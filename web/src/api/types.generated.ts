@@ -36,21 +36,17 @@ export type RequestActorRole = "Public" | "Member" | "Owner";
 
 export type RequestAudience = "Public" | "Private";
 
-export type RequestState = "Working" | "ReadyForReview" | "Completed";
-
-export type RequestAssessmentOutcome = "Accepted" | "Neutral" | "Rejected";
-
-export type RequestReviewExitReason = "AuthorReturned" | "ChangesRequested" | "RevisionPushed" | "ContentEdited";
+export type RequestState = "Draft" | "Open" | "Closed" | "Merged";
 
 export type GitOid = string;
 
-export type RequestEventKind = "Started" | "ReadyForReview" | "ReturnedToWorking" | "RevisionPushed" | "Held" | "HoldReleased" | "Assessed" | "Merged" | "Closed" | "Settled" | "IdentityEdited" | "DiscussionResolved" | "DiscussionReopened";
+export type RequestEventKind = "Started" | "Submitted" | "RevisionPushed" | "Merged" | "Closed" | "IdentityEdited" | "DiscussionResolved" | "DiscussionReopened";
 
 export type ProjectionPreviewAudience = "private" | "public";
 
 export type ProjectionPreviewSource = "live";
 
-export type AccountSessionResponse = { identity: SessionIdentity | null, user: UserResponse | null, credit_balance_credits: number | null, };
+export type AccountSessionResponse = { identity: SessionIdentity | null, user: UserResponse | null, };
 
 export type UserResponse = { id: string, handle: string, email: string, email_verified: boolean, };
 
@@ -88,9 +84,9 @@ export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
 
 export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
 
-export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, ready_for_review_count: number, request_permissions: RepoRequestPermissionsResponse, };
+export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, open_request_count: number, request_permissions: RepoRequestPermissionsResponse, };
 
-export type RepoRequestPermissionsResponse = { can_start_request: boolean, uses_credit_stake: boolean, };
+export type RepoRequestPermissionsResponse = { can_start_request: boolean, };
 
 export type CreateRepoRequest = { name: string, visibility: Visibility | null, };
 
@@ -166,19 +162,25 @@ export type ProjectionPreviewCommitVisibilityResponse = "FullyPublic" | "Mixed" 
 
 export type ProjectionPreviewSummaryResponse = { visible_files: number, hidden_files: number, visible_commits: number, hidden_commits: number, };
 
-export type RequestQueueSection = "your_work" | "ready" | "completed";
+export type RequestQueueSection = "your_work" | "open" | "closed";
 
 export type RequestListResponse = { requests: Array<RequestListItemResponse>, next_cursor: string | null, };
 
 export type RequestDetailResponse = { request: RequestSummaryResponse, };
 
+export type CreateRequestRatingRequest = { score: number, reason: string, };
+
+export type RequestRatingParticipantResponse = { id: string, handle: string, rating_score_sum: number, rating_count: number, };
+
+export type RequestRatingResponse = { id: string, request_id: string, rater: RequestRatingParticipantResponse, subject: RequestRatingParticipantResponse, score: number, reason: string, created_at_unix: number, };
+
+export type RequestRatingsResponse = { ratings: Array<RequestRatingResponse>, eligible_subject: RequestRatingParticipantResponse | null, };
+
 export type RequestMutationResponse = { request: RequestSummaryResponse, };
 
-export type RequestListItemResponse = { id: string, name: string, title: string, author_role: RequestActorRole, audience: RequestAudience, head_oid: GitOid, state: RequestState, current_stake_credits: number, assessment_outcome: RequestAssessmentOutcome | null, ready_at_unix: number | null, held_at_unix: number | null, updated_at_unix: number, mergeability: RequestMergeabilityResponse, };
+export type RequestListItemResponse = { id: string, name: string, title: string, author_role: RequestActorRole, audience: RequestAudience, head_oid: GitOid, state: RequestState, submitted_at_unix: number | null, updated_at_unix: number, mergeability: RequestMergeabilityResponse, };
 
-export type RequestSummaryResponse = { id: string, name: string, title: string, description_markdown: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, activity_version: number, current_stake_credits: number, first_ready_at_unix: number | null, ready_at_unix: number | null, held_at_unix: number | null, held_by_user_id: string | null, assessment_outcome: RequestAssessmentOutcome | null, assessment_body_markdown: string | null, assessed_at_unix: number | null, assessed_by_user_id: string | null, completed_at_unix: number | null, completed_by_user_id: string | null, merged_at_unix: number | null, merged_by_user_id: string | null, merged_head_oid: GitOid | null, merged_main_oid: GitOid | null, created_at_unix: number, updated_at_unix: number, invitees: Array<RequestInviteeResponse>, assessment_previews: Array<RequestSettlementPreviewResponse>, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
-
-export type RequestSettlementPreviewResponse = { outcome: RequestAssessmentOutcome, stake_credits: number, refunded_credits: number, reward_credits: number, burned_credits: number, };
+export type RequestSummaryResponse = { id: string, name: string, title: string, description_markdown: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, activity_version: number, submitted_at_unix: number | null, closed_at_unix: number | null, closed_by_user_id: string | null, merged_at_unix: number | null, merged_by_user_id: string | null, merged_head_oid: GitOid | null, merged_main_oid: GitOid | null, created_at_unix: number, updated_at_unix: number, invitees: Array<RequestInviteeResponse>, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
 
 export type RequestInviteeResponse = { user: RequestActorSummaryResponse, invited_by_user_id: string, created_at_unix: number, };
 
@@ -190,19 +192,17 @@ export type RequestInviteeMutationResponse = { request: RequestSummaryResponse, 
 
 export type LeaveRequestResponse = { invitee: RequestInviteeResponse, };
 
-export type RequestPermissionsResponse = { can_view_activity: boolean, can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_identity: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_hold: boolean, can_request_changes: boolean, can_assess: boolean, can_close: boolean, can_merge: boolean, };
+export type RequestPermissionsResponse = { can_view_activity: boolean, can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_identity: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_submit: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_close: boolean, can_merge: boolean, };
 
-export type RequestMergeabilityStatus = "Ready" | "Completed" | "Working" | "NotMaintainer" | "MissingRequestBranch";
+export type RequestMergeabilityStatus = "Ready" | "Draft" | "Closed" | "Merged" | "NotMaintainer" | "MissingRequestBranch";
 
 export type RequestMergeabilityResponse = { status: RequestMergeabilityStatus, current_main_oid: GitOid | null, request_head_oid: GitOid, reason: string | null, };
 
 export type RequestEventResponse = { id: string, position: number, actor: RequestActorSummaryResponse, kind: RequestEventKind, payload: RequestEventPayload, created_at_unix: number, };
 
-export type RequestEventPayload = { "Started": { title: string, description_markdown: string, } } | { "ReadyForReview": { head_oid: string, stake_credits: number, } } | { "ReturnedToWorking": { head_oid: string, stake_credits: number, reason: RequestReviewExitReason, } } | { "RevisionPushed": { old_head_oid: string, new_head_oid: string, note: string | null, } } | { "Held": { head_oid: string, } } | { "HoldReleased": { head_oid: string, } } | { "Assessed": { head_oid: string, outcome: RequestAssessmentOutcome, body_markdown: string | null, stake_credits: number, } } | { "Merged": { head_oid: string, main_oid: string, } } | { "Closed": { head_oid: string, } } | { "Settled": { settlement: RequestSettlement, } } | { "IdentityEdited": { before: RequestIdentityAuditFact, after: RequestIdentityAuditFact, } } | { "DiscussionResolved": { discussion_id: string, } } | { "DiscussionReopened": { discussion_id: string, } };
+export type RequestEventPayload = { "Started": { title: string, description_markdown: string, } } | { "Submitted": { head_oid: string, } } | { "RevisionPushed": { old_head_oid: string, new_head_oid: string, note: string | null, } } | { "Merged": { head_oid: string, main_oid: string, } } | { "Closed": { head_oid: string, } } | { "IdentityEdited": { before: RequestIdentityAuditFact, after: RequestIdentityAuditFact, } } | { "DiscussionResolved": { discussion_id: string, } } | { "DiscussionReopened": { discussion_id: string, } };
 
 export type RequestIdentityAuditFact = { title_sha256: string, title_byte_count: number, description_sha256: string, description_byte_count: number, };
-
-export type RequestSettlement = { outcome: RequestAssessmentOutcome, stake_credits: number, refunded_credits: number, reward_credits: number, burned_credits: number, settled_at_unix: number, };
 
 export type RequestActorSummaryResponse = { id: string, handle: string, };
 
@@ -232,9 +232,7 @@ export type RequestCloseResponse = { deleted: boolean, request: RequestSummaryRe
 
 export type StartRequestRequest = { name: string, title: string | null, audience: RequestAudience, };
 
-export type ReadyRequestRequest = { stake_credits: number | null, };
-
-export type AssessRequestRequest = { outcome: RequestAssessmentOutcome, body_markdown: string | null, };
+export type SubmitRequestRequest = Record<symbol, never>;
 
 export type EditRequestIdentityRequest = { title: string | null, description_markdown: string | null, };
 
@@ -293,12 +291,9 @@ export const ApiRouteTemplates = {
   repoRequests: "/v1/repos/{owner}/{repo}/requests",
   repoRequestQueue: "/v1/repos/{owner}/{repo}/requests/queue",
   repoRequest: "/v1/repos/{owner}/{repo}/requests/{request_id}",
-  repoRequestReady: "/v1/repos/{owner}/{repo}/requests/{request_id}/ready",
-  repoRequestWorking: "/v1/repos/{owner}/{repo}/requests/{request_id}/working",
-  repoRequestHold: "/v1/repos/{owner}/{repo}/requests/{request_id}/hold",
-  repoRequestRequestChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/request-changes",
-  repoRequestAssessment: "/v1/repos/{owner}/{repo}/requests/{request_id}/assessment",
+  repoRequestSubmit: "/v1/repos/{owner}/{repo}/requests/{request_id}/submit",
   repoRequestMerge: "/v1/repos/{owner}/{repo}/requests/{request_id}/merge",
+  repoRequestRatings: "/v1/repos/{owner}/{repo}/requests/{request_id}/ratings",
   repoRequestInvitees: "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees",
   repoRequestInviteesMe: "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees/me",
   repoSession: "/v1/repos/{owner}/{repo}/session",

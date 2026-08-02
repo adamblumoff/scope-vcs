@@ -323,7 +323,7 @@ pub(crate) async fn persist_request_ref_revision(
     let mutation = state
         .metadata
         .requests()
-        .record_request_revision_with_review_invalidation(
+        .record_request_revision(
             RecordRequestRevisionInput {
                 request_id: request.id,
                 actor_user_id: actor_user_id.to_string(),

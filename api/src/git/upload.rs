@@ -224,7 +224,7 @@ fn git_read_view_repo(
         hash_field(
             &mut hasher,
             b"state",
-            format!("{:?}", request.state).as_bytes(),
+            format!("{:?}", request.state()).as_bytes(),
         );
         if let Some(snapshot) = request.git_snapshot.as_ref() {
             hash_field(&mut hasher, b"snapshot", snapshot.sha256.as_bytes());

@@ -1,8 +1,10 @@
-import type { RequestSummary } from '@/api/types'
+import type { RequestParams, RequestRating, RequestRatings, RequestSummary } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
-import { Coins, GitBranch, GitCommitHorizontal } from 'lucide-react'
+import { GitBranch, GitCommitHorizontal } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { RequestInvitees } from './request-invitees'
+import { RequestRatingsSection } from './request-ratings-section'
+import type { RateRequestInput } from '@/api/requests'
 import {
   formatUnixDate,
   requestAudienceLabel,
@@ -13,13 +15,17 @@ import type { RequestActionController } from './use-request-actions'
 
 export function RequestContextRail({
   actions,
+  onRate,
+  params,
+  ratings,
   request,
 }: {
   actions: RequestActionController
+  onRate: (input: RateRequestInput) => Promise<RequestRating>
+  params: RequestParams
+  ratings: RequestRatings
   request: RequestSummary
 }) {
-  const accepted = request.assessment_previews.find((item) => item.outcome === 'Accepted')
-
   return (
     <aside className="order-1 min-w-0 border-b border-border bg-muted/15 xl:order-2 xl:border-b-0 xl:border-l">
       <RailSection icon={<GitBranch />} title="Request details">
@@ -32,34 +38,13 @@ export function RequestContextRail({
 
       <RequestInvitees actions={actions} request={request} />
 
-      <RailSection icon={<Coins />} title="Review">
-        <RailValue
-          label="Current stake"
-          value={`${request.current_stake_credits} credits`}
-        />
-        {accepted && request.state === 'ReadyForReview' ? (
-          <p className="text-xs leading-5 text-muted-foreground">
-            Accepted returns {accepted.refunded_credits} and rewards {accepted.reward_credits} credits.
-          </p>
-        ) : null}
-        <RailValue
-          label="First published"
-          value={formatUnixDate(request.first_ready_at_unix)}
-        />
-        <RailValue label="Ready since" value={formatUnixDate(request.ready_at_unix)} />
-        <RailValue label="Held since" value={formatUnixDate(request.held_at_unix)} />
-        <RailValue
-          label="Assessment"
-          value={request.assessment_outcome ?? 'Not assessed'}
-        />
-        {request.assessment_body_markdown ? (
-          <p className="whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-            {request.assessment_body_markdown}
-          </p>
-        ) : null}
-        <RailValue label="Completed" value={formatUnixDate(request.completed_at_unix)} />
+      <RailSection icon={<GitBranch />} title="Lifecycle">
+        <RailValue label="Submitted" value={formatUnixDate(request.submitted_at_unix)} />
+        <RailValue label="Closed" value={formatUnixDate(request.closed_at_unix)} />
         <RailValue label="Merged" value={formatUnixDate(request.merged_at_unix)} />
       </RailSection>
+
+      <RequestRatingsSection initial={ratings} onRate={onRate} params={params} />
 
       <RailSection icon={<GitCommitHorizontal />} title="Git state">
         <RailValue label="Base" value={shortOid(request.base_main_oid)} />

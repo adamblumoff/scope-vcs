@@ -1,11 +1,9 @@
 use scope_api_contract::{
     RequestActorSummaryResponse, RequestEventResponse, RequestInviteeResponse,
     RequestListItemResponse, RequestMergeabilityResponse, RequestPermissionsResponse,
-    RequestSettlementPreviewResponse, RequestSummaryResponse,
+    RequestSummaryResponse,
 };
-use scope_domain::requests::{
-    Request, RequestAssessmentOutcome, RequestEvent, request_list_mergeability, settlement_for,
-};
+use scope_domain::requests::{Request, RequestEvent, request_list_mergeability};
 use scope_domain::store::RepositoryAccess;
 use scope_postgres::db::RequestListRow;
 
@@ -15,23 +13,7 @@ pub(crate) fn request_summary_response(
     permissions: RequestPermissionsResponse,
     mergeability: RequestMergeabilityResponse,
 ) -> Result<RequestSummaryResponse, crate::error::ApiError> {
-    let assessment_previews = [
-        RequestAssessmentOutcome::Accepted,
-        RequestAssessmentOutcome::Neutral,
-        RequestAssessmentOutcome::Rejected,
-    ]
-    .into_iter()
-    .map(|outcome| {
-        let settlement = settlement_for(request.current_stake_credits, outcome, 0);
-        RequestSettlementPreviewResponse {
-            outcome: settlement.outcome.into(),
-            stake_credits: settlement.stake_credits,
-            refunded_credits: settlement.refunded_credits,
-            reward_credits: settlement.reward_credits,
-            burned_credits: settlement.burned_credits,
-        }
-    })
-    .collect();
+    let state = request.state();
     Ok(RequestSummaryResponse {
         id: request.id,
         name: request.name,
@@ -42,19 +24,11 @@ pub(crate) fn request_summary_response(
         audience: request.audience.into(),
         base_main_oid: super::git_oid_response(request.base_main_oid)?,
         head_oid: super::git_oid_response(request.head_oid)?,
-        state: request.state.into(),
+        state: state.into(),
         activity_version: request.activity_version,
-        current_stake_credits: request.current_stake_credits,
-        first_ready_at_unix: request.first_ready_at_unix,
-        ready_at_unix: request.ready_at_unix,
-        held_at_unix: request.held_at_unix,
-        held_by_user_id: request.held_by_user_id,
-        assessment_outcome: request.assessment_outcome.map(Into::into),
-        assessment_body_markdown: request.assessment_body_markdown,
-        assessed_at_unix: request.assessed_at_unix,
-        assessed_by_user_id: request.assessed_by_user_id,
-        completed_at_unix: request.completed_at_unix,
-        completed_by_user_id: request.completed_by_user_id,
+        submitted_at_unix: request.submitted_at_unix,
+        closed_at_unix: request.closed_at_unix,
+        closed_by_user_id: request.closed_by_user_id,
         merged_at_unix: request.merged_at_unix,
         merged_by_user_id: request.merged_by_user_id,
         merged_head_oid: request
@@ -69,7 +43,6 @@ pub(crate) fn request_summary_response(
         updated_at_unix: request.updated_at_unix,
         invitees,
         permissions,
-        assessment_previews,
         mergeability,
     })
 }
@@ -79,13 +52,7 @@ pub(crate) fn request_list_item_response(
     access: RepositoryAccess,
     current_main_oid: Option<String>,
 ) -> Result<RequestListItemResponse, crate::error::ApiError> {
-    let decision = request_list_mergeability(
-        request.state,
-        request.assessment_outcome,
-        request.has_git_snapshot,
-        request.is_merged,
-        access,
-    );
+    let decision = request_list_mergeability(request.state, request.has_git_snapshot, access);
     let request_head_oid = super::git_oid_response(request.head_oid)?;
     Ok(RequestListItemResponse {
         id: request.id,
@@ -95,10 +62,7 @@ pub(crate) fn request_list_item_response(
         audience: request.audience.into(),
         head_oid: request_head_oid.clone(),
         state: request.state.into(),
-        current_stake_credits: request.current_stake_credits,
-        assessment_outcome: request.assessment_outcome.map(Into::into),
-        ready_at_unix: request.ready_at_unix,
-        held_at_unix: request.held_at_unix,
+        submitted_at_unix: request.submitted_at_unix,
         updated_at_unix: request.updated_at_unix,
         mergeability: RequestMergeabilityResponse {
             status: decision.status.into(),

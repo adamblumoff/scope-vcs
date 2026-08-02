@@ -36,8 +36,7 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
         .await
         .unwrap()
         .unwrap();
-    request.first_ready_at_unix = Some(11);
-    request.ready_queue_version = Some(1);
+    request.submitted_at_unix = Some(11);
     request.updated_at_unix = 11;
     save_request_row(store.db.as_ref(), &request).await.unwrap();
     store
@@ -256,7 +255,7 @@ async fn discussion_replies_are_read_as_paginated_tree_levels() {
 }
 
 #[tokio::test]
-async fn close_unpublished_working_request_deletes_request_and_events() {
+async fn close_draft_request_deletes_request_and_events() {
     let store = postgres_store();
     start_public_request(&store).await;
     store
@@ -284,7 +283,8 @@ async fn close_unpublished_working_request_deletes_request_and_events() {
             CloseRequestInput {
                 request_id: "req_1".to_string(),
                 actor_user_id: "user_public".to_string(),
-                actor_can_close: false,
+                actor_is_author: false,
+                actor_is_maintainer: false,
                 event_id: "event_closed".to_string(),
                 now_unix: 5,
             },
@@ -343,7 +343,7 @@ async fn close_unpublished_working_request_deletes_request_and_events() {
 }
 
 #[tokio::test]
-async fn maintainer_cannot_close_another_authors_working_request() {
+async fn maintainer_cannot_delete_another_authors_draft() {
     let store = postgres_store();
     start_public_request(&store).await;
 
@@ -353,7 +353,8 @@ async fn maintainer_cannot_close_another_authors_working_request() {
             CloseRequestInput {
                 request_id: "req_1".to_string(),
                 actor_user_id: "user_owner".to_string(),
-                actor_can_close: true,
+                actor_is_author: false,
+                actor_is_maintainer: false,
                 event_id: "event_closed_by_maintainer".to_string(),
                 now_unix: 4,
             },
@@ -362,7 +363,7 @@ async fn maintainer_cannot_close_another_authors_working_request() {
         .await
         .unwrap_err();
 
-    assert!(error.message.contains("close access required"));
+    assert!(error.message.contains("only the request author"));
     assert!(
         store
             .requests()
@@ -374,7 +375,7 @@ async fn maintainer_cannot_close_another_authors_working_request() {
 }
 
 #[tokio::test]
-async fn close_published_working_request_persists_completion() {
+async fn close_open_request_persists_exact_closer() {
     let store = postgres_store();
     let mut request = store
         .requests()
@@ -382,8 +383,7 @@ async fn close_published_working_request_persists_completion() {
         .await
         .unwrap()
         .request;
-    request.first_ready_at_unix = Some(3);
-    request.ready_queue_version = Some(1);
+    request.submitted_at_unix = Some(3);
     request.updated_at_unix = 3;
     save_request_row(store.db.as_ref(), &request).await.unwrap();
 
@@ -393,7 +393,8 @@ async fn close_published_working_request_persists_completion() {
             CloseRequestInput {
                 request_id: request.id.clone(),
                 actor_user_id: request.author_user_id.clone(),
-                actor_can_close: false,
+                actor_is_author: false,
+                actor_is_maintainer: false,
                 event_id: "event_closed".to_string(),
                 now_unix: 4,
             },
@@ -402,19 +403,19 @@ async fn close_published_working_request_persists_completion() {
         .await
         .unwrap();
 
-    assert!(matches!(mutation, CloseRequestMutation::Completed { .. }));
+    assert!(matches!(mutation, CloseRequestMutation::Closed { .. }));
     let stored = store
         .requests()
         .request_for_tests("req_1")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(stored.state, RequestState::Completed);
-    assert_eq!(stored.completed_at_unix, Some(4));
-    assert_eq!(stored.completed_by_user_id.as_deref(), Some("user_public"));
+    assert_eq!(stored.state(), RequestState::Closed);
+    assert_eq!(stored.closed_at_unix, Some(4));
+    assert_eq!(stored.closed_by_user_id.as_deref(), Some("user_public"));
 }
 
-fn postgres_store() -> MetadataStore {
+pub(crate) fn postgres_store() -> MetadataStore {
     let target = super::super::TestDatabaseTarget::required().unwrap();
     let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
     store
@@ -447,7 +448,7 @@ fn catalog_with_repo() -> crate::db::CatalogFixture {
     catalog
 }
 
-async fn start_public_request(store: &MetadataStore) {
+pub(crate) async fn start_public_request(store: &MetadataStore) {
     store
         .requests()
         .start_request(public_start_input())

@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn merge_route_persists_git_content_and_settles_public_stake_once() {
+async fn merge_route_persists_git_content_once() {
     let (state, owner_source) = test_state_with_mergeable_request().await;
     insert_member_user(&state).await;
     let (source, remote, _server, first_request_head) =
@@ -78,25 +78,25 @@ async fn merge_route_persists_git_content_and_settles_public_stake_once() {
     let request_head = git_head_oid(&source);
     let app = router(state.clone());
 
-    let ready = app
+    let submitted = app
         .clone()
         .oneshot(
             axum::http::Request::builder()
                 .method("POST")
                 .uri(format!(
-                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/ready"
+                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/submit"
                 ))
                 .header(
                     AUTHORIZATION,
                     bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
                 )
                 .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"stake_credits":5}"#))
+                .body(Body::from("{}"))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(ready.status(), StatusCode::OK);
+    assert_eq!(submitted.status(), StatusCode::OK);
 
     let merge_request = || {
         axum::http::Request::builder()
@@ -115,8 +115,7 @@ async fn merge_route_persists_git_content_and_settles_public_stake_once() {
     let merged_status = merged.status();
     let merged = response_json(merged).await;
     assert_eq!(merged_status, StatusCode::OK, "{merged}");
-    assert_eq!(merged["request"]["state"], "Completed");
-    assert_eq!(merged["request"]["assessment_outcome"], "Accepted");
+    assert_eq!(merged["request"]["state"], "Merged");
     assert_eq!(merged["request"]["merged_head_oid"], request_head);
     assert_ne!(merged["request"]["merged_main_oid"], request_head);
     assert_eq!(
@@ -224,31 +223,8 @@ async fn merge_route_persists_git_content_and_settles_public_stake_once() {
         }
         origin => panic!("expected public request merge origin, got {origin:?}"),
     }
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        105
-    );
-
     let replay = app.oneshot(merge_request()).await.unwrap();
     assert_eq!(replay.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        105
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -273,13 +249,13 @@ async fn public_merge_rejects_path_made_private_after_request_push() {
     .unwrap();
     let app = router(state.clone());
 
-    let ready = app
+    let submitted = app
         .clone()
         .oneshot(
             axum::http::Request::builder()
                 .method("POST")
                 .uri(format!(
-                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/ready"
+                    "/v1/repos/{TEST_REPO_ID}/requests/{REQUEST_ID}/submit"
                 ))
                 .header(AUTHORIZATION, bearer_header())
                 .header(CONTENT_TYPE, "application/json")
@@ -288,9 +264,9 @@ async fn public_merge_rejects_path_made_private_after_request_push() {
         )
         .await
         .unwrap();
-    let ready_status = ready.status();
-    let ready = response_json(ready).await;
-    assert_eq!(ready_status, StatusCode::OK, "{ready}");
+    let submitted_status = submitted.status();
+    let submitted = response_json(submitted).await;
+    assert_eq!(submitted_status, StatusCode::OK, "{submitted}");
 
     let private_path = ScopePath::parse("/request.txt").unwrap();
     state
@@ -329,7 +305,7 @@ async fn public_merge_rejects_path_made_private_after_request_push() {
     assert_eq!(merged_status, StatusCode::CONFLICT, "{merged}");
     assert_eq!(live_file_content(&state, "/request.txt").await, None);
     assert_eq!(
-        stored_request(&state, REQUEST_ID).await.state,
-        RequestState::ReadyForReview
+        stored_request(&state, REQUEST_ID).await.state(),
+        RequestState::Open
     );
 }

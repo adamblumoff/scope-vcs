@@ -243,9 +243,9 @@ pub(crate) async fn accept_repository_invite(
             RepoChangeReason::MemberAdded,
         )
         .await;
-    let ready_for_review_count =
-        ready_for_review_count_for_access(&state, &repo, repo.access_for_user_id(&user.id)).await?;
-    let summary = repo_summary_for_user(&repo, &user.id, ready_for_review_count)
+    let open_request_count =
+        open_request_count_for_access(&state, &repo, repo.access_for_user_id(&user.id)).await?;
+    let summary = repo_summary_for_user(&repo, &user.id, open_request_count)
         .ok_or_else(|| ApiError::internal_message("accepted invite member cannot read repo"))?;
     Ok(Json(AcceptRepositoryInviteResponse {
         repo: summary,
@@ -310,7 +310,7 @@ fn ensure_invite_can_be_used(invite: &RepositoryInvite, now_unix: u64) -> Result
     Ok(())
 }
 
-async fn ready_for_review_count_for_access(
+async fn open_request_count_for_access(
     state: &AppState,
     repo: &StoredRepository,
     access: RepositoryAccess,
@@ -326,7 +326,7 @@ async fn ready_for_review_count_for_access(
 }
 
 fn request_counts_for_access(request: &Request, access: RepositoryAccess) -> bool {
-    request_policy(request, RequestViewer::new(access, None, false)).counts_as_ready
+    request_policy(request, RequestViewer::new(access, None, false)).counts_as_open
 }
 
 async fn member_response_for_user(

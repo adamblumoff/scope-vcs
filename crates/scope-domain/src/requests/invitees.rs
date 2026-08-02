@@ -1,4 +1,4 @@
-use super::{Request, RequestAudience, RequestInvitee, RequestState, validate_required_id};
+use super::{Request, RequestAudience, RequestInvitee, validate_required_id};
 use crate::error::DomainError;
 use std::collections::BTreeMap;
 
@@ -106,8 +106,8 @@ fn validate_invitee_request(request: &Request) -> Result<(), DomainError> {
             "private requests do not support invitees",
         ));
     }
-    if request.state == RequestState::Completed {
-        return Err(DomainError::conflict("request is completed"));
+    if request.is_terminal() {
+        return Err(DomainError::conflict("request is closed"));
     }
     Ok(())
 }

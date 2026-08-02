@@ -1,3 +1,4 @@
+use super::text::terminal_text;
 use super::*;
 pub(super) fn load_exact_request(
     git_repo: &GitRepo,
@@ -44,73 +45,25 @@ fn api_target<'a>(context: &'a local::RequestContext, request_id: &'a str) -> Re
     }
 }
 
-pub(super) fn ready_request(
+pub(super) fn submit_request_command(
     git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
     target: RequestTargetArgs,
-    stake: Option<u32>,
     yes: bool,
 ) -> anyhow::Result<()> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let uses_credits = before.request.author_role == crate::api::RequestActorRole::Public;
-    let stake = ready_stake(uses_credits, stake)?;
-    let stake_credits = stake.unwrap_or_default();
-    let prompt = match (before.request.first_ready_at_unix.is_none(), uses_credits) {
-        (true, true) => format!(
-            "This publishes the request and holds {} credits",
-            stake_credits
-        ),
-        (false, true) => format!(
-            "This holds {} credits and returns the request to review",
-            stake_credits
-        ),
-        (true, false) => "This publishes the request for review".to_string(),
-        (false, false) => "This returns the request to review".to_string(),
-    };
-    require_confirmation(&prompt, yes)?;
-    let response = mark_request_ready(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-        stake,
-    )?;
-    print_request_mutation_receipt("Ready for review", Some(&before.request), &response);
-    Ok(())
-}
-
-pub(super) fn ready_stake(uses_credits: bool, stake: Option<u32>) -> anyhow::Result<Option<u32>> {
-    if uses_credits {
-        stake.map(Some).ok_or_else(|| {
-            let max = scope_domain::requests::REQUEST_MAX_STAKE_CREDITS;
-            anyhow::anyhow!(
-                "--stake <CREDITS> is required for public-authored requests (1–{max} credits)"
-            )
-        })
-    } else {
-        Ok(None)
-    }
-}
-
-pub(super) fn working_request(
-    git_repo: &GitRepo,
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTargetArgs,
-) -> anyhow::Result<()> {
-    let (context, request_id, before) =
-        load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let response = return_request_to_working(
+    let prompt = "Submit this request to its maintainers";
+    require_confirmation(prompt, yes)?;
+    let response = api_submit_request(
         client,
         api_url,
         session_token,
         api_target(&context, &request_id),
     )?;
-    print_request_mutation_receipt("Returned to Working", Some(&before.request), &response);
+    print_request_mutation_receipt("Submitted", Some(&before.request), &response);
     Ok(())
 }
 
@@ -204,98 +157,6 @@ pub(super) fn leave_invited_request(
     Ok(())
 }
 
-pub(super) fn hold_request_command(
-    git_repo: &GitRepo,
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTargetArgs,
-    held: bool,
-) -> anyhow::Result<()> {
-    let (context, request_id, before) =
-        load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let target = api_target(&context, &request_id);
-    let response = if held {
-        hold_request(client, api_url, session_token, target)?
-    } else {
-        unhold_request(client, api_url, session_token, target)?
-    };
-    print_request_mutation_receipt(
-        if held {
-            "Review hold started"
-        } else {
-            "Review hold released"
-        },
-        Some(&before.request),
-        &response,
-    );
-    Ok(())
-}
-
-pub(super) fn request_changes_command(
-    git_repo: &GitRepo,
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTargetArgs,
-) -> anyhow::Result<()> {
-    let (context, request_id, before) =
-        load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let response = request_changes(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-    )?;
-    print_request_mutation_receipt("Changes requested", Some(&before.request), &response);
-    Ok(())
-}
-
-pub(super) fn assess_request_command(
-    git_repo: &GitRepo,
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    args: RequestAssessArgs,
-) -> anyhow::Result<()> {
-    let RequestAssessArgs {
-        target,
-        outcome,
-        message,
-        yes,
-    } = args;
-    let outcome = outcome.into();
-    let (context, request_id, before) =
-        load_exact_request(git_repo, client, api_url, session_token, target)?;
-    require_confirmation(
-        &assessment_confirmation(
-            &before.request.name,
-            outcome,
-            before.request.current_stake_credits,
-        ),
-        yes,
-    )?;
-    let response = assess_request(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-        outcome,
-        message,
-    )?;
-    print_request_mutation_receipt("Request assessed", Some(&before.request), &response);
-    print_committed_settlement(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-        before.request.activity_version,
-        response.request.activity_version,
-        "Assessment committed",
-    );
-    Ok(())
-}
-
 pub(super) fn merge_request_command(
     git_repo: &GitRepo,
     client: &Client,
@@ -317,61 +178,39 @@ pub(super) fn merge_request_command(
         api_target(&context, &request_id),
     )?;
     print_request_mutation_receipt("Merged", Some(&before.request), &response);
-    print_committed_settlement(
+    Ok(())
+}
+
+pub(super) fn rate_request_command(
+    git_repo: &GitRepo,
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    target: RequestTargetArgs,
+    score: u8,
+    reason: String,
+) -> anyhow::Result<()> {
+    let (context, request_id, _) =
+        load_exact_request(git_repo, client, api_url, session_token, target)?;
+    let response = rate_request(
         client,
         api_url,
         session_token,
         api_target(&context, &request_id),
-        before.request.activity_version,
-        response.request.activity_version,
-        "Merge committed",
+        score,
+        reason,
+    )?;
+    println!(
+        "Rated @{} {}/5 — {}",
+        terminal_text(&response.subject.handle),
+        response.score,
+        terminal_text(&response.reason)
     );
     Ok(())
 }
 
-fn assessment_confirmation(
-    request_name: &str,
-    outcome: crate::api::RequestAssessmentOutcome,
-    stake_credits: u32,
-) -> String {
-    let settlement = if stake_credits > 0 {
-        " and settle its review stake"
-    } else {
-        ""
-    };
-    format!("Complete request {request_name} as {outcome:?}{settlement}")
-}
-
-fn merge_confirmation(request_name: &str, state: crate::api::RequestState) -> String {
-    if state == crate::api::RequestState::ReadyForReview {
-        format!("Merge request {request_name} into main and complete it as Accepted")
-    } else {
-        format!("Merge accepted request {request_name} into main")
-    }
-}
-
-fn print_committed_settlement(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTarget<'_>,
-    after_position: u64,
-    version: u64,
-    committed_label: &str,
-) {
-    match full_request_activity(
-        client,
-        api_url,
-        session_token,
-        target,
-        after_position,
-        version,
-    ) {
-        Ok(activity) => print_request_settlement(&activity),
-        Err(error) => {
-            eprintln!("{committed_label}, but its settlement receipt could not be loaded: {error}")
-        }
-    }
+fn merge_confirmation(request_name: &str, _state: crate::api::RequestState) -> String {
+    format!("Merge request {request_name} into main")
 }
 
 fn events_through_version(
@@ -429,18 +268,31 @@ pub(super) fn show_one_request(
     api_url: &str,
     session_token: &str,
     target: RequestTargetArgs,
+    json: bool,
 ) -> anyhow::Result<()> {
     let (context, request_id, detail) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    print_request_detail(&detail);
-    print_request_activity(&full_request_activity(
+    let activity = full_request_activity(
         client,
         api_url,
         session_token,
         api_target(&context, &request_id),
         0,
         detail.request.activity_version,
-    )?);
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "request": detail.request,
+                "activity": activity,
+            }))
+            .context("serialize request detail")?
+        );
+    } else {
+        print_request_detail(&detail);
+        print_request_activity(&activity);
+    }
     Ok(())
 }
 
@@ -450,10 +302,13 @@ pub(super) fn list_request_status(
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
+    json: bool,
 ) -> anyhow::Result<()> {
     let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
-    print_repo_access(&context.repo);
-    print_request_list(client, api_url, session_token, &context)
+    if !json {
+        print_repo_access(&context.repo);
+    }
+    print_request_list(client, api_url, session_token, &context, json)
 }
 
 pub(super) fn print_request_list(
@@ -461,6 +316,7 @@ pub(super) fn print_request_list(
     api_url: &str,
     session_token: &str,
     context: &local::RequestContext,
+    json: bool,
 ) -> anyhow::Result<()> {
     let mut requests = Vec::new();
     let mut cursor = None;
@@ -479,29 +335,34 @@ pub(super) fn print_request_list(
     }
     requests.sort_by(|left, right| {
         let rank = |state| match state {
-            crate::api::RequestState::ReadyForReview => 0,
-            crate::api::RequestState::Working => 1,
-            crate::api::RequestState::Completed => 2,
+            crate::api::RequestState::Open => 0,
+            crate::api::RequestState::Draft => 1,
+            crate::api::RequestState::Closed => 2,
+            crate::api::RequestState::Merged => 3,
         };
         let state_order = rank(left.state).cmp(&rank(right.state));
         if state_order != std::cmp::Ordering::Equal {
             return state_order;
         }
-        if left.state == crate::api::RequestState::ReadyForReview {
-            return right
-                .current_stake_credits
-                .cmp(&left.current_stake_credits)
-                .then_with(|| left.ready_at_unix.cmp(&right.ready_at_unix))
+        if left.state == crate::api::RequestState::Open {
+            return left
+                .submitted_at_unix
+                .cmp(&right.submitted_at_unix)
                 .then_with(|| left.id.cmp(&right.id));
         }
         left.updated_at_unix
             .cmp(&right.updated_at_unix)
             .then_with(|| left.id.cmp(&right.id))
     });
-    if requests.is_empty() {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&requests).context("serialize request list")?
+        );
+    } else if requests.is_empty() {
         println!("No visible requests.");
     } else {
-        println!(" WAIT  STAKE  STATE      REQUEST");
+        println!(" WAIT  STATE      REQUEST");
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("system clock is before Unix epoch")?
@@ -524,20 +385,18 @@ mod tests {
             {
                 "id": "event_2", "position": 2,
                 "actor": {"id": "scope_usr_actor", "handle": "actor"},
-                "kind": "ReadyForReview",
-                "payload": {"ReadyForReview": {
-                    "head_oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    "stake_credits": 12
+                "kind": "Submitted",
+                "payload": {"Submitted": {
+                    "head_oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 }},
                 "created_at_unix": 20
             },
             {
                 "id": "event_3", "position": 3,
                 "actor": {"id": "scope_usr_actor", "handle": "actor"},
-                "kind": "ReadyForReview",
-                "payload": {"ReadyForReview": {
-                    "head_oid": "cccccccccccccccccccccccccccccccccccccccc",
-                    "stake_credits": 15
+                "kind": "Submitted",
+                "payload": {"Submitted": {
+                    "head_oid": "cccccccccccccccccccccccccccccccccccccccc"
                 }},
                 "created_at_unix": 30
             }
@@ -550,28 +409,15 @@ mod tests {
     }
 
     #[test]
-    fn assessment_confirmation_mentions_only_real_settlement() {
-        let outcome = crate::api::RequestAssessmentOutcome::Neutral;
-        assert_eq!(
-            assessment_confirmation("change", outcome, 0),
-            "Complete request change as Neutral"
-        );
-        assert_eq!(
-            assessment_confirmation("change", outcome, 12),
-            "Complete request change as Neutral and settle its review stake"
-        );
-    }
-
-    #[test]
-    fn ready_merge_confirmation_discloses_accepted_completion() {
+    fn merge_confirmation_names_the_request() {
         use crate::api::RequestState;
         assert_eq!(
-            merge_confirmation("change", RequestState::ReadyForReview),
-            "Merge request change into main and complete it as Accepted"
+            merge_confirmation("change", RequestState::Open),
+            "Merge request change into main"
         );
         assert_eq!(
-            merge_confirmation("change", RequestState::Completed),
-            "Merge accepted request change into main"
+            merge_confirmation("change", RequestState::Merged),
+            "Merge request change into main"
         );
     }
 }

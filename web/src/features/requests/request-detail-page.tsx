@@ -5,15 +5,18 @@ import type {
   RepoLiveState,
   RepoParams,
   RequestMutation,
+  RequestRating,
+  RequestRatings,
 } from '@/api/types'
 import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
+import type { RateRequestInput } from '@/api/requests'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
-import { Coins, History, ShieldQuestion } from 'lucide-react'
+import { History, ShieldQuestion } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useMemo, useState } from 'react'
 import { RequestActivityDrawer } from './request-activity-drawer'
@@ -99,6 +102,8 @@ type RequestDetailPageProps = {
   performAction: (command: RequestActionCommand) => Promise<RequestActionResult>
   reopenAndReply: (input: CreateReplyInput) => Promise<RequestDiscussionReplyMutation>
   reopenDiscussion: (input: RequestDiscussionActionInput) => Promise<RequestDiscussionMutation>
+  ratings: RequestRatings
+  rateRequest: (input: RateRequestInput) => Promise<RequestRating>
   resolveDiscussion: (input: RequestDiscussionActionInput) => Promise<RequestDiscussionMutation>
   updateDescription: (input: UpdateDescriptionInput) => Promise<RequestMutation>
 }
@@ -121,6 +126,8 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     performAction,
     reopenAndReply,
     reopenDiscussion,
+    ratings,
+    rateRequest,
     resolveDiscussion,
     updateDescription,
   } = props
@@ -164,19 +171,12 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     [createReply, loadReplies, reopenAndReply],
   )
   const isMaintainer = live.repo.access.actor !== 'Public'
-  const isContributor = actor.id === request.author_user_id ||
-    request.invitees.some((invitee) => invitee.user.id === actor.id)
-  const heldContributor = request.held_at_unix !== null && isContributor && !isMaintainer
-  const hasLifecycleActions = request.permissions.can_mark_ready ||
-    request.permissions.can_return_to_working ||
-    request.permissions.can_hold ||
-    request.permissions.can_request_changes ||
-    request.permissions.can_assess ||
+  const hasLifecycleActions = request.permissions.can_submit ||
     request.permissions.can_merge ||
     request.permissions.can_close
 
   const canResolveDiscussion = useCallback(
-    (discussion: RequestDiscussion) => request.state !== 'Completed' && (
+    (discussion: RequestDiscussion) => !['Closed', 'Merged'].includes(request.state) && (
       isMaintainer ||
       actor.id === discussion.author.id ||
       actor.id === request.author_user_id
@@ -205,7 +205,6 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             {discussionControls}
             <RequestLifecycleActions
               actions={requestActions}
-              balance={account?.credit_balance_credits ?? null}
               className="hidden xl:flex"
               request={request}
             />
@@ -233,17 +232,8 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             <div className="flex flex-wrap items-center gap-2">
               <LifecycleBadge state={live.repo.lifecycle_state} />
               <Badge variant={requestStatusTone(request)}>{requestStatusLabel(request)}</Badge>
-              {request.held_at_unix !== null ? <Badge variant="warning">On hold</Badge> : null}
               <Badge variant={requestMergeabilityTone(request)}>{requestMergeabilityLabel(request)}</Badge>
-              {request.current_stake_credits > 0 ? (
-                <Badge variant="neutral"><Coins />{request.current_stake_credits}</Badge>
-              ) : null}
             </div>
-            {heldContributor ? (
-              <p className="text-sm text-warning-foreground">
-                Maintainer review is on hold. Author and invitee changes are disabled until release.
-              </p>
-            ) : null}
             {requestActions.error ? (
               <p className="text-sm text-destructive" role="alert">{requestActions.error}</p>
             ) : null}
@@ -261,7 +251,15 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         actions={discussionActions}
         actor={actor}
         canResolve={canResolveDiscussion}
-        contextRail={<RequestContextRail actions={requestActions} request={request} />}
+        contextRail={(
+          <RequestContextRail
+            actions={requestActions}
+            onRate={rateRequest}
+            params={discussionParams}
+            ratings={ratings}
+            request={request}
+          />
+        )}
         description={description}
         header={requestHeader}
         initialPage={discussionPage}
@@ -282,7 +280,6 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--border-strong)] bg-background/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur xl:hidden">
           <RequestLifecycleActions
             actions={requestActions}
-            balance={account?.credit_balance_credits ?? null}
             className="grid w-full grid-cols-2 [&>button]:min-h-10"
             request={request}
           />

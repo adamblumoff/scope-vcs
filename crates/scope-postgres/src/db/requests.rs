@@ -10,11 +10,10 @@ use super::{
     request_discussion_rows::{insert_discussion, save_read_state},
     request_invitees::delete_request_invitees,
     request_rows::{
-        credit_account_by_user_id, credit_ledger_entry_by_id, delete_request_rows,
-        insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
-        latest_request_events, request_by_id, request_by_name, request_event_by_id,
-        request_events_after_position, request_events_by_request_id, requests_by_repo_author,
-        requests_by_repo_id, save_credit_account_row, save_request_row,
+        delete_request_rows, insert_request_event_row, insert_request_row, latest_request_events,
+        request_by_id, request_by_name, request_event_by_id, request_events_after_position,
+        request_events_by_request_id, requests_by_repo_author, requests_by_repo_id,
+        save_request_row,
     },
 };
 use sea_orm::TransactionTrait;
@@ -22,11 +21,11 @@ use std::{collections::BTreeMap, sync::Arc};
 use {
     crate::error::PostgresError,
     scope_domain::requests::{
-        CloseRequestInput, CloseRequestMutation, CreditAccountMutation, EditRequestIdentityInput,
-        GrantUserCreditsInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
-        Request, RequestEvent, RequestRevisionMutation, RequestTimelineMutation, StartRequestInput,
-        StartRequestMutation, WorkingRequestUploadMutation, close_request, edit_request_identity,
-        grant_user_credits, record_request_revision, record_working_request_upload, start_request,
+        CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput,
+        RecordRequestRevisionInput, RecordWorkingRequestUploadInput, Request, RequestEvent,
+        RequestRevisionMutation, RequestTimelineMutation, StartRequestInput, StartRequestMutation,
+        WorkingRequestUploadMutation, close_request, edit_request_identity,
+        record_request_revision, record_working_request_upload, start_request,
     },
 };
 
@@ -89,31 +88,6 @@ impl RequestStore {
         limit: u64,
     ) -> Result<Vec<RequestEvent>, PostgresError> {
         latest_request_events(self.db.as_ref(), request_id, limit).await
-    }
-
-    pub async fn grant_user_credits(
-        &self,
-        input: GrantUserCreditsInput,
-    ) -> Result<CreditAccountMutation, PostgresError> {
-        let db = Arc::clone(&self.db);
-        let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        acquire_aggregate_lock(&tx, "user-credit", &input.user_id).await?;
-        ensure_user_exists(&tx, &input.user_id).await?;
-
-        let mut accounts = BTreeMap::new();
-        if let Some(account) = credit_account_by_user_id(&tx, &input.user_id).await? {
-            accounts.insert(account.user_id.clone(), account);
-        }
-        let mut ledger_entries = BTreeMap::new();
-        if let Some(entry) = credit_ledger_entry_by_id(&tx, &input.ledger_entry_id).await? {
-            ledger_entries.insert(entry.id.clone(), entry);
-        }
-
-        let mutation = grant_user_credits(&mut accounts, &mut ledger_entries, input)?;
-        save_credit_account_row(&tx, &mutation.account).await?;
-        insert_credit_ledger_entry_row(&tx, &mutation.ledger_entry).await?;
-        tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(mutation)
     }
 
     pub async fn start_request(
@@ -247,9 +221,10 @@ impl RequestStore {
         let db = Arc::clone(&self.db);
         let now_unix = input.now_unix;
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (_repo, request) = lock_request_repository(&tx, &input.request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        input.actor_can_close = request.author_user_id == input.actor_user_id;
+        input.actor_is_author = request.author_user_id == input.actor_user_id;
+        input.actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
         let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
         let mut events = request_events_by_request_id(&tx, &request.id)
             .await?
@@ -285,7 +260,7 @@ impl RequestStore {
                     .await?;
                 }
             }
-            CloseRequestMutation::Completed { request, event } => {
+            CloseRequestMutation::Closed { request, event } => {
                 save_request_row(&tx, request).await?;
                 delete_request_invitees(&tx, &request.id).await?;
                 insert_request_event_row(&tx, event).await?;
@@ -297,4 +272,4 @@ impl RequestStore {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

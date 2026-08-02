@@ -5,10 +5,7 @@ use super::{
     repository_rows::insert_repository,
     request_change_block_rows::insert_change_block,
     request_discussion_rows::{insert_discussion, insert_reply, save_read_state},
-    request_rows::{
-        insert_credit_ledger_entry_row, insert_request_event_row, insert_request_row,
-        save_credit_account_row,
-    },
+    request_rows::{insert_request_event_row, insert_request_row},
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::{
@@ -23,7 +20,7 @@ use super::{
 };
 #[cfg(any(test, feature = "test-support"))]
 use scope_domain::{
-    requests::{CreditLedgerEntry, Request, RequestEvent, UserCreditAccount},
+    requests::{Request, RequestEvent},
     store::{RepoStorageCleanup, SourceBlob, StoredRepository},
 };
 use sea_orm::{ActiveModelTrait, ConnectionTrait, IntoActiveModel, TransactionTrait};
@@ -310,30 +307,6 @@ impl RepositoryStore {
 
 #[cfg(any(test, feature = "test-support"))]
 impl AuthStore {
-    pub async fn credit_account_for_tests(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<UserCreditAccount>, PostgresError> {
-        entities::user_credit_account::Entity::find_by_id(user_id.to_string())
-            .one(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .map(entities::user_credit_account::Model::try_into_domain)
-            .transpose()
-    }
-
-    pub async fn credit_ledger_entries_for_tests(
-        &self,
-    ) -> Result<Vec<CreditLedgerEntry>, PostgresError> {
-        entities::credit_ledger_entry::Entity::find()
-            .all(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(entities::credit_ledger_entry::Model::try_into_domain)
-            .collect()
-    }
-
     pub async fn user_count_for_tests(&self) -> Result<u64, PostgresError> {
         use sea_orm::PaginatorTrait;
         entities::user::Entity::find()
@@ -545,12 +518,6 @@ async fn seed_catalog_rows(
     }
     for event in catalog.request_events.values() {
         insert_request_event_row(tx, event).await?;
-    }
-    for account in catalog.user_credit_accounts.values() {
-        save_credit_account_row(tx, account).await?;
-    }
-    for entry in catalog.credit_ledger_entries.values() {
-        insert_credit_ledger_entry_row(tx, entry).await?;
     }
     save_pending_repo_storage_deletions(
         tx,

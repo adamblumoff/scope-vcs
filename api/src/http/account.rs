@@ -60,20 +60,9 @@ pub(crate) async fn get_account_session(
     headers: HeaderMap,
 ) -> Result<Json<AccountSessionResponse>, ApiError> {
     let user = optional_scope_user(&state, &headers).await?;
-    let credit_balance_credits = match user.as_ref() {
-        Some(user) => state
-            .metadata
-            .auth()
-            .credit_account_by_user_id(&user.id)
-            .await?
-            .map(|account| account.balance_credits),
-        None => None,
-    };
-
     Ok(Json(AccountSessionResponse {
         identity: user.as_ref().map(SessionIdentity::from),
         user: user.map(user_response),
-        credit_balance_credits,
     }))
 }
 

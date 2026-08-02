@@ -2,7 +2,6 @@ import type {
   RequestEvent,
   RequestListItem,
   RequestSummary,
-  RequestWorkflowAssessmentOutcome,
   RequestWorkflowEventKind,
   RequestWorkflowState,
 } from '@/api/types'
@@ -11,34 +10,21 @@ import type { BadgeVariant } from '@/components/ui/badge'
 export type BadgeTone = BadgeVariant
 
 const REQUEST_STATES = {
-  Working: { label: 'Working', tone: 'neutral' },
-  ReadyForReview: { label: 'Ready for review', tone: 'info' },
-  Completed: { label: 'Completed', tone: 'success' },
+  Draft: { label: 'Draft', tone: 'neutral' },
+  Open: { label: 'Open', tone: 'info' },
+  Closed: { label: 'Closed', tone: 'neutral' },
+  Merged: { label: 'Merged', tone: 'success' },
 } as const satisfies Record<
   RequestWorkflowState,
   { label: string; tone: BadgeTone }
 >
 
-const ASSESSMENTS = {
-  Accepted: { label: 'Accepted', tone: 'success' },
-  Neutral: { label: 'Neutral', tone: 'neutral' },
-  Rejected: { label: 'Rejected', tone: 'danger' },
-} as const satisfies Record<
-  RequestWorkflowAssessmentOutcome,
-  { label: string; tone: BadgeTone }
->
-
 const EVENT_LABELS = {
   Started: 'Started',
-  ReadyForReview: 'Ready for review',
-  ReturnedToWorking: 'Returned to working',
+  Submitted: 'Submitted',
   RevisionPushed: 'Revision pushed',
-  Held: 'Held',
-  HoldReleased: 'Hold released',
-  Assessed: 'Assessed',
   Merged: 'Merged',
   Closed: 'Closed',
-  Settled: 'Settled',
   IdentityEdited: 'Request edited',
   DiscussionResolved: 'Discussion resolved',
   DiscussionReopened: 'Discussion reopened',
@@ -46,8 +32,9 @@ const EVENT_LABELS = {
 
 const MERGEABILITY = {
   Ready: { label: 'Clean merge available', tone: 'success' },
-  Completed: { label: 'Completed', tone: 'neutral' },
-  Working: { label: 'Working', tone: 'neutral' },
+  Draft: { label: 'Draft', tone: 'neutral' },
+  Closed: { label: 'Closed', tone: 'neutral' },
+  Merged: { label: 'Merged', tone: 'success' },
   NotMaintainer: { label: 'Maintainer required', tone: 'neutral' },
   MissingRequestBranch: { label: 'Branch missing', tone: 'warning' },
 } as const satisfies Record<
@@ -58,23 +45,11 @@ const MERGEABILITY = {
 type RequestLabelSource = RequestSummary | RequestListItem
 
 export function requestStatusLabel(request: RequestLabelSource) {
-  return request.state === 'Completed' && request.assessment_outcome
-    ? ASSESSMENTS[request.assessment_outcome].label
-    : REQUEST_STATES[request.state].label
+  return REQUEST_STATES[request.state].label
 }
 
 export function requestStatusTone(request: RequestLabelSource): BadgeTone {
-  return request.state === 'Completed' && request.assessment_outcome
-    ? ASSESSMENTS[request.assessment_outcome].tone
-    : REQUEST_STATES[request.state].tone
-}
-
-export function requestCompletionMergeLabel(request: RequestLabelSource) {
-  return request.state === 'Completed' &&
-    request.assessment_outcome === 'Accepted' &&
-    request.mergeability.status === 'Completed'
-    ? 'Merged'
-    : 'Not merged'
+  return REQUEST_STATES[request.state].tone
 }
 
 export function requestAudienceLabel(request: RequestLabelSource) {
@@ -114,20 +89,8 @@ export function requestEventBody(event: RequestEvent) {
   switch (event.kind) {
     case 'Started':
       return stringValue(value.title)
-    case 'ReadyForReview':
-      return [
-        oidText(value.head_oid),
-        creditText(value.stake_credits, 'staked'),
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    case 'ReturnedToWorking':
-      return [
-        reviewExitReason(value.reason),
-        creditText(value.stake_credits, 'refunded'),
-      ]
-        .filter(Boolean)
-        .join(' · ')
+    case 'Submitted':
+      return oidText(value.head_oid)
     case 'RevisionPushed':
       return [
         `${oidText(value.old_head_oid)} → ${oidText(value.new_head_oid)}`,
@@ -135,30 +98,10 @@ export function requestEventBody(event: RequestEvent) {
       ]
         .filter(Boolean)
         .join('\n')
-    case 'Held':
-    case 'HoldReleased':
     case 'Closed':
       return oidText(value.head_oid)
-    case 'Assessed':
-      return [
-        stringValue(value.outcome),
-        stringValue(value.body_markdown),
-        creditText(value.stake_credits, 'at settlement'),
-      ]
-        .filter(Boolean)
-        .join(' · ')
     case 'Merged':
       return `${oidText(value.head_oid)} → ${oidText(value.main_oid)}`
-    case 'Settled': {
-      const settlement = value.settlement as Record<string, unknown> | undefined
-      return settlement
-        ? [
-            `${numberValue(settlement.refunded_credits)} refunded`,
-            `${numberValue(settlement.reward_credits)} reward`,
-            `${numberValue(settlement.burned_credits)} burned`,
-          ].join(' / ')
-        : null
-    }
     case 'IdentityEdited':
       return 'The request title or description was updated.'
     case 'DiscussionResolved':
@@ -193,28 +136,6 @@ function oidText(value: unknown) {
   return typeof value === 'string' ? shortOid(value) : null
 }
 
-function reviewExitReason(value: unknown) {
-  switch (value) {
-    case 'AuthorReturned':
-      return 'Author returned to Working'
-    case 'ChangesRequested':
-      return 'Maintainer requested changes'
-    case 'RevisionPushed':
-      return 'Branch update invalidated review'
-    case 'ContentEdited':
-      return 'Request edit invalidated review'
-    default:
-      return null
-  }
-}
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : null
-}
-
-function numberValue(value: unknown) {
-  return typeof value === 'number' ? value : 0
-}
-
-function creditText(value: unknown, suffix: string) {
-  return typeof value === 'number' ? `${value} ${suffix}` : null
 }

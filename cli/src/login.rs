@@ -70,11 +70,7 @@ pub fn whoami() -> anyhow::Result<()> {
         bail!("not signed in; run scope login");
     };
     println!("{}", display_user(&session.user));
-    if let Some(balance) =
-        account_session(&client, &api_url, &session.token)?.credit_balance_credits
-    {
-        println!("Credits: {balance}");
-    }
+    let _ = account_session(&client, &api_url, &session.token)?;
     Ok(())
 }
 

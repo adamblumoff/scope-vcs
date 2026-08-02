@@ -30,6 +30,8 @@ mod migration_harness_tests;
 #[cfg(test)]
 mod migration_tests;
 #[cfg(test)]
+mod request_submission_migration_tests;
+#[cfg(test)]
 mod runner_protocol_cutover_migration_tests;
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
@@ -61,16 +63,11 @@ pub use request_invitees::{
 };
 mod request_queue;
 pub use request_queue::{RequestQueueCursor, RequestQueuePageQuery, RequestQueueRow};
+mod request_ratings;
 mod request_rows;
 pub use request_rows::RequestListRow;
-mod request_identity_transactions;
-#[cfg(test)]
-mod request_invalidation_transactions_tests;
 mod request_merge;
-mod request_review_transactions;
-#[cfg(test)]
-mod request_review_transactions_tests;
-mod request_revision_transactions;
+mod request_submission_transactions;
 mod requests;
 mod run_attempt_persistence;
 mod run_details;
@@ -89,9 +86,6 @@ pub use runs::{DispatchClaim, StoredRunLog};
 mod run_concurrency_tests;
 #[cfg(test)]
 mod runs_tests;
-mod starter_credits;
-#[cfg(test)]
-mod starter_credits_tests;
 #[cfg(any(test, feature = "local-dev", feature = "test-support"))]
 mod test_support;
 mod visibility_changes;

@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn maintainer_can_manage_invitees_after_work_was_published() {
+    async fn maintainer_can_manage_invitees_after_submission() {
         let store = postgres_store(2);
         start_public_request(&store, "request_override").await;
         store
@@ -497,8 +497,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        request.first_ready_at_unix = Some(4);
-        request.ready_queue_version = Some(1);
+        request.submitted_at_unix = Some(4);
         request.updated_at_unix = 4;
         super::super::request_rows::save_request_row(store.db.as_ref(), &request)
             .await

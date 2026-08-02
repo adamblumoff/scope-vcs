@@ -2,7 +2,6 @@ import { createApiClient } from '@/api/client'
 import type { RequestParams } from '@/api/types'
 import type {
   LeaveRequestResponse,
-  RequestAssessmentOutcome,
   RequestCloseResponse,
   RequestInviteeMutationResponse,
   RequestMutationResponse,
@@ -11,16 +10,11 @@ import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
 
 export type RequestActionCommand =
   | { action: 'add_invitee'; handle: string }
-  | { action: 'assess'; body_markdown: string | null; outcome: RequestAssessmentOutcome }
   | { action: 'close' }
-  | { action: 'hold' }
   | { action: 'leave' }
   | { action: 'merge' }
-  | { action: 'ready'; stake_credits: number | null }
-  | { action: 'release_hold' }
+  | { action: 'submit' }
   | { action: 'remove_invitee'; handle: string }
-  | { action: 'request_changes' }
-  | { action: 'working' }
 
 export type RequestActionInput = RequestParams & RequestActionCommand
 
@@ -36,41 +30,10 @@ export async function performRequestActionForRequest(
   const mutationOptions = { auth: 'required' as const }
 
   switch (input.action) {
-    case 'ready':
+    case 'submit':
       return mutationResult(await api.post<RequestMutationResponse>(
-        requestRoute(ApiRouteTemplates.repoRequestReady, input),
-        { ...mutationOptions, body: { stake_credits: input.stake_credits } },
-      ))
-    case 'working':
-      return mutationResult(await api.post<RequestMutationResponse>(
-        requestRoute(ApiRouteTemplates.repoRequestWorking, input),
-        mutationOptions,
-      ))
-    case 'hold':
-      return mutationResult(await api.put<RequestMutationResponse>(
-        requestRoute(ApiRouteTemplates.repoRequestHold, input),
-        mutationOptions,
-      ))
-    case 'release_hold':
-      return mutationResult(await api.delete<RequestMutationResponse>(
-        requestRoute(ApiRouteTemplates.repoRequestHold, input),
-        mutationOptions,
-      ))
-    case 'request_changes':
-      return mutationResult(await api.post<RequestMutationResponse>(
-        requestRoute(ApiRouteTemplates.repoRequestRequestChanges, input),
-        mutationOptions,
-      ))
-    case 'assess':
-      return mutationResult(await api.post<RequestMutationResponse>(
-        requestRoute(ApiRouteTemplates.repoRequestAssessment, input),
-        {
-          ...mutationOptions,
-          body: {
-            body_markdown: input.body_markdown,
-            outcome: input.outcome,
-          },
-        },
+        requestRoute(ApiRouteTemplates.repoRequestSubmit, input),
+        { ...mutationOptions, body: {} },
       ))
     case 'merge':
       return mutationResult(await api.post<RequestMutationResponse>(

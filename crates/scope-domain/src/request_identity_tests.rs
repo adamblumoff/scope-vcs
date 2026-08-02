@@ -1,6 +1,6 @@
 use super::{
     requests::*,
-    requests_tests::{ready_request, working_request},
+    requests_tests::{open_request, working_request},
 };
 use std::collections::BTreeMap;
 
@@ -86,13 +86,10 @@ fn identity_edit_supports_each_field_combination_and_rejects_empty_or_unchanged_
 }
 
 #[test]
-fn held_request_rejects_identity_edits_at_domain_boundary() {
-    let mut request = ready_request();
-    request.held_at_unix = Some(21);
-    request.held_by_user_id = Some("maintainer".to_string());
-    request.updated_at_unix = 21;
+fn open_request_identity_edits_preserve_submission() {
+    let request = open_request();
     let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let error = edit_request_identity(
+    let mutation = edit_request_identity(
         &mut requests,
         &mut BTreeMap::new(),
         EditRequestIdentityInput {
@@ -101,31 +98,12 @@ fn held_request_rejects_identity_edits_at_domain_boundary() {
             actor_can_edit_identity: true,
             event_id: "event_identity".to_string(),
             title: None,
-            description_markdown: Some("Changed while held".to_string()),
+            description_markdown: Some("Changed while open".to_string()),
             now_unix: 22,
         },
     )
-    .unwrap_err();
-    assert!(error.message.contains("while held"));
-}
-
-#[test]
-fn ready_request_rejects_identity_edits_until_review_invalidation_exists() {
-    let request = ready_request();
-    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
-    let error = edit_request_identity(
-        &mut requests,
-        &mut BTreeMap::new(),
-        EditRequestIdentityInput {
-            request_id: "request_1".to_string(),
-            actor_user_id: "author".to_string(),
-            actor_can_edit_identity: true,
-            event_id: "event_identity".to_string(),
-            title: None,
-            description_markdown: Some("Changed while ready".to_string()),
-            now_unix: 22,
-        },
-    )
-    .unwrap_err();
-    assert!(error.message.contains("while ready for review"));
+    .unwrap();
+    assert_eq!(mutation.request.state(), RequestState::Open);
+    assert_eq!(mutation.request.submitted_at_unix, Some(20));
+    assert_eq!(mutation.request.description_markdown, "Changed while open");
 }

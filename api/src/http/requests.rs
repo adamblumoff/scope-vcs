@@ -14,22 +14,19 @@ use axum::{
     http::HeaderMap,
 };
 use scope_api_contract::{
-    AddRequestInviteeRequest, AssessRequestRequest, EditRequestIdentityRequest,
-    LeaveRequestResponse, ReadyRequestRequest, RemoveRequestInviteeRequest,
-    RequestActorSummaryResponse, RequestCloseResponse, RequestDetailResponse,
-    RequestInviteeMutationResponse, RequestInviteeResponse, RequestListResponse,
-    RequestMergeabilityResponse, RequestMutationResponse, RequestPermissionsResponse,
-    RequestSummaryResponse, StartRequestRequest,
+    AddRequestInviteeRequest, EditRequestIdentityRequest, LeaveRequestResponse,
+    RemoveRequestInviteeRequest, RequestActorSummaryResponse, RequestCloseResponse,
+    RequestDetailResponse, RequestInviteeMutationResponse, RequestInviteeResponse,
+    RequestListResponse, RequestMergeabilityResponse, RequestMutationResponse,
+    RequestPermissionsResponse, RequestSummaryResponse, StartRequestRequest, SubmitRequestRequest,
 };
 use scope_domain::{
     projection::{ProjectionViewKey, project_graph},
     requests::{
-        AssessRequestInput, CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput,
-        MarkRequestReadyInput, MergeRequestInput, REQUEST_LIST_DEFAULT_PAGE_SIZE,
-        REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole, RequestAssessmentOutcome,
-        RequestAudience, RequestReviewExitReason, RequestViewer, ReturnRequestToWorkingInput,
-        SetRequestHoldInput, StartRequestInput, canonical_request_ref, request_actor_role,
-        request_mergeability, request_policy,
+        CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput, MergeRequestInput,
+        REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestAudience,
+        RequestViewer, StartRequestInput, SubmitRequestInput, canonical_request_ref,
+        request_actor_role, request_mergeability, request_policy,
     },
     store::{RepositoryAccess, RepositoryActor, StoredRepository},
 };
@@ -158,31 +155,24 @@ pub(crate) async fn get_request(
     Ok(Json(RequestDetailResponse { request }))
 }
 
-pub(crate) async fn mark_request_ready(
+pub(crate) async fn submit_request(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-    Json(input): Json<ReadyRequestRequest>,
+    Json(_input): Json<SubmitRequestRequest>,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let uses_credits = request.author_role == RequestActorRole::Public;
     let mutation = state
         .metadata
         .requests()
-        .mark_request_ready(MarkRequestReadyInput {
+        .submit_request(SubmitRequestInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
             actor_is_author: false,
-            actor_can_mutate: false,
-            stake_credits: input.stake_credits,
-            public_ready_count: 0,
-            ready_queue_version: 0,
-            event_id: random_id("event_request_ready")?,
-            stake_ledger_entry_id: uses_credits
-                .then(|| random_id("ledger_review_stake"))
-                .transpose()?,
+            actor_can_submit: false,
+            event_id: random_id("event_request_submitted")?,
             now_unix: unix_now()?,
         })
         .await?;
@@ -192,168 +182,7 @@ pub(crate) async fn mark_request_ready(
         access,
         &user.id,
         mutation.request,
-        RepoChangeReason::RequestReady,
-    )
-    .await
-}
-
-pub(crate) async fn return_request_to_working(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let mutation = state
-        .metadata
-        .requests()
-        .return_request_to_working(ReturnRequestToWorkingInput {
-            request_id: request.id,
-            actor_user_id: user.id.clone(),
-            actor_is_author: false,
-            actor_is_maintainer: false,
-            actor_can_mutate: false,
-            reason: RequestReviewExitReason::AuthorReturned,
-            event_id: random_id("event_request_working")?,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    lifecycle_response(
-        &state,
-        &repo,
-        access,
-        &user.id,
-        mutation.request,
-        RepoChangeReason::RequestWorking,
-    )
-    .await
-}
-
-pub(crate) async fn hold_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    set_hold(state, headers, owner, repo_name, request_id, true).await
-}
-
-pub(crate) async fn release_request_hold(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    set_hold(state, headers, owner, repo_name, request_id, false).await
-}
-
-async fn set_hold(
-    state: AppState,
-    headers: HeaderMap,
-    owner: String,
-    repo_name: String,
-    request_id: String,
-    held: bool,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let mutation = state
-        .metadata
-        .requests()
-        .set_request_hold(SetRequestHoldInput {
-            request_id: request.id,
-            actor_user_id: user.id.clone(),
-            actor_is_maintainer: false,
-            held,
-            event_id: random_id(if held {
-                "event_request_held"
-            } else {
-                "event_request_hold_released"
-            })?,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    lifecycle_response(
-        &state,
-        &repo,
-        access,
-        &user.id,
-        mutation.request,
-        if held {
-            RepoChangeReason::RequestHeld
-        } else {
-            RepoChangeReason::RequestUnheld
-        },
-    )
-    .await
-}
-
-pub(crate) async fn request_changes(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let mutation = state
-        .metadata
-        .requests()
-        .return_request_to_working(ReturnRequestToWorkingInput {
-            request_id: request.id,
-            actor_user_id: user.id.clone(),
-            actor_is_author: false,
-            actor_is_maintainer: false,
-            actor_can_mutate: false,
-            reason: RequestReviewExitReason::ChangesRequested,
-            event_id: random_id("event_request_changes_requested")?,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    lifecycle_response(
-        &state,
-        &repo,
-        access,
-        &user.id,
-        mutation.request,
-        RepoChangeReason::RequestChangesRequested,
-    )
-    .await
-}
-
-pub(crate) async fn assess_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-    Json(input): Json<AssessRequestRequest>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let ids = settlement_ids(&request, input.outcome.into())?;
-    let mutation = state
-        .metadata
-        .requests()
-        .assess_request(AssessRequestInput {
-            request_id: request.id,
-            actor_user_id: user.id.clone(),
-            actor_is_maintainer: false,
-            outcome: input.outcome.into(),
-            body_markdown: input.body_markdown,
-            assessed_event_id: random_id("event_request_assessed")?,
-            settled_event_id: ids.settled_event_id,
-            refund_ledger_entry_id: ids.refund_ledger_entry_id,
-            reward_ledger_entry_id: ids.reward_ledger_entry_id,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    lifecycle_response(
-        &state,
-        &repo,
-        access,
-        &user.id,
-        mutation.request,
-        RepoChangeReason::RequestAssessed,
+        RepoChangeReason::RequestSubmitted,
     )
     .await
 }
@@ -375,7 +204,6 @@ pub(crate) async fn merge_request(
         }
         return Err(ApiError::conflict("request cannot be merged"));
     }
-    let ids = settlement_ids(&request, RequestAssessmentOutcome::Accepted)?;
     let prepared =
         prepare_request_merge(&state, &owner, &repo_name, &user.id, &repo, &request).await?;
     let durable_objects = prepared.durable_objects().to_vec();
@@ -397,10 +225,6 @@ pub(crate) async fn merge_request(
                 merged_head_oid: String::new(),
                 merged_main_oid: String::new(),
                 merged_event_id: random_id("event_request_merged")?,
-                assessed_event_id: random_id("event_request_merge_assessed")?,
-                settled_event_id: ids.settled_event_id,
-                refund_ledger_entry_id: ids.refund_ledger_entry_id,
-                reward_ledger_entry_id: ids.reward_ledger_entry_id,
                 now_unix: unix_now()?,
             },
             &crate::persistence_ids::generate_persistence_id,
@@ -434,34 +258,6 @@ pub(crate) async fn merge_request(
         RepoChangeReason::RequestMerged,
     )
     .await
-}
-
-#[derive(Default)]
-struct SettlementIds {
-    settled_event_id: Option<String>,
-    refund_ledger_entry_id: Option<String>,
-    reward_ledger_entry_id: Option<String>,
-}
-
-fn settlement_ids(
-    request: &Request,
-    outcome: RequestAssessmentOutcome,
-) -> Result<SettlementIds, ApiError> {
-    if request.current_stake_credits == 0 {
-        return Ok(SettlementIds::default());
-    }
-    Ok(SettlementIds {
-        settled_event_id: Some(random_id("event_request_settled")?),
-        refund_ledger_entry_id: matches!(
-            outcome,
-            RequestAssessmentOutcome::Accepted | RequestAssessmentOutcome::Neutral
-        )
-        .then(|| random_id("ledger_review_stake_refund"))
-        .transpose()?,
-        reward_ledger_entry_id: (outcome == RequestAssessmentOutcome::Accepted)
-            .then(|| random_id("ledger_assessment_reward"))
-            .transpose()?,
-    })
 }
 
 async fn lifecycle_response(
@@ -527,7 +323,8 @@ pub(crate) async fn close_request(
             CloseRequestInput {
                 request_id: request.id,
                 actor_user_id: user.id.clone(),
-                actor_can_close: false,
+                actor_is_author: false,
+                actor_is_maintainer: false,
                 event_id: random_id("event_request_closed")?,
                 now_unix: unix_now()?,
             },
@@ -545,7 +342,7 @@ pub(crate) async fn close_request(
                 request: None,
             }))
         }
-        CloseRequestMutation::Completed { request, .. } => {
+        CloseRequestMutation::Closed { request, .. } => {
             let current_main_oid = committed_main_oid_for_access(&repo, access)?;
             let request = request_response_for_viewer(
                 &state,
@@ -631,7 +428,7 @@ pub(crate) async fn edit_request_identity(
     let mutation = state
         .metadata
         .requests()
-        .edit_request_identity_with_review_invalidation(EditRequestIdentityInput {
+        .edit_request_identity(EditRequestIdentityInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
             actor_can_edit_identity: false,
@@ -886,13 +683,9 @@ async fn request_response_for_viewer(
         can_edit_identity: decision.can_edit_identity,
         can_pull_branch: decision.can_pull_branch,
         can_push_branch: decision.can_push_branch,
-        can_mark_ready: decision.can_mark_ready,
-        can_return_to_working: decision.can_return_to_working,
+        can_submit: decision.can_submit,
         can_manage_invitees: decision.can_manage_invitees,
         can_leave_request: decision.can_leave_request,
-        can_hold: decision.can_hold,
-        can_request_changes: decision.can_request_changes,
-        can_assess: decision.can_assess,
         can_close: decision.can_close,
         can_merge: decision.can_merge,
     };

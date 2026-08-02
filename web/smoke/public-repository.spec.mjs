@@ -198,10 +198,10 @@ test('public repository requests route is anonymously readable', async () => {
     await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
     await assertCurrentRepoSection(page, 'Requests')
     await page.getByRole('heading', { level: 2, name: 'Your work' }).waitFor()
-    await page.getByRole('heading', { level: 2, name: 'Ready for review' }).waitFor()
-    await page.getByRole('heading', { level: 2, name: 'Completed' }).waitFor()
-    await page.getByText('No requests are ready for review.', { exact: true }).waitFor()
-    await page.getByText('No completed requests are visible.', { exact: true }).waitFor()
+    await page.getByRole('heading', { level: 2, name: 'Open' }).waitFor()
+    await page.getByRole('heading', { level: 2, name: 'Closed' }).waitFor()
+    await page.getByText('No open requests are visible.', { exact: true }).waitFor()
+    await page.getByText('No closed requests are visible.', { exact: true }).waitFor()
   })
 })
 
@@ -264,7 +264,7 @@ test('request queue search is keyboard accessible and mobile rows do not overflo
         true,
       )
       const search = page.getByRole('searchbox', {
-        name: 'Search ready and completed requests',
+        name: 'Search open and closed requests',
       })
       const queueRequests = []
       page.on('request', (request) => {
@@ -281,7 +281,7 @@ test('request queue search is keyboard accessible and mobile rows do not overflo
       await search.press('Enter')
       await page
         .getByText(
-          'No ready for review requests match “missing request title”.',
+          'No open requests match “missing request title”.',
           { exact: true },
         )
         .waitFor()

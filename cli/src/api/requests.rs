@@ -126,101 +126,19 @@ pub fn start_request(
     )
 }
 
-pub fn mark_request_ready(
+pub fn submit_request(
     client: &Client,
     api_url: &str,
     session_token: &str,
     target: RequestTarget<'_>,
-    stake_credits: Option<u32>,
 ) -> anyhow::Result<RequestMutationResponse> {
     execute_request(
         client
-            .post(request_action_url(api_url, target, "ready"))
+            .post(request_action_url(api_url, target, "submit"))
             .bearer_auth(session_token)
-            .json(&ReadyRequestRequest { stake_credits }),
+            .json(&SubmitRequestRequest {}),
         target,
-        "mark request ready",
-    )
-}
-
-pub fn return_request_to_working(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTarget<'_>,
-) -> anyhow::Result<RequestMutationResponse> {
-    execute_request(
-        client
-            .post(request_action_url(api_url, target, "working"))
-            .bearer_auth(session_token),
-        target,
-        "return request to Working",
-    )
-}
-
-pub fn hold_request(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTarget<'_>,
-) -> anyhow::Result<RequestMutationResponse> {
-    execute_request(
-        client
-            .put(request_action_url(api_url, target, "hold"))
-            .bearer_auth(session_token),
-        target,
-        "hold request",
-    )
-}
-
-pub fn unhold_request(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTarget<'_>,
-) -> anyhow::Result<RequestMutationResponse> {
-    execute_request(
-        client
-            .delete(request_action_url(api_url, target, "hold"))
-            .bearer_auth(session_token),
-        target,
-        "release request hold",
-    )
-}
-
-pub fn request_changes(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTarget<'_>,
-) -> anyhow::Result<RequestMutationResponse> {
-    execute_request(
-        client
-            .post(request_action_url(api_url, target, "request-changes"))
-            .bearer_auth(session_token),
-        target,
-        "request changes",
-    )
-}
-
-pub fn assess_request(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTarget<'_>,
-    outcome: RequestAssessmentOutcome,
-    body_markdown: Option<String>,
-) -> anyhow::Result<RequestMutationResponse> {
-    execute_request(
-        client
-            .post(request_action_url(api_url, target, "assessment"))
-            .bearer_auth(session_token)
-            .json(&AssessRequestRequest {
-                outcome,
-                body_markdown,
-            }),
-        target,
-        "assess request",
+        "submit request",
     )
 }
 
@@ -236,6 +154,24 @@ pub fn merge_request(
             .bearer_auth(session_token),
         target,
         "merge request",
+    )
+}
+
+pub fn rate_request(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    target: RequestTarget<'_>,
+    score: u8,
+    reason: String,
+) -> anyhow::Result<RequestRatingResponse> {
+    execute_request(
+        client
+            .post(request_action_url(api_url, target, "ratings"))
+            .bearer_auth(session_token)
+            .json(&CreateRequestRatingRequest { score, reason }),
+        target,
+        "rate request participant",
     )
 }
 
@@ -505,28 +441,27 @@ mod tests {
     fn request_errors_surface_authoritative_safe_messages() {
         let (api_url, server) = serve_once(
             StatusCode::CONFLICT,
-            r#"{"error":"stake must be 1–25\u001b[31m"}"#,
+            r#"{"error":"request cannot be submitted\u001b[31m"}"#,
         );
 
-        let error = mark_request_ready(&Client::new(), &api_url, "token", target(), Some(26))
+        let error = submit_request(&Client::new(), &api_url, "token", target())
             .unwrap_err()
             .to_string();
 
-        assert_eq!(error, "stake must be 1–25 [31m");
+        assert_eq!(error, "request cannot be submitted [31m");
         let request = server.join().unwrap();
-        assert!(request.starts_with("POST /v1/repos/owner/repo/requests/req_one/ready "));
-        assert!(request.contains(r#"{"stake_credits":26}"#), "{request}");
+        assert!(request.starts_with("POST /v1/repos/owner/repo/requests/req_one/submit "));
+        assert!(request.contains("\r\n\r\n{}"), "{request}");
     }
 
     #[test]
-    fn maintainer_ready_omits_the_stake_field() {
+    fn submit_posts_an_empty_payload() {
         let (api_url, server) = serve_once(StatusCode::CONFLICT, r#"{"error":"fixture stop"}"#);
 
-        mark_request_ready(&Client::new(), &api_url, "token", target(), None).unwrap_err();
+        submit_request(&Client::new(), &api_url, "token", target()).unwrap_err();
 
         let request = server.join().unwrap();
         assert!(request.contains("\r\n\r\n{}"), "{request}");
-        assert!(!request.contains("stake_credits"), "{request}");
     }
 
     #[test]

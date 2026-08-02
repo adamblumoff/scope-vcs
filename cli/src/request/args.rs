@@ -1,5 +1,5 @@
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use scope_api_contract::{RequestAssessmentOutcome, RequestAudience};
+use scope_api_contract::RequestAudience;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -10,15 +10,13 @@ pub struct RequestArgs {
 
 #[derive(Subcommand)]
 pub(super) enum RequestCommand {
-    #[command(about = "Start a Working request and create its local branch")]
+    #[command(about = "Start a draft request and create its local branch")]
     Start(RequestStartArgs),
     #[command(about = "Push the current commit to a request branch")]
     Push(RequestPushArgs),
-    #[command(about = "Publish a request as ready for review")]
-    Ready(RequestReadyArgs),
-    #[command(about = "Return a request to Working")]
-    Working(RequestWorkingArgs),
-    #[command(about = "Close a Working request")]
+    #[command(about = "Submit a request to its maintainers")]
+    Submit(RequestSubmitArgs),
+    #[command(about = "Close a request")]
     Close(RequestCloseArgs),
     #[command(about = "Edit a request title or description")]
     Edit(RequestEditArgs),
@@ -28,16 +26,10 @@ pub(super) enum RequestCommand {
     Uninvite(RequestUninviteArgs),
     #[command(about = "Leave a request that invited you")]
     Leave(RequestLeaveArgs),
-    #[command(about = "Place a ready request on hold")]
-    Hold(RequestHoldArgs),
-    #[command(about = "Release a request review hold")]
-    Unhold(RequestUnholdArgs),
-    #[command(about = "Return a request to Working for changes")]
-    RequestChanges(RequestChangesArgs),
-    #[command(about = "Complete a request with a review assessment")]
-    Assess(RequestAssessArgs),
     #[command(about = "Merge a request into main")]
     Merge(RequestMergeArgs),
+    #[command(about = "Rate the other terminal request participant")]
+    Rate(RequestRateArgs),
     #[command(about = "Start a top-level discussion on a request")]
     Discuss(RequestDiscussArgs),
     #[command(about = "Show one request")]
@@ -83,23 +75,11 @@ pub(super) struct RequestPushArgs {
 }
 
 #[derive(Parser)]
-pub(super) struct RequestReadyArgs {
+pub(super) struct RequestSubmitArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
-    #[arg(
-        long,
-        value_name = "CREDITS",
-        help = "Credits to stake (required for public authors; ignored for owner/member authors)"
-    )]
-    pub(super) stake: Option<u32>,
-    #[arg(long, help = "Confirm publication and the credit stake")]
+    #[arg(long, help = "Confirm one-way submission")]
     pub(super) yes: bool,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestWorkingArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
 }
 
 #[derive(Parser)]
@@ -153,46 +133,21 @@ pub(super) struct RequestLeaveArgs {
 }
 
 #[derive(Parser)]
-pub(super) struct RequestHoldArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestUnholdArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestChangesArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestAssessArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
-    #[arg(value_enum)]
-    pub(super) outcome: RequestAssessmentArg,
-    #[arg(
-        required_if_eq("outcome", "rejected"),
-        long,
-        value_name = "MARKDOWN",
-        help = "Assessment message (required when rejecting)"
-    )]
-    pub(super) message: Option<String>,
-    #[arg(long, help = "Confirm completion and credit settlement")]
-    pub(super) yes: bool,
-}
-
-#[derive(Parser)]
 pub(super) struct RequestMergeArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
-    #[arg(long, help = "Confirm the merge and any resulting assessment")]
+    #[arg(long, help = "Confirm the merge")]
     pub(super) yes: bool,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestRateArgs {
+    #[command(flatten)]
+    pub(super) target: RequestTargetArgs,
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=5), help = "Rating from 1 to 5")]
+    pub(super) score: u8,
+    #[arg(long, help = "Required reason for the rating")]
+    pub(super) reason: String,
 }
 
 #[derive(Parser)]
@@ -207,12 +162,16 @@ pub(super) struct RequestDiscussArgs {
 pub(super) struct RequestShowArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
+    #[arg(long, help = "Print the request and activity as JSON")]
+    pub(super) json: bool,
 }
 
 #[derive(Parser)]
 pub(super) struct RequestListArgs {
     #[arg(long, help = "Scope Git remote for the target repository")]
     pub(super) remote: Option<String>,
+    #[arg(long, help = "Print visible requests as JSON")]
+    pub(super) json: bool,
 }
 
 #[derive(Parser)]
@@ -232,23 +191,6 @@ impl From<RequestAudienceArg> for RequestAudience {
         match audience {
             RequestAudienceArg::Public => RequestAudience::Public,
             RequestAudienceArg::Private => RequestAudience::Private,
-        }
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-pub(super) enum RequestAssessmentArg {
-    Accepted,
-    Neutral,
-    Rejected,
-}
-
-impl From<RequestAssessmentArg> for RequestAssessmentOutcome {
-    fn from(outcome: RequestAssessmentArg) -> Self {
-        match outcome {
-            RequestAssessmentArg::Accepted => RequestAssessmentOutcome::Accepted,
-            RequestAssessmentArg::Neutral => RequestAssessmentOutcome::Neutral,
-            RequestAssessmentArg::Rejected => RequestAssessmentOutcome::Rejected,
         }
     }
 }

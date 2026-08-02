@@ -1,15 +1,12 @@
 use super::{RequestListRow, RequestStore, entities};
 use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect,
+    ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
     sea_query::{Expr, Query, extension::postgres::PgExpr},
 };
 use {
     crate::error::PostgresError,
     scope_domain::{
-        requests::{
-            REQUEST_LIST_MAX_PAGE_SIZE, RequestAudience, RequestQueueSection, RequestState,
-        },
+        requests::{REQUEST_LIST_MAX_PAGE_SIZE, RequestAudience, RequestQueueSection},
         store::{RepositoryAccess, RepositoryActor},
     },
 };
@@ -20,14 +17,12 @@ pub enum RequestQueueCursor {
         updated_at_unix: u64,
         request_id: String,
     },
-    Ready {
-        snapshot_version: u64,
-        stake_credits: u32,
-        ready_at_unix: u64,
+    Open {
+        submitted_at_unix: u64,
         request_id: String,
     },
-    Completed {
-        completed_at_unix: u64,
+    Closed {
+        closed_at_unix: u64,
         request_id: String,
     },
 }
@@ -48,54 +43,6 @@ pub struct RequestQueueRow {
     pub request: RequestListRow,
     pub cursor: RequestQueueCursor,
 }
-#[derive(FromQueryResult)]
-struct ReadyQueueVersionDbRow {
-    snapshot_version: i64,
-}
-
-// Ready-cycle versions are retained after exit, so MAX across all request history is
-// the monotonic repository watermark. Domain facts couple publication to a non-null version.
-async fn ready_queue_snapshot_version<C>(conn: &C, repo_id: &str) -> Result<u64, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    entities::request::Entity::find()
-        .select_only()
-        .expr_as(
-            Expr::cust("COALESCE(MAX(ready_queue_version), 0)"),
-            "snapshot_version",
-        )
-        .filter(entities::request::Column::RepoId.eq(repo_id))
-        .into_model::<ReadyQueueVersionDbRow>()
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| {
-            PostgresError::internal_message("ready queue snapshot query returned no row")
-        })
-        .and_then(|row| entities::i64_to_u64(row.snapshot_version, "ready queue snapshot version"))
-}
-
-pub(super) async fn next_ready_queue_version<C>(
-    conn: &C,
-    repo_id: &str,
-) -> Result<u64, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    ready_queue_snapshot_version(conn, repo_id)
-        .await?
-        .checked_add(1)
-        .ok_or_else(|| PostgresError::internal_message("ready queue version overflow"))
-        .and_then(|version| {
-            i64::try_from(version).map(|_| version).map_err(|_| {
-                PostgresError::internal_message(
-                    "ready queue version exceeds PostgreSQL bigint range",
-                )
-            })
-        })
-}
-
 impl RequestStore {
     pub async fn request_queue_page(
         &self,
@@ -103,10 +50,10 @@ impl RequestStore {
     ) -> Result<Vec<RequestQueueRow>, PostgresError> {
         if input.section == RequestQueueSection::YourWork && input.search.is_some() {
             return Err(PostgresError::invalid_input(
-                "search is only supported for ready and completed requests",
+                "search is only supported for open and closed requests",
             ));
         }
-        let snapshot_version = ready_snapshot(&input, self).await?;
+        ensure_cursor_section(&input)?;
         let mut query = entities::request::Entity::find()
             .filter(entities::request::Column::RepoId.eq(input.repo_id));
 
@@ -133,32 +80,19 @@ impl RequestStore {
                             .add(entities::request::Column::AuthorUserId.eq(viewer_user_id))
                             .add(Expr::exists(invitee)),
                     )
-                    .filter(
-                        Condition::any()
-                            .add(
-                                entities::request::Column::State
-                                    .ne(entities::encode_enum(RequestState::Completed)?),
-                            )
-                            .add(entities::request::Column::FirstReadyAtUnix.is_not_null()),
-                    )
+                    .filter(entities::request::Column::SubmittedAtUnix.is_null())
+                    .filter(entities::request::Column::ClosedAtUnix.is_null())
+                    .filter(entities::request::Column::MergedAtUnix.is_null())
             }
-            RequestQueueSection::Ready => query
-                .filter(
-                    entities::request::Column::State
-                        .eq(entities::encode_enum(RequestState::ReadyForReview)?),
-                )
-                .filter(
-                    entities::request::Column::ReadyQueueVersion.lte(
-                        i64::try_from(snapshot_version.expect("ready snapshot established"))
-                            .map_err(PostgresError::internal)?,
-                    ),
-                ),
-            RequestQueueSection::Completed => query
-                .filter(
-                    entities::request::Column::State
-                        .eq(entities::encode_enum(RequestState::Completed)?),
-                )
-                .filter(entities::request::Column::FirstReadyAtUnix.is_not_null()),
+            RequestQueueSection::Open => query
+                .filter(entities::request::Column::SubmittedAtUnix.is_not_null())
+                .filter(entities::request::Column::ClosedAtUnix.is_null())
+                .filter(entities::request::Column::MergedAtUnix.is_null()),
+            RequestQueueSection::Closed => query.filter(
+                Condition::any()
+                    .add(entities::request::Column::ClosedAtUnix.is_not_null())
+                    .add(entities::request::Column::MergedAtUnix.is_not_null()),
+            ),
         };
 
         if private_requests_hidden(input.access, input.search) {
@@ -181,12 +115,11 @@ impl RequestStore {
             RequestQueueSection::YourWork => query
                 .order_by_desc(entities::request::Column::UpdatedAtUnix)
                 .order_by_asc(entities::request::Column::Id),
-            RequestQueueSection::Ready => query
-                .order_by_desc(entities::request::Column::CurrentStakeCredits)
-                .order_by_asc(entities::request::Column::ReadyAtUnix)
+            RequestQueueSection::Open => query
+                .order_by_asc(entities::request::Column::SubmittedAtUnix)
                 .order_by_asc(entities::request::Column::Id),
-            RequestQueueSection::Completed => query
-                .order_by_desc(entities::request::Column::CompletedAtUnix)
+            RequestQueueSection::Closed => query
+                .order_by_desc(Expr::cust("COALESCE(closed_at_unix, merged_at_unix)"))
                 .order_by_asc(entities::request::Column::Id),
         };
 
@@ -198,7 +131,7 @@ impl RequestStore {
             .into_iter()
             .map(|row| {
                 let request = row.try_into_domain()?;
-                let cursor = cursor_for_request(input.section, snapshot_version, &request)?;
+                let cursor = cursor_for_request(input.section, &request)?;
                 Ok(RequestQueueRow {
                     request: RequestListRow::from(request),
                     cursor,
@@ -208,23 +141,12 @@ impl RequestStore {
     }
 }
 
-async fn ready_snapshot(
-    input: &RequestQueuePageQuery<'_>,
-    store: &RequestStore,
-) -> Result<Option<u64>, PostgresError> {
+fn ensure_cursor_section(input: &RequestQueuePageQuery<'_>) -> Result<(), PostgresError> {
     match (input.section, input.after) {
-        (
-            RequestQueueSection::Ready,
-            Some(RequestQueueCursor::Ready {
-                snapshot_version, ..
-            }),
-        ) => Ok(Some(*snapshot_version)),
-        (RequestQueueSection::Ready, None) => Ok(Some(
-            ready_queue_snapshot_version(store.db.as_ref(), input.repo_id).await?,
-        )),
-        (RequestQueueSection::YourWork, None) | (RequestQueueSection::Completed, None) => Ok(None),
+        (_, None) => Ok(()),
         (RequestQueueSection::YourWork, Some(RequestQueueCursor::YourWork { .. }))
-        | (RequestQueueSection::Completed, Some(RequestQueueCursor::Completed { .. })) => Ok(None),
+        | (RequestQueueSection::Open, Some(RequestQueueCursor::Open { .. }))
+        | (RequestQueueSection::Closed, Some(RequestQueueCursor::Closed { .. })) => Ok(()),
         _ => Err(PostgresError::invalid_input(
             "request queue cursor section mismatch",
         )),
@@ -262,36 +184,28 @@ fn apply_cursor(
             *updated_at_unix,
             request_id,
         )?,
-        RequestQueueCursor::Ready {
-            stake_credits,
-            ready_at_unix,
+        RequestQueueCursor::Open {
+            submitted_at_unix,
             request_id,
-            ..
-        } => {
-            let stake_credits = i32::try_from(*stake_credits).map_err(PostgresError::internal)?;
-            let ready_at_unix = i64::try_from(*ready_at_unix).map_err(PostgresError::internal)?;
-            Condition::any()
-                .add(entities::request::Column::CurrentStakeCredits.lt(stake_credits))
-                .add(
-                    Condition::all()
-                        .add(entities::request::Column::CurrentStakeCredits.eq(stake_credits))
-                        .add(entities::request::Column::ReadyAtUnix.gt(ready_at_unix)),
-                )
-                .add(
-                    Condition::all()
-                        .add(entities::request::Column::CurrentStakeCredits.eq(stake_credits))
-                        .add(entities::request::Column::ReadyAtUnix.eq(ready_at_unix))
-                        .add(entities::request::Column::Id.gt(request_id.as_str())),
-                )
-        }
-        RequestQueueCursor::Completed {
-            completed_at_unix,
-            request_id,
-        } => descending_time_cursor(
-            entities::request::Column::CompletedAtUnix,
-            *completed_at_unix,
+        } => ascending_time_cursor(
+            entities::request::Column::SubmittedAtUnix,
+            *submitted_at_unix,
             request_id,
         )?,
+        RequestQueueCursor::Closed {
+            closed_at_unix,
+            request_id,
+        } => Condition::any()
+            .add(descending_time_cursor(
+                entities::request::Column::ClosedAtUnix,
+                *closed_at_unix,
+                request_id,
+            )?)
+            .add(descending_time_cursor(
+                entities::request::Column::MergedAtUnix,
+                *closed_at_unix,
+                request_id,
+            )?),
     };
     query = query.filter(condition);
     Ok(query)
@@ -310,9 +224,21 @@ fn descending_time_cursor(
     ))
 }
 
+fn ascending_time_cursor(
+    column: entities::request::Column,
+    value: u64,
+    request_id: &str,
+) -> Result<Condition, PostgresError> {
+    let value = i64::try_from(value).map_err(PostgresError::internal)?;
+    Ok(Condition::any().add(column.gt(value)).add(
+        Condition::all()
+            .add(column.eq(value))
+            .add(entities::request::Column::Id.gt(request_id)),
+    ))
+}
+
 fn cursor_for_request(
     section: RequestQueueSection,
-    snapshot_version: Option<u64>,
     request: &scope_domain::requests::Request,
 ) -> Result<RequestQueueCursor, PostgresError> {
     match section {
@@ -320,18 +246,19 @@ fn cursor_for_request(
             updated_at_unix: request.updated_at_unix,
             request_id: request.id.clone(),
         }),
-        RequestQueueSection::Ready => Ok(RequestQueueCursor::Ready {
-            snapshot_version: snapshot_version.expect("ready snapshot established"),
-            stake_credits: request.current_stake_credits,
-            ready_at_unix: request.ready_at_unix.ok_or_else(|| {
-                PostgresError::internal_message("ready request is missing its ready time")
+        RequestQueueSection::Open => Ok(RequestQueueCursor::Open {
+            submitted_at_unix: request.submitted_at_unix.ok_or_else(|| {
+                PostgresError::internal_message("open request is missing its submission time")
             })?,
             request_id: request.id.clone(),
         }),
-        RequestQueueSection::Completed => Ok(RequestQueueCursor::Completed {
-            completed_at_unix: request.completed_at_unix.ok_or_else(|| {
-                PostgresError::internal_message("completed request is missing its completion time")
-            })?,
+        RequestQueueSection::Closed => Ok(RequestQueueCursor::Closed {
+            closed_at_unix: request
+                .closed_at_unix
+                .or(request.merged_at_unix)
+                .ok_or_else(|| {
+                    PostgresError::internal_message("terminal request is missing its terminal time")
+                })?,
             request_id: request.id.clone(),
         }),
     }

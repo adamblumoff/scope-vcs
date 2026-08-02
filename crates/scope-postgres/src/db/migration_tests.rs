@@ -24,7 +24,7 @@ pub(super) async fn isolated_database() -> (
     (target, db, lease)
 }
 
-async fn initialize_ready_v6(db: &DatabaseConnection) {
+pub(super) async fn initialize_ready_v6(db: &DatabaseConnection) {
     db.execute_unprepared(V6_SCHEMA).await.unwrap();
     db.execute_unprepared(
         "
@@ -93,14 +93,6 @@ async fn representative_business_snapshot(db: &DatabaseConnection) -> String {
                     SELECT jsonb_agg(to_jsonb(item) ORDER BY id)
                     FROM scope_requests item
                 ),
-                'credit_accounts', (
-                    SELECT jsonb_agg(to_jsonb(item) ORDER BY user_id)
-                    FROM scope_user_credit_accounts item
-                ),
-                'credit_entries', (
-                    SELECT jsonb_agg(to_jsonb(item) ORDER BY id)
-                    FROM scope_credit_ledger_entries item
-                ),
                 'workflow_revisions', (
                     SELECT jsonb_agg(to_jsonb(item) ORDER BY digest)
                     FROM scope_workflow_revisions item
@@ -131,7 +123,13 @@ async fn representative_business_snapshot(db: &DatabaseConnection) -> String {
 fn without_migration_rewritten_state(snapshot: String) -> serde_json::Value {
     let mut snapshot = serde_json::from_str::<serde_json::Value>(&snapshot).unwrap();
     let object = snapshot.as_object_mut().unwrap();
-    for key in ["outbox", "projections", "workflow_revisions", "runs"] {
+    for key in [
+        "outbox",
+        "projections",
+        "requests",
+        "workflow_revisions",
+        "runs",
+    ] {
         object.remove(key);
     }
     snapshot
@@ -152,6 +150,10 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0003_structured_run_attempts",
             "m0004_runner_protocol_cutover",
             "m0005_projection_head_oid",
+            "m0006_drop_request_credits",
+            "m0007_drop_review_ceremony",
+            "m0008_one_way_request_submission",
+            "m0009_request_ratings",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -200,7 +202,30 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 43);
+    assert_eq!(scope_table_count, 42);
+    assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
+    assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
+    let review_columns = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "
+                SELECT count(*) AS count
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'scope_requests'
+                  AND column_name IN (
+                    'held_at_unix', 'held_by_user_id', 'assessment_outcome',
+                    'assessment_body_markdown', 'assessed_at_unix', 'assessed_by_user_id'
+                  )
+            "
+            .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(review_columns, 0);
 }
 
 #[tokio::test]
@@ -234,9 +259,23 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
             VALUES (
                 'request_legacy', 'repo_legacy', 'legacy-change', 'user_legacy',
                 'Owner', 'Private', repeat('d', 40), repeat('e', 40), NULL,
-                'Legacy request', 'Preserve this request', 'Working', 0, NULL, 0,
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                NULL, NULL, NULL, NULL, 1, 1
+                'Legacy request', 'Preserve this request', 'Completed', 1, 1, 0,
+                2, NULL, NULL, NULL, 'Neutral', 'Archived after review', 3,
+                'user_legacy', 3, 'user_legacy', NULL, NULL, NULL, NULL, 1, 3
+            );
+            INSERT INTO scope_request_events (
+                id, request_id, actor_user_id, kind, position, payload, created_at_unix
+            )
+            VALUES (
+                'event_legacy_assessed', 'request_legacy', 'user_legacy', 'Assessed', 1,
+                jsonb_build_object(
+                    'Assessed', jsonb_build_object(
+                        'head_oid', repeat('e', 40),
+                        'outcome', 'Neutral',
+                        'body_markdown', 'Archived after review'
+                    )
+                ),
+                3
             );
             INSERT INTO scope_user_credit_accounts (user_id, balance_credits)
             VALUES ('user_legacy', 100);
@@ -302,6 +341,25 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
     let after =
         without_migration_rewritten_state(representative_business_snapshot(db.as_ref()).await);
     assert_eq!(after, before);
+    let migrated_event = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT kind, payload FROM scope_request_events WHERE id = 'event_legacy_assessed'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        migrated_event.try_get::<String>("", "kind").unwrap(),
+        "Closed"
+    );
+    assert_eq!(
+        migrated_event
+            .try_get::<serde_json::Value>("", "payload")
+            .unwrap()["Closed"]["head_oid"],
+        "e".repeat(40)
+    );
     let rewritten = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -765,6 +823,10 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0003_structured_run_attempts",
             "m0004_runner_protocol_cutover",
             "m0005_projection_head_oid",
+            "m0006_drop_request_credits",
+            "m0007_drop_review_ceremony",
+            "m0008_one_way_request_submission",
+            "m0009_request_ratings",
         ]
     );
 }
@@ -788,6 +850,10 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0003_structured_run_attempts",
             "m0004_runner_protocol_cutover",
             "m0005_projection_head_oid",
+            "m0006_drop_request_credits",
+            "m0007_drop_review_ceremony",
+            "m0008_one_way_request_submission",
+            "m0009_request_ratings",
         ]
     );
 }

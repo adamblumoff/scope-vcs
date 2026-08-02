@@ -6,8 +6,8 @@ export type { RequestQueueSection } from './types.generated'
 
 const REQUEST_QUEUE_SECTIONS = [
   'your_work',
-  'ready',
-  'completed',
+  'open',
+  'closed',
 ] as const satisfies readonly RequestQueueSection[]
 
 export type LoadRequestQueueInput = RepoParams & {

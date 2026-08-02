@@ -15,12 +15,12 @@ const loadRequestQueuePage = createServerFn({ method: 'GET' })
 
 export const Route = createFileRoute('/repos/$owner/$repo/requests/')({
   loader: async ({ params }) => {
-    const [yourWork, ready, completed] = await Promise.all([
+    const [yourWork, open, closed] = await Promise.all([
       loadRequestQueuePage({ data: { ...params, section: 'your_work' } }),
-      loadRequestQueuePage({ data: { ...params, section: 'ready' } }),
-      loadRequestQueuePage({ data: { ...params, section: 'completed' } }),
+      loadRequestQueuePage({ data: { ...params, section: 'open' } }),
+      loadRequestQueuePage({ data: { ...params, section: 'closed' } }),
     ])
-    return { completed, ready, your_work: yourWork }
+    return { closed, open, your_work: yourWork }
   },
   component: RequestsRoute,
 })

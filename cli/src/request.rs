@@ -1,11 +1,10 @@
 use crate::{
     api::{
         CreateRequestDiscussionParams, RequestActivityParams, RequestTarget, StartRequestParams,
-        add_request_invitee, assess_request, close_request as api_close_request,
-        create_request_discussion, edit_request_identity, get_request, get_request_activity,
-        hold_request, leave_request, list_requests, mark_request_ready, merge_request,
-        remove_request_invitee, request_changes, return_request_to_working,
-        start_request as api_start_request, unhold_request,
+        add_request_invitee, close_request as api_close_request, create_request_discussion,
+        edit_request_identity, get_request, get_request_activity, leave_request, list_requests,
+        merge_request, rate_request, remove_request_invitee, start_request as api_start_request,
+        submit_request as api_submit_request,
     },
     git_repo::{
         GitRepo, current_branch, ensure_clean_working_tree, ensure_git_repo_ready, head_oid,
@@ -32,9 +31,7 @@ mod tests;
 mod text;
 use actions::*;
 pub use args::RequestArgs;
-use args::{
-    RequestAssessArgs, RequestAudienceArg, RequestCommand, RequestStartArgs, RequestTargetArgs,
-};
+use args::{RequestAudienceArg, RequestCommand, RequestStartArgs, RequestTargetArgs};
 use confirm::require_confirmation;
 use local::{
     fetch_main_projection, load_context, load_context_and_request_id, maybe_request_id_for_context,
@@ -44,8 +41,7 @@ use local::{
 use render::{
     print_close_receipt, print_discussion_receipt, print_invitee_added_receipt,
     print_invitee_removed_receipt, print_leave_receipt, print_repo_access, print_request_activity,
-    print_request_detail, print_request_mutation_receipt, print_request_settlement,
-    request_list_line,
+    print_request_detail, print_request_mutation_receipt, request_list_line,
 };
 use text::short_oid;
 
@@ -60,18 +56,14 @@ pub fn prepare_request_command(args: RequestArgs) -> anyhow::Result<PreparedRequ
     let (command_name, needs_clean_tree) = match &args.command {
         RequestCommand::Start(_) => ("scope request start", true),
         RequestCommand::Push(_) => ("scope request push", false),
-        RequestCommand::Ready(_) => ("scope request ready", false),
-        RequestCommand::Working(_) => ("scope request working", false),
+        RequestCommand::Submit(_) => ("scope request submit", false),
         RequestCommand::Close(_) => ("scope request close", false),
         RequestCommand::Edit(_) => ("scope request edit", false),
         RequestCommand::Invite(_) => ("scope request invite", false),
         RequestCommand::Uninvite(_) => ("scope request uninvite", false),
         RequestCommand::Leave(_) => ("scope request leave", false),
-        RequestCommand::Hold(_) => ("scope request hold", false),
-        RequestCommand::Unhold(_) => ("scope request unhold", false),
-        RequestCommand::RequestChanges(_) => ("scope request request-changes", false),
-        RequestCommand::Assess(_) => ("scope request assess", false),
         RequestCommand::Merge(_) => ("scope request merge", false),
+        RequestCommand::Rate(_) => ("scope request rate", false),
         RequestCommand::Discuss(_) => ("scope request discuss", false),
         RequestCommand::Show(_) => ("scope request show", false),
         RequestCommand::List(_) => ("scope request list", false),
@@ -103,18 +95,14 @@ pub fn run_request_command(
             args.target.remote,
             args.target.request,
         ),
-        RequestCommand::Ready(args) => ready_request(
+        RequestCommand::Submit(args) => submit_request_command(
             &git_repo,
             client,
             api_url,
             session_token,
             args.target,
-            args.stake,
             args.yes,
         ),
-        RequestCommand::Working(args) => {
-            working_request(&git_repo, client, api_url, session_token, args.target)
-        }
         RequestCommand::Close(args) => close_request_branch(
             &git_repo,
             client,
@@ -153,23 +141,6 @@ pub fn run_request_command(
         RequestCommand::Leave(args) => {
             leave_invited_request(&git_repo, client, api_url, session_token, args.target)
         }
-        RequestCommand::Hold(args) => {
-            hold_request_command(&git_repo, client, api_url, session_token, args.target, true)
-        }
-        RequestCommand::Unhold(args) => hold_request_command(
-            &git_repo,
-            client,
-            api_url,
-            session_token,
-            args.target,
-            false,
-        ),
-        RequestCommand::RequestChanges(args) => {
-            request_changes_command(&git_repo, client, api_url, session_token, args.target)
-        }
-        RequestCommand::Assess(args) => {
-            assess_request_command(&git_repo, client, api_url, session_token, args)
-        }
         RequestCommand::Merge(args) => merge_request_command(
             &git_repo,
             client,
@@ -177,6 +148,15 @@ pub fn run_request_command(
             session_token,
             args.target,
             args.yes,
+        ),
+        RequestCommand::Rate(args) => rate_request_command(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.target,
+            args.score,
+            args.reason,
         ),
         RequestCommand::Discuss(args) => start_request_discussion(
             &git_repo,
@@ -187,12 +167,22 @@ pub fn run_request_command(
             args.target.request,
             args.body,
         ),
-        RequestCommand::Show(args) => {
-            show_one_request(&git_repo, client, api_url, session_token, args.target)
-        }
-        RequestCommand::List(args) => {
-            list_request_status(&git_repo, client, api_url, session_token, args.remote)
-        }
+        RequestCommand::Show(args) => show_one_request(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.target,
+            args.json,
+        ),
+        RequestCommand::List(args) => list_request_status(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.remote,
+            args.json,
+        ),
         RequestCommand::Status(args) => show_request_status(
             &git_repo,
             client,
@@ -393,7 +383,7 @@ fn show_request_status(
         return Ok(());
     }
 
-    print_request_list(client, api_url, session_token, &context)
+    print_request_list(client, api_url, session_token, &context, false)
 }
 
 fn start_request_discussion(
@@ -446,11 +436,8 @@ fn close_request_branch(
 ) -> anyhow::Result<()> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let prompt = if before.request.first_ready_at_unix.is_none() {
-        format!(
-            "Permanently delete unpublished Working request {}",
-            before.request.name
-        )
+    let prompt = if before.request.submitted_at_unix.is_none() {
+        format!("Permanently delete draft request {}", before.request.name)
     } else {
         format!("Close published request {}", before.request.name)
     };

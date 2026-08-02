@@ -3,6 +3,8 @@ import type {
   RequestDetail,
   RequestChangeBlockFiles,
   RequestList,
+  RequestRating,
+  RequestRatings,
   ReviewFileDiff,
   RequestParams,
 } from './types'
@@ -25,6 +27,32 @@ export async function loadRequestForRequest(
   return createApiClient().get<RequestDetail>(requestPath(data), {
     auth: 'optional',
   })
+}
+
+export type RateRequestInput = RequestParams & {
+  score: number
+  reason: string
+}
+
+export async function loadRequestRatingsForRequest(
+  data: RequestParams,
+): Promise<RequestRatings> {
+  return createApiClient().get<RequestRatings>(
+    requestRoute(ApiRouteTemplates.repoRequestRatings, data),
+    { auth: 'optional' },
+  )
+}
+
+export async function rateRequestForRequest(
+  data: RateRequestInput,
+): Promise<RequestRating> {
+  return createApiClient().post<RequestRating>(
+    requestRoute(ApiRouteTemplates.repoRequestRatings, data),
+    {
+      auth: 'required',
+      body: { reason: data.reason, score: data.score },
+    },
+  )
 }
 
 export async function loadRequestChangeBlockFilesForRequest(

@@ -426,7 +426,7 @@ async fn repo_summary_response(
     state: &AppState,
     summary: RepoSummaryRead,
 ) -> Result<RepoSummaryResponse, ApiError> {
-    let ready_for_review_count = state
+    let open_request_count = state
         .metadata
         .requests()
         .requests_by_repo_id(&summary.id)
@@ -443,11 +443,11 @@ async fn repo_summary_response(
         default_visibility: summary.default_visibility.into(),
         change_version: summary.change_version,
         access: repository_access_response(summary.access),
-        ready_for_review_count,
+        open_request_count,
         request_permissions,
     })
 }
 
 fn request_visible_in_summary(request: &Request, access: RepositoryAccess) -> bool {
-    request_policy(request, RequestViewer::new(access, None, false)).counts_as_ready
+    request_policy(request, RequestViewer::new(access, None, false)).counts_as_open
 }

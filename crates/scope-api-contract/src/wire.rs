@@ -2,17 +2,13 @@ use scope_domain::{
     account::SessionIdentity as DomainSessionIdentity,
     policy::Visibility as DomainVisibility,
     requests::{
-        RequestActorRole as DomainRequestActorRole,
-        RequestAssessmentOutcome as DomainRequestAssessmentOutcome,
-        RequestAudience as DomainRequestAudience,
+        RequestActorRole as DomainRequestActorRole, RequestAudience as DomainRequestAudience,
         RequestDiscussionStatus as DomainRequestDiscussionStatus,
         RequestEventKind as DomainRequestEventKind,
         RequestEventPayload as DomainRequestEventPayload,
         RequestIdentityAuditFact as DomainRequestIdentityAuditFact,
         RequestMergeabilityStatus as DomainRequestMergeabilityStatus,
-        RequestQueueSection as DomainRequestQueueSection,
-        RequestReviewExitReason as DomainRequestReviewExitReason,
-        RequestSettlement as DomainRequestSettlement, RequestState as DomainRequestState,
+        RequestQueueSection as DomainRequestQueueSection, RequestState as DomainRequestState,
     },
     store::{
         FileChangeKind as DomainFileChangeKind, FirstPushTokenStatus as DomainFirstPushTokenStatus,
@@ -131,44 +127,29 @@ impl From<RepositoryMemberPermissions> for DomainRepositoryMemberPermissions {
 
 wire_enum!(RequestActorRole => DomainRequestActorRole { Public, Member, Owner });
 wire_enum!(RequestAudience => DomainRequestAudience { Public, Private });
-wire_enum!(RequestState => DomainRequestState { Working, ReadyForReview, Completed });
-wire_enum!(RequestAssessmentOutcome => DomainRequestAssessmentOutcome {
-    Accepted,
-    Neutral,
-    Rejected,
-});
-wire_enum!(RequestReviewExitReason => DomainRequestReviewExitReason {
-    AuthorReturned,
-    ChangesRequested,
-    RevisionPushed,
-    ContentEdited,
-});
+wire_enum!(RequestState => DomainRequestState { Draft, Open, Closed, Merged });
 wire_enum!(RequestEventKind => DomainRequestEventKind {
     Started,
-    ReadyForReview,
-    ReturnedToWorking,
+    Submitted,
     RevisionPushed,
-    Held,
-    HoldReleased,
-    Assessed,
     Merged,
     Closed,
-    Settled,
     IdentityEdited,
     DiscussionResolved,
     DiscussionReopened,
 });
 wire_enum!(RequestMergeabilityStatus => DomainRequestMergeabilityStatus {
     Ready,
-    Completed,
-    Working,
+    Draft,
+    Closed,
+    Merged,
     NotMaintainer,
     MissingRequestBranch,
 });
 wire_enum!(
     #[serde(rename_all = "snake_case")]
     #[cfg_attr(feature = "ts", ts(rename_all = "snake_case"))]
-    RequestQueueSection => DomainRequestQueueSection { YourWork, Ready, Completed }
+    RequestQueueSection => DomainRequestQueueSection { YourWork, Open, Closed }
 );
 wire_enum!(RequestDiscussionStatus => DomainRequestDiscussionStatus { Dormant, Open, Resolved });
 
@@ -194,60 +175,18 @@ impl From<DomainRequestIdentityAuditFact> for RequestIdentityAuditFact {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct RequestSettlement {
-    pub outcome: RequestAssessmentOutcome,
-    pub stake_credits: u32,
-    pub refunded_credits: u32,
-    pub reward_credits: u32,
-    pub burned_credits: u32,
-    pub settled_at_unix: u64,
-}
-
-impl From<DomainRequestSettlement> for RequestSettlement {
-    fn from(value: DomainRequestSettlement) -> Self {
-        Self {
-            outcome: value.outcome.into(),
-            stake_credits: value.stake_credits,
-            refunded_credits: value.refunded_credits,
-            reward_credits: value.reward_credits,
-            burned_credits: value.burned_credits,
-            settled_at_unix: value.settled_at_unix,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum RequestEventPayload {
     Started {
         title: String,
         description_markdown: String,
     },
-    ReadyForReview {
+    Submitted {
         head_oid: String,
-        stake_credits: u32,
-    },
-    ReturnedToWorking {
-        head_oid: String,
-        stake_credits: u32,
-        reason: RequestReviewExitReason,
     },
     RevisionPushed {
         old_head_oid: String,
         new_head_oid: String,
         note: Option<String>,
-    },
-    Held {
-        head_oid: String,
-    },
-    HoldReleased {
-        head_oid: String,
-    },
-    Assessed {
-        head_oid: String,
-        outcome: RequestAssessmentOutcome,
-        body_markdown: Option<String>,
-        stake_credits: u32,
     },
     Merged {
         head_oid: String,
@@ -255,9 +194,6 @@ pub enum RequestEventPayload {
     },
     Closed {
         head_oid: String,
-    },
-    Settled {
-        settlement: RequestSettlement,
     },
     IdentityEdited {
         before: RequestIdentityAuditFact,
@@ -281,22 +217,7 @@ impl From<DomainRequestEventPayload> for RequestEventPayload {
                 title,
                 description_markdown,
             },
-            DomainRequestEventPayload::ReadyForReview {
-                head_oid,
-                stake_credits,
-            } => Self::ReadyForReview {
-                head_oid,
-                stake_credits,
-            },
-            DomainRequestEventPayload::ReturnedToWorking {
-                head_oid,
-                stake_credits,
-                reason,
-            } => Self::ReturnedToWorking {
-                head_oid,
-                stake_credits,
-                reason: reason.into(),
-            },
+            DomainRequestEventPayload::Submitted { head_oid } => Self::Submitted { head_oid },
             DomainRequestEventPayload::RevisionPushed {
                 old_head_oid,
                 new_head_oid,
@@ -306,26 +227,10 @@ impl From<DomainRequestEventPayload> for RequestEventPayload {
                 new_head_oid,
                 note,
             },
-            DomainRequestEventPayload::Held { head_oid } => Self::Held { head_oid },
-            DomainRequestEventPayload::HoldReleased { head_oid } => Self::HoldReleased { head_oid },
-            DomainRequestEventPayload::Assessed {
-                head_oid,
-                outcome,
-                body_markdown,
-                stake_credits,
-            } => Self::Assessed {
-                head_oid,
-                outcome: outcome.into(),
-                body_markdown,
-                stake_credits,
-            },
             DomainRequestEventPayload::Merged { head_oid, main_oid } => {
                 Self::Merged { head_oid, main_oid }
             }
             DomainRequestEventPayload::Closed { head_oid } => Self::Closed { head_oid },
-            DomainRequestEventPayload::Settled { settlement } => Self::Settled {
-                settlement: settlement.into(),
-            },
             DomainRequestEventPayload::IdentityEdited { before, after } => Self::IdentityEdited {
                 before: before.into(),
                 after: after.into(),

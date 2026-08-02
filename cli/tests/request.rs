@@ -34,7 +34,14 @@ fn obsolete_request_lifecycle_commands_and_aliases_are_removed() {
     let dir = TempDir::new("removed-request-lifecycle");
     create_repo_with_head(dir.path());
 
-    for command in ["comment", "needs-response", "respond", "resolve", "submit"] {
+    for command in [
+        "comment",
+        "needs-response",
+        "ready",
+        "respond",
+        "resolve",
+        "working",
+    ] {
         scope_failure(
             dir.path(),
             ["request", command],
@@ -56,18 +63,49 @@ fn request_discuss_requires_a_body_before_login() {
 }
 
 #[test]
-fn request_ready_accepts_an_omitted_stake_before_role_resolution() {
-    let dir = TempDir::new("ready-stake");
+fn request_rate_requires_score_and_reason_before_login() {
+    let dir = TempDir::new("rate-request");
+    create_repo_with_head(dir.path());
+
+    scope_failure(
+        dir.path(),
+        ["request", "rate"],
+        "the following required arguments were not provided",
+    );
+    scope_failure(
+        dir.path(),
+        ["request", "rate", "--score", "6", "--reason", "Excellent"],
+        "not in 1..=5",
+    );
+}
+
+#[test]
+fn request_submit_reaches_auth_without_extra_arguments() {
+    let dir = TempDir::new("submit-request");
     create_repo_with_head(dir.path());
 
     let output = scope_command(dir.path())
-        .args(["request", "ready"])
+        .args(["request", "submit"])
         .output()
         .unwrap();
-    assert_failure(&output, "scope request ready");
+    assert_failure(&output, "scope request submit");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(!stderr.contains("required arguments"), "{stderr}");
     assert!(stderr.contains("start browser login"), "{stderr}");
+}
+
+#[test]
+fn request_show_and_list_accept_json_output() {
+    let dir = TempDir::new("request-json");
+    create_repo_with_head(dir.path());
+
+    for args in [["request", "show", "--json"], ["request", "list", "--json"]] {
+        let output = scope_command(dir.path()).args(args).output().unwrap();
+        assert_failure(&output, "request JSON output");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!stderr.contains("unexpected argument"), "{stderr}");
+        assert!(stderr.contains("start browser login"), "{stderr}");
+    }
 }
 
 #[test]
@@ -83,33 +121,6 @@ fn request_edit_requires_a_title_or_description_file_before_login() {
 }
 
 #[test]
-fn rejected_assessment_requires_a_message_before_login() {
-    let dir = TempDir::new("assess-rejected-message");
-    create_repo_with_head(dir.path());
-
-    scope_failure(
-        dir.path(),
-        ["request", "assess", "rejected"],
-        "the following required arguments were not provided",
-    );
-}
-
-#[test]
-fn request_assess_rejects_obsolete_dispositions_before_login() {
-    let dir = TempDir::new("assess-outcome");
-    create_repo_with_head(dir.path());
-
-    for outcome in [
-        "changes-requested",
-        "duplicate",
-        "needs-response",
-        "resolved",
-    ] {
-        scope_failure(dir.path(), ["request", "assess", outcome], "invalid value");
-    }
-}
-
-#[test]
 fn request_help_exposes_the_complete_approved_vocabulary() {
     let dir = TempDir::new("request-help");
     create_repo_with_head(dir.path());
@@ -122,24 +133,8 @@ fn request_help_exposes_the_complete_approved_vocabulary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     for command in [
-        "assess",
-        "close",
-        "discuss",
-        "edit",
-        "hold",
-        "invite",
-        "leave",
-        "list",
-        "merge",
-        "push",
-        "ready",
-        "request-changes",
-        "show",
-        "start",
-        "status",
-        "unhold",
-        "uninvite",
-        "working",
+        "close", "discuss", "edit", "invite", "leave", "list", "merge", "push", "show", "start",
+        "status", "submit", "uninvite",
     ] {
         assert!(
             stdout.lines().any(|line| {
@@ -158,22 +153,8 @@ fn request_command_help_uses_the_shared_target_flags() {
     create_repo_with_head(dir.path());
 
     for command in [
-        "assess",
-        "close",
-        "discuss",
-        "edit",
-        "hold",
-        "invite",
-        "leave",
-        "merge",
-        "push",
-        "ready",
-        "request-changes",
-        "show",
-        "status",
-        "unhold",
+        "close", "discuss", "edit", "invite", "leave", "merge", "push", "show", "status", "submit",
         "uninvite",
-        "working",
     ] {
         let output = scope_command(dir.path())
             .args(["request", command, "--help"])

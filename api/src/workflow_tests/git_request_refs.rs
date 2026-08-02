@@ -1,10 +1,9 @@
 use super::*;
 use scope_domain::requests::{
-    MarkRequestReadyInput, Request, RequestActorRole, RequestAudience, RequestEventKind,
-    RequestReviewExitReason, RequestState, ReturnRequestToWorkingInput, SetRequestHoldInput,
-    StartRequestInput,
+    Request, RequestActorRole, RequestAudience, RequestEventKind, RequestState, StartRequestInput,
+    SubmitRequestInput,
 };
-use scope_postgres::db::{AddRequestInviteeCommand, RemoveRequestInviteeCommand};
+use scope_postgres::db::AddRequestInviteeCommand;
 
 const PUBLIC_SUBJECT: &str = "user_public";
 const PUBLIC_EMAIL: &str = "public@example.com";
@@ -32,16 +31,12 @@ async fn permissioned_clone_fetches_named_public_requests_without_joining() {
     state
         .metadata
         .requests()
-        .mark_request_ready(MarkRequestReadyInput {
+        .submit_request(SubmitRequestInput {
             request_id: REQUEST_ID.to_string(),
             actor_user_id: public_user_id(),
             actor_is_author: false,
-            actor_can_mutate: false,
-            stake_credits: Some(1),
-            public_ready_count: 0,
-            ready_queue_version: 0,
-            event_id: "event_published_clone_ready".to_string(),
-            stake_ledger_entry_id: Some("ledger_published_clone_ready".to_string()),
+            actor_can_submit: false,
+            event_id: "event_published_clone_submitted".to_string(),
             now_unix: 4,
         })
         .await
@@ -75,11 +70,9 @@ async fn closed_public_request_remains_fetchable_as_read_only_history() {
         .metadata
         .requests()
         .mutate_request_for_tests(REQUEST_ID, |request| {
-            request.state = RequestState::Completed;
-            request.first_ready_at_unix = Some(3);
-            request.ready_queue_version = Some(1);
-            request.completed_at_unix = Some(3);
-            request.completed_by_user_id = Some(test_owner_id());
+            request.submitted_at_unix = Some(3);
+            request.closed_at_unix = Some(3);
+            request.closed_by_user_id = Some(test_owner_id());
             request.updated_at_unix = 3;
         })
         .await
@@ -141,7 +134,7 @@ async fn public_request_receive_pack_requires_current_repo_read() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn working_request_ref_push_replaces_snapshot_without_touching_main() {
+async fn draft_request_ref_push_replaces_snapshot_without_touching_main() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, first_request_head) =
         request_checkout(&state, "request-ref-push").await;
@@ -191,7 +184,7 @@ async fn working_request_ref_push_replaces_snapshot_without_touching_main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn working_push_records_revision_activity_without_touching_main() {
+async fn draft_push_records_revision_activity_without_touching_main() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, _) =
         request_checkout(&state, "request-ref-revision").await;
@@ -209,7 +202,7 @@ async fn working_push_records_revision_activity_without_touching_main() {
     .unwrap();
 
     let request = stored_request(&state, REQUEST_ID).await;
-    assert_eq!(request.state, RequestState::Working);
+    assert_eq!(request.state(), RequestState::Draft);
     assert_eq!(request.head_oid, git_head_oid(&source));
     assert_eq!(request.activity_version, before.activity_version + 1);
     assert_eq!(request_event_count(&state).await, before_event_count + 1);
@@ -217,23 +210,19 @@ async fn working_push_records_revision_activity_without_touching_main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ready_revision_invalidates_review_refunds_stake_and_publishes_refresh() {
+async fn open_revision_stays_open_and_publishes_refresh() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, _first_request_head) =
         request_checkout(&state, "request-ref-revision-rollback").await;
     state
         .metadata
         .requests()
-        .mark_request_ready(MarkRequestReadyInput {
+        .submit_request(SubmitRequestInput {
             request_id: REQUEST_ID.to_string(),
             actor_user_id: public_user_id(),
             actor_is_author: false,
-            actor_can_mutate: false,
-            stake_credits: Some(10),
-            public_ready_count: 0,
-            ready_queue_version: 0,
-            event_id: "event_ready_for_revision".to_string(),
-            stake_ledger_entry_id: Some("ledger_ready_for_revision".to_string()),
+            actor_can_submit: false,
+            event_id: "event_submit_for_revision".to_string(),
             now_unix: 4,
         })
         .await
@@ -252,11 +241,9 @@ async fn ready_revision_invalidates_review_refunds_stake_and_publishes_refresh()
     .unwrap();
 
     let after = stored_request(&state, REQUEST_ID).await;
-    assert_eq!(after.state, RequestState::Working);
+    assert_eq!(after.state(), RequestState::Open);
     assert_eq!(after.head_oid, git_head_oid(&source));
-    assert_eq!(after.current_stake_credits, 0);
-    assert_eq!(after.held_at_unix, None);
-    assert_eq!(request_event_count(&state).await, before_event_count + 2);
+    assert_eq!(request_event_count(&state).await, before_event_count + 1);
     let request_events = state
         .metadata
         .requests()
@@ -264,22 +251,8 @@ async fn ready_revision_invalidates_review_refunds_stake_and_publishes_refresh()
         .await
         .unwrap();
     assert!(request_events.iter().any(|event| {
-        event.request_id == REQUEST_ID && event.kind == RequestEventKind::ReturnedToWorking
-    }));
-    assert!(request_events.iter().any(|event| {
         event.request_id == REQUEST_ID && event.kind == RequestEventKind::RevisionPushed
     }));
-    assert_eq!(
-        state
-            .metadata
-            .auth()
-            .credit_account_for_tests(&public_user_id())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance_credits,
-        100
-    );
     let store_repo =
         crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
     let stored_head = git_stdout_text(
@@ -622,20 +595,10 @@ async fn insert_private_request_for_public_user(state: &AppState) {
             git_snapshot: None,
             title: "Former member request".to_string(),
             description_markdown: String::new(),
-            state: RequestState::Working,
             activity_version: 0,
-            ready_queue_version: None,
-            current_stake_credits: 0,
-            first_ready_at_unix: None,
-            ready_at_unix: None,
-            held_at_unix: None,
-            held_by_user_id: None,
-            assessment_outcome: None,
-            assessment_body_markdown: None,
-            assessed_at_unix: None,
-            assessed_by_user_id: None,
-            completed_at_unix: None,
-            completed_by_user_id: None,
+            submitted_at_unix: None,
+            closed_at_unix: None,
+            closed_by_user_id: None,
             merged_at_unix: None,
             merged_by_user_id: None,
             merged_head_oid: None,
@@ -683,7 +646,7 @@ async fn insert_public_contributor(state: &AppState) {
 
 async fn assert_request_branch_unchanged(state: &AppState) {
     let request = stored_request(state, REQUEST_ID).await;
-    assert_eq!(request.state, RequestState::Working);
+    assert_eq!(request.state(), RequestState::Draft);
     assert_eq!(request.head_oid, request.base_main_oid);
     assert!(request.git_snapshot.is_none());
     assert_eq!(request_event_count(state).await, 1);

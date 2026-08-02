@@ -187,29 +187,17 @@ pub fn router(state: AppState) -> Router {
                 .delete(http::requests::close_request),
         )
         .route(
-            routes::REPO_REQUEST_READY,
-            post(http::requests::mark_request_ready),
-        )
-        .route(
-            routes::REPO_REQUEST_WORKING,
-            post(http::requests::return_request_to_working),
-        )
-        .route(
-            routes::REPO_REQUEST_HOLD,
-            axum::routing::put(http::requests::hold_request)
-                .delete(http::requests::release_request_hold),
-        )
-        .route(
-            routes::REPO_REQUEST_REQUEST_CHANGES,
-            post(http::requests::request_changes),
-        )
-        .route(
-            routes::REPO_REQUEST_ASSESSMENT,
-            post(http::requests::assess_request),
+            routes::REPO_REQUEST_SUBMIT,
+            post(http::requests::submit_request),
         )
         .route(
             routes::REPO_REQUEST_MERGE,
             post(http::requests::merge_request),
+        )
+        .route(
+            routes::REPO_REQUEST_RATINGS,
+            get(http::request_ratings::list_request_ratings)
+                .post(http::request_ratings::create_request_rating),
         )
         .route(
             routes::REPO_REQUEST_INVITEES,

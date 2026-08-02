@@ -9,12 +9,6 @@ pub use access::{
 };
 mod change_blocks;
 pub use change_blocks::RequestChangeBlock;
-mod credits;
-pub use credits::{
-    CreditAccountMutation, CreditLedgerEntry, CreditLedgerEntryKind, GrantUserCreditsInput,
-    PUBLIC_ACCOUNT_STARTER_CREDITS, RequestSettlement, UserCreditAccount, grant_user_credits,
-    settlement_for,
-};
 mod identity;
 pub use identity::{EditRequestIdentityInput, edit_request_identity};
 mod discussions;
@@ -42,8 +36,7 @@ pub use invitees::{
 };
 mod limits;
 pub use limits::{
-    PUBLIC_WORKING_REQUEST_LIMIT, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
-    REQUEST_ASSESSMENT_BODY_MAX_BYTES, REQUEST_DESCRIPTION_MAX_BYTES,
+    PUBLIC_WORKING_REQUEST_LIMIT, REQUEST_ACTIVITY_PAGE_MAX_EVENTS, REQUEST_DESCRIPTION_MAX_BYTES,
     REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES,
     REQUEST_DISCUSSION_REPLY_MAX_DEPTH, REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE,
     REQUEST_TIMELINE_BODY_MAX_BYTES, REQUEST_TITLE_MAX_BYTES,
@@ -57,16 +50,14 @@ pub use model::{
 };
 mod queue;
 pub use queue::RequestQueueSection;
-mod review;
-pub use review::{
-    REQUEST_MAX_STAKE_CREDITS, RequestAssessmentOutcome, RequestReviewExitReason,
-    validate_assessment_body,
+mod ratings;
+pub use ratings::{
+    CreateRequestRatingInput, REQUEST_RATING_REASON_MAX_BYTES, RequestRating, RequestReputation,
+    create_request_rating, eligible_rating_subject_user_id,
 };
-mod review_lifecycle;
-pub use review_lifecycle::{
-    AssessRequestInput, MarkRequestReadyInput, MergeRequestInput, PUBLIC_READY_REQUEST_LIMIT,
-    RequestReviewMutation, ReturnRequestToWorkingInput, SetRequestHoldInput, assess_request,
-    mark_request_ready, merge_request, return_request_to_working, set_request_hold,
+mod submission;
+pub use submission::{
+    MergeRequestInput, RequestLifecycleMutation, SubmitRequestInput, merge_request, submit_request,
 };
 
 pub const REQUEST_REF_PREFIX: &str = "refs/heads/";
@@ -96,8 +87,8 @@ pub(super) fn open_request_mut<'a>(
     let request = requests
         .get_mut(request_id)
         .ok_or_else(|| DomainError::not_found("request not found"))?;
-    if request.state == RequestState::Completed {
-        return Err(DomainError::conflict("request is completed"));
+    if request.is_terminal() {
+        return Err(DomainError::conflict("request is closed"));
     }
     Ok(request)
 }

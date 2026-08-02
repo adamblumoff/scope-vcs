@@ -12,8 +12,8 @@ use scope_domain::{
     projection::{FileChange, LogicalCommit},
     requests::{
         EditRequestIdentityInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
-        RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestChangeBlock,
-        RequestDiscussion, RequestDiscussionReadState, StartRequestInput, canonical_request_ref,
+        RequestActorRole, RequestAudience, RequestChangeBlock, RequestDiscussion,
+        RequestDiscussionReadState, StartRequestInput, canonical_request_ref,
         edit_request_identity, record_request_revision, record_working_request_upload,
         start_request,
     },
@@ -201,12 +201,10 @@ struct SeedRequest {
 }
 
 enum SeedRequestOutcome {
-    Working,
-    ReadyForReview,
-    Held,
-    Accepted,
-    Neutral,
-    Rejected,
+    Draft,
+    Open,
+    Merged,
+    Closed,
 }
 
 fn seed_request_gallery(
@@ -322,62 +320,25 @@ fn seed_owner_request(
     }
 
     let request = catalog.requests.get_mut(id).expect("seed request exists");
-    if !matches!(outcome, SeedRequestOutcome::Working) {
-        request.first_ready_at_unix = Some(lifecycle_at_unix);
-        request.ready_queue_version = Some(lifecycle_at_unix);
+    if !matches!(outcome, SeedRequestOutcome::Draft) {
+        request.submitted_at_unix = Some(lifecycle_at_unix);
     }
     match outcome {
-        SeedRequestOutcome::Working => {}
-        SeedRequestOutcome::ReadyForReview => {
-            request.state = scope_domain::requests::RequestState::ReadyForReview;
-            request.ready_at_unix = Some(lifecycle_at_unix);
-        }
-        SeedRequestOutcome::Held => {
-            request.state = scope_domain::requests::RequestState::ReadyForReview;
-            request.ready_at_unix = Some(lifecycle_at_unix);
-            request.held_at_unix = Some(lifecycle_at_unix + 1);
-            request.held_by_user_id = Some(owner.id.clone());
-        }
-        SeedRequestOutcome::Accepted => {
-            request.state = scope_domain::requests::RequestState::Completed;
-            request.assessment_outcome = Some(RequestAssessmentOutcome::Accepted);
-            request.assessment_body_markdown = Some("Merged after review.".to_string());
-            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
-            request.assessed_by_user_id = Some(owner.id.clone());
-            request.completed_at_unix = Some(lifecycle_at_unix + 1);
-            request.completed_by_user_id = Some(owner.id.clone());
+        SeedRequestOutcome::Draft | SeedRequestOutcome::Open => {}
+        SeedRequestOutcome::Merged => {
             request.merged_at_unix = Some(lifecycle_at_unix + 1);
             request.merged_by_user_id = Some(owner.id.clone());
             request.merged_head_oid = Some(current_head_oid.clone());
             request.merged_main_oid = Some(current_head_oid);
         }
-        SeedRequestOutcome::Neutral => {
-            request.state = scope_domain::requests::RequestState::Completed;
-            request.assessment_outcome = Some(RequestAssessmentOutcome::Neutral);
-            request.assessment_body_markdown =
-                Some("Useful context, with no action needed.".to_string());
-            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
-            request.assessed_by_user_id = Some(owner.id.clone());
-            request.completed_at_unix = Some(lifecycle_at_unix + 1);
-            request.completed_by_user_id = Some(owner.id.clone());
-        }
-        SeedRequestOutcome::Rejected => {
-            request.state = scope_domain::requests::RequestState::Completed;
-            request.assessment_outcome = Some(RequestAssessmentOutcome::Rejected);
-            request.assessment_body_markdown =
-                Some("The proposal does not fit the repository direction.".to_string());
-            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
-            request.assessed_by_user_id = Some(owner.id.clone());
-            request.completed_at_unix = Some(lifecycle_at_unix + 1);
-            request.completed_by_user_id = Some(owner.id.clone());
+        SeedRequestOutcome::Closed => {
+            request.closed_at_unix = Some(lifecycle_at_unix + 1);
+            request.closed_by_user_id = Some(owner.id.clone());
         }
     }
     request.updated_at_unix = match outcome {
-        SeedRequestOutcome::Working | SeedRequestOutcome::ReadyForReview => lifecycle_at_unix,
-        SeedRequestOutcome::Held
-        | SeedRequestOutcome::Accepted
-        | SeedRequestOutcome::Neutral
-        | SeedRequestOutcome::Rejected => lifecycle_at_unix + 1,
+        SeedRequestOutcome::Draft | SeedRequestOutcome::Open => lifecycle_at_unix,
+        SeedRequestOutcome::Merged | SeedRequestOutcome::Closed => lifecycle_at_unix + 1,
     };
     request.validate_facts()?;
     Ok(())
@@ -582,7 +543,7 @@ fn update_demo_git_snapshot(
                 snapshot: working_snapshot,
                 description_markdown: Some("A private working draft for the request author."),
                 revisions: Vec::new(),
-                outcome: SeedRequestOutcome::Working,
+                outcome: SeedRequestOutcome::Draft,
                 audience: RequestAudience::Public,
                 now_unix: 1_800_000_050,
             },
@@ -595,7 +556,7 @@ fn update_demo_git_snapshot(
                 snapshot: ready_snapshot,
                 description_markdown: Some(request_discussions::READY_REQUEST_DESCRIPTION),
                 revisions: ready_revisions,
-                outcome: SeedRequestOutcome::ReadyForReview,
+                outcome: SeedRequestOutcome::Open,
                 audience: RequestAudience::Public,
                 now_unix: 1_800_000_100,
             },
@@ -608,7 +569,7 @@ fn update_demo_git_snapshot(
                 snapshot: held_snapshot,
                 description_markdown: None,
                 revisions: Vec::new(),
-                outcome: SeedRequestOutcome::Held,
+                outcome: SeedRequestOutcome::Open,
                 audience: RequestAudience::Private,
                 now_unix: 1_800_000_200,
             },
@@ -621,7 +582,7 @@ fn update_demo_git_snapshot(
                 snapshot: accepted_snapshot,
                 description_markdown: None,
                 revisions: Vec::new(),
-                outcome: SeedRequestOutcome::Accepted,
+                outcome: SeedRequestOutcome::Merged,
                 audience: RequestAudience::Private,
                 now_unix: 1_800_000_300,
             },
@@ -634,7 +595,7 @@ fn update_demo_git_snapshot(
                 snapshot: rejected_snapshot,
                 description_markdown: None,
                 revisions: Vec::new(),
-                outcome: SeedRequestOutcome::Rejected,
+                outcome: SeedRequestOutcome::Closed,
                 audience: RequestAudience::Private,
                 now_unix: 1_800_000_400,
             },
@@ -645,9 +606,9 @@ fn update_demo_git_snapshot(
                 base_oid: main_oid,
                 head_oid: neutral_oid,
                 snapshot: neutral_snapshot,
-                description_markdown: Some("A public completed request with a neutral assessment."),
+                description_markdown: Some("A public request kept as closed history."),
                 revisions: Vec::new(),
-                outcome: SeedRequestOutcome::Neutral,
+                outcome: SeedRequestOutcome::Closed,
                 audience: RequestAudience::Public,
                 now_unix: 1_800_000_500,
             },

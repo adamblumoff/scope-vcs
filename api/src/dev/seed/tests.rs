@@ -6,7 +6,7 @@ use super::*;
 use crate::AppState;
 use crate::git::import::git_stdout_text;
 use crate::git::storage::restore_git_segments;
-use scope_domain::requests::{RequestAssessmentOutcome, RequestState};
+use scope_domain::requests::RequestState;
 use scope_object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
 use std::sync::Arc;
 
@@ -59,16 +59,16 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     );
     assert_eq!(
         request_state(&catalog, "req_demo_working"),
-        RequestState::Working
+        RequestState::Draft
     );
     assert!(
         catalog.requests["req_demo_working"]
-            .first_ready_at_unix
+            .submitted_at_unix
             .is_none()
     );
     assert_eq!(
         request_state(&catalog, "req_demo_ready"),
-        RequestState::ReadyForReview
+        RequestState::Open
     );
     let ready_blocks = catalog
         .request_change_blocks
@@ -77,30 +77,23 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
         .collect::<Vec<_>>();
     assert_eq!(ready_blocks.len(), 4);
     let ready = catalog.requests.get("req_demo_ready").unwrap();
-    let last_ready_event_at = catalog
+    let last_request_event_at = catalog
         .request_events
         .values()
         .filter(|event| event.request_id == ready.id)
         .map(|event| event.created_at_unix)
         .max()
         .unwrap();
-    assert!(ready.ready_at_unix.unwrap() > last_ready_event_at);
-    assert_eq!(ready.updated_at_unix, ready.ready_at_unix.unwrap());
+    assert!(ready.submitted_at_unix.unwrap() > last_request_event_at);
+    assert_eq!(ready.updated_at_unix, ready.submitted_at_unix.unwrap());
     assert!(
         ready_blocks
             .iter()
             .all(|block| block.git_snapshot.git_oid == block.new_head_oid)
     );
-    assert_eq!(
-        request_state(&catalog, "req_demo_held"),
-        RequestState::ReadyForReview
-    );
+    assert_eq!(request_state(&catalog, "req_demo_held"), RequestState::Open);
     let accepted = catalog.requests.get("req_demo_accepted").unwrap();
-    assert_eq!(accepted.state, RequestState::Completed);
-    assert_eq!(
-        accepted.assessment_outcome,
-        Some(RequestAssessmentOutcome::Accepted)
-    );
+    assert_eq!(accepted.state(), RequestState::Merged);
     assert_eq!(accepted.merged_main_oid, accepted.merged_head_oid);
     assert_ne!(
         accepted.merged_main_oid,
@@ -108,14 +101,10 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     );
     assert_eq!(
         request_state(&catalog, "req_demo_rejected"),
-        RequestState::Completed
+        RequestState::Closed
     );
     let neutral = catalog.requests.get("req_demo_neutral").unwrap();
-    assert_eq!(neutral.state, RequestState::Completed);
-    assert_eq!(
-        neutral.assessment_outcome,
-        Some(RequestAssessmentOutcome::Neutral)
-    );
+    assert_eq!(neutral.state(), RequestState::Closed);
     assert_eq!(neutral.audience, RequestAudience::Public);
 }
 
@@ -208,7 +197,7 @@ async fn seed_catalog_git_segments_restore_raw_repositories() {
 }
 
 fn request_state(catalog: &scope_postgres::db::CatalogFixture, request_id: &str) -> RequestState {
-    catalog.requests.get(request_id).unwrap().state
+    catalog.requests.get(request_id).unwrap().state()
 }
 
 fn assert_snapshot_file(

@@ -5,18 +5,18 @@ import { parseLoadRequestQueueInput } from './request-queue-input'
 test('parseLoadRequestQueueInput normalizes pagination and search', () => {
   assert.deepEqual(
     parseLoadRequestQueueInput({
-      cursor: '  ready:page-2  ',
+      cursor: '  open:page-2  ',
       owner: ' scope ',
       repo: ' vcs ',
       search: '  atomic refs  ',
-      section: 'ready',
+      section: 'open',
     }),
     {
-      cursor: 'ready:page-2',
+      cursor: 'open:page-2',
       owner: 'scope',
       repo: 'vcs',
       search: 'atomic refs',
-      section: 'ready',
+      section: 'open',
     },
   )
 })
@@ -50,14 +50,14 @@ test('parseLoadRequestQueueInput removes empty optional values', () => {
       owner: 'scope',
       repo: 'vcs',
       search: '\n',
-      section: 'completed',
+      section: 'closed',
     }),
     {
       cursor: null,
       owner: 'scope',
       repo: 'vcs',
       search: null,
-      section: 'completed',
+      section: 'closed',
     },
   )
 })

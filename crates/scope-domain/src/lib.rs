@@ -15,7 +15,9 @@ mod request_change_block_tests;
 #[cfg(test)]
 mod request_identity_tests;
 #[cfg(test)]
-mod request_review_lifecycle_tests;
+mod request_rating_tests;
+#[cfg(test)]
+mod request_submission_tests;
 pub mod requests;
 #[cfg(test)]
 mod requests_tests;
