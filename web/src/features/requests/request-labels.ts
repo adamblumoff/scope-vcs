@@ -7,6 +7,15 @@ import type {
 } from '@/api/types'
 import type { BadgeVariant } from '@/components/ui/badge'
 
+const REQUEST_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  month: 'short',
+  timeZone: 'UTC',
+  year: 'numeric',
+})
+
 export type BadgeTone = BadgeVariant
 
 const REQUEST_STATES = {
@@ -123,13 +132,7 @@ export function formatUnixDate(unixSeconds: number | null) {
   if (unixSeconds === null) {
     return 'Not set'
   }
-  return new Intl.DateTimeFormat(undefined, {
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  }).format(new Date(unixSeconds * 1000))
+  return REQUEST_DATE_FORMATTER.format(new Date(unixSeconds * 1000))
 }
 
 function oidText(value: unknown) {
