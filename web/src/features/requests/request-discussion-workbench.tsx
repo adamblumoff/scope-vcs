@@ -181,7 +181,7 @@ export function RequestDiscussionWorkbench({
               </div>
             ) : null}
 
-            {permissions.canOpenDiscussion && request.state !== 'Completed' ? (
+            {permissions.canOpenDiscussion && !['Closed', 'Merged'].includes(request.state) ? (
               <div className="border-t border-border px-5 py-5 lg:px-7">
                 <RequestDiscussionComposer onSubmit={store.create} />
               </div>

@@ -3,8 +3,8 @@ use crate::{
         CreateRequestDiscussionParams, RequestActivityParams, RequestTarget, StartRequestParams,
         add_request_invitee, close_request as api_close_request, create_request_discussion,
         edit_request_identity, get_request, get_request_activity, leave_request, list_requests,
-        mark_request_ready, merge_request, remove_request_invitee, return_request_to_working,
-        start_request as api_start_request,
+        merge_request, remove_request_invitee, start_request as api_start_request,
+        submit_request as api_submit_request,
     },
     git_repo::{
         GitRepo, current_branch, ensure_clean_working_tree, ensure_git_repo_ready, head_oid,
@@ -56,8 +56,7 @@ pub fn prepare_request_command(args: RequestArgs) -> anyhow::Result<PreparedRequ
     let (command_name, needs_clean_tree) = match &args.command {
         RequestCommand::Start(_) => ("scope request start", true),
         RequestCommand::Push(_) => ("scope request push", false),
-        RequestCommand::Ready(_) => ("scope request ready", false),
-        RequestCommand::Working(_) => ("scope request working", false),
+        RequestCommand::Submit(_) => ("scope request submit", false),
         RequestCommand::Close(_) => ("scope request close", false),
         RequestCommand::Edit(_) => ("scope request edit", false),
         RequestCommand::Invite(_) => ("scope request invite", false),
@@ -95,7 +94,7 @@ pub fn run_request_command(
             args.target.remote,
             args.target.request,
         ),
-        RequestCommand::Ready(args) => ready_request(
+        RequestCommand::Submit(args) => submit_request_command(
             &git_repo,
             client,
             api_url,
@@ -103,9 +102,6 @@ pub fn run_request_command(
             args.target,
             args.yes,
         ),
-        RequestCommand::Working(args) => {
-            working_request(&git_repo, client, api_url, session_token, args.target)
-        }
         RequestCommand::Close(args) => close_request_branch(
             &git_repo,
             client,
@@ -420,11 +416,8 @@ fn close_request_branch(
 ) -> anyhow::Result<()> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let prompt = if before.request.first_ready_at_unix.is_none() {
-        format!(
-            "Permanently delete unpublished Working request {}",
-            before.request.name
-        )
+    let prompt = if before.request.submitted_at_unix.is_none() {
+        format!("Permanently delete draft request {}", before.request.name)
     } else {
         format!("Close published request {}", before.request.name)
     };

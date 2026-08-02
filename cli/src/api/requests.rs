@@ -126,7 +126,7 @@ pub fn start_request(
     )
 }
 
-pub fn mark_request_ready(
+pub fn submit_request(
     client: &Client,
     api_url: &str,
     session_token: &str,
@@ -134,26 +134,11 @@ pub fn mark_request_ready(
 ) -> anyhow::Result<RequestMutationResponse> {
     execute_request(
         client
-            .post(request_action_url(api_url, target, "ready"))
+            .post(request_action_url(api_url, target, "submit"))
             .bearer_auth(session_token)
-            .json(&ReadyRequestRequest {}),
+            .json(&SubmitRequestRequest {}),
         target,
-        "mark request ready",
-    )
-}
-
-pub fn return_request_to_working(
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTarget<'_>,
-) -> anyhow::Result<RequestMutationResponse> {
-    execute_request(
-        client
-            .post(request_action_url(api_url, target, "working"))
-            .bearer_auth(session_token),
-        target,
-        "return request to Working",
+        "submit request",
     )
 }
 
@@ -441,21 +426,21 @@ mod tests {
             r#"{"error":"request cannot be submitted\u001b[31m"}"#,
         );
 
-        let error = mark_request_ready(&Client::new(), &api_url, "token", target())
+        let error = submit_request(&Client::new(), &api_url, "token", target())
             .unwrap_err()
             .to_string();
 
         assert_eq!(error, "request cannot be submitted [31m");
         let request = server.join().unwrap();
-        assert!(request.starts_with("POST /v1/repos/owner/repo/requests/req_one/ready "));
+        assert!(request.starts_with("POST /v1/repos/owner/repo/requests/req_one/submit "));
         assert!(request.contains("\r\n\r\n{}"), "{request}");
     }
 
     #[test]
-    fn ready_posts_an_empty_payload() {
+    fn submit_posts_an_empty_payload() {
         let (api_url, server) = serve_once(StatusCode::CONFLICT, r#"{"error":"fixture stop"}"#);
 
-        mark_request_ready(&Client::new(), &api_url, "token", target()).unwrap_err();
+        submit_request(&Client::new(), &api_url, "token", target()).unwrap_err();
 
         let request = server.join().unwrap();
         assert!(request.contains("\r\n\r\n{}"), "{request}");

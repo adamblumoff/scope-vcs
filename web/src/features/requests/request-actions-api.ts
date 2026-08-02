@@ -13,9 +13,8 @@ export type RequestActionCommand =
   | { action: 'close' }
   | { action: 'leave' }
   | { action: 'merge' }
-  | { action: 'ready' }
+  | { action: 'submit' }
   | { action: 'remove_invitee'; handle: string }
-  | { action: 'working' }
 
 export type RequestActionInput = RequestParams & RequestActionCommand
 
@@ -31,15 +30,10 @@ export async function performRequestActionForRequest(
   const mutationOptions = { auth: 'required' as const }
 
   switch (input.action) {
-    case 'ready':
+    case 'submit':
       return mutationResult(await api.post<RequestMutationResponse>(
-        requestRoute(ApiRouteTemplates.repoRequestReady, input),
+        requestRoute(ApiRouteTemplates.repoRequestSubmit, input),
         { ...mutationOptions, body: {} },
-      ))
-    case 'working':
-      return mutationResult(await api.post<RequestMutationResponse>(
-        requestRoute(ApiRouteTemplates.repoRequestWorking, input),
-        mutationOptions,
       ))
     case 'merge':
       return mutationResult(await api.post<RequestMutationResponse>(

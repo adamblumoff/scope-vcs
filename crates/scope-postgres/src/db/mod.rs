@@ -30,6 +30,8 @@ mod migration_harness_tests;
 #[cfg(test)]
 mod migration_tests;
 #[cfg(test)]
+mod request_submission_migration_tests;
+#[cfg(test)]
 mod runner_protocol_cutover_migration_tests;
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
@@ -63,10 +65,8 @@ mod request_queue;
 pub use request_queue::{RequestQueueCursor, RequestQueuePageQuery, RequestQueueRow};
 mod request_rows;
 pub use request_rows::RequestListRow;
-mod request_identity_transactions;
 mod request_merge;
-mod request_review_transactions;
-mod request_revision_transactions;
+mod request_submission_transactions;
 mod requests;
 mod run_attempt_persistence;
 mod run_details;

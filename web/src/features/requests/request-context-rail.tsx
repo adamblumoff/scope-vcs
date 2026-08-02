@@ -30,13 +30,9 @@ export function RequestContextRail({
 
       <RequestInvitees actions={actions} request={request} />
 
-      <RailSection icon={<GitBranch />} title="Review">
-        <RailValue
-          label="First published"
-          value={formatUnixDate(request.first_ready_at_unix)}
-        />
-        <RailValue label="Ready since" value={formatUnixDate(request.ready_at_unix)} />
-        <RailValue label="Completed" value={formatUnixDate(request.completed_at_unix)} />
+      <RailSection icon={<GitBranch />} title="Lifecycle">
+        <RailValue label="Submitted" value={formatUnixDate(request.submitted_at_unix)} />
+        <RailValue label="Closed" value={formatUnixDate(request.closed_at_unix)} />
         <RailValue label="Merged" value={formatUnixDate(request.merged_at_unix)} />
       </RailSection>
 

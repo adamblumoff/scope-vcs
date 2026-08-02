@@ -24,7 +24,7 @@ pub(super) async fn isolated_database() -> (
     (target, db, lease)
 }
 
-async fn initialize_ready_v6(db: &DatabaseConnection) {
+pub(super) async fn initialize_ready_v6(db: &DatabaseConnection) {
     db.execute_unprepared(V6_SCHEMA).await.unwrap();
     db.execute_unprepared(
         "
@@ -152,6 +152,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0005_projection_head_oid",
             "m0006_drop_request_credits",
             "m0007_drop_review_ceremony",
+            "m0008_one_way_request_submission",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -823,6 +824,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0005_projection_head_oid",
             "m0006_drop_request_credits",
             "m0007_drop_review_ceremony",
+            "m0008_one_way_request_submission",
         ]
     );
 }
@@ -848,6 +850,7 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0005_projection_head_oid",
             "m0006_drop_request_credits",
             "m0007_drop_review_ceremony",
+            "m0008_one_way_request_submission",
         ]
     );
 }

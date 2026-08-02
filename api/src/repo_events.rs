@@ -31,8 +31,7 @@ pub(crate) enum RepoChangeReason {
     MemberRemoved,
     FirstPushApplied,
     PushReceived,
-    RequestReady,
-    RequestWorking,
+    RequestSubmitted,
     RequestInviteeAdded,
     RequestInviteeRemoved,
     #[cfg(test)]
@@ -60,8 +59,7 @@ impl RepoChangeReason {
             Self::MemberRemoved => "member-removed",
             Self::FirstPushApplied => "first-push-applied",
             Self::PushReceived => "push-received",
-            Self::RequestReady => "request-ready",
-            Self::RequestWorking => "request-working",
+            Self::RequestSubmitted => "request-submitted",
             Self::RequestInviteeAdded => "request-invitee-added",
             Self::RequestInviteeRemoved => "request-invitee-removed",
             #[cfg(test)]

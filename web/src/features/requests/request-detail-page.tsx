@@ -164,13 +164,12 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     [createReply, loadReplies, reopenAndReply],
   )
   const isMaintainer = live.repo.access.actor !== 'Public'
-  const hasLifecycleActions = request.permissions.can_mark_ready ||
-    request.permissions.can_return_to_working ||
+  const hasLifecycleActions = request.permissions.can_submit ||
     request.permissions.can_merge ||
     request.permissions.can_close
 
   const canResolveDiscussion = useCallback(
-    (discussion: RequestDiscussion) => request.state !== 'Completed' && (
+    (discussion: RequestDiscussion) => !['Closed', 'Merged'].includes(request.state) && (
       isMaintainer ||
       actor.id === discussion.author.id ||
       actor.id === request.author_user_id

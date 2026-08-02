@@ -44,7 +44,7 @@ fn api_target<'a>(context: &'a local::RequestContext, request_id: &'a str) -> Re
     }
 }
 
-pub(super) fn ready_request(
+pub(super) fn submit_request_command(
     git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
@@ -54,37 +54,15 @@ pub(super) fn ready_request(
 ) -> anyhow::Result<()> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let prompt = match before.request.first_ready_at_unix.is_none() {
-        true => "This publishes the request for review".to_string(),
-        false => "This returns the request to review".to_string(),
-    };
-    require_confirmation(&prompt, yes)?;
-    let response = mark_request_ready(
+    let prompt = "Submit this request to its maintainers";
+    require_confirmation(prompt, yes)?;
+    let response = api_submit_request(
         client,
         api_url,
         session_token,
         api_target(&context, &request_id),
     )?;
-    print_request_mutation_receipt("Ready for review", Some(&before.request), &response);
-    Ok(())
-}
-
-pub(super) fn working_request(
-    git_repo: &GitRepo,
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTargetArgs,
-) -> anyhow::Result<()> {
-    let (context, request_id, before) =
-        load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let response = return_request_to_working(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-    )?;
-    print_request_mutation_receipt("Returned to Working", Some(&before.request), &response);
+    print_request_mutation_receipt("Submitted", Some(&before.request), &response);
     Ok(())
 }
 
@@ -311,18 +289,19 @@ pub(super) fn print_request_list(
     }
     requests.sort_by(|left, right| {
         let rank = |state| match state {
-            crate::api::RequestState::ReadyForReview => 0,
-            crate::api::RequestState::Working => 1,
-            crate::api::RequestState::Completed => 2,
+            crate::api::RequestState::Open => 0,
+            crate::api::RequestState::Draft => 1,
+            crate::api::RequestState::Closed => 2,
+            crate::api::RequestState::Merged => 3,
         };
         let state_order = rank(left.state).cmp(&rank(right.state));
         if state_order != std::cmp::Ordering::Equal {
             return state_order;
         }
-        if left.state == crate::api::RequestState::ReadyForReview {
+        if left.state == crate::api::RequestState::Open {
             return left
-                .ready_at_unix
-                .cmp(&right.ready_at_unix)
+                .submitted_at_unix
+                .cmp(&right.submitted_at_unix)
                 .then_with(|| left.id.cmp(&right.id));
         }
         left.updated_at_unix
@@ -355,8 +334,8 @@ mod tests {
             {
                 "id": "event_2", "position": 2,
                 "actor": {"id": "scope_usr_actor", "handle": "actor"},
-                "kind": "ReadyForReview",
-                "payload": {"ReadyForReview": {
+                "kind": "Submitted",
+                "payload": {"Submitted": {
                     "head_oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 }},
                 "created_at_unix": 20
@@ -364,8 +343,8 @@ mod tests {
             {
                 "id": "event_3", "position": 3,
                 "actor": {"id": "scope_usr_actor", "handle": "actor"},
-                "kind": "ReadyForReview",
-                "payload": {"ReadyForReview": {
+                "kind": "Submitted",
+                "payload": {"Submitted": {
                     "head_oid": "cccccccccccccccccccccccccccccccccccccccc"
                 }},
                 "created_at_unix": 30
@@ -382,11 +361,11 @@ mod tests {
     fn merge_confirmation_names_the_request() {
         use crate::api::RequestState;
         assert_eq!(
-            merge_confirmation("change", RequestState::ReadyForReview),
+            merge_confirmation("change", RequestState::Open),
             "Merge request change into main"
         );
         assert_eq!(
-            merge_confirmation("change", RequestState::Completed),
+            merge_confirmation("change", RequestState::Merged),
             "Merge request change into main"
         );
     }

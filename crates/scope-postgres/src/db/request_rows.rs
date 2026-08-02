@@ -20,7 +20,7 @@ pub struct RequestListRow {
     pub audience: RequestAudience,
     pub head_oid: String,
     pub state: RequestState,
-    pub ready_at_unix: Option<u64>,
+    pub submitted_at_unix: Option<u64>,
     pub is_merged: bool,
     pub updated_at_unix: u64,
     pub has_git_snapshot: bool,
@@ -28,6 +28,7 @@ pub struct RequestListRow {
 
 impl From<Request> for RequestListRow {
     fn from(request: Request) -> Self {
+        let state = request.state();
         Self {
             id: request.id,
             name: request.name,
@@ -35,8 +36,8 @@ impl From<Request> for RequestListRow {
             author_role: request.author_role,
             audience: request.audience,
             head_oid: request.head_oid,
-            state: request.state,
-            ready_at_unix: request.ready_at_unix,
+            state,
+            submitted_at_unix: request.submitted_at_unix,
             is_merged: request.merged_at_unix.is_some(),
             updated_at_unix: request.updated_at_unix,
             has_git_snapshot: request.git_snapshot.is_some(),
@@ -251,26 +252,21 @@ where
             entities::request::Column::GitSnapshot,
             Expr::value(row.git_snapshot),
         )
-        .col_expr(entities::request::Column::State, Expr::value(row.state))
         .col_expr(
             entities::request::Column::ActivityVersion,
             Expr::value(row.activity_version),
         )
         .col_expr(
-            entities::request::Column::FirstReadyAtUnix,
-            Expr::value(row.first_ready_at_unix),
+            entities::request::Column::SubmittedAtUnix,
+            Expr::value(row.submitted_at_unix),
         )
         .col_expr(
-            entities::request::Column::ReadyAtUnix,
-            Expr::value(row.ready_at_unix),
+            entities::request::Column::ClosedAtUnix,
+            Expr::value(row.closed_at_unix),
         )
         .col_expr(
-            entities::request::Column::CompletedAtUnix,
-            Expr::value(row.completed_at_unix),
-        )
-        .col_expr(
-            entities::request::Column::CompletedByUserId,
-            Expr::value(row.completed_by_user_id),
+            entities::request::Column::ClosedByUserId,
+            Expr::value(row.closed_by_user_id),
         )
         .col_expr(
             entities::request::Column::MergedAtUnix,

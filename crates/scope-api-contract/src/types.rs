@@ -101,8 +101,8 @@ mod tests {
 
     #[test]
     fn lifecycle_request_payloads_preserve_optional_fields() {
-        let ready: ReadyRequestRequest = serde_json::from_str("{}").expect("ready request");
-        assert_eq!(serde_json::to_string(&ready).unwrap(), "{}");
+        let submit: SubmitRequestRequest = serde_json::from_str("{}").expect("submit request");
+        assert_eq!(serde_json::to_string(&submit).unwrap(), "{}");
 
         let edit: EditRequestIdentityRequest = serde_json::from_str(r#"{"title":"New title"}"#)
             .expect("identity edit with only a title");
@@ -329,10 +329,9 @@ pub struct RequestSummaryResponse {
     pub head_oid: GitOid,
     pub state: RequestState,
     pub activity_version: u64,
-    pub first_ready_at_unix: Option<u64>,
-    pub ready_at_unix: Option<u64>,
-    pub completed_at_unix: Option<u64>,
-    pub completed_by_user_id: Option<String>,
+    pub submitted_at_unix: Option<u64>,
+    pub closed_at_unix: Option<u64>,
+    pub closed_by_user_id: Option<String>,
     pub merged_at_unix: Option<u64>,
     pub merged_by_user_id: Option<String>,
     pub merged_head_oid: Option<GitOid>,
@@ -387,7 +386,7 @@ pub struct RequestListItemResponse {
     pub audience: RequestAudience,
     pub head_oid: GitOid,
     pub state: RequestState,
-    pub ready_at_unix: Option<u64>,
+    pub submitted_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub mergeability: RequestMergeabilityResponse,
 }
@@ -401,8 +400,7 @@ pub struct RequestPermissionsResponse {
     pub can_edit_identity: bool,
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
-    pub can_mark_ready: bool,
-    pub can_return_to_working: bool,
+    pub can_submit: bool,
     pub can_manage_invitees: bool,
     pub can_leave_request: bool,
     pub can_close: bool,
@@ -539,7 +537,7 @@ pub struct StartRequestRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct ReadyRequestRequest {}
+pub struct SubmitRequestRequest {}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

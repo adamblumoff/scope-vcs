@@ -4,8 +4,7 @@ use crate::api::{
     RequestAudience, RequestCloseResponse, RequestDetailResponse,
     RequestDiscussionMutationResponse, RequestDiscussionStatus, RequestEventPayload,
     RequestInviteeMutationResponse, RequestListItemResponse, RequestMergeabilityStatus,
-    RequestMutationResponse, RequestPermissionsResponse, RequestReviewExitReason, RequestState,
-    RequestSummaryResponse,
+    RequestMutationResponse, RequestPermissionsResponse, RequestState, RequestSummaryResponse,
 };
 
 pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {
@@ -24,7 +23,7 @@ pub(super) fn print_request_activity(activity: &RequestActivityPageResponse) {
     if lines.is_empty() {
         return;
     }
-    println!("Review cycles:");
+    println!("Activity:");
     for line in lines {
         println!("  {line}");
     }
@@ -70,12 +69,9 @@ pub(super) fn print_leave_receipt(request_id: &str, response: &LeaveRequestRespo
 
 pub(super) fn print_close_receipt(request_id: &str, response: &RequestCloseResponse) {
     if response.deleted {
-        println!("Closed and removed unpublished Working request {request_id}");
+        println!("Closed and removed draft request {request_id}");
     } else if let Some(request) = response.request.as_ref() {
-        println!(
-            "Closed request {} · Completed · remains in published history",
-            request.name
-        );
+        println!("Closed request {} · remains in history", request.name);
     } else {
         println!("Closed request {request_id}");
     }
@@ -109,7 +105,7 @@ pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
 pub(super) fn request_list_line(request: &RequestListItemResponse, now_unix: u64) -> String {
     format!(
         "{:>5}  {}",
-        wait_label(request.ready_at_unix, now_unix),
+        wait_label(request.submitted_at_unix, now_unix),
         format_request_line(RequestLine {
             name: &request.name,
             id: &request.id,
@@ -120,11 +116,11 @@ pub(super) fn request_list_line(request: &RequestListItemResponse, now_unix: u64
     )
 }
 
-fn wait_label(ready_at_unix: Option<u64>, now_unix: u64) -> String {
-    let Some(ready_at_unix) = ready_at_unix else {
+fn wait_label(submitted_at_unix: Option<u64>, now_unix: u64) -> String {
+    let Some(submitted_at_unix) = submitted_at_unix else {
         return "-".to_string();
     };
-    let seconds = now_unix.saturating_sub(ready_at_unix);
+    let seconds = now_unix.saturating_sub(submitted_at_unix);
     if seconds < 60 {
         "<1m".to_string()
     } else if seconds < 60 * 60 {
@@ -142,10 +138,10 @@ fn request_detail_lines(request: &RequestSummaryResponse) -> Vec<String> {
         format!(
             "  lifecycle: {} · {}",
             state_label(request.state),
-            if request.first_ready_at_unix.is_some() {
-                "published"
+            if request.submitted_at_unix.is_some() {
+                "submitted"
             } else {
-                "not yet published"
+                "not yet submitted"
             }
         ),
         format!(
@@ -201,27 +197,14 @@ fn request_detail_lines(request: &RequestSummaryResponse) -> Vec<String> {
 fn request_activity_lines(activity: &RequestActivityPageResponse) -> Vec<String> {
     let mut events = activity.events.iter().collect::<Vec<_>>();
     events.sort_by_key(|event| event.position);
-    let mut cycle = 0_u64;
     let mut lines = Vec::new();
     for event in events {
-        match &event.payload {
-            RequestEventPayload::ReadyForReview { head_oid } => {
-                cycle += 1;
-                lines.push(format!(
-                    "cycle {cycle}: Ready · head {} · at {}",
-                    short_oid(head_oid),
-                    event.created_at_unix
-                ));
-            }
-            RequestEventPayload::ReturnedToWorking { reason, .. } => {
-                lines.push(format!(
-                    "cycle {}: Working · {} · at {}",
-                    cycle.max(1),
-                    exit_reason_label(*reason),
-                    event.created_at_unix
-                ));
-            }
-            _ => {}
+        if let RequestEventPayload::Submitted { head_oid } = &event.payload {
+            lines.push(format!(
+                "Submitted · head {} · at {}",
+                short_oid(head_oid),
+                event.created_at_unix
+            ));
         }
     }
     lines
@@ -257,8 +240,7 @@ fn capabilities_label(permissions: &RequestPermissionsResponse) -> String {
     let capabilities = [
         (permissions.can_push_branch, "push"),
         (permissions.can_pull_branch, "pull"),
-        (permissions.can_mark_ready, "ready"),
-        (permissions.can_return_to_working, "working"),
+        (permissions.can_submit, "submit"),
         (permissions.can_edit_identity, "edit"),
         (permissions.can_manage_invitees, "invitees"),
         (permissions.can_leave_request, "leave"),
@@ -280,8 +262,9 @@ fn capabilities_label(permissions: &RequestPermissionsResponse) -> String {
 fn mergeability_label(request: &RequestSummaryResponse) -> String {
     match request.mergeability.status {
         RequestMergeabilityStatus::Ready => "ready".to_string(),
-        RequestMergeabilityStatus::Completed => "completed".to_string(),
-        RequestMergeabilityStatus::Working => "working".to_string(),
+        RequestMergeabilityStatus::Closed => "closed".to_string(),
+        RequestMergeabilityStatus::Merged => "merged".to_string(),
+        RequestMergeabilityStatus::Draft => "draft".to_string(),
         RequestMergeabilityStatus::NotMaintainer => request
             .mergeability
             .reason
@@ -320,17 +303,10 @@ fn audience_label(audience: RequestAudience) -> &'static str {
 
 fn state_label(state: RequestState) -> &'static str {
     match state {
-        RequestState::Working => "working",
-        RequestState::ReadyForReview => "ready",
-        RequestState::Completed => "completed",
-    }
-}
-
-fn exit_reason_label(reason: RequestReviewExitReason) -> &'static str {
-    match reason {
-        RequestReviewExitReason::AuthorReturned => "author returned to Working",
-        RequestReviewExitReason::RevisionPushed => "revision pushed",
-        RequestReviewExitReason::ContentEdited => "identity edited",
+        RequestState::Draft => "draft",
+        RequestState::Open => "open",
+        RequestState::Closed => "closed",
+        RequestState::Merged => "merged",
     }
 }
 
@@ -340,11 +316,11 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn list_renders_ready_state_and_wait() {
+    fn list_renders_open_state_and_wait() {
         let request: RequestListItemResponse = serde_json::from_value(json!({
             "id": "req_one", "name": "fix-refs", "title": "Fix refs",
             "author_role": "Public", "audience": "Public", "head_oid": oid('b'),
-            "state": "ReadyForReview", "ready_at_unix": 10, "updated_at_unix": 20,
+            "state": "Open", "submitted_at_unix": 10, "updated_at_unix": 20,
             "mergeability": {
                 "status": "NotMaintainer",
                 "current_main_oid": oid('a'),
@@ -355,16 +331,15 @@ mod tests {
         .unwrap();
 
         let rendered = request_list_line(&request, 70);
-        assert!(rendered.contains("ready"), "{rendered}");
+        assert!(rendered.contains("open"), "{rendered}");
         assert!(rendered.contains("1m"), "{rendered}");
     }
 
     #[test]
-    fn detail_uses_server_capabilities_and_renders_invitees_and_publication() {
+    fn detail_uses_server_capabilities_and_renders_invitees_and_submission() {
         let mut request = summary();
-        request.state = RequestState::ReadyForReview;
-        request.first_ready_at_unix = Some(10);
-        request.ready_at_unix = Some(11);
+        request.state = RequestState::Open;
+        request.submitted_at_unix = Some(10);
         request.permissions.can_edit_identity = true;
         request.invitees = serde_json::from_value(json!([{
             "user": {"id": "scope_usr_devon", "handle": "devon"},
@@ -375,55 +350,25 @@ mod tests {
 
         let rendered = request_detail_lines(&request).join("\n");
 
-        assert!(rendered.contains("ready"), "{rendered}");
-        assert!(rendered.contains("published"), "{rendered}");
+        assert!(rendered.contains("open"), "{rendered}");
+        assert!(rendered.contains("submitted"), "{rendered}");
         assert!(rendered.contains("@devon"), "{rendered}");
         assert!(rendered.contains("edit"), "{rendered}");
     }
 
     #[test]
-    fn activity_renders_repeated_review_cycles() {
+    fn activity_renders_submission() {
         let activity: RequestActivityPageResponse = serde_json::from_value(json!({
             "events": [
-                event(1, json!({"ReadyForReview": {"head_oid": oid('b')}})),
-                event(3, json!({"ReadyForReview": {"head_oid": oid('c')}})),
-                event(2, json!({"ReturnedToWorking": {
-                    "head_oid": oid('b'), "reason": "RevisionPushed"
-                }}))
+                event(1, json!({"Submitted": {"head_oid": oid('b')}}))
             ],
-            "through_position": 3
+            "through_position": 1
         }))
         .unwrap();
 
         let rendered = request_activity_lines(&activity).join("\n");
 
-        assert!(rendered.contains("cycle 1: Ready · head"), "{rendered}");
-        assert!(
-            rendered.contains("cycle 1: Working · revision pushed"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("cycle 2: Ready · head"), "{rendered}");
-    }
-
-    #[test]
-    fn review_cycles_render_without_financial_effects() {
-        let activity: RequestActivityPageResponse = serde_json::from_value(json!({
-            "events": [
-                event(1, json!({"ReadyForReview": {"head_oid": oid('b')}})),
-                event(2, json!({"ReturnedToWorking": {
-                    "head_oid": oid('b'), "reason": "RevisionPushed"
-                }}))
-            ],
-            "through_position": 2
-        }))
-        .unwrap();
-
-        let rendered = request_activity_lines(&activity).join("\n");
-        assert!(rendered.contains("cycle 1: Ready · head"), "{rendered}");
-        assert!(
-            rendered.contains("cycle 1: Working · revision pushed"),
-            "{rendered}"
-        );
+        assert!(rendered.contains("Submitted · head"), "{rendered}");
     }
 
     #[test]
@@ -441,18 +386,18 @@ mod tests {
                 "description_markdown":"Atomic updates","author_user_id":"scope_usr_author",
                 "author_role":"Public","audience":"Public",
                 "base_main_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "head_oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"Working",
+                "head_oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"Draft",
                 "activity_version":1,
-                "first_ready_at_unix":null,"ready_at_unix":null,"completed_at_unix":null,
-                "completed_by_user_id":null,"merged_at_unix":null,"merged_by_user_id":null,
+                "submitted_at_unix":null,"closed_at_unix":null,"closed_by_user_id":null,
+                "merged_at_unix":null,"merged_by_user_id":null,
                 "merged_head_oid":null,"merged_main_oid":null,"created_at_unix":1,
                 "updated_at_unix":2,"invitees":[],
                 "permissions":{"can_view_activity":false,"can_open_discussion":false,"can_reply_to_discussion":false,
                     "can_edit_identity":false,"can_pull_branch":false,"can_push_branch":false,
-                    "can_mark_ready":false,"can_return_to_working":false,
+                    "can_submit":false,
                     "can_manage_invitees":false,"can_leave_request":false,
                     "can_close":false,"can_merge":false},
-                "mergeability":{"status":"Working",
+                "mergeability":{"status":"Draft",
                     "current_main_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "request_head_oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":null}
             }"#,
@@ -466,9 +411,7 @@ mod tests {
             "position": position,
             "actor": {"id": "scope_usr_actor", "handle": "actor"},
             "kind": match payload.as_object().unwrap().keys().next().unwrap().as_str() {
-                "ReadyForReview" => "ReadyForReview",
-                "ReturnedToWorking" => "ReturnedToWorking",
-                "Settled" => "Settled",
+                "Submitted" => "Submitted",
                 _ => unreachable!()
             },
             "payload": payload,

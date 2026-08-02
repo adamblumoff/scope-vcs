@@ -239,15 +239,6 @@ async fn request_queue_enforces_section_visibility_order_search_and_stable_pagin
         "created after cursor",
     )
     .await;
-    state
-        .metadata
-        .requests()
-        .mutate_request_for_tests("req_ready_tie_a", |request| {
-            request.ready_at_unix = Some(33);
-            request.updated_at_unix = 33;
-        })
-        .await
-        .unwrap();
     let second = response_json(
         api_request(
             app.clone(),
@@ -366,9 +357,7 @@ async fn ready_fixture(
         .mutate_request_for_tests(request_id, |request| {
             request.title = title.to_string();
             request.description_markdown = description.to_string();
-            request.state = RequestState::ReadyForReview;
-            request.first_ready_at_unix = Some(ready_at_unix);
-            request.ready_at_unix = Some(ready_at_unix);
+            request.submitted_at_unix = Some(ready_at_unix);
             request.updated_at_unix = ready_at_unix;
         })
         .await
@@ -390,11 +379,9 @@ async fn completed_fixture(
         .mutate_request_for_tests(request_id, |request| {
             request.title = title.to_string();
             request.description_markdown = description.to_string();
-            request.state = RequestState::Completed;
-            request.first_ready_at_unix = Some(ready_at_unix);
-            request.ready_at_unix = None;
-            request.completed_at_unix = Some(completed_at_unix);
-            request.completed_by_user_id = Some(test_owner_id());
+            request.submitted_at_unix = Some(ready_at_unix);
+            request.closed_at_unix = Some(completed_at_unix);
+            request.closed_by_user_id = Some(test_owner_id());
             request.updated_at_unix = completed_at_unix;
         })
         .await

@@ -1,4 +1,3 @@
-use super::RequestReviewExitReason;
 use crate::{error::DomainError, store::SourceBlob};
 use serde::{Deserialize, Serialize};
 
@@ -17,9 +16,10 @@ pub enum RequestAudience {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RequestState {
-    Working,
-    ReadyForReview,
-    Completed,
+    Draft,
+    Open,
+    Closed,
+    Merged,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,12 +35,10 @@ pub struct Request {
     pub git_snapshot: Option<SourceBlob>,
     pub title: String,
     pub description_markdown: String,
-    pub state: RequestState,
     pub activity_version: u64,
-    pub first_ready_at_unix: Option<u64>,
-    pub ready_at_unix: Option<u64>,
-    pub completed_at_unix: Option<u64>,
-    pub completed_by_user_id: Option<String>,
+    pub submitted_at_unix: Option<u64>,
+    pub closed_at_unix: Option<u64>,
+    pub closed_by_user_id: Option<String>,
     pub merged_at_unix: Option<u64>,
     pub merged_by_user_id: Option<String>,
     pub merged_head_oid: Option<String>,
@@ -50,8 +48,24 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn is_published(&self) -> bool {
-        self.first_ready_at_unix.is_some()
+    pub fn state(&self) -> RequestState {
+        if self.merged_at_unix.is_some() {
+            RequestState::Merged
+        } else if self.closed_at_unix.is_some() {
+            RequestState::Closed
+        } else if self.submitted_at_unix.is_some() {
+            RequestState::Open
+        } else {
+            RequestState::Draft
+        }
+    }
+
+    pub fn is_submitted(&self) -> bool {
+        self.submitted_at_unix.is_some()
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.closed_at_unix.is_some() || self.merged_at_unix.is_some()
     }
 
     pub fn validate_facts(&self) -> Result<(), DomainError> {
@@ -70,8 +84,7 @@ pub struct RequestInvitee {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RequestEventKind {
     Started,
-    ReadyForReview,
-    ReturnedToWorking,
+    Submitted,
     RevisionPushed,
     Merged,
     Closed,
@@ -94,12 +107,8 @@ pub enum RequestEventPayload {
         title: String,
         description_markdown: String,
     },
-    ReadyForReview {
+    Submitted {
         head_oid: String,
-    },
-    ReturnedToWorking {
-        head_oid: String,
-        reason: RequestReviewExitReason,
     },
     RevisionPushed {
         old_head_oid: String,
@@ -149,9 +158,8 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
         ));
     }
     for (label, value) in [
-        ("first ready time", request.first_ready_at_unix),
-        ("ready time", request.ready_at_unix),
-        ("completion time", request.completed_at_unix),
+        ("submission time", request.submitted_at_unix),
+        ("close time", request.closed_at_unix),
         ("merge time", request.merged_at_unix),
     ] {
         if value
@@ -162,36 +170,12 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
             )));
         }
     }
-    match request.state {
-        RequestState::Working => {
-            require_none("working request ready time", request.ready_at_unix)?;
-            require_none("working request completion time", request.completed_at_unix)?;
-        }
-        RequestState::ReadyForReview => {
-            require_some(
-                "ready request publication time",
-                request.first_ready_at_unix,
-            )?;
-            require_some("ready request ready time", request.ready_at_unix)?;
-            require_none("ready request completion time", request.completed_at_unix)?;
-        }
-        RequestState::Completed => {
-            require_some(
-                "completed request publication time",
-                request.first_ready_at_unix,
-            )?;
-            require_none("completed request ready time", request.ready_at_unix)?;
-            require_some(
-                "completed request completion time",
-                request.completed_at_unix,
-            )?;
-            require_some_ref(
-                "completed request completion actor",
-                request.completed_by_user_id.as_ref(),
-            )?;
-        }
-    }
 
+    require_pair(
+        "close time and actor",
+        request.closed_at_unix.is_some(),
+        request.closed_by_user_id.is_some(),
+    )?;
     let merge_count = [
         request.merged_at_unix.is_some(),
         request.merged_by_user_id.is_some(),
@@ -206,57 +190,37 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
             "merge time, actor, head, and main oid must be set together",
         ));
     }
-    if merge_count > 0 && request.state != RequestState::Completed {
-        return Err(DomainError::conflict("merged requests must be completed"));
-    }
-    if let (Some(completed_at_unix), Some(merged_at_unix)) =
-        (request.completed_at_unix, request.merged_at_unix)
-        && merged_at_unix < completed_at_unix
-    {
+    if request.closed_at_unix.is_some() && request.merged_at_unix.is_some() {
         return Err(DomainError::conflict(
-            "request merge cannot precede completion",
+            "request cannot be both closed and merged",
         ));
     }
-    if let (Some(first_ready_at_unix), Some(ready_at_unix)) =
-        (request.first_ready_at_unix, request.ready_at_unix)
-        && ready_at_unix < first_ready_at_unix
-    {
+    if request.is_terminal() && !request.is_submitted() {
         return Err(DomainError::conflict(
-            "current ready time cannot precede first ready time",
+            "terminal requests must have been submitted",
         ));
     }
-    if let (Some(first_ready_at_unix), Some(completed_at_unix)) =
-        (request.first_ready_at_unix, request.completed_at_unix)
-        && completed_at_unix < first_ready_at_unix
-    {
-        return Err(DomainError::conflict(
-            "request completion cannot precede first publication",
-        ));
+    if let Some(submitted_at) = request.submitted_at_unix {
+        for (label, terminal_at) in [
+            ("close", request.closed_at_unix),
+            ("merge", request.merged_at_unix),
+        ] {
+            if terminal_at.is_some_and(|terminal_at| terminal_at < submitted_at) {
+                return Err(DomainError::conflict(format!(
+                    "request {label} cannot precede submission"
+                )));
+            }
+        }
     }
-
     Ok(())
 }
 
-fn require_some(label: &str, value: Option<u64>) -> Result<(), DomainError> {
-    if value.is_none() {
-        Err(DomainError::conflict(format!("{label} is required")))
-    } else {
+fn require_pair(label: &str, left: bool, right: bool) -> Result<(), DomainError> {
+    if left == right {
         Ok(())
-    }
-}
-
-fn require_some_ref<T>(label: &str, value: Option<&T>) -> Result<(), DomainError> {
-    if value.is_none() {
-        Err(DomainError::conflict(format!("{label} is required")))
     } else {
-        Ok(())
-    }
-}
-
-fn require_none(label: &str, value: Option<u64>) -> Result<(), DomainError> {
-    if value.is_some() {
-        Err(DomainError::conflict(format!("{label} must be empty")))
-    } else {
-        Ok(())
+        Err(DomainError::conflict(format!(
+            "request {label} must be set together"
+        )))
     }
 }

@@ -10,15 +10,13 @@ pub struct RequestArgs {
 
 #[derive(Subcommand)]
 pub(super) enum RequestCommand {
-    #[command(about = "Start a Working request and create its local branch")]
+    #[command(about = "Start a draft request and create its local branch")]
     Start(RequestStartArgs),
     #[command(about = "Push the current commit to a request branch")]
     Push(RequestPushArgs),
-    #[command(about = "Publish a request as ready for review")]
-    Ready(RequestReadyArgs),
-    #[command(about = "Return a request to Working")]
-    Working(RequestWorkingArgs),
-    #[command(about = "Close a Working request")]
+    #[command(about = "Submit a request to its maintainers")]
+    Submit(RequestSubmitArgs),
+    #[command(about = "Close a request")]
     Close(RequestCloseArgs),
     #[command(about = "Edit a request title or description")]
     Edit(RequestEditArgs),
@@ -75,17 +73,11 @@ pub(super) struct RequestPushArgs {
 }
 
 #[derive(Parser)]
-pub(super) struct RequestReadyArgs {
+pub(super) struct RequestSubmitArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
-    #[arg(long, help = "Confirm publication for review")]
+    #[arg(long, help = "Confirm one-way submission")]
     pub(super) yes: bool,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestWorkingArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
 }
 
 #[derive(Parser)]

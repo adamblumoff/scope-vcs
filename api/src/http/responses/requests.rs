@@ -13,6 +13,7 @@ pub(crate) fn request_summary_response(
     permissions: RequestPermissionsResponse,
     mergeability: RequestMergeabilityResponse,
 ) -> Result<RequestSummaryResponse, crate::error::ApiError> {
+    let state = request.state();
     Ok(RequestSummaryResponse {
         id: request.id,
         name: request.name,
@@ -23,12 +24,11 @@ pub(crate) fn request_summary_response(
         audience: request.audience.into(),
         base_main_oid: super::git_oid_response(request.base_main_oid)?,
         head_oid: super::git_oid_response(request.head_oid)?,
-        state: request.state.into(),
+        state: state.into(),
         activity_version: request.activity_version,
-        first_ready_at_unix: request.first_ready_at_unix,
-        ready_at_unix: request.ready_at_unix,
-        completed_at_unix: request.completed_at_unix,
-        completed_by_user_id: request.completed_by_user_id,
+        submitted_at_unix: request.submitted_at_unix,
+        closed_at_unix: request.closed_at_unix,
+        closed_by_user_id: request.closed_by_user_id,
         merged_at_unix: request.merged_at_unix,
         merged_by_user_id: request.merged_by_user_id,
         merged_head_oid: request
@@ -62,7 +62,7 @@ pub(crate) fn request_list_item_response(
         audience: request.audience.into(),
         head_oid: request_head_oid.clone(),
         state: request.state.into(),
-        ready_at_unix: request.ready_at_unix,
+        submitted_at_unix: request.submitted_at_unix,
         updated_at_unix: request.updated_at_unix,
         mergeability: RequestMergeabilityResponse {
             status: decision.status.into(),

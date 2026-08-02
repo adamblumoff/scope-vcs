@@ -6,9 +6,7 @@ use sea_orm::{
 use {
     crate::error::PostgresError,
     scope_domain::{
-        requests::{
-            REQUEST_LIST_MAX_PAGE_SIZE, RequestAudience, RequestQueueSection, RequestState,
-        },
+        requests::{REQUEST_LIST_MAX_PAGE_SIZE, RequestAudience, RequestQueueSection},
         store::{RepositoryAccess, RepositoryActor},
     },
 };
@@ -82,25 +80,19 @@ impl RequestStore {
                             .add(entities::request::Column::AuthorUserId.eq(viewer_user_id))
                             .add(Expr::exists(invitee)),
                     )
-                    .filter(
-                        Condition::any()
-                            .add(
-                                entities::request::Column::State
-                                    .ne(entities::encode_enum(RequestState::Completed)?),
-                            )
-                            .add(entities::request::Column::FirstReadyAtUnix.is_not_null()),
-                    )
+                    .filter(entities::request::Column::SubmittedAtUnix.is_null())
+                    .filter(entities::request::Column::ClosedAtUnix.is_null())
+                    .filter(entities::request::Column::MergedAtUnix.is_null())
             }
-            RequestQueueSection::Ready => query.filter(
-                entities::request::Column::State
-                    .eq(entities::encode_enum(RequestState::ReadyForReview)?),
+            RequestQueueSection::Ready => query
+                .filter(entities::request::Column::SubmittedAtUnix.is_not_null())
+                .filter(entities::request::Column::ClosedAtUnix.is_null())
+                .filter(entities::request::Column::MergedAtUnix.is_null()),
+            RequestQueueSection::Completed => query.filter(
+                Condition::any()
+                    .add(entities::request::Column::ClosedAtUnix.is_not_null())
+                    .add(entities::request::Column::MergedAtUnix.is_not_null()),
             ),
-            RequestQueueSection::Completed => query
-                .filter(
-                    entities::request::Column::State
-                        .eq(entities::encode_enum(RequestState::Completed)?),
-                )
-                .filter(entities::request::Column::FirstReadyAtUnix.is_not_null()),
         };
 
         if private_requests_hidden(input.access, input.search) {
@@ -124,10 +116,10 @@ impl RequestStore {
                 .order_by_desc(entities::request::Column::UpdatedAtUnix)
                 .order_by_asc(entities::request::Column::Id),
             RequestQueueSection::Ready => query
-                .order_by_asc(entities::request::Column::FirstReadyAtUnix)
+                .order_by_asc(entities::request::Column::SubmittedAtUnix)
                 .order_by_asc(entities::request::Column::Id),
             RequestQueueSection::Completed => query
-                .order_by_desc(entities::request::Column::CompletedAtUnix)
+                .order_by_desc(Expr::cust("COALESCE(closed_at_unix, merged_at_unix)"))
                 .order_by_asc(entities::request::Column::Id),
         };
 
@@ -196,18 +188,24 @@ fn apply_cursor(
             first_ready_at_unix,
             request_id,
         } => ascending_time_cursor(
-            entities::request::Column::FirstReadyAtUnix,
+            entities::request::Column::SubmittedAtUnix,
             *first_ready_at_unix,
             request_id,
         )?,
         RequestQueueCursor::Completed {
             completed_at_unix,
             request_id,
-        } => descending_time_cursor(
-            entities::request::Column::CompletedAtUnix,
-            *completed_at_unix,
-            request_id,
-        )?,
+        } => Condition::any()
+            .add(descending_time_cursor(
+                entities::request::Column::ClosedAtUnix,
+                *completed_at_unix,
+                request_id,
+            )?)
+            .add(descending_time_cursor(
+                entities::request::Column::MergedAtUnix,
+                *completed_at_unix,
+                request_id,
+            )?),
     };
     query = query.filter(condition);
     Ok(query)
@@ -249,15 +247,18 @@ fn cursor_for_request(
             request_id: request.id.clone(),
         }),
         RequestQueueSection::Ready => Ok(RequestQueueCursor::Ready {
-            first_ready_at_unix: request.first_ready_at_unix.ok_or_else(|| {
-                PostgresError::internal_message("ready request is missing its first ready time")
+            first_ready_at_unix: request.submitted_at_unix.ok_or_else(|| {
+                PostgresError::internal_message("open request is missing its submission time")
             })?,
             request_id: request.id.clone(),
         }),
         RequestQueueSection::Completed => Ok(RequestQueueCursor::Completed {
-            completed_at_unix: request.completed_at_unix.ok_or_else(|| {
-                PostgresError::internal_message("completed request is missing its completion time")
-            })?,
+            completed_at_unix: request
+                .closed_at_unix
+                .or(request.merged_at_unix)
+                .ok_or_else(|| {
+                    PostgresError::internal_message("terminal request is missing its terminal time")
+                })?,
             request_id: request.id.clone(),
         }),
     }

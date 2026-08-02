@@ -15,20 +15,18 @@ use axum::{
 };
 use scope_api_contract::{
     AddRequestInviteeRequest, EditRequestIdentityRequest, LeaveRequestResponse,
-    ReadyRequestRequest, RemoveRequestInviteeRequest, RequestActorSummaryResponse,
-    RequestCloseResponse, RequestDetailResponse, RequestInviteeMutationResponse,
-    RequestInviteeResponse, RequestListResponse, RequestMergeabilityResponse,
-    RequestMutationResponse, RequestPermissionsResponse, RequestSummaryResponse,
-    StartRequestRequest,
+    RemoveRequestInviteeRequest, RequestActorSummaryResponse, RequestCloseResponse,
+    RequestDetailResponse, RequestInviteeMutationResponse, RequestInviteeResponse,
+    RequestListResponse, RequestMergeabilityResponse, RequestMutationResponse,
+    RequestPermissionsResponse, RequestSummaryResponse, StartRequestRequest, SubmitRequestRequest,
 };
 use scope_domain::{
     projection::{ProjectionViewKey, project_graph},
     requests::{
-        CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput, MarkRequestReadyInput,
-        MergeRequestInput, REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, Request,
-        RequestAudience, RequestReviewExitReason, RequestViewer, ReturnRequestToWorkingInput,
-        StartRequestInput, canonical_request_ref, request_actor_role, request_mergeability,
-        request_policy,
+        CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput, MergeRequestInput,
+        REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestAudience,
+        RequestViewer, StartRequestInput, SubmitRequestInput, canonical_request_ref,
+        request_actor_role, request_mergeability, request_policy,
     },
     store::{RepositoryAccess, RepositoryActor, StoredRepository},
 };
@@ -157,11 +155,11 @@ pub(crate) async fn get_request(
     Ok(Json(RequestDetailResponse { request }))
 }
 
-pub(crate) async fn mark_request_ready(
+pub(crate) async fn submit_request(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-    Json(_input): Json<ReadyRequestRequest>,
+    Json(_input): Json<SubmitRequestRequest>,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
@@ -169,13 +167,12 @@ pub(crate) async fn mark_request_ready(
     let mutation = state
         .metadata
         .requests()
-        .mark_request_ready(MarkRequestReadyInput {
+        .submit_request(SubmitRequestInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
             actor_is_author: false,
-            actor_can_mutate: false,
-            public_ready_count: 0,
-            event_id: random_id("event_request_ready")?,
+            actor_can_submit: false,
+            event_id: random_id("event_request_submitted")?,
             now_unix: unix_now()?,
         })
         .await?;
@@ -185,39 +182,7 @@ pub(crate) async fn mark_request_ready(
         access,
         &user.id,
         mutation.request,
-        RepoChangeReason::RequestReady,
-    )
-    .await
-}
-
-pub(crate) async fn return_request_to_working(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id)): Path<(String, String, String)>,
-) -> Result<Json<RequestMutationResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let mutation = state
-        .metadata
-        .requests()
-        .return_request_to_working(ReturnRequestToWorkingInput {
-            request_id: request.id,
-            actor_user_id: user.id.clone(),
-            actor_is_author: false,
-            actor_can_mutate: false,
-            reason: RequestReviewExitReason::AuthorReturned,
-            event_id: random_id("event_request_working")?,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    lifecycle_response(
-        &state,
-        &repo,
-        access,
-        &user.id,
-        mutation.request,
-        RepoChangeReason::RequestWorking,
+        RepoChangeReason::RequestSubmitted,
     )
     .await
 }
@@ -358,7 +323,8 @@ pub(crate) async fn close_request(
             CloseRequestInput {
                 request_id: request.id,
                 actor_user_id: user.id.clone(),
-                actor_can_close: false,
+                actor_is_author: false,
+                actor_is_maintainer: false,
                 event_id: random_id("event_request_closed")?,
                 now_unix: unix_now()?,
             },
@@ -376,7 +342,7 @@ pub(crate) async fn close_request(
                 request: None,
             }))
         }
-        CloseRequestMutation::Completed { request, .. } => {
+        CloseRequestMutation::Closed { request, .. } => {
             let current_main_oid = committed_main_oid_for_access(&repo, access)?;
             let request = request_response_for_viewer(
                 &state,
@@ -462,7 +428,7 @@ pub(crate) async fn edit_request_identity(
     let mutation = state
         .metadata
         .requests()
-        .edit_request_identity_with_review_invalidation(EditRequestIdentityInput {
+        .edit_request_identity(EditRequestIdentityInput {
             request_id: request.id,
             actor_user_id: user.id.clone(),
             actor_can_edit_identity: false,
@@ -717,8 +683,7 @@ async fn request_response_for_viewer(
         can_edit_identity: decision.can_edit_identity,
         can_pull_branch: decision.can_pull_branch,
         can_push_branch: decision.can_push_branch,
-        can_mark_ready: decision.can_mark_ready,
-        can_return_to_working: decision.can_return_to_working,
+        can_submit: decision.can_submit,
         can_manage_invitees: decision.can_manage_invitees,
         can_leave_request: decision.can_leave_request,
         can_close: decision.can_close,

@@ -50,12 +50,9 @@ pub use model::{
 };
 mod queue;
 pub use queue::RequestQueueSection;
-mod review;
-pub use review::RequestReviewExitReason;
-mod review_lifecycle;
-pub use review_lifecycle::{
-    MarkRequestReadyInput, MergeRequestInput, PUBLIC_READY_REQUEST_LIMIT, RequestReviewMutation,
-    ReturnRequestToWorkingInput, mark_request_ready, merge_request, return_request_to_working,
+mod submission;
+pub use submission::{
+    MergeRequestInput, RequestLifecycleMutation, SubmitRequestInput, merge_request, submit_request,
 };
 
 pub const REQUEST_REF_PREFIX: &str = "refs/heads/";
@@ -85,8 +82,8 @@ pub(super) fn open_request_mut<'a>(
     let request = requests
         .get_mut(request_id)
         .ok_or_else(|| DomainError::not_found("request not found"))?;
-    if request.state == RequestState::Completed {
-        return Err(DomainError::conflict("request is completed"));
+    if request.is_terminal() {
+        return Err(DomainError::conflict("request is closed"));
     }
     Ok(request)
 }

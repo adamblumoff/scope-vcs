@@ -4,7 +4,6 @@ mod helpers;
 mod queue;
 pub(super) use helpers::{create_owner_request, create_public_request, rebuild_request_projection};
 
-use scope_domain::requests::RequestState;
 use scope_postgres::db::AddRequestInviteeCommand;
 
 const REQUEST_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -30,15 +29,15 @@ async fn request_reads_do_not_consume_git_projection_capacity() {
 
     rebuild_request_projection(&state).await;
     create_owner_request(&state, "req_metadata_head", REQUEST_HEAD).await;
-    let ready = api_request(
+    let submitted = api_request(
         app.clone(),
         "POST",
-        "/v1/repos/owner/repo/requests/req_metadata_head/ready",
+        "/v1/repos/owner/repo/requests/req_metadata_head/submit",
         Some(&bearer_header()),
         Some("{}"),
     )
     .await;
-    assert_eq!(ready.status(), StatusCode::OK);
+    assert_eq!(submitted.status(), StatusCode::OK);
 
     let queue = api_request(
         app,
@@ -270,48 +269,34 @@ async fn request_list_pages_one_hundred_and_one_visible_rows_without_overlap() {
 }
 
 #[tokio::test]
-async fn request_lifecycle_exposes_only_ready_working_and_merge_actions() {
+async fn request_lifecycle_exposes_one_way_submit_and_merge_actions() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     create_owner_request(&state, "req_lifecycle", REQUEST_HEAD).await;
     let app = router(state);
     let bearer = bearer_header();
 
-    let ready = api_request(
+    let submitted = api_request(
         app.clone(),
         "POST",
-        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
+        "/v1/repos/owner/repo/requests/req_lifecycle/submit",
         Some(&bearer),
         Some("{}"),
     )
     .await;
-    assert_eq!(ready.status(), StatusCode::OK);
-    let ready = response_json(ready).await;
-    assert_eq!(ready["request"]["state"], "ReadyForReview");
-    let working = api_request(
-        app.clone(),
-        "POST",
-        "/v1/repos/owner/repo/requests/req_lifecycle/working",
-        Some(&bearer),
-        None,
-    )
-    .await;
-    assert_eq!(working.status(), StatusCode::OK);
-    assert_eq!(response_json(working).await["request"]["state"], "Working");
+    assert_eq!(submitted.status(), StatusCode::OK);
+    let submitted = response_json(submitted).await;
+    assert_eq!(submitted["request"]["state"], "Open");
 
-    let ready_again = api_request(
+    let repeated = api_request(
         app.clone(),
         "POST",
-        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
+        "/v1/repos/owner/repo/requests/req_lifecycle/submit",
         Some(&bearer),
         Some("{}"),
     )
     .await;
-    assert_eq!(ready_again.status(), StatusCode::OK);
-    assert_eq!(
-        response_json(ready_again).await["request"]["state"],
-        "ReadyForReview"
-    );
+    assert_eq!(repeated.status(), StatusCode::CONFLICT);
 
     for (method, path) in [
         ("PUT", "/v1/repos/owner/repo/requests/req_lifecycle/hold"),
@@ -364,24 +349,12 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
     }
 
     create_public_request(&state, "req_never", author_id.clone(), REQUEST_HEAD).await;
-    create_public_request(&state, "req_previous", author_id.clone(), REQUEST_HEAD).await;
     create_public_request(&state, "req_ready_public", author_id.clone(), REQUEST_HEAD).await;
     state
         .metadata
         .requests()
-        .mutate_request_for_tests("req_previous", |request| {
-            request.first_ready_at_unix = Some(4);
-            request.updated_at_unix = 4;
-        })
-        .await
-        .unwrap();
-    state
-        .metadata
-        .requests()
         .mutate_request_for_tests("req_ready_public", |request| {
-            request.state = RequestState::ReadyForReview;
-            request.first_ready_at_unix = Some(4);
-            request.ready_at_unix = Some(4);
+            request.submitted_at_unix = Some(4);
             request.updated_at_unix = 4;
         })
         .await
@@ -412,7 +385,7 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
     )
     .await;
     assert_eq!(request_ids(&anonymous_list), vec!["req_ready_public"]);
-    assert_eq!(anonymous_list["requests"][0]["ready_at_unix"], 4);
+    assert_eq!(anonymous_list["requests"][0]["submitted_at_unix"], 4);
 
     let unrelated = bearer_header_for("request_unrelated", "request-unrelated@example.com");
     for suffix in ["req_never", "req_never/timeline", "req_never/activity"] {
@@ -429,7 +402,7 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
             StatusCode::NOT_FOUND
         );
     }
-    for request_id in ["req_previous", "req_ready_public"] {
+    for request_id in ["req_ready_public"] {
         assert_eq!(
             api_request(
                 app.clone(),
@@ -522,7 +495,7 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
         request_ids(&maintainer_list),
         vec!["req_private_matrix", "req_ready_public"]
     );
-    for request_id in ["req_previous", "req_private_matrix"] {
+    for request_id in ["req_private_matrix"] {
         assert_eq!(
             api_request(
                 app.clone(),
@@ -660,7 +633,7 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
         .metadata
         .requests()
         .mutate_request_for_tests("req_invites", |request| {
-            request.first_ready_at_unix = Some(5);
+            request.submitted_at_unix = Some(5);
             request.updated_at_unix = 5;
         })
         .await

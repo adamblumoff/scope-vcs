@@ -36,13 +36,11 @@ export type RequestActorRole = "Public" | "Member" | "Owner";
 
 export type RequestAudience = "Public" | "Private";
 
-export type RequestState = "Working" | "ReadyForReview" | "Completed";
-
-export type RequestReviewExitReason = "AuthorReturned" | "RevisionPushed" | "ContentEdited";
+export type RequestState = "Draft" | "Open" | "Closed" | "Merged";
 
 export type GitOid = string;
 
-export type RequestEventKind = "Started" | "ReadyForReview" | "ReturnedToWorking" | "RevisionPushed" | "Merged" | "Closed" | "IdentityEdited" | "DiscussionResolved" | "DiscussionReopened";
+export type RequestEventKind = "Started" | "Submitted" | "RevisionPushed" | "Merged" | "Closed" | "IdentityEdited" | "DiscussionResolved" | "DiscussionReopened";
 
 export type ProjectionPreviewAudience = "private" | "public";
 
@@ -172,9 +170,9 @@ export type RequestDetailResponse = { request: RequestSummaryResponse, };
 
 export type RequestMutationResponse = { request: RequestSummaryResponse, };
 
-export type RequestListItemResponse = { id: string, name: string, title: string, author_role: RequestActorRole, audience: RequestAudience, head_oid: GitOid, state: RequestState, ready_at_unix: number | null, updated_at_unix: number, mergeability: RequestMergeabilityResponse, };
+export type RequestListItemResponse = { id: string, name: string, title: string, author_role: RequestActorRole, audience: RequestAudience, head_oid: GitOid, state: RequestState, submitted_at_unix: number | null, updated_at_unix: number, mergeability: RequestMergeabilityResponse, };
 
-export type RequestSummaryResponse = { id: string, name: string, title: string, description_markdown: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, activity_version: number, first_ready_at_unix: number | null, ready_at_unix: number | null, completed_at_unix: number | null, completed_by_user_id: string | null, merged_at_unix: number | null, merged_by_user_id: string | null, merged_head_oid: GitOid | null, merged_main_oid: GitOid | null, created_at_unix: number, updated_at_unix: number, invitees: Array<RequestInviteeResponse>, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
+export type RequestSummaryResponse = { id: string, name: string, title: string, description_markdown: string, author_user_id: string, author_role: RequestActorRole, audience: RequestAudience, base_main_oid: GitOid, head_oid: GitOid, state: RequestState, activity_version: number, submitted_at_unix: number | null, closed_at_unix: number | null, closed_by_user_id: string | null, merged_at_unix: number | null, merged_by_user_id: string | null, merged_head_oid: GitOid | null, merged_main_oid: GitOid | null, created_at_unix: number, updated_at_unix: number, invitees: Array<RequestInviteeResponse>, permissions: RequestPermissionsResponse, mergeability: RequestMergeabilityResponse, };
 
 export type RequestInviteeResponse = { user: RequestActorSummaryResponse, invited_by_user_id: string, created_at_unix: number, };
 
@@ -186,15 +184,15 @@ export type RequestInviteeMutationResponse = { request: RequestSummaryResponse, 
 
 export type LeaveRequestResponse = { invitee: RequestInviteeResponse, };
 
-export type RequestPermissionsResponse = { can_view_activity: boolean, can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_identity: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_mark_ready: boolean, can_return_to_working: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_close: boolean, can_merge: boolean, };
+export type RequestPermissionsResponse = { can_view_activity: boolean, can_open_discussion: boolean, can_reply_to_discussion: boolean, can_edit_identity: boolean, can_pull_branch: boolean, can_push_branch: boolean, can_submit: boolean, can_manage_invitees: boolean, can_leave_request: boolean, can_close: boolean, can_merge: boolean, };
 
-export type RequestMergeabilityStatus = "Ready" | "Completed" | "Working" | "NotMaintainer" | "MissingRequestBranch";
+export type RequestMergeabilityStatus = "Ready" | "Draft" | "Closed" | "Merged" | "NotMaintainer" | "MissingRequestBranch";
 
 export type RequestMergeabilityResponse = { status: RequestMergeabilityStatus, current_main_oid: GitOid | null, request_head_oid: GitOid, reason: string | null, };
 
 export type RequestEventResponse = { id: string, position: number, actor: RequestActorSummaryResponse, kind: RequestEventKind, payload: RequestEventPayload, created_at_unix: number, };
 
-export type RequestEventPayload = { "Started": { title: string, description_markdown: string, } } | { "ReadyForReview": { head_oid: string, } } | { "ReturnedToWorking": { head_oid: string, reason: RequestReviewExitReason, } } | { "RevisionPushed": { old_head_oid: string, new_head_oid: string, note: string | null, } } | { "Merged": { head_oid: string, main_oid: string, } } | { "Closed": { head_oid: string, } } | { "IdentityEdited": { before: RequestIdentityAuditFact, after: RequestIdentityAuditFact, } } | { "DiscussionResolved": { discussion_id: string, } } | { "DiscussionReopened": { discussion_id: string, } };
+export type RequestEventPayload = { "Started": { title: string, description_markdown: string, } } | { "Submitted": { head_oid: string, } } | { "RevisionPushed": { old_head_oid: string, new_head_oid: string, note: string | null, } } | { "Merged": { head_oid: string, main_oid: string, } } | { "Closed": { head_oid: string, } } | { "IdentityEdited": { before: RequestIdentityAuditFact, after: RequestIdentityAuditFact, } } | { "DiscussionResolved": { discussion_id: string, } } | { "DiscussionReopened": { discussion_id: string, } };
 
 export type RequestIdentityAuditFact = { title_sha256: string, title_byte_count: number, description_sha256: string, description_byte_count: number, };
 
@@ -226,7 +224,7 @@ export type RequestCloseResponse = { deleted: boolean, request: RequestSummaryRe
 
 export type StartRequestRequest = { name: string, title: string | null, audience: RequestAudience, };
 
-export type ReadyRequestRequest = Record<symbol, never>;
+export type SubmitRequestRequest = Record<symbol, never>;
 
 export type EditRequestIdentityRequest = { title: string | null, description_markdown: string | null, };
 
@@ -285,8 +283,7 @@ export const ApiRouteTemplates = {
   repoRequests: "/v1/repos/{owner}/{repo}/requests",
   repoRequestQueue: "/v1/repos/{owner}/{repo}/requests/queue",
   repoRequest: "/v1/repos/{owner}/{repo}/requests/{request_id}",
-  repoRequestReady: "/v1/repos/{owner}/{repo}/requests/{request_id}/ready",
-  repoRequestWorking: "/v1/repos/{owner}/{repo}/requests/{request_id}/working",
+  repoRequestSubmit: "/v1/repos/{owner}/{repo}/requests/{request_id}/submit",
   repoRequestMerge: "/v1/repos/{owner}/{repo}/requests/{request_id}/merge",
   repoRequestInvitees: "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees",
   repoRequestInviteesMe: "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees/me",

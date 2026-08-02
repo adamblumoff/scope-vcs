@@ -1,8 +1,8 @@
 use super::{
     REQUEST_DESCRIPTION_MAX_BYTES, REQUEST_TITLE_MAX_BYTES, Request, RequestEvent,
-    RequestEventKind, RequestEventPayload, RequestIdentityAuditFact, RequestState,
-    RequestTimelineMutation, advance_request_activity, ensure_event_id_available, open_request_mut,
-    validate_body_size, validate_required_id,
+    RequestEventKind, RequestEventPayload, RequestIdentityAuditFact, RequestTimelineMutation,
+    advance_request_activity, ensure_event_id_available, open_request_mut, validate_body_size,
+    validate_required_id,
 };
 use crate::error::DomainError;
 use sha2::{Digest, Sha256};
@@ -48,11 +48,6 @@ pub fn edit_request_identity(
         )?;
     }
     let request = open_request_mut(requests, &input.request_id)?;
-    if request.state == RequestState::ReadyForReview {
-        return Err(DomainError::conflict(
-            "request cannot be edited while ready for review",
-        ));
-    }
     let title = input.title.unwrap_or_else(|| request.title.clone());
     let description_markdown = input
         .description_markdown

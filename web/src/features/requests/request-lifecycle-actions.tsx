@@ -1,13 +1,13 @@
 import type { RequestSummary } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { CheckCircle2, RotateCcw, XCircle } from 'lucide-react'
+import { CheckCircle2, XCircle } from 'lucide-react'
 import { useState } from 'react'
 import { RequestConfirmDialog } from './request-confirm-dialog'
-import { RequestReadyDialog } from './request-ready-dialog'
+import { RequestSubmitDialog } from './request-submit-dialog'
 import type { RequestActionController } from './use-request-actions'
 
-type Dialog = 'close' | 'merge' | 'ready' | 'working' | null
+type Dialog = 'close' | 'merge' | 'submit' | null
 
 export function RequestLifecycleActions({
   actions,
@@ -22,8 +22,7 @@ export function RequestLifecycleActions({
   const busy = actions.pending !== null
   const permissions = request.permissions
   const canMerge = permissions.can_merge && request.mergeability.status === 'Ready'
-  const hasActions = permissions.can_mark_ready ||
-    permissions.can_return_to_working ||
+  const hasActions = permissions.can_submit ||
     canMerge ||
     permissions.can_close
 
@@ -32,16 +31,10 @@ export function RequestLifecycleActions({
   return (
     <>
       <div className={cn('flex flex-wrap items-center gap-2', className)}>
-        {permissions.can_mark_ready ? (
-          <Button disabled={busy} onClick={() => setDialog('ready')} size="sm" type="button">
+        {permissions.can_submit ? (
+          <Button disabled={busy} onClick={() => setDialog('submit')} size="sm" type="button">
             <CheckCircle2 />
-            Ready for review
-          </Button>
-        ) : null}
-        {permissions.can_return_to_working ? (
-          <Button disabled={busy} onClick={() => setDialog('working')} size="sm" type="button" variant="secondary">
-            <RotateCcw />
-            Return to Working
+            Submit
           </Button>
         ) : null}
         {canMerge ? (
@@ -57,23 +50,12 @@ export function RequestLifecycleActions({
         ) : null}
       </div>
 
-      <RequestReadyDialog
-        onConfirm={() => actions.run({ action: 'ready' })}
-        onOpenChange={(open) => setDialog(open ? 'ready' : null)}
-        open={dialog === 'ready'}
-        pending={actions.pending === 'ready'}
-        request={request}
+      <RequestSubmitDialog
+        onConfirm={() => actions.run({ action: 'submit' })}
+        onOpenChange={(open) => setDialog(open ? 'submit' : null)}
+        open={dialog === 'submit'}
+        pending={actions.pending === 'submit'}
       />
-      <RequestConfirmDialog
-        confirmLabel="Return to Working"
-        onConfirm={() => actions.run({ action: 'working' })}
-        onOpenChange={(open) => setDialog(open ? 'working' : null)}
-        open={dialog === 'working'}
-        pending={actions.pending === 'working'}
-        title="Return this request to Working?"
-      >
-        <p>The author must mark the current package Ready again before review can continue.</p>
-      </RequestConfirmDialog>
       <RequestConfirmDialog
         confirmLabel="Merge request"
         onConfirm={() => actions.run({ action: 'merge' })}
@@ -91,12 +73,12 @@ export function RequestLifecycleActions({
         onOpenChange={(open) => setDialog(open ? 'close' : null)}
         open={dialog === 'close'}
         pending={actions.pending === 'close'}
-        title="Close this Working request?"
+        title="Close this request?"
       >
-        {request.first_ready_at_unix === null ? (
-          <p>This never-published request will be deleted and will not enter public history.</p>
+        {request.submitted_at_unix === null ? (
+          <p>This draft request will be permanently deleted.</p>
         ) : (
-          <p>This published request will become Completed and remain in public history.</p>
+          <p>This submitted request will close and remain in request history.</p>
         )}
       </RequestConfirmDialog>
     </>

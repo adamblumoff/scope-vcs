@@ -5,6 +5,7 @@ mod m0004_runner_protocol_cutover;
 mod m0005_projection_head_oid;
 mod m0006_drop_request_credits;
 mod m0007_drop_review_ceremony;
+mod m0008_one_way_request_submission;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -27,6 +28,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0005_projection_head_oid::Migration),
             Box::new(m0006_drop_request_credits::Migration),
             Box::new(m0007_drop_review_ceremony::Migration),
+            Box::new(m0008_one_way_request_submission::Migration),
         ]
     }
 }

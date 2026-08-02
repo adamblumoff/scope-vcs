@@ -71,7 +71,8 @@ pub struct RequestRevisionMutation {
 pub struct CloseRequestInput {
     pub request_id: String,
     pub actor_user_id: String,
-    pub actor_can_close: bool,
+    pub actor_is_author: bool,
+    pub actor_is_maintainer: bool,
     pub event_id: String,
     pub now_unix: u64,
 }
@@ -84,7 +85,7 @@ pub enum CloseRequestMutation {
         change_blocks: Vec<RequestChangeBlock>,
         orphan_objects: Vec<SourceBlob>,
     },
-    Completed {
+    Closed {
         request: Request,
         event: RequestEvent,
     },
@@ -106,7 +107,7 @@ pub fn start_request(
                 request.repo_id == input.repo_id
                     && request.author_user_id == input.author_user_id
                     && request.author_role == RequestActorRole::Public
-                    && request.state == RequestState::Working
+                    && request.state() == RequestState::Draft
             })
             .count()
             >= PUBLIC_WORKING_REQUEST_LIMIT
@@ -128,12 +129,10 @@ pub fn start_request(
         git_snapshot: None,
         title,
         description_markdown: String::new(),
-        state: RequestState::Working,
         activity_version: 1,
-        first_ready_at_unix: None,
-        ready_at_unix: None,
-        completed_at_unix: None,
-        completed_by_user_id: None,
+        submitted_at_unix: None,
+        closed_at_unix: None,
+        closed_by_user_id: None,
         merged_at_unix: None,
         merged_by_user_id: None,
         merged_head_oid: None,
@@ -173,8 +172,8 @@ pub fn record_working_request_upload(
             "request branch edit access required",
         ));
     }
-    if request.state != RequestState::Working {
-        return Err(DomainError::conflict("request is not working"));
+    if request.is_terminal() {
+        return Err(DomainError::conflict("request is closed"));
     }
     validate_expected_head(request, input.expected_old_head_oid.as_deref())?;
     validate_snapshot_head(&input.git_snapshot, &input.new_head_oid)?;
@@ -206,9 +205,9 @@ pub fn record_request_revision(
             "request branch edit access required",
         ));
     }
-    if request.state != RequestState::Working {
+    if request.is_terminal() {
         return Err(DomainError::conflict(
-            "only working requests can receive new revisions",
+            "closed requests cannot receive new revisions",
         ));
     }
     validate_expected_head(request, input.expected_old_head_oid.as_deref())?;
@@ -259,16 +258,28 @@ pub fn close_request(
     validate_required_id("request id", &input.request_id)?;
     validate_required_id("actor user id", &input.actor_user_id)?;
     validate_required_id("event id", &input.event_id)?;
-    if !input.actor_can_close {
-        return Err(DomainError::forbidden("request close access required"));
-    }
     let request = requests
         .get(&input.request_id)
         .ok_or_else(|| DomainError::not_found("request not found"))?;
-    if request.state != RequestState::Working {
-        return Err(DomainError::conflict("only working requests can be closed"));
+    match request.state() {
+        RequestState::Draft
+            if !input.actor_is_author || request.author_user_id != input.actor_user_id =>
+        {
+            return Err(DomainError::forbidden(
+                "only the request author can delete a draft",
+            ));
+        }
+        RequestState::Open if !input.actor_is_author && !input.actor_is_maintainer => {
+            return Err(DomainError::forbidden(
+                "request author or repo maintainer required",
+            ));
+        }
+        RequestState::Closed | RequestState::Merged => {
+            return Err(DomainError::conflict("request is already closed"));
+        }
+        RequestState::Draft | RequestState::Open => {}
     }
-    if !request.is_published() {
+    if !request.is_submitted() {
         let request = requests
             .remove(&input.request_id)
             .ok_or_else(|| DomainError::not_found("request not found"))?;
@@ -313,9 +324,8 @@ pub fn close_request(
     let request = requests
         .get_mut(&input.request_id)
         .ok_or_else(|| DomainError::not_found("request not found"))?;
-    request.state = RequestState::Completed;
-    request.completed_at_unix = Some(input.now_unix);
-    request.completed_by_user_id = Some(input.actor_user_id.clone());
+    request.closed_at_unix = Some(input.now_unix);
+    request.closed_by_user_id = Some(input.actor_user_id.clone());
     request.updated_at_unix = input.now_unix;
     let position = advance_request_activity(request)?;
     request.validate_facts()?;
@@ -332,7 +342,7 @@ pub fn close_request(
         created_at_unix: input.now_unix,
     };
     events.insert(event.id.clone(), event.clone());
-    Ok(CloseRequestMutation::Completed { request, event })
+    Ok(CloseRequestMutation::Closed { request, event })
 }
 
 fn validate_start_request_input(input: &StartRequestInput) -> Result<(), DomainError> {

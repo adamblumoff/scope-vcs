@@ -449,5 +449,5 @@ async fn repo_summary_response(
 }
 
 fn request_visible_in_summary(request: &Request, access: RepositoryAccess) -> bool {
-    request_policy(request, RequestViewer::new(access, None, false)).counts_as_ready
+    request_policy(request, RequestViewer::new(access, None, false)).counts_as_open
 }

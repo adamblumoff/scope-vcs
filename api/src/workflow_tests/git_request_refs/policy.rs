@@ -63,13 +63,12 @@ async fn advertisement_and_exact_fetch_follow_viewer_and_publication_policy() {
     state
         .metadata
         .requests()
-        .mark_request_ready(MarkRequestReadyInput {
+        .submit_request(SubmitRequestInput {
             request_id: REQUEST_ID.to_string(),
             actor_user_id: public_user_id(),
             actor_is_author: false,
-            actor_can_mutate: false,
-            public_ready_count: 0,
-            event_id: "event_advertisement_ready".to_string(),
+            actor_can_submit: false,
+            event_id: "event_advertisement_submitted".to_string(),
             now_unix: 4,
         })
         .await
@@ -82,56 +81,6 @@ async fn advertisement_and_exact_fetch_follow_viewer_and_publication_policy() {
         (permissioned_remote.as_str(), Some(unrelated.as_str())),
     ] {
         assert!(advertises_request_ref(remote, bearer));
-    }
-
-    state
-        .metadata
-        .requests()
-        .return_request_to_working(ReturnRequestToWorkingInput {
-            request_id: REQUEST_ID.to_string(),
-            actor_user_id: public_user_id(),
-            actor_is_author: false,
-            actor_can_mutate: false,
-            reason: RequestReviewExitReason::AuthorReturned,
-            event_id: "event_advertisement_working".to_string(),
-            now_unix: 5,
-        })
-        .await
-        .unwrap();
-    assert!(advertises_request_ref(&permissioned_remote, Some(&author)));
-    assert!(advertises_request_ref(&permissioned_remote, Some(&invitee)));
-    assert!(!advertises_request_ref(
-        &permissioned_remote,
-        Some(&maintainer)
-    ));
-    assert!(!advertises_request_ref(
-        &permissioned_remote,
-        Some(&unrelated)
-    ));
-    assert!(!advertises_request_ref(&public_remote, None));
-    for (remote, bearer, label) in [
-        (
-            public_remote.as_str(),
-            None,
-            "public-published-working-exact-fetch",
-        ),
-        (
-            permissioned_remote.as_str(),
-            Some(maintainer.as_str()),
-            "maintainer-published-working-exact-fetch",
-        ),
-        (
-            permissioned_remote.as_str(),
-            Some(unrelated.as_str()),
-            "unrelated-published-working-exact-fetch",
-        ),
-    ] {
-        assert!(fetch_exact_request_tip(
-            remote,
-            bearer,
-            &request_head,
-            label
-        ));
     }
 }
 

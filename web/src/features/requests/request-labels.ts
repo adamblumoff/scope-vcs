@@ -10,9 +10,10 @@ import type { BadgeVariant } from '@/components/ui/badge'
 export type BadgeTone = BadgeVariant
 
 const REQUEST_STATES = {
-  Working: { label: 'Working', tone: 'neutral' },
-  ReadyForReview: { label: 'Ready for review', tone: 'info' },
-  Completed: { label: 'Completed', tone: 'success' },
+  Draft: { label: 'Draft', tone: 'neutral' },
+  Open: { label: 'Open', tone: 'info' },
+  Closed: { label: 'Closed', tone: 'neutral' },
+  Merged: { label: 'Merged', tone: 'success' },
 } as const satisfies Record<
   RequestWorkflowState,
   { label: string; tone: BadgeTone }
@@ -20,8 +21,7 @@ const REQUEST_STATES = {
 
 const EVENT_LABELS = {
   Started: 'Started',
-  ReadyForReview: 'Ready for review',
-  ReturnedToWorking: 'Returned to working',
+  Submitted: 'Submitted',
   RevisionPushed: 'Revision pushed',
   Merged: 'Merged',
   Closed: 'Closed',
@@ -32,8 +32,9 @@ const EVENT_LABELS = {
 
 const MERGEABILITY = {
   Ready: { label: 'Clean merge available', tone: 'success' },
-  Completed: { label: 'Completed', tone: 'neutral' },
-  Working: { label: 'Working', tone: 'neutral' },
+  Draft: { label: 'Draft', tone: 'neutral' },
+  Closed: { label: 'Closed', tone: 'neutral' },
+  Merged: { label: 'Merged', tone: 'success' },
   NotMaintainer: { label: 'Maintainer required', tone: 'neutral' },
   MissingRequestBranch: { label: 'Branch missing', tone: 'warning' },
 } as const satisfies Record<
@@ -88,10 +89,8 @@ export function requestEventBody(event: RequestEvent) {
   switch (event.kind) {
     case 'Started':
       return stringValue(value.title)
-    case 'ReadyForReview':
+    case 'Submitted':
       return oidText(value.head_oid)
-    case 'ReturnedToWorking':
-      return reviewExitReason(value.reason)
     case 'RevisionPushed':
       return [
         `${oidText(value.old_head_oid)} → ${oidText(value.new_head_oid)}`,
@@ -137,18 +136,6 @@ function oidText(value: unknown) {
   return typeof value === 'string' ? shortOid(value) : null
 }
 
-function reviewExitReason(value: unknown) {
-  switch (value) {
-    case 'AuthorReturned':
-      return 'Author returned to Working'
-    case 'RevisionPushed':
-      return 'Branch update invalidated review'
-    case 'ContentEdited':
-      return 'Request edit invalidated review'
-    default:
-      return null
-  }
-}
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : null
 }

@@ -326,7 +326,7 @@ async fn ready_for_review_count_for_access(
 }
 
 fn request_counts_for_access(request: &Request, access: RepositoryAccess) -> bool {
-    request_policy(request, RequestViewer::new(access, None, false)).counts_as_ready
+    request_policy(request, RequestViewer::new(access, None, false)).counts_as_open
 }
 
 async fn member_response_for_user(

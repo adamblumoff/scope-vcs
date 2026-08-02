@@ -8,9 +8,7 @@ use scope_domain::{
         RequestEventPayload as DomainRequestEventPayload,
         RequestIdentityAuditFact as DomainRequestIdentityAuditFact,
         RequestMergeabilityStatus as DomainRequestMergeabilityStatus,
-        RequestQueueSection as DomainRequestQueueSection,
-        RequestReviewExitReason as DomainRequestReviewExitReason,
-        RequestState as DomainRequestState,
+        RequestQueueSection as DomainRequestQueueSection, RequestState as DomainRequestState,
     },
     store::{
         FileChangeKind as DomainFileChangeKind, FirstPushTokenStatus as DomainFirstPushTokenStatus,
@@ -129,16 +127,10 @@ impl From<RepositoryMemberPermissions> for DomainRepositoryMemberPermissions {
 
 wire_enum!(RequestActorRole => DomainRequestActorRole { Public, Member, Owner });
 wire_enum!(RequestAudience => DomainRequestAudience { Public, Private });
-wire_enum!(RequestState => DomainRequestState { Working, ReadyForReview, Completed });
-wire_enum!(RequestReviewExitReason => DomainRequestReviewExitReason {
-    AuthorReturned,
-    RevisionPushed,
-    ContentEdited,
-});
+wire_enum!(RequestState => DomainRequestState { Draft, Open, Closed, Merged });
 wire_enum!(RequestEventKind => DomainRequestEventKind {
     Started,
-    ReadyForReview,
-    ReturnedToWorking,
+    Submitted,
     RevisionPushed,
     Merged,
     Closed,
@@ -148,8 +140,9 @@ wire_enum!(RequestEventKind => DomainRequestEventKind {
 });
 wire_enum!(RequestMergeabilityStatus => DomainRequestMergeabilityStatus {
     Ready,
-    Completed,
-    Working,
+    Draft,
+    Closed,
+    Merged,
     NotMaintainer,
     MissingRequestBranch,
 });
@@ -187,12 +180,8 @@ pub enum RequestEventPayload {
         title: String,
         description_markdown: String,
     },
-    ReadyForReview {
+    Submitted {
         head_oid: String,
-    },
-    ReturnedToWorking {
-        head_oid: String,
-        reason: RequestReviewExitReason,
     },
     RevisionPushed {
         old_head_oid: String,
@@ -228,15 +217,7 @@ impl From<DomainRequestEventPayload> for RequestEventPayload {
                 title,
                 description_markdown,
             },
-            DomainRequestEventPayload::ReadyForReview { head_oid } => {
-                Self::ReadyForReview { head_oid }
-            }
-            DomainRequestEventPayload::ReturnedToWorking { head_oid, reason } => {
-                Self::ReturnedToWorking {
-                    head_oid,
-                    reason: reason.into(),
-                }
-            }
+            DomainRequestEventPayload::Submitted { head_oid } => Self::Submitted { head_oid },
             DomainRequestEventPayload::RevisionPushed {
                 old_head_oid,
                 new_head_oid,

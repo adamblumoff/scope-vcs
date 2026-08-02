@@ -187,12 +187,8 @@ pub fn router(state: AppState) -> Router {
                 .delete(http::requests::close_request),
         )
         .route(
-            routes::REPO_REQUEST_READY,
-            post(http::requests::mark_request_ready),
-        )
-        .route(
-            routes::REPO_REQUEST_WORKING,
-            post(http::requests::return_request_to_working),
+            routes::REPO_REQUEST_SUBMIT,
+            post(http::requests::submit_request),
         )
         .route(
             routes::REPO_REQUEST_MERGE,

@@ -421,8 +421,8 @@ function QueueDate({
   request: RequestListItem
   section: RequestQueueSection
 }) {
-  if (section === 'ready' && request.ready_at_unix !== null) {
-    return <span className="tabular-nums">Ready {formatUnixDate(request.ready_at_unix)}</span>
+  if (section === 'ready' && request.submitted_at_unix !== null) {
+    return <span className="tabular-nums">Submitted {formatUnixDate(request.submitted_at_unix)}</span>
   }
   return <span className="tabular-nums">Updated {formatUnixDate(request.updated_at_unix)}</span>
 }
