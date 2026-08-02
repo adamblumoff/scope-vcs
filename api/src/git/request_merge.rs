@@ -184,14 +184,27 @@ fn merge_main_oid(
         &["config", "user.email", "merge@scope.local"],
         "configuring request merge email",
     )?;
+    let synthetic_base =
+        synthetic_merge_commit(repo, request_base_oid, None, "Scope request merge base")?;
+    let synthetic_main = synthetic_merge_commit(
+        repo,
+        current_main_oid,
+        Some(&synthetic_base),
+        "Scope current main",
+    )?;
+    let synthetic_request = synthetic_merge_commit(
+        repo,
+        request_head_oid,
+        Some(&synthetic_base),
+        "Scope request head",
+    )?;
     let merge_tree = run_git_output(
         Some(repo),
         &[
             "merge-tree",
             "--write-tree",
-            &format!("--merge-base={request_base_oid}"),
-            current_main_oid,
-            request_head_oid,
+            &synthetic_main,
+            &synthetic_request,
         ],
         "merging request trees",
     )?;
@@ -227,6 +240,30 @@ fn merge_main_oid(
     if !commit.status.success() {
         return Err(ApiError::service_unavailable(format!(
             "creating request merge commit: {}",
+            String::from_utf8_lossy(&commit.stderr).trim()
+        )));
+    }
+    String::from_utf8(commit.stdout)
+        .map_err(ApiError::internal)
+        .map(|value| value.trim().to_string())
+}
+
+fn synthetic_merge_commit(
+    repo: &std::path::Path,
+    tree_source_oid: &str,
+    parent_oid: Option<&str>,
+    message: &str,
+) -> Result<String, ApiError> {
+    let tree_source = format!("{tree_source_oid}^{{tree}}");
+    let mut args = vec!["commit-tree", tree_source.as_str()];
+    if let Some(parent_oid) = parent_oid {
+        args.extend(["-p", parent_oid]);
+    }
+    args.extend(["-m", message]);
+    let commit = run_git_output(Some(repo), &args, "creating synthetic request merge commit")?;
+    if !commit.status.success() {
+        return Err(ApiError::service_unavailable(format!(
+            "creating synthetic request merge commit: {}",
             String::from_utf8_lossy(&commit.stderr).trim()
         )));
     }
@@ -308,6 +345,65 @@ mod tests {
         assert_eq!(
             parents.split_ascii_whitespace().collect::<Vec<_>>(),
             [current_main.as_str(), request_head.as_str()]
+        );
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn explicit_request_base_merges_non_overlapping_file_edits() {
+        let repo = temp_repo_path("content-merge");
+        run_git(
+            None,
+            &[
+                "init",
+                "--initial-branch=main",
+                repo.to_string_lossy().as_ref(),
+            ],
+            "initializing merge test repository",
+        )
+        .unwrap();
+        run_git(
+            Some(&repo),
+            &["config", "user.name", "Test"],
+            "configuring test name",
+        )
+        .unwrap();
+        run_git(
+            Some(&repo),
+            &["config", "user.email", "test@scope.local"],
+            "configuring test email",
+        )
+        .unwrap();
+
+        fs::write(repo.join("shared.txt"), "top\nmiddle\nbottom\n").unwrap();
+        commit_all(&repo, "shared base");
+        let request_base = oid(&repo, "HEAD");
+
+        fs::write(repo.join("shared.txt"), "main top\nmiddle\nbottom\n").unwrap();
+        commit_all(&repo, "main edit");
+        let current_main = oid(&repo, "HEAD");
+
+        run_git(
+            Some(&repo),
+            &["switch", "--create", "request", &request_base],
+            "creating request branch",
+        )
+        .unwrap();
+        fs::write(repo.join("shared.txt"), "top\nmiddle\nrequest bottom\n").unwrap();
+        commit_all(&repo, "request edit");
+        let request_head = oid(&repo, "HEAD");
+
+        let merged = merge_main_oid(
+            &repo,
+            &request_base,
+            &current_main,
+            &request_head,
+            "content-merge",
+        )
+        .unwrap();
+        assert_eq!(
+            git_text(&repo, &["show", &format!("{merged}:shared.txt")]),
+            "main top\nmiddle\nrequest bottom\n"
         );
         let _ = fs::remove_dir_all(repo);
     }
