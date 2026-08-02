@@ -314,8 +314,8 @@ pub struct CreateRequestRatingRequest {
 pub struct RequestRatingResponse {
     pub id: String,
     pub request_id: String,
-    pub rater: RequestActorSummaryResponse,
-    pub subject: RequestActorSummaryResponse,
+    pub rater: RequestRatingParticipantResponse,
+    pub subject: RequestRatingParticipantResponse,
     pub score: u8,
     pub reason: String,
     pub created_at_unix: u64,
@@ -323,9 +323,18 @@ pub struct RequestRatingResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestRatingParticipantResponse {
+    pub id: String,
+    pub handle: String,
+    pub rating_score_sum: u64,
+    pub rating_count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestRatingsResponse {
     pub ratings: Vec<RequestRatingResponse>,
-    pub eligible_subject: Option<RequestActorSummaryResponse>,
+    pub eligible_subject: Option<RequestRatingParticipantResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

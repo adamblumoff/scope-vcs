@@ -1,7 +1,22 @@
 use crate::requests::{
-    CreateRequestRatingInput, Request, RequestActorRole, RequestAudience, create_request_rating,
-    eligible_rating_subject_user_id,
+    CreateRequestRatingInput, Request, RequestActorRole, RequestAudience, RequestReputation,
+    create_request_rating, eligible_rating_subject_user_id,
 };
+
+#[test]
+fn reputation_accepts_only_possible_rating_totals() {
+    assert_eq!(
+        RequestReputation::from_totals(9, 2).unwrap(),
+        RequestReputation {
+            score_sum: 9,
+            rating_count: 2,
+        }
+    );
+    assert!(RequestReputation::from_totals(0, 0).is_ok());
+    assert!(RequestReputation::from_totals(0, 1).is_err());
+    assert!(RequestReputation::from_totals(6, 1).is_err());
+    assert!(RequestReputation::from_totals(1, 0).is_err());
+}
 
 fn terminal_request(merged: bool) -> Request {
     Request {

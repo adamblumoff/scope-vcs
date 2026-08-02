@@ -52,7 +52,7 @@ mod queue;
 pub use queue::RequestQueueSection;
 mod ratings;
 pub use ratings::{
-    CreateRequestRatingInput, REQUEST_RATING_REASON_MAX_BYTES, RequestRating,
+    CreateRequestRatingInput, REQUEST_RATING_REASON_MAX_BYTES, RequestRating, RequestReputation,
     create_request_rating, eligible_rating_subject_user_id,
 };
 mod submission;

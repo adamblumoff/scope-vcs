@@ -68,6 +68,10 @@ async fn terminal_participants_rate_each_other_once_and_reasons_follow_request_v
     )
     .await;
     assert_eq!(author_rating["subject"]["id"], test_owner_id());
+    assert_eq!(author_rating["subject"]["rating_score_sum"], 5);
+    assert_eq!(author_rating["subject"]["rating_count"], 1);
+    assert_eq!(author_rating["rater"]["rating_score_sum"], 0);
+    assert_eq!(author_rating["rater"]["rating_count"], 0);
     assert_eq!(author_rating["reason"], "Fast and clear review");
     assert_eq!(
         api_request(
@@ -94,6 +98,10 @@ async fn terminal_participants_rate_each_other_once_and_reasons_follow_request_v
     )
     .await;
     assert_eq!(owner_rating["subject"]["id"], author_id);
+    assert_eq!(owner_rating["subject"]["rating_score_sum"], 4);
+    assert_eq!(owner_rating["subject"]["rating_count"], 1);
+    assert_eq!(owner_rating["rater"]["rating_score_sum"], 5);
+    assert_eq!(owner_rating["rater"]["rating_count"], 1);
 
     let public = response_json(api_request(app, "GET", uri, None, None).await).await;
     assert_eq!(public["ratings"].as_array().unwrap().len(), 2);
@@ -105,4 +113,5 @@ async fn terminal_participants_rate_each_other_once_and_reasons_follow_request_v
             .any(|rating| rating["reason"] == "Fast and clear review")
     );
     assert!(public["eligible_subject"].is_null());
+    assert!(public.get("average_score").is_none());
 }

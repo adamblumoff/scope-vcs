@@ -78,6 +78,10 @@ export function RequestRatingsSection({
               <div className="font-medium">
                 @{rating.rater.handle} rated @{rating.subject.handle} {rating.score}/5
               </div>
+              <div className="text-muted-foreground">
+                @{rating.subject.handle}: {rating.subject.rating_count} ratings ·{' '}
+                {rating.subject.rating_score_sum} points
+              </div>
               <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{rating.reason}</p>
             </div>
           ))}

@@ -170,9 +170,11 @@ export type RequestDetailResponse = { request: RequestSummaryResponse, };
 
 export type CreateRequestRatingRequest = { score: number, reason: string, };
 
-export type RequestRatingResponse = { id: string, request_id: string, rater: RequestActorSummaryResponse, subject: RequestActorSummaryResponse, score: number, reason: string, created_at_unix: number, };
+export type RequestRatingParticipantResponse = { id: string, handle: string, rating_score_sum: number, rating_count: number, };
 
-export type RequestRatingsResponse = { ratings: Array<RequestRatingResponse>, eligible_subject: RequestActorSummaryResponse | null, };
+export type RequestRatingResponse = { id: string, request_id: string, rater: RequestRatingParticipantResponse, subject: RequestRatingParticipantResponse, score: number, reason: string, created_at_unix: number, };
+
+export type RequestRatingsResponse = { ratings: Array<RequestRatingResponse>, eligible_subject: RequestRatingParticipantResponse | null, };
 
 export type RequestMutationResponse = { request: RequestSummaryResponse, };
 

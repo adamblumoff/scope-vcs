@@ -3,10 +3,12 @@ use super::{
     request_access::{ensure_user_exists, lock_request_repository},
 };
 use crate::error::PostgresError;
-use scope_domain::requests::{CreateRequestRatingInput, RequestRating, create_request_rating};
+use scope_domain::requests::{
+    CreateRequestRatingInput, RequestRating, RequestReputation, create_request_rating,
+};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel,
+    QueryFilter, QueryOrder, Statement, TransactionTrait,
 };
 
 impl RequestStore {
@@ -33,6 +35,38 @@ impl RequestStore {
             .map_err(PostgresError::internal)?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(rating)
+    }
+
+    pub async fn request_reputation(
+        &self,
+        user_id: &str,
+    ) -> Result<RequestReputation, PostgresError> {
+        let row = self
+            .db
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"
+                    SELECT COALESCE(SUM(score), 0)::bigint AS score_sum,
+                           COUNT(*)::bigint AS rating_count
+                    FROM scope_request_ratings
+                    WHERE subject_user_id = $1
+                "#,
+                [user_id.into()],
+            ))
+            .await
+            .map_err(PostgresError::internal)?
+            .ok_or_else(|| PostgresError::internal_message("request reputation row is missing"))?;
+        let score_sum = row
+            .try_get::<i64>("", "score_sum")
+            .map_err(PostgresError::internal)?
+            .try_into()
+            .map_err(PostgresError::internal)?;
+        let rating_count = row
+            .try_get::<i64>("", "rating_count")
+            .map_err(PostgresError::internal)?
+            .try_into()
+            .map_err(PostgresError::internal)?;
+        RequestReputation::from_totals(score_sum, rating_count).map_err(Into::into)
     }
 }
 
@@ -145,6 +179,58 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+
+        let request_store = store.requests();
+        let mut second_request = request_store.request_by_id("req_1").await.unwrap().unwrap();
+        second_request.id = "req_2".to_string();
+        second_request.name = "second-request".to_string();
+        entities::request::Model::from_domain(&second_request)
+            .unwrap()
+            .into_active_model()
+            .insert(request_store.db.as_ref())
+            .await
+            .unwrap();
+        request_store
+            .create_request_rating(CreateRequestRatingInput {
+                id: "rating_author_second_request".to_string(),
+                request_id: "req_2".to_string(),
+                actor_user_id: "user_public".to_string(),
+                score: 3,
+                reason: "Another clear review".to_string(),
+                now_unix: 9,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .requests()
+                .request_reputation("user_owner")
+                .await
+                .unwrap(),
+            RequestReputation {
+                score_sum: 8,
+                rating_count: 2,
+            }
+        );
+        assert_eq!(
+            store
+                .requests()
+                .request_reputation("user_public")
+                .await
+                .unwrap(),
+            RequestReputation {
+                score_sum: 4,
+                rating_count: 1,
+            }
+        );
+        assert_eq!(
+            store
+                .requests()
+                .request_reputation("user_member")
+                .await
+                .unwrap(),
+            RequestReputation::default()
         );
     }
 }

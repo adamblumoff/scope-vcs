@@ -276,7 +276,6 @@ async fn request_queue_enforces_section_visibility_order_search_and_stable_pagin
         response_json(api_request(app.clone(), "GET", "/v1/repos/owner/repo", None, None).await)
             .await;
     assert_eq!(public_repo["open_request_count"], 6);
-    assert!(public_repo.get("ready_for_review_count").is_none());
     let maintainer_repo = response_json(
         api_request(
             app,

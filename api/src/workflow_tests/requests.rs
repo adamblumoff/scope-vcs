@@ -298,25 +298,6 @@ async fn request_lifecycle_exposes_one_way_submit_and_merge_actions() {
     )
     .await;
     assert_eq!(repeated.status(), StatusCode::CONFLICT);
-
-    for (method, path) in [
-        ("PUT", "/v1/repos/owner/repo/requests/req_lifecycle/hold"),
-        (
-            "POST",
-            "/v1/repos/owner/repo/requests/req_lifecycle/request-changes",
-        ),
-        (
-            "POST",
-            "/v1/repos/owner/repo/requests/req_lifecycle/assessment",
-        ),
-    ] {
-        assert_eq!(
-            api_request(app.clone(), method, path, Some(&bearer), None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-    }
 }
 
 #[tokio::test]

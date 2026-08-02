@@ -23,8 +23,9 @@ use scope_api_contract::{
     RequestInviteeMutationResponse, RequestInviteeResponse, RequestListItemResponse,
     RequestListResponse, RequestMergeabilityResponse, RequestMergeabilityStatus,
     RequestMutationResponse, RequestPermissionsResponse, RequestQueueSection,
-    RequestRatingResponse, RequestRatingsResponse, RequestState, RequestSummaryResponse,
-    SessionIdentity, StartRequestRequest, SubmitRequestRequest, UserResponse, Visibility,
+    RequestRatingParticipantResponse, RequestRatingResponse, RequestRatingsResponse, RequestState,
+    RequestSummaryResponse, SessionIdentity, StartRequestRequest, SubmitRequestRequest,
+    UserResponse, Visibility,
 };
 use std::{fs, path::Path};
 use ts_rs::TS;
@@ -117,6 +118,7 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<RequestListResponse>(&ts_config),
         declaration::<RequestDetailResponse>(&ts_config),
         declaration::<CreateRequestRatingRequest>(&ts_config),
+        declaration::<RequestRatingParticipantResponse>(&ts_config),
         declaration::<RequestRatingResponse>(&ts_config),
         declaration::<RequestRatingsResponse>(&ts_config),
         declaration::<RequestMutationResponse>(&ts_config),

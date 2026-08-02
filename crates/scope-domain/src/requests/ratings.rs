@@ -14,6 +14,31 @@ pub struct RequestRating {
     pub created_at_unix: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RequestReputation {
+    pub score_sum: u64,
+    pub rating_count: u64,
+}
+
+impl RequestReputation {
+    pub fn from_totals(score_sum: u64, rating_count: u64) -> Result<Self, DomainError> {
+        let maximum_score = rating_count.checked_mul(5).ok_or_else(|| {
+            DomainError::invariant_violation("request reputation rating count overflow")
+        })?;
+        if (rating_count == 0 && score_sum != 0)
+            || (rating_count > 0 && !(rating_count..=maximum_score).contains(&score_sum))
+        {
+            return Err(DomainError::invariant_violation(
+                "request reputation totals are inconsistent",
+            ));
+        }
+        Ok(Self {
+            score_sum,
+            rating_count,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateRequestRatingInput {
     pub id: String,
