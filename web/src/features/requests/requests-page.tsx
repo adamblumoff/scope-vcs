@@ -28,7 +28,6 @@ import {
   formatUnixDate,
   requestAudienceLabel,
   requestAuthorRoleLabel,
-  requestCompletionMergeLabel,
   requestMergeabilityLabel,
   requestStatusLabel,
   requestStatusTone,
@@ -398,12 +397,8 @@ function RequestQueueRow({
         </div>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
-        {request.held_at_unix !== null ? <Badge variant="warning">On hold</Badge> : null}
         {section === 'completed' ? (
           <>
-            <span className="text-xs text-muted-foreground">
-              {requestCompletionMergeLabel(request)}
-            </span>
             <Badge variant={requestStatusTone(request)}>
               {requestStatusLabel(request)}
             </Badge>

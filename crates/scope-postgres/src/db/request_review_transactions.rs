@@ -16,11 +16,10 @@ use {
     crate::error::PostgresError,
     scope_domain::{
         requests::{
-            AssessRequestInput, MarkRequestReadyInput, Request, RequestActorRole,
-            RequestReviewMutation, ReturnRequestToWorkingInput, SetRequestHoldInput,
-            assess_request, mark_request_ready, return_request_to_working, set_request_hold,
+            MarkRequestReadyInput, Request, RequestActorRole, RequestReviewMutation,
+            ReturnRequestToWorkingInput, mark_request_ready, return_request_to_working,
         },
-        store::{RepositoryActor, StoredRepository},
+        store::StoredRepository,
     },
 };
 
@@ -64,40 +63,11 @@ impl RequestStore {
         let (repo, request) =
             lock_review_context(&tx, &input.actor_user_id, &input.request_id).await?;
         input.actor_is_author = input.actor_user_id == request.author_user_id;
-        input.actor_is_maintainer = is_maintainer(&repo, &input.actor_user_id);
         input.actor_can_mutate =
             request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
                 .await?
                 .branch_mutable;
         let mutation = return_request_to_working(&request, input)?;
-        persist_review_mutation(&tx, &mutation).await?;
-        tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(mutation)
-    }
-
-    pub async fn set_request_hold(
-        &self,
-        mut input: SetRequestHoldInput,
-    ) -> Result<RequestReviewMutation, PostgresError> {
-        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) =
-            lock_review_context(&tx, &input.actor_user_id, &input.request_id).await?;
-        input.actor_is_maintainer = is_maintainer(&repo, &input.actor_user_id);
-        let mutation = set_request_hold(&request, input)?;
-        persist_review_mutation(&tx, &mutation).await?;
-        tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(mutation)
-    }
-
-    pub async fn assess_request(
-        &self,
-        mut input: AssessRequestInput,
-    ) -> Result<RequestReviewMutation, PostgresError> {
-        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) =
-            lock_review_context(&tx, &input.actor_user_id, &input.request_id).await?;
-        input.actor_is_maintainer = is_maintainer(&repo, &input.actor_user_id);
-        let mutation = assess_request(&request, input)?;
         persist_review_mutation(&tx, &mutation).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(mutation)
@@ -133,11 +103,4 @@ pub(super) async fn persist_review_mutation(
         insert_request_event_row(tx, event).await?;
     }
     Ok(())
-}
-
-fn is_maintainer(repo: &StoredRepository, user_id: &str) -> bool {
-    matches!(
-        repo.access_for_user_id(user_id).actor,
-        RepositoryActor::Owner | RepositoryActor::Member
-    )
 }

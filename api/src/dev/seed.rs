@@ -12,8 +12,8 @@ use scope_domain::{
     projection::{FileChange, LogicalCommit},
     requests::{
         EditRequestIdentityInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
-        RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestChangeBlock,
-        RequestDiscussion, RequestDiscussionReadState, StartRequestInput, canonical_request_ref,
+        RequestActorRole, RequestAudience, RequestChangeBlock, RequestDiscussion,
+        RequestDiscussionReadState, StartRequestInput, canonical_request_ref,
         edit_request_identity, record_request_revision, record_working_request_upload,
         start_request,
     },
@@ -334,15 +334,9 @@ fn seed_owner_request(
         SeedRequestOutcome::Held => {
             request.state = scope_domain::requests::RequestState::ReadyForReview;
             request.ready_at_unix = Some(lifecycle_at_unix);
-            request.held_at_unix = Some(lifecycle_at_unix + 1);
-            request.held_by_user_id = Some(owner.id.clone());
         }
         SeedRequestOutcome::Accepted => {
             request.state = scope_domain::requests::RequestState::Completed;
-            request.assessment_outcome = Some(RequestAssessmentOutcome::Accepted);
-            request.assessment_body_markdown = Some("Merged after review.".to_string());
-            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
-            request.assessed_by_user_id = Some(owner.id.clone());
             request.completed_at_unix = Some(lifecycle_at_unix + 1);
             request.completed_by_user_id = Some(owner.id.clone());
             request.merged_at_unix = Some(lifecycle_at_unix + 1);
@@ -352,21 +346,11 @@ fn seed_owner_request(
         }
         SeedRequestOutcome::Neutral => {
             request.state = scope_domain::requests::RequestState::Completed;
-            request.assessment_outcome = Some(RequestAssessmentOutcome::Neutral);
-            request.assessment_body_markdown =
-                Some("Useful context, with no action needed.".to_string());
-            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
-            request.assessed_by_user_id = Some(owner.id.clone());
             request.completed_at_unix = Some(lifecycle_at_unix + 1);
             request.completed_by_user_id = Some(owner.id.clone());
         }
         SeedRequestOutcome::Rejected => {
             request.state = scope_domain::requests::RequestState::Completed;
-            request.assessment_outcome = Some(RequestAssessmentOutcome::Rejected);
-            request.assessment_body_markdown =
-                Some("The proposal does not fit the repository direction.".to_string());
-            request.assessed_at_unix = Some(lifecycle_at_unix + 1);
-            request.assessed_by_user_id = Some(owner.id.clone());
             request.completed_at_unix = Some(lifecycle_at_unix + 1);
             request.completed_by_user_id = Some(owner.id.clone());
         }

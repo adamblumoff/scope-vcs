@@ -1,10 +1,9 @@
 use super::*;
 use scope_domain::requests::{
     MarkRequestReadyInput, Request, RequestActorRole, RequestAudience, RequestEventKind,
-    RequestReviewExitReason, RequestState, ReturnRequestToWorkingInput, SetRequestHoldInput,
-    StartRequestInput,
+    RequestReviewExitReason, RequestState, ReturnRequestToWorkingInput, StartRequestInput,
 };
-use scope_postgres::db::{AddRequestInviteeCommand, RemoveRequestInviteeCommand};
+use scope_postgres::db::AddRequestInviteeCommand;
 
 const PUBLIC_SUBJECT: &str = "user_public";
 const PUBLIC_EMAIL: &str = "public@example.com";
@@ -247,7 +246,6 @@ async fn ready_revision_invalidates_review_and_publishes_refresh() {
     let after = stored_request(&state, REQUEST_ID).await;
     assert_eq!(after.state, RequestState::Working);
     assert_eq!(after.head_oid, git_head_oid(&source));
-    assert_eq!(after.held_at_unix, None);
     assert_eq!(request_event_count(&state).await, before_event_count + 2);
     let request_events = state
         .metadata
@@ -607,12 +605,6 @@ async fn insert_private_request_for_public_user(state: &AppState) {
             activity_version: 0,
             first_ready_at_unix: None,
             ready_at_unix: None,
-            held_at_unix: None,
-            held_by_user_id: None,
-            assessment_outcome: None,
-            assessment_body_markdown: None,
-            assessed_at_unix: None,
-            assessed_by_user_id: None,
             completed_at_unix: None,
             completed_by_user_id: None,
             merged_at_unix: None,

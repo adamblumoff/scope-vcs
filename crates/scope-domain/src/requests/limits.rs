@@ -1,7 +1,6 @@
 use crate::error::DomainError;
 
 pub const REQUEST_ACTIVITY_PAGE_MAX_EVENTS: usize = 50;
-pub const REQUEST_ASSESSMENT_BODY_MAX_BYTES: usize = 64 * 1024;
 pub const REQUEST_DISCUSSION_BODY_MAX_BYTES: usize = 64 * 1024;
 pub const REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES: usize = 128;
 pub const REQUEST_DISCUSSION_REPLY_MAX_DEPTH: u16 = 16;

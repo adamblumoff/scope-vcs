@@ -1,7 +1,7 @@
 use super::*;
 use scope_domain::requests::{
-    Request, RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestChangeBlock,
-    RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
+    Request, RequestActorRole, RequestAudience, RequestChangeBlock, RequestDiscussion,
+    RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
     RequestDiscussionSubject, RequestEvent, RequestEventKind, RequestEventPayload, RequestInvitee,
     RequestState,
 };
@@ -29,12 +29,6 @@ pub mod request {
         pub activity_version: i64,
         pub first_ready_at_unix: Option<i64>,
         pub ready_at_unix: Option<i64>,
-        pub held_at_unix: Option<i64>,
-        pub held_by_user_id: Option<String>,
-        pub assessment_outcome: Option<String>,
-        pub assessment_body_markdown: Option<String>,
-        pub assessed_at_unix: Option<i64>,
-        pub assessed_by_user_id: Option<String>,
         pub completed_at_unix: Option<i64>,
         pub completed_by_user_id: Option<String>,
         pub merged_at_unix: Option<i64>,
@@ -72,15 +66,6 @@ pub mod request {
                     "request first ready time",
                 )?,
                 ready_at_unix: encode_optional_time(request.ready_at_unix, "request ready time")?,
-                held_at_unix: encode_optional_time(request.held_at_unix, "request hold time")?,
-                held_by_user_id: request.held_by_user_id.clone(),
-                assessment_outcome: request.assessment_outcome.map(encode_enum).transpose()?,
-                assessment_body_markdown: request.assessment_body_markdown.clone(),
-                assessed_at_unix: encode_optional_time(
-                    request.assessed_at_unix,
-                    "request assessment time",
-                )?,
-                assessed_by_user_id: request.assessed_by_user_id.clone(),
                 completed_at_unix: encode_optional_time(
                     request.completed_at_unix,
                     "request completion time",
@@ -118,18 +103,6 @@ pub mod request {
                     "request first ready time",
                 )?,
                 ready_at_unix: decode_optional_time(self.ready_at_unix, "request ready time")?,
-                held_at_unix: decode_optional_time(self.held_at_unix, "request hold time")?,
-                held_by_user_id: self.held_by_user_id,
-                assessment_outcome: self
-                    .assessment_outcome
-                    .map(decode_enum::<RequestAssessmentOutcome>)
-                    .transpose()?,
-                assessment_body_markdown: self.assessment_body_markdown,
-                assessed_at_unix: decode_optional_time(
-                    self.assessed_at_unix,
-                    "request assessment time",
-                )?,
-                assessed_by_user_id: self.assessed_by_user_id,
                 completed_at_unix: decode_optional_time(
                     self.completed_at_unix,
                     "request completion time",

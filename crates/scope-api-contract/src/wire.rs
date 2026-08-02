@@ -2,9 +2,7 @@ use scope_domain::{
     account::SessionIdentity as DomainSessionIdentity,
     policy::Visibility as DomainVisibility,
     requests::{
-        RequestActorRole as DomainRequestActorRole,
-        RequestAssessmentOutcome as DomainRequestAssessmentOutcome,
-        RequestAudience as DomainRequestAudience,
+        RequestActorRole as DomainRequestActorRole, RequestAudience as DomainRequestAudience,
         RequestDiscussionStatus as DomainRequestDiscussionStatus,
         RequestEventKind as DomainRequestEventKind,
         RequestEventPayload as DomainRequestEventPayload,
@@ -132,14 +130,8 @@ impl From<RepositoryMemberPermissions> for DomainRepositoryMemberPermissions {
 wire_enum!(RequestActorRole => DomainRequestActorRole { Public, Member, Owner });
 wire_enum!(RequestAudience => DomainRequestAudience { Public, Private });
 wire_enum!(RequestState => DomainRequestState { Working, ReadyForReview, Completed });
-wire_enum!(RequestAssessmentOutcome => DomainRequestAssessmentOutcome {
-    Accepted,
-    Neutral,
-    Rejected,
-});
 wire_enum!(RequestReviewExitReason => DomainRequestReviewExitReason {
     AuthorReturned,
-    ChangesRequested,
     RevisionPushed,
     ContentEdited,
 });
@@ -148,9 +140,6 @@ wire_enum!(RequestEventKind => DomainRequestEventKind {
     ReadyForReview,
     ReturnedToWorking,
     RevisionPushed,
-    Held,
-    HoldReleased,
-    Assessed,
     Merged,
     Closed,
     IdentityEdited,
@@ -210,17 +199,6 @@ pub enum RequestEventPayload {
         new_head_oid: String,
         note: Option<String>,
     },
-    Held {
-        head_oid: String,
-    },
-    HoldReleased {
-        head_oid: String,
-    },
-    Assessed {
-        head_oid: String,
-        outcome: RequestAssessmentOutcome,
-        body_markdown: Option<String>,
-    },
     Merged {
         head_oid: String,
         main_oid: String,
@@ -267,17 +245,6 @@ impl From<DomainRequestEventPayload> for RequestEventPayload {
                 old_head_oid,
                 new_head_oid,
                 note,
-            },
-            DomainRequestEventPayload::Held { head_oid } => Self::Held { head_oid },
-            DomainRequestEventPayload::HoldReleased { head_oid } => Self::HoldReleased { head_oid },
-            DomainRequestEventPayload::Assessed {
-                head_oid,
-                outcome,
-                body_markdown,
-            } => Self::Assessed {
-                head_oid,
-                outcome: outcome.into(),
-                body_markdown,
             },
             DomainRequestEventPayload::Merged { head_oid, main_oid } => {
                 Self::Merged { head_oid, main_oid }

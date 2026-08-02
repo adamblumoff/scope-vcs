@@ -36,16 +36,6 @@ export function RequestContextRail({
           value={formatUnixDate(request.first_ready_at_unix)}
         />
         <RailValue label="Ready since" value={formatUnixDate(request.ready_at_unix)} />
-        <RailValue label="Held since" value={formatUnixDate(request.held_at_unix)} />
-        <RailValue
-          label="Assessment"
-          value={request.assessment_outcome ?? 'Not assessed'}
-        />
-        {request.assessment_body_markdown ? (
-          <p className="whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-            {request.assessment_body_markdown}
-          </p>
-        ) : null}
         <RailValue label="Completed" value={formatUnixDate(request.completed_at_unix)} />
         <RailValue label="Merged" value={formatUnixDate(request.merged_at_unix)} />
       </RailSection>

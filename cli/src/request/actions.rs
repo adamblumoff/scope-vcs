@@ -178,82 +178,6 @@ pub(super) fn leave_invited_request(
     Ok(())
 }
 
-pub(super) fn hold_request_command(
-    git_repo: &GitRepo,
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTargetArgs,
-    held: bool,
-) -> anyhow::Result<()> {
-    let (context, request_id, before) =
-        load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let target = api_target(&context, &request_id);
-    let response = if held {
-        hold_request(client, api_url, session_token, target)?
-    } else {
-        unhold_request(client, api_url, session_token, target)?
-    };
-    print_request_mutation_receipt(
-        if held {
-            "Review hold started"
-        } else {
-            "Review hold released"
-        },
-        Some(&before.request),
-        &response,
-    );
-    Ok(())
-}
-
-pub(super) fn request_changes_command(
-    git_repo: &GitRepo,
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    target: RequestTargetArgs,
-) -> anyhow::Result<()> {
-    let (context, request_id, before) =
-        load_exact_request(git_repo, client, api_url, session_token, target)?;
-    let response = request_changes(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-    )?;
-    print_request_mutation_receipt("Changes requested", Some(&before.request), &response);
-    Ok(())
-}
-
-pub(super) fn assess_request_command(
-    git_repo: &GitRepo,
-    client: &Client,
-    api_url: &str,
-    session_token: &str,
-    args: RequestAssessArgs,
-) -> anyhow::Result<()> {
-    let RequestAssessArgs {
-        target,
-        outcome,
-        message,
-        yes,
-    } = args;
-    let outcome = outcome.into();
-    let (context, request_id, before) =
-        load_exact_request(git_repo, client, api_url, session_token, target)?;
-    require_confirmation(&assessment_confirmation(&before.request.name, outcome), yes)?;
-    let response = assess_request(
-        client,
-        api_url,
-        session_token,
-        api_target(&context, &request_id),
-        outcome,
-        message,
-    )?;
-    print_request_mutation_receipt("Request assessed", Some(&before.request), &response);
-    Ok(())
-}
-
 pub(super) fn merge_request_command(
     git_repo: &GitRepo,
     client: &Client,
@@ -278,19 +202,8 @@ pub(super) fn merge_request_command(
     Ok(())
 }
 
-fn assessment_confirmation(
-    request_name: &str,
-    outcome: crate::api::RequestAssessmentOutcome,
-) -> String {
-    format!("Complete request {request_name} as {outcome:?}")
-}
-
-fn merge_confirmation(request_name: &str, state: crate::api::RequestState) -> String {
-    if state == crate::api::RequestState::ReadyForReview {
-        format!("Merge request {request_name} into main and complete it as Accepted")
-    } else {
-        format!("Merge accepted request {request_name} into main")
-    }
+fn merge_confirmation(request_name: &str, _state: crate::api::RequestState) -> String {
+    format!("Merge request {request_name} into main")
 }
 
 fn events_through_version(
@@ -466,24 +379,15 @@ mod tests {
     }
 
     #[test]
-    fn assessment_confirmation_names_outcome() {
-        let outcome = crate::api::RequestAssessmentOutcome::Neutral;
-        assert_eq!(
-            assessment_confirmation("change", outcome),
-            "Complete request change as Neutral"
-        );
-    }
-
-    #[test]
-    fn ready_merge_confirmation_discloses_accepted_completion() {
+    fn merge_confirmation_names_the_request() {
         use crate::api::RequestState;
         assert_eq!(
             merge_confirmation("change", RequestState::ReadyForReview),
-            "Merge request change into main and complete it as Accepted"
+            "Merge request change into main"
         );
         assert_eq!(
             merge_confirmation("change", RequestState::Completed),
-            "Merge accepted request change into main"
+            "Merge request change into main"
         );
     }
 }

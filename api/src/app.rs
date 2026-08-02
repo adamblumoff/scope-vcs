@@ -195,19 +195,6 @@ pub fn router(state: AppState) -> Router {
             post(http::requests::return_request_to_working),
         )
         .route(
-            routes::REPO_REQUEST_HOLD,
-            axum::routing::put(http::requests::hold_request)
-                .delete(http::requests::release_request_hold),
-        )
-        .route(
-            routes::REPO_REQUEST_REQUEST_CHANGES,
-            post(http::requests::request_changes),
-        )
-        .route(
-            routes::REPO_REQUEST_ASSESSMENT,
-            post(http::requests::assess_request),
-        )
-        .route(
             routes::REPO_REQUEST_MERGE,
             post(http::requests::merge_request),
         )

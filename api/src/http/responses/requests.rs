@@ -27,12 +27,6 @@ pub(crate) fn request_summary_response(
         activity_version: request.activity_version,
         first_ready_at_unix: request.first_ready_at_unix,
         ready_at_unix: request.ready_at_unix,
-        held_at_unix: request.held_at_unix,
-        held_by_user_id: request.held_by_user_id,
-        assessment_outcome: request.assessment_outcome.map(Into::into),
-        assessment_body_markdown: request.assessment_body_markdown,
-        assessed_at_unix: request.assessed_at_unix,
-        assessed_by_user_id: request.assessed_by_user_id,
         completed_at_unix: request.completed_at_unix,
         completed_by_user_id: request.completed_by_user_id,
         merged_at_unix: request.merged_at_unix,
@@ -58,13 +52,7 @@ pub(crate) fn request_list_item_response(
     access: RepositoryAccess,
     current_main_oid: Option<String>,
 ) -> Result<RequestListItemResponse, crate::error::ApiError> {
-    let decision = request_list_mergeability(
-        request.state,
-        request.assessment_outcome,
-        request.has_git_snapshot,
-        request.is_merged,
-        access,
-    );
+    let decision = request_list_mergeability(request.state, request.has_git_snapshot, access);
     let request_head_oid = super::git_oid_response(request.head_oid)?;
     Ok(RequestListItemResponse {
         id: request.id,
@@ -74,9 +62,7 @@ pub(crate) fn request_list_item_response(
         audience: request.audience.into(),
         head_oid: request_head_oid.clone(),
         state: request.state.into(),
-        assessment_outcome: request.assessment_outcome.map(Into::into),
         ready_at_unix: request.ready_at_unix,
-        held_at_unix: request.held_at_unix,
         updated_at_unix: request.updated_at_unix,
         mergeability: RequestMergeabilityResponse {
             status: decision.status.into(),

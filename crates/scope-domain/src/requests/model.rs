@@ -1,4 +1,4 @@
-use super::{RequestAssessmentOutcome, RequestReviewExitReason, validate_assessment_body};
+use super::RequestReviewExitReason;
 use crate::{error::DomainError, store::SourceBlob};
 use serde::{Deserialize, Serialize};
 
@@ -39,12 +39,6 @@ pub struct Request {
     pub activity_version: u64,
     pub first_ready_at_unix: Option<u64>,
     pub ready_at_unix: Option<u64>,
-    pub held_at_unix: Option<u64>,
-    pub held_by_user_id: Option<String>,
-    pub assessment_outcome: Option<RequestAssessmentOutcome>,
-    pub assessment_body_markdown: Option<String>,
-    pub assessed_at_unix: Option<u64>,
-    pub assessed_by_user_id: Option<String>,
     pub completed_at_unix: Option<u64>,
     pub completed_by_user_id: Option<String>,
     pub merged_at_unix: Option<u64>,
@@ -79,9 +73,6 @@ pub enum RequestEventKind {
     ReadyForReview,
     ReturnedToWorking,
     RevisionPushed,
-    Held,
-    HoldReleased,
-    Assessed,
     Merged,
     Closed,
     IdentityEdited,
@@ -114,17 +105,6 @@ pub enum RequestEventPayload {
         old_head_oid: String,
         new_head_oid: String,
         note: Option<String>,
-    },
-    Held {
-        head_oid: String,
-    },
-    HoldReleased {
-        head_oid: String,
-    },
-    Assessed {
-        head_oid: String,
-        outcome: RequestAssessmentOutcome,
-        body_markdown: Option<String>,
     },
     Merged {
         head_oid: String,
@@ -171,8 +151,6 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
     for (label, value) in [
         ("first ready time", request.first_ready_at_unix),
         ("ready time", request.ready_at_unix),
-        ("hold time", request.held_at_unix),
-        ("assessment time", request.assessed_at_unix),
         ("completion time", request.completed_at_unix),
         ("merge time", request.merged_at_unix),
     ] {
@@ -187,8 +165,6 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
     match request.state {
         RequestState::Working => {
             require_none("working request ready time", request.ready_at_unix)?;
-            require_none("working request hold time", request.held_at_unix)?;
-            require_none_ref("working request holder", request.held_by_user_id.as_ref())?;
             require_none("working request completion time", request.completed_at_unix)?;
         }
         RequestState::ReadyForReview => {
@@ -198,22 +174,6 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
             )?;
             require_some("ready request ready time", request.ready_at_unix)?;
             require_none("ready request completion time", request.completed_at_unix)?;
-            let hold_is_complete =
-                request.held_at_unix.is_some() == request.held_by_user_id.is_some();
-            if !hold_is_complete {
-                return Err(DomainError::conflict(
-                    "ready request hold time and holder must be set together",
-                ));
-            }
-            if request
-                .held_at_unix
-                .zip(request.ready_at_unix)
-                .is_some_and(|(held_at, ready_at)| held_at < ready_at)
-            {
-                return Err(DomainError::conflict(
-                    "ready request hold time cannot precede ready time",
-                ));
-            }
         }
         RequestState::Completed => {
             require_some(
@@ -221,8 +181,6 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
                 request.first_ready_at_unix,
             )?;
             require_none("completed request ready time", request.ready_at_unix)?;
-            require_none("completed request hold time", request.held_at_unix)?;
-            require_none_ref("completed request holder", request.held_by_user_id.as_ref())?;
             require_some(
                 "completed request completion time",
                 request.completed_at_unix,
@@ -232,41 +190,6 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
                 request.completed_by_user_id.as_ref(),
             )?;
         }
-    }
-
-    let assessment_count = [
-        request.assessment_outcome.is_some(),
-        request.assessed_at_unix.is_some(),
-        request.assessed_by_user_id.is_some(),
-    ]
-    .into_iter()
-    .filter(|present| *present)
-    .count();
-    if assessment_count != 0 && assessment_count != 3 {
-        return Err(DomainError::conflict(
-            "assessment outcome, time, and actor must be set together",
-        ));
-    }
-    if assessment_count > 0 && request.state != RequestState::Completed {
-        return Err(DomainError::conflict(
-            "only completed requests may be assessed",
-        ));
-    }
-    if let Some(assessed_at_unix) = request.assessed_at_unix
-        && Some(assessed_at_unix) != request.completed_at_unix
-    {
-        return Err(DomainError::conflict(
-            "assessment and completion must happen atomically",
-        ));
-    }
-    if let Some(outcome) = request.assessment_outcome {
-        validate_assessment_body(outcome, request.assessment_body_markdown.as_deref())
-            .map_err(|_| DomainError::conflict("rejected assessment requires a written reason"))?;
-    }
-    if request.assessment_outcome.is_none() && request.assessment_body_markdown.is_some() {
-        return Err(DomainError::conflict(
-            "assessment body requires an assessment outcome",
-        ));
     }
 
     let merge_count = [
@@ -283,13 +206,8 @@ pub fn validate_request_facts(request: &Request) -> Result<(), DomainError> {
             "merge time, actor, head, and main oid must be set together",
         ));
     }
-    if merge_count > 0
-        && (request.state != RequestState::Completed
-            || request.assessment_outcome != Some(RequestAssessmentOutcome::Accepted))
-    {
-        return Err(DomainError::conflict(
-            "merged requests must be completed and accepted",
-        ));
+    if merge_count > 0 && request.state != RequestState::Completed {
+        return Err(DomainError::conflict("merged requests must be completed"));
     }
     if let (Some(completed_at_unix), Some(merged_at_unix)) =
         (request.completed_at_unix, request.merged_at_unix)
@@ -336,14 +254,6 @@ fn require_some_ref<T>(label: &str, value: Option<&T>) -> Result<(), DomainError
 }
 
 fn require_none(label: &str, value: Option<u64>) -> Result<(), DomainError> {
-    if value.is_some() {
-        Err(DomainError::conflict(format!("{label} must be empty")))
-    } else {
-        Ok(())
-    }
-}
-
-fn require_none_ref<T>(label: &str, value: Option<&T>) -> Result<(), DomainError> {
     if value.is_some() {
         Err(DomainError::conflict(format!("{label} must be empty")))
     } else {

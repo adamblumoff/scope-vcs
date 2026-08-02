@@ -39,7 +39,6 @@ impl RequestStore {
                     request_id: request.id.clone(),
                     actor_user_id: input.actor_user_id.clone(),
                     actor_is_author: input.actor_user_id == request.author_user_id,
-                    actor_is_maintainer: repo.is_maintainer_user_id(&input.actor_user_id),
                     actor_can_mutate: input.actor_can_edit,
                     reason: RequestReviewExitReason::RevisionPushed,
                     event_id: format!("{}:review-invalidated", input.event_id),

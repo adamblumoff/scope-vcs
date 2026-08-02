@@ -72,70 +72,8 @@ fn publication_marker_survives_return_to_working_and_is_required_for_completion(
 }
 
 #[test]
-fn ready_state_owns_ready_time_and_complete_hold_pair() {
-    let mut request = ready_request();
-    request.validate_facts().unwrap();
-
-    request.held_at_unix = Some(21);
-    request.updated_at_unix = 21;
-    assert!(
-        request
-            .validate_facts()
-            .unwrap_err()
-            .message
-            .contains("set together")
-    );
-    request.held_by_user_id = Some("maintainer".to_string());
-    request.held_at_unix = Some(19);
-    assert!(
-        request
-            .validate_facts()
-            .unwrap_err()
-            .message
-            .contains("cannot precede ready time")
-    );
-    request.held_at_unix = Some(21);
-    request.validate_facts().unwrap();
-}
-
-#[test]
-fn assessment_is_atomic_immutable_completion_data() {
-    let mut request = completed_request(RequestAssessmentOutcome::Rejected);
-    request.assessment_body_markdown =
-        Some("The change violates the parser invariant.".to_string());
-    request.validate_facts().unwrap();
-
-    request.assessment_body_markdown = Some("   ".to_string());
-    assert!(
-        request
-            .validate_facts()
-            .unwrap_err()
-            .message
-            .contains("written reason")
-    );
-    request.assessment_body_markdown = Some("Reason".to_string());
-    request.assessed_at_unix = Some(29);
-    assert!(
-        request
-            .validate_facts()
-            .unwrap_err()
-            .message
-            .contains("atomically")
-    );
-}
-
-#[test]
-fn merge_facts_are_complete_accepted_and_never_precede_completion() {
-    let mut request = completed_request(RequestAssessmentOutcome::Accepted);
-    assert!(
-        policy_for(&request, ViewerKind::Maintainer)
-            .permissions
-            .can_merge
-    );
-    assert_eq!(
-        request_mergeability(&request, maintainer_access()).status,
-        RequestMergeabilityStatus::Ready
-    );
+fn merge_facts_are_complete_and_never_precede_completion() {
+    let mut request = completed_request();
     request.merged_at_unix = Some(31);
     request.merged_by_user_id = Some("maintainer".to_string());
     request.merged_head_oid = Some("head".to_string());
@@ -152,15 +90,6 @@ fn merge_facts_are_complete_accepted_and_never_precede_completion() {
         RequestMergeabilityStatus::Completed
     );
 
-    request.assessment_outcome = Some(RequestAssessmentOutcome::Neutral);
-    assert!(
-        request
-            .validate_facts()
-            .unwrap_err()
-            .message
-            .contains("accepted")
-    );
-    request.assessment_outcome = Some(RequestAssessmentOutcome::Accepted);
     request.merged_at_unix = Some(29);
     assert!(
         request
@@ -197,12 +126,11 @@ fn request_policy_surface_truth_table_is_viewer_and_lifecycle_aware() {
     let never_published_working = working_request();
     let published_working = published_working_request();
     let ready = ready_request();
-    let held_ready = held_request();
-    let completed = completed_request(RequestAssessmentOutcome::Neutral);
+    let completed = completed_request();
     let private_working = private_request(working_request());
     let private_published_working = private_request(published_working_request());
     let private_ready = private_request(ready_request());
-    let private_completed = private_request(completed_request(RequestAssessmentOutcome::Neutral));
+    let private_completed = private_request(completed_request());
 
     let cases = [
         (
@@ -235,17 +163,6 @@ fn request_policy_surface_truth_table_is_viewer_and_lifecycle_aware() {
                 published_ready_reader(false),
                 published_ready_reader(true),
                 published_ready_reader(true),
-                published_ready_reader(true),
-            ],
-        ),
-        (
-            "held public Ready",
-            &held_ready,
-            [
-                published_ready_reader(false),
-                published_ready_reader(false),
-                published_ready_reader(false),
-                published_ready_reader(false),
                 published_ready_reader(true),
             ],
         ),
@@ -317,19 +234,13 @@ fn request_policy_surface_truth_table_is_viewer_and_lifecycle_aware() {
 }
 
 #[test]
-fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
+fn request_policy_permissions_keep_roles_and_lifecycle_distinct() {
     let working = working_request();
     let author = policy_for(&working, ViewerKind::Author).permissions;
     assert!(author.can_open_discussion && author.can_reply_to_discussion);
     assert!(author.can_edit_identity && author.can_pull_branch && author.can_push_branch);
     assert!(author.can_mark_ready && author.can_manage_invitees && author.can_close);
-    assert!(
-        !author.can_leave_request
-            && !author.can_hold
-            && !author.can_request_changes
-            && !author.can_assess
-            && !author.can_merge
-    );
+    assert!(!author.can_leave_request && !author.can_merge);
 
     let invitee = policy_for(&working, ViewerKind::Invitee).permissions;
     assert!(invitee.can_open_discussion && invitee.can_reply_to_discussion);
@@ -348,49 +259,24 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
     let author = policy_for(&ready, ViewerKind::Author).permissions;
     assert!(author.can_push_branch && author.can_return_to_working && author.can_manage_invitees);
     let maintainer = policy_for(&ready, ViewerKind::Maintainer).permissions;
-    assert!(
-        maintainer.can_push_branch
-            && maintainer.can_hold
-            && maintainer.can_request_changes
-            && maintainer.can_assess
-            && maintainer.can_merge
-    );
-
-    let held = held_request();
-    for viewer in [ViewerKind::Author, ViewerKind::Invitee] {
-        let permissions = policy_for(&held, viewer).permissions;
-        assert!(
-            permissions.can_open_discussion
-                && permissions.can_reply_to_discussion
-                && permissions.can_pull_branch
-        );
-        assert!(!permissions.can_push_branch && !permissions.can_edit_identity);
-        assert!(!permissions.can_return_to_working && !permissions.can_manage_invitees);
-        assert!(!permissions.can_leave_request);
-    }
-    let maintainer = policy_for(&held, ViewerKind::Maintainer).permissions;
-    assert!(
-        maintainer.can_push_branch
-            && maintainer.can_edit_identity
-            && maintainer.can_manage_invitees
-    );
+    assert!(maintainer.can_push_branch && maintainer.can_merge);
 
     let private_working = private_request(working_request());
     let author = policy_for(&private_working, ViewerKind::Author).permissions;
     assert!(author.can_mark_ready && author.can_close && !author.can_manage_invitees);
-    let private_held = private_request(held_request());
+    let private_ready = private_request(ready_request());
     assert!(
-        policy_for(&private_held, ViewerKind::Author)
+        policy_for(&private_ready, ViewerKind::Author)
             .permissions
             .can_push_branch
     );
     assert!(
-        policy_for(&private_held, ViewerKind::Maintainer)
+        policy_for(&private_ready, ViewerKind::Maintainer)
             .permissions
             .can_push_branch
     );
 
-    let completed = completed_request(RequestAssessmentOutcome::Neutral);
+    let completed = completed_request();
     for viewer in ViewerKind::ALL {
         let decision = policy_for(&completed, viewer);
         assert_eq!(
@@ -408,43 +294,6 @@ fn request_policy_permissions_keep_roles_and_hold_behavior_distinct() {
         );
         assert!(!decision.permissions.can_manage_invitees);
     }
-}
-
-#[test]
-fn hold_blocks_contributors_but_not_maintainers_and_completion_blocks_all() {
-    let request = ready_request();
-    assert!(
-        policy_for(&request, ViewerKind::Author)
-            .permissions
-            .can_edit_identity
-    );
-    let request = held_request();
-    let author = policy_for(&request, ViewerKind::Author).permissions;
-    assert!(!author.can_push_branch);
-    assert!(!author.can_edit_identity);
-    assert!(!author.can_return_to_working);
-    assert!(!author.can_manage_invitees);
-    let maintainer = policy_for(&request, ViewerKind::Maintainer).permissions;
-    assert!(maintainer.can_hold);
-    assert!(maintainer.can_push_branch);
-    assert!(maintainer.can_edit_identity);
-    assert!(maintainer.can_merge);
-    assert!(maintainer.can_assess);
-    assert!(maintainer.can_manage_invitees);
-    assert_eq!(
-        request_mergeability(&request, maintainer_access()).status,
-        RequestMergeabilityStatus::Ready
-    );
-
-    let private_request = private_request(request);
-    let maintainer = policy_for(&private_request, ViewerKind::Maintainer).permissions;
-    assert!(!maintainer.can_manage_invitees);
-
-    let request = completed_request(RequestAssessmentOutcome::Neutral);
-    let maintainer = policy_for(&request, ViewerKind::Maintainer).permissions;
-    assert!(maintainer.can_pull_branch);
-    assert!(!maintainer.can_push_branch);
-    assert!(maintainer.can_open_discussion);
 }
 
 #[test]
@@ -521,7 +370,6 @@ fn close_hard_deletes_draft_and_completes_published_work() {
         panic!("published request must remain as completed history");
     };
     assert_eq!(request.state, RequestState::Completed);
-    assert_eq!(request.assessment_outcome, None);
     assert_eq!(event.kind, RequestEventKind::Closed);
 }
 
@@ -732,9 +580,6 @@ fn no_permissions() -> RequestPermissions {
         can_return_to_working: false,
         can_manage_invitees: false,
         can_leave_request: false,
-        can_hold: false,
-        can_request_changes: false,
-        can_assess: false,
         can_close: false,
         can_merge: false,
     }
@@ -744,15 +589,6 @@ fn published_working_request() -> Request {
     let mut request = ready_request();
     request.state = RequestState::Working;
     request.ready_at_unix = None;
-    request.validate_facts().unwrap();
-    request
-}
-
-fn held_request() -> Request {
-    let mut request = ready_request();
-    request.held_at_unix = Some(21);
-    request.held_by_user_id = Some("maintainer".to_string());
-    request.updated_at_unix = 21;
     request.validate_facts().unwrap();
     request
 }
@@ -796,13 +632,10 @@ pub(super) fn ready_request() -> Request {
     request
 }
 
-fn completed_request(outcome: RequestAssessmentOutcome) -> Request {
+fn completed_request() -> Request {
     let mut request = ready_request();
     request.state = RequestState::Completed;
     request.ready_at_unix = None;
-    request.assessment_outcome = Some(outcome);
-    request.assessed_at_unix = Some(30);
-    request.assessed_by_user_id = Some("maintainer".to_string());
     request.completed_at_unix = Some(30);
     request.completed_by_user_id = Some("maintainer".to_string());
     request.updated_at_unix = 30;

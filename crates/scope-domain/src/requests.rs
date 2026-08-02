@@ -36,8 +36,7 @@ pub use invitees::{
 };
 mod limits;
 pub use limits::{
-    PUBLIC_WORKING_REQUEST_LIMIT, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
-    REQUEST_ASSESSMENT_BODY_MAX_BYTES, REQUEST_DESCRIPTION_MAX_BYTES,
+    PUBLIC_WORKING_REQUEST_LIMIT, REQUEST_ACTIVITY_PAGE_MAX_EVENTS, REQUEST_DESCRIPTION_MAX_BYTES,
     REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES,
     REQUEST_DISCUSSION_REPLY_MAX_DEPTH, REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE,
     REQUEST_TIMELINE_BODY_MAX_BYTES, REQUEST_TITLE_MAX_BYTES,
@@ -52,12 +51,11 @@ pub use model::{
 mod queue;
 pub use queue::RequestQueueSection;
 mod review;
-pub use review::{RequestAssessmentOutcome, RequestReviewExitReason, validate_assessment_body};
+pub use review::RequestReviewExitReason;
 mod review_lifecycle;
 pub use review_lifecycle::{
-    AssessRequestInput, MarkRequestReadyInput, MergeRequestInput, PUBLIC_READY_REQUEST_LIMIT,
-    RequestReviewMutation, ReturnRequestToWorkingInput, SetRequestHoldInput, assess_request,
-    mark_request_ready, merge_request, return_request_to_working, set_request_hold,
+    MarkRequestReadyInput, MergeRequestInput, PUBLIC_READY_REQUEST_LIMIT, RequestReviewMutation,
+    ReturnRequestToWorkingInput, mark_request_ready, merge_request, return_request_to_working,
 };
 
 pub const REQUEST_REF_PREFIX: &str = "refs/heads/";

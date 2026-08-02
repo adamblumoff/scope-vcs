@@ -270,7 +270,7 @@ async fn request_list_pages_one_hundred_and_one_visible_rows_without_overlap() {
 }
 
 #[tokio::test]
-async fn maintainer_request_lifecycle_routes_delegate_to_atomic_commands() {
+async fn request_lifecycle_exposes_only_ready_working_and_merge_actions() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     create_owner_request(&state, "req_lifecycle", REQUEST_HEAD).await;
@@ -288,40 +288,6 @@ async fn maintainer_request_lifecycle_routes_delegate_to_atomic_commands() {
     assert_eq!(ready.status(), StatusCode::OK);
     let ready = response_json(ready).await;
     assert_eq!(ready["request"]["state"], "ReadyForReview");
-    assert_eq!(ready["request"]["permissions"]["can_request_changes"], true);
-
-    let held = api_request(
-        app.clone(),
-        "PUT",
-        "/v1/repos/owner/repo/requests/req_lifecycle/hold",
-        Some(&bearer),
-        None,
-    )
-    .await;
-    assert_eq!(held.status(), StatusCode::OK);
-    assert!(response_json(held).await["request"]["held_at_unix"].is_number());
-
-    let held_author_exit = api_request(
-        app.clone(),
-        "POST",
-        "/v1/repos/owner/repo/requests/req_lifecycle/working",
-        Some(&bearer),
-        None,
-    )
-    .await;
-    assert_eq!(held_author_exit.status(), StatusCode::CONFLICT);
-
-    let released = api_request(
-        app.clone(),
-        "DELETE",
-        "/v1/repos/owner/repo/requests/req_lifecycle/hold",
-        Some(&bearer),
-        None,
-    )
-    .await;
-    assert_eq!(released.status(), StatusCode::OK);
-    assert!(response_json(released).await["request"]["held_at_unix"].is_null());
-
     let working = api_request(
         app.clone(),
         "POST",
@@ -342,38 +308,29 @@ async fn maintainer_request_lifecycle_routes_delegate_to_atomic_commands() {
     )
     .await;
     assert_eq!(ready_again.status(), StatusCode::OK);
-    let changes = api_request(
-        app.clone(),
-        "POST",
-        "/v1/repos/owner/repo/requests/req_lifecycle/request-changes",
-        Some(&bearer),
-        None,
-    )
-    .await;
-    assert_eq!(changes.status(), StatusCode::OK);
-    assert_eq!(response_json(changes).await["request"]["state"], "Working");
+    assert_eq!(
+        response_json(ready_again).await["request"]["state"],
+        "ReadyForReview"
+    );
 
-    let ready_for_assessment = api_request(
-        app.clone(),
-        "POST",
-        "/v1/repos/owner/repo/requests/req_lifecycle/ready",
-        Some(&bearer),
-        Some("{}"),
-    )
-    .await;
-    assert_eq!(ready_for_assessment.status(), StatusCode::OK);
-    let assessed = api_request(
-        app.clone(),
-        "POST",
-        "/v1/repos/owner/repo/requests/req_lifecycle/assessment",
-        Some(&bearer),
-        Some(r#"{"outcome":"Neutral"}"#),
-    )
-    .await;
-    assert_eq!(assessed.status(), StatusCode::OK);
-    let assessed = response_json(assessed).await;
-    assert_eq!(assessed["request"]["state"], "Completed");
-    assert_eq!(assessed["request"]["assessment_outcome"], "Neutral");
+    for (method, path) in [
+        ("PUT", "/v1/repos/owner/repo/requests/req_lifecycle/hold"),
+        (
+            "POST",
+            "/v1/repos/owner/repo/requests/req_lifecycle/request-changes",
+        ),
+        (
+            "POST",
+            "/v1/repos/owner/repo/requests/req_lifecycle/assessment",
+        ),
+    ] {
+        assert_eq!(
+            api_request(app.clone(), method, path, Some(&bearer), None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 }
 
 #[tokio::test]
@@ -456,7 +413,6 @@ async fn request_reads_apply_one_viewer_aware_policy_across_lists_and_exact_surf
     .await;
     assert_eq!(request_ids(&anonymous_list), vec!["req_ready_public"]);
     assert_eq!(anonymous_list["requests"][0]["ready_at_unix"], 4);
-    assert!(anonymous_list["requests"][0]["held_at_unix"].is_null());
 
     let unrelated = bearer_header_for("request_unrelated", "request-unrelated@example.com");
     for suffix in ["req_never", "req_never/timeline", "req_never/activity"] {
@@ -641,7 +597,6 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
             .unwrap();
     }
     create_public_request(&state, "req_invites", author_id.clone(), REQUEST_HEAD).await;
-    create_public_request(&state, "req_held_invites", author_id.clone(), REQUEST_HEAD).await;
     create_owner_request(&state, "req_private_invites", REQUEST_HEAD).await;
     let app = router(state.clone());
     let author = bearer_header_for("invite_author", "invite-author@example.com");
@@ -669,60 +624,6 @@ async fn invitee_routes_enforce_exact_handles_roles_leave_and_private_exclusion(
     let added = response_json(added).await;
     assert_eq!(added["invitee"]["user"]["handle"], "invite-target");
     assert_eq!(added["request"]["invitees"].as_array().unwrap().len(), 1);
-    let held_added = api_request(
-        app.clone(),
-        "PUT",
-        "/v1/repos/owner/repo/requests/req_held_invites/invitees",
-        Some(&author),
-        Some(r#"{"handle":"invite-target"}"#),
-    )
-    .await;
-    assert_eq!(held_added.status(), StatusCode::OK);
-
-    let ready = api_request(
-        app.clone(),
-        "POST",
-        "/v1/repos/owner/repo/requests/req_held_invites/ready",
-        Some(&author),
-        Some("{}"),
-    )
-    .await;
-    assert_eq!(ready.status(), StatusCode::OK);
-    let ready = response_json(ready).await;
-    assert_eq!(ready["request"]["state"], "ReadyForReview");
-
-    let held = api_request(
-        app.clone(),
-        "PUT",
-        "/v1/repos/owner/repo/requests/req_held_invites/hold",
-        Some(&bearer_header()),
-        None,
-    )
-    .await;
-    assert_eq!(held.status(), StatusCode::OK);
-    let held = response_json(held).await;
-    assert_eq!(held["request"]["permissions"]["can_leave_request"], false);
-
-    let held_leave = api_request(
-        app.clone(),
-        "DELETE",
-        "/v1/repos/owner/repo/requests/req_held_invites/invitees/me",
-        Some(&invitee),
-        None,
-    )
-    .await;
-    assert_eq!(held_leave.status(), StatusCode::FORBIDDEN);
-
-    let released = api_request(
-        app.clone(),
-        "DELETE",
-        "/v1/repos/owner/repo/requests/req_held_invites/hold",
-        Some(&bearer_header()),
-        None,
-    )
-    .await;
-    assert_eq!(released.status(), StatusCode::OK);
-
     let invitee_manage = api_request(
         app.clone(),
         "PUT",

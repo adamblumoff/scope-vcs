@@ -1,7 +1,6 @@
 use super::{
-    Request, RequestActorRole, RequestAssessmentOutcome, RequestEvent, RequestEventKind,
-    RequestEventPayload, RequestReviewExitReason, RequestState, validate_assessment_body,
-    validate_required_id,
+    Request, RequestActorRole, RequestEvent, RequestEventKind, RequestEventPayload,
+    RequestReviewExitReason, RequestState, validate_required_id,
 };
 use crate::error::DomainError;
 
@@ -29,31 +28,9 @@ pub struct ReturnRequestToWorkingInput {
     pub request_id: String,
     pub actor_user_id: String,
     pub actor_is_author: bool,
-    pub actor_is_maintainer: bool,
     pub actor_can_mutate: bool,
     pub reason: RequestReviewExitReason,
     pub event_id: String,
-    pub now_unix: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct SetRequestHoldInput {
-    pub request_id: String,
-    pub actor_user_id: String,
-    pub actor_is_maintainer: bool,
-    pub held: bool,
-    pub event_id: String,
-    pub now_unix: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct AssessRequestInput {
-    pub request_id: String,
-    pub actor_user_id: String,
-    pub actor_is_maintainer: bool,
-    pub outcome: RequestAssessmentOutcome,
-    pub body_markdown: Option<String>,
-    pub assessed_event_id: String,
     pub now_unix: u64,
 }
 
@@ -65,7 +42,6 @@ pub struct MergeRequestInput {
     pub merged_head_oid: String,
     pub merged_main_oid: String,
     pub merged_event_id: String,
-    pub assessed_event_id: String,
     pub now_unix: u64,
 }
 
@@ -105,17 +81,15 @@ pub fn mark_request_ready(
     next.state = RequestState::ReadyForReview;
     next.first_ready_at_unix.get_or_insert(input.now_unix);
     next.ready_at_unix = Some(input.now_unix);
-    clear_hold(&mut next);
     next.updated_at_unix = input.now_unix;
-    let payload = RequestEventPayload::ReadyForReview {
-        head_oid: next.head_oid.clone(),
-    };
     let event = append_event(
         &mut next,
         input.event_id,
         input.actor_user_id,
         RequestEventKind::ReadyForReview,
-        payload,
+        RequestEventPayload::ReadyForReview {
+            head_oid: request.head_oid.clone(),
+        },
         input.now_unix,
     )?;
     next.validate_facts()?;
@@ -138,112 +112,20 @@ pub fn return_request_to_working(
     let mut next = request.clone();
     next.state = RequestState::Working;
     next.ready_at_unix = None;
-    clear_hold(&mut next);
     next.updated_at_unix = input.now_unix;
-    let payload = RequestEventPayload::ReturnedToWorking {
-        head_oid: next.head_oid.clone(),
-        reason: input.reason,
-    };
     let event = append_event(
         &mut next,
         input.event_id,
         input.actor_user_id,
         RequestEventKind::ReturnedToWorking,
-        payload,
+        RequestEventPayload::ReturnedToWorking {
+            head_oid: request.head_oid.clone(),
+            reason: input.reason,
+        },
         input.now_unix,
     )?;
     next.validate_facts()?;
     Ok(mutation(next, vec![event]))
-}
-
-pub fn set_request_hold(
-    request: &Request,
-    input: SetRequestHoldInput,
-) -> Result<RequestReviewMutation, DomainError> {
-    validate_command(request, &input.request_id, &input.actor_user_id)?;
-    validate_required_id("request event id", &input.event_id)?;
-    if !input.actor_is_maintainer {
-        return Err(DomainError::forbidden("repo maintainer required"));
-    }
-    if request.state != RequestState::ReadyForReview {
-        return Err(DomainError::conflict("only ready requests can be held"));
-    }
-    if request.held_at_unix.is_some() == input.held {
-        return Ok(mutation(request.clone(), Vec::new()));
-    }
-
-    let mut next = request.clone();
-    let (kind, payload) = if input.held {
-        next.held_at_unix = Some(input.now_unix);
-        next.held_by_user_id = Some(input.actor_user_id.clone());
-        (
-            RequestEventKind::Held,
-            RequestEventPayload::Held {
-                head_oid: next.head_oid.clone(),
-            },
-        )
-    } else {
-        clear_hold(&mut next);
-        (
-            RequestEventKind::HoldReleased,
-            RequestEventPayload::HoldReleased {
-                head_oid: next.head_oid.clone(),
-            },
-        )
-    };
-    next.updated_at_unix = input.now_unix;
-    let event = append_event(
-        &mut next,
-        input.event_id,
-        input.actor_user_id,
-        kind,
-        payload,
-        input.now_unix,
-    )?;
-    next.validate_facts()?;
-    Ok(mutation(next, vec![event]))
-}
-
-pub fn assess_request(
-    request: &Request,
-    input: AssessRequestInput,
-) -> Result<RequestReviewMutation, DomainError> {
-    validate_command(request, &input.request_id, &input.actor_user_id)?;
-    validate_required_id("assessed event id", &input.assessed_event_id)?;
-    if !input.actor_is_maintainer {
-        return Err(DomainError::forbidden("repo maintainer required"));
-    }
-    if request.state != RequestState::ReadyForReview {
-        return Err(DomainError::conflict("only ready requests can be assessed"));
-    }
-    validate_assessment_body(input.outcome, input.body_markdown.as_deref())?;
-
-    let mut next = request.clone();
-    next.state = RequestState::Completed;
-    next.ready_at_unix = None;
-    clear_hold(&mut next);
-    next.assessment_outcome = Some(input.outcome);
-    next.assessment_body_markdown = input.body_markdown.clone();
-    next.assessed_at_unix = Some(input.now_unix);
-    next.assessed_by_user_id = Some(input.actor_user_id.clone());
-    next.completed_at_unix = Some(input.now_unix);
-    next.completed_by_user_id = Some(input.actor_user_id.clone());
-    next.updated_at_unix = input.now_unix;
-    let payload = RequestEventPayload::Assessed {
-        head_oid: next.head_oid.clone(),
-        outcome: input.outcome,
-        body_markdown: input.body_markdown,
-    };
-    let assessed = append_event(
-        &mut next,
-        input.assessed_event_id,
-        input.actor_user_id,
-        RequestEventKind::Assessed,
-        payload,
-        input.now_unix,
-    )?;
-    next.validate_facts()?;
-    Ok(mutation(next, vec![assessed]))
 }
 
 pub fn merge_request(
@@ -257,8 +139,8 @@ pub fn merge_request(
     if !input.actor_is_maintainer {
         return Err(DomainError::forbidden("repo maintainer required"));
     }
-    if request.merged_at_unix.is_some() {
-        return Err(DomainError::conflict("request is already merged"));
+    if request.state != RequestState::ReadyForReview {
+        return Err(DomainError::conflict("only ready requests can be merged"));
     }
     if input.merged_head_oid != request.head_oid {
         return Err(DomainError::conflict(
@@ -266,55 +148,29 @@ pub fn merge_request(
         ));
     }
 
-    let mut result = match request.state {
-        RequestState::ReadyForReview => assess_request(
-            request,
-            AssessRequestInput {
-                request_id: input.request_id.clone(),
-                actor_user_id: input.actor_user_id.clone(),
-                actor_is_maintainer: true,
-                outcome: RequestAssessmentOutcome::Accepted,
-                body_markdown: None,
-                assessed_event_id: input.assessed_event_id,
-                now_unix: input.now_unix,
-            },
-        )?,
-        RequestState::Completed
-            if request.assessment_outcome == Some(RequestAssessmentOutcome::Accepted) =>
-        {
-            mutation(request.clone(), Vec::new())
-        }
-        RequestState::Completed => {
-            return Err(DomainError::conflict(
-                "only accepted completed requests can be merged",
-            ));
-        }
-        RequestState::Working => {
-            return Err(DomainError::conflict(
-                "only ready or accepted requests can be merged",
-            ));
-        }
-    };
-
-    result.request.merged_at_unix = Some(input.now_unix);
-    result.request.merged_by_user_id = Some(input.actor_user_id.clone());
-    result.request.merged_head_oid = Some(input.merged_head_oid.clone());
-    result.request.merged_main_oid = Some(input.merged_main_oid.clone());
-    result.request.updated_at_unix = input.now_unix;
-    let payload = RequestEventPayload::Merged {
-        head_oid: input.merged_head_oid,
-        main_oid: input.merged_main_oid,
-    };
-    result.events.push(append_event(
-        &mut result.request,
+    let mut next = request.clone();
+    next.state = RequestState::Completed;
+    next.ready_at_unix = None;
+    next.completed_at_unix = Some(input.now_unix);
+    next.completed_by_user_id = Some(input.actor_user_id.clone());
+    next.merged_at_unix = Some(input.now_unix);
+    next.merged_by_user_id = Some(input.actor_user_id.clone());
+    next.merged_head_oid = Some(input.merged_head_oid.clone());
+    next.merged_main_oid = Some(input.merged_main_oid.clone());
+    next.updated_at_unix = input.now_unix;
+    let event = append_event(
+        &mut next,
         input.merged_event_id,
         input.actor_user_id,
         RequestEventKind::Merged,
-        payload,
+        RequestEventPayload::Merged {
+            head_oid: input.merged_head_oid,
+            main_oid: input.merged_main_oid,
+        },
         input.now_unix,
-    )?);
-    result.request.validate_facts()?;
-    Ok(result)
+    )?;
+    next.validate_facts()?;
+    Ok(mutation(next, vec![event]))
 }
 
 fn authorize_exit(
@@ -331,26 +187,12 @@ fn authorize_exit(
             if !input.actor_can_mutate {
                 return Err(DomainError::forbidden("request mutation access required"));
             }
-            if request.held_at_unix.is_some() {
-                return Err(DomainError::conflict(
-                    "held request cannot be returned by its author",
-                ));
-            }
-        }
-        RequestReviewExitReason::ChangesRequested if !input.actor_is_maintainer => {
-            return Err(DomainError::forbidden("repo maintainer required"));
         }
         RequestReviewExitReason::RevisionPushed | RequestReviewExitReason::ContentEdited => {
             if !input.actor_can_mutate {
                 return Err(DomainError::forbidden("request mutation access required"));
             }
-            if request.held_at_unix.is_some() && !input.actor_is_maintainer {
-                return Err(DomainError::conflict(
-                    "request cannot be changed while held",
-                ));
-            }
         }
-        RequestReviewExitReason::ChangesRequested => {}
     }
     Ok(())
 }
@@ -373,7 +215,6 @@ fn append_event(
     payload: RequestEventPayload,
     now: u64,
 ) -> Result<RequestEvent, DomainError> {
-    validate_required_id("request event id", &id)?;
     request.activity_version = request
         .activity_version
         .checked_add(1)
@@ -391,9 +232,4 @@ fn append_event(
 
 fn mutation(request: Request, events: Vec<RequestEvent>) -> RequestReviewMutation {
     RequestReviewMutation { request, events }
-}
-
-fn clear_hold(request: &mut Request) {
-    request.held_at_unix = None;
-    request.held_by_user_id = None;
 }

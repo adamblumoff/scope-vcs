@@ -2,7 +2,6 @@ import type {
   RequestEvent,
   RequestListItem,
   RequestSummary,
-  RequestWorkflowAssessmentOutcome,
   RequestWorkflowEventKind,
   RequestWorkflowState,
 } from '@/api/types'
@@ -19,23 +18,11 @@ const REQUEST_STATES = {
   { label: string; tone: BadgeTone }
 >
 
-const ASSESSMENTS = {
-  Accepted: { label: 'Accepted', tone: 'success' },
-  Neutral: { label: 'Neutral', tone: 'neutral' },
-  Rejected: { label: 'Rejected', tone: 'danger' },
-} as const satisfies Record<
-  RequestWorkflowAssessmentOutcome,
-  { label: string; tone: BadgeTone }
->
-
 const EVENT_LABELS = {
   Started: 'Started',
   ReadyForReview: 'Ready for review',
   ReturnedToWorking: 'Returned to working',
   RevisionPushed: 'Revision pushed',
-  Held: 'Held',
-  HoldReleased: 'Hold released',
-  Assessed: 'Assessed',
   Merged: 'Merged',
   Closed: 'Closed',
   IdentityEdited: 'Request edited',
@@ -57,23 +44,11 @@ const MERGEABILITY = {
 type RequestLabelSource = RequestSummary | RequestListItem
 
 export function requestStatusLabel(request: RequestLabelSource) {
-  return request.state === 'Completed' && request.assessment_outcome
-    ? ASSESSMENTS[request.assessment_outcome].label
-    : REQUEST_STATES[request.state].label
+  return REQUEST_STATES[request.state].label
 }
 
 export function requestStatusTone(request: RequestLabelSource): BadgeTone {
-  return request.state === 'Completed' && request.assessment_outcome
-    ? ASSESSMENTS[request.assessment_outcome].tone
-    : REQUEST_STATES[request.state].tone
-}
-
-export function requestCompletionMergeLabel(request: RequestLabelSource) {
-  return request.state === 'Completed' &&
-    request.assessment_outcome === 'Accepted' &&
-    request.mergeability.status === 'Completed'
-    ? 'Merged'
-    : 'Not merged'
+  return REQUEST_STATES[request.state].tone
 }
 
 export function requestAudienceLabel(request: RequestLabelSource) {
@@ -124,14 +99,8 @@ export function requestEventBody(event: RequestEvent) {
       ]
         .filter(Boolean)
         .join('\n')
-    case 'Held':
-    case 'HoldReleased':
     case 'Closed':
       return oidText(value.head_oid)
-    case 'Assessed':
-      return [stringValue(value.outcome), stringValue(value.body_markdown)]
-        .filter(Boolean)
-        .join(' · ')
     case 'Merged':
       return `${oidText(value.head_oid)} → ${oidText(value.main_oid)}`
     case 'IdentityEdited':
@@ -172,8 +141,6 @@ function reviewExitReason(value: unknown) {
   switch (value) {
     case 'AuthorReturned':
       return 'Author returned to Working'
-    case 'ChangesRequested':
-      return 'Maintainer requested changes'
     case 'RevisionPushed':
       return 'Branch update invalidated review'
     case 'ContentEdited':

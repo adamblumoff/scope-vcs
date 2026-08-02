@@ -1,7 +1,7 @@
 use crate::{
     FirstPushTokenStatus, RepoConfig, RepoPublicationState, RepositoryActor, RequestActorRole,
-    RequestAssessmentOutcome, RequestAudience, RequestDiscussionStatus, RequestEventKind,
-    RequestEventPayload, RequestMergeabilityStatus, RequestState, SessionIdentity, Visibility,
+    RequestAudience, RequestDiscussionStatus, RequestEventKind, RequestEventPayload,
+    RequestMergeabilityStatus, RequestState, SessionIdentity, Visibility,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{fmt, ops::Deref};
@@ -103,11 +103,6 @@ mod tests {
     fn lifecycle_request_payloads_preserve_optional_fields() {
         let ready: ReadyRequestRequest = serde_json::from_str("{}").expect("ready request");
         assert_eq!(serde_json::to_string(&ready).unwrap(), "{}");
-
-        let assessment: AssessRequestRequest = serde_json::from_str(r#"{"outcome":"Rejected"}"#)
-            .expect("assessment request without a body");
-        assert_eq!(assessment.outcome, RequestAssessmentOutcome::Rejected);
-        assert_eq!(assessment.body_markdown, None);
 
         let edit: EditRequestIdentityRequest = serde_json::from_str(r#"{"title":"New title"}"#)
             .expect("identity edit with only a title");
@@ -336,12 +331,6 @@ pub struct RequestSummaryResponse {
     pub activity_version: u64,
     pub first_ready_at_unix: Option<u64>,
     pub ready_at_unix: Option<u64>,
-    pub held_at_unix: Option<u64>,
-    pub held_by_user_id: Option<String>,
-    pub assessment_outcome: Option<RequestAssessmentOutcome>,
-    pub assessment_body_markdown: Option<String>,
-    pub assessed_at_unix: Option<u64>,
-    pub assessed_by_user_id: Option<String>,
     pub completed_at_unix: Option<u64>,
     pub completed_by_user_id: Option<String>,
     pub merged_at_unix: Option<u64>,
@@ -398,9 +387,7 @@ pub struct RequestListItemResponse {
     pub audience: RequestAudience,
     pub head_oid: GitOid,
     pub state: RequestState,
-    pub assessment_outcome: Option<RequestAssessmentOutcome>,
     pub ready_at_unix: Option<u64>,
-    pub held_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub mergeability: RequestMergeabilityResponse,
 }
@@ -418,9 +405,6 @@ pub struct RequestPermissionsResponse {
     pub can_return_to_working: bool,
     pub can_manage_invitees: bool,
     pub can_leave_request: bool,
-    pub can_hold: bool,
-    pub can_request_changes: bool,
-    pub can_assess: bool,
     pub can_close: bool,
     pub can_merge: bool,
 }
@@ -556,13 +540,6 @@ pub struct StartRequestRequest {
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ReadyRequestRequest {}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct AssessRequestRequest {
-    pub outcome: RequestAssessmentOutcome,
-    pub body_markdown: Option<String>,
-}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

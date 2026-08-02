@@ -1,7 +1,7 @@
 use super::text::{short_oid, terminal_text};
 use crate::api::{
     LeaveRequestResponse, RepoSummaryResponse, RepositoryActor, RequestActivityPageResponse,
-    RequestAssessmentOutcome, RequestAudience, RequestCloseResponse, RequestDetailResponse,
+    RequestAudience, RequestCloseResponse, RequestDetailResponse,
     RequestDiscussionMutationResponse, RequestDiscussionStatus, RequestEventPayload,
     RequestInviteeMutationResponse, RequestListItemResponse, RequestMergeabilityStatus,
     RequestMutationResponse, RequestPermissionsResponse, RequestReviewExitReason, RequestState,
@@ -101,10 +101,8 @@ pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
         name: &request.name,
         id: &request.id,
         state: request.state,
-        held: request.held_at_unix.is_some(),
         title: &request.title,
         head_oid: &request.head_oid,
-        assessment_outcome: request.assessment_outcome,
     })
 }
 
@@ -116,10 +114,8 @@ pub(super) fn request_list_line(request: &RequestListItemResponse, now_unix: u64
             name: &request.name,
             id: &request.id,
             state: request.state,
-            held: request.held_at_unix.is_some(),
             title: &request.title,
             head_oid: &request.head_oid,
-            assessment_outcome: request.assessment_outcome,
         })
     )
 }
@@ -145,7 +141,7 @@ fn request_detail_lines(request: &RequestSummaryResponse) -> Vec<String> {
         request_line(request),
         format!(
             "  lifecycle: {} · {}",
-            state_label(request.state, request.held_at_unix.is_some()),
+            state_label(request.state),
             if request.first_ready_at_unix.is_some() {
                 "published"
             } else {
@@ -166,10 +162,6 @@ fn request_detail_lines(request: &RequestSummaryResponse) -> Vec<String> {
             terminal_text(request.description_markdown.trim())
         ));
     }
-    lines.push(match request.held_at_unix {
-        Some(held_at) => format!("  hold: active since {held_at} · maintainer group"),
-        None => "  hold: none".to_string(),
-    });
     lines.push(if request.invitees.is_empty() {
         "  invitees: none".to_string()
     } else {
@@ -188,16 +180,6 @@ fn request_detail_lines(request: &RequestSummaryResponse) -> Vec<String> {
         capabilities_label(&request.permissions)
     ));
     lines.push(format!("  mergeability: {}", mergeability_label(request)));
-    if let Some(outcome) = request.assessment_outcome {
-        let mut assessment = format!("  assessment: {}", outcome_label(outcome));
-        if let Some(body) = request.assessment_body_markdown.as_deref() {
-            assessment.push_str(&format!(" · {}", terminal_text(body)));
-        }
-        if let Some(assessed_at) = request.assessed_at_unix {
-            assessment.push_str(&format!(" · at {assessed_at}"));
-        }
-        lines.push(assessment);
-    }
     if let Some(merged_at) = request.merged_at_unix {
         lines.push(format!(
             "  merge: {} → {} · at {merged_at}",
@@ -246,41 +228,28 @@ fn request_activity_lines(activity: &RequestActivityPageResponse) -> Vec<String>
 }
 
 fn mutation_effect_lines(
-    before: &RequestSummaryResponse,
-    after: &RequestSummaryResponse,
+    _before: &RequestSummaryResponse,
+    _after: &RequestSummaryResponse,
 ) -> Vec<String> {
-    let mut lines = Vec::new();
-    if before.held_at_unix.is_some() && after.held_at_unix.is_none() {
-        lines.push("Review hold cleared".to_string());
-    } else if before.held_at_unix.is_none() && after.held_at_unix.is_some() {
-        lines.push("Review hold started".to_string());
-    }
-    lines
+    Vec::new()
 }
 
 struct RequestLine<'a> {
     name: &'a str,
     id: &'a str,
     state: RequestState,
-    held: bool,
     title: &'a str,
     head_oid: &'a str,
-    assessment_outcome: Option<RequestAssessmentOutcome>,
 }
 
 fn format_request_line(line: RequestLine<'_>) -> String {
-    let assessment = line
-        .assessment_outcome
-        .map(|outcome| format!(" · {}", outcome_label(outcome)))
-        .unwrap_or_default();
     format!(
-        "{:<9}  {} ({}) — {} · head {}{}",
-        state_label(line.state, line.held),
+        "{:<9}  {} ({}) — {} · head {}",
+        state_label(line.state),
         terminal_text(line.name),
         terminal_text(line.id),
         terminal_text(line.title),
-        short_oid(line.head_oid),
-        assessment
+        short_oid(line.head_oid)
     )
 }
 
@@ -293,8 +262,6 @@ fn capabilities_label(permissions: &RequestPermissionsResponse) -> String {
         (permissions.can_edit_identity, "edit"),
         (permissions.can_manage_invitees, "invitees"),
         (permissions.can_leave_request, "leave"),
-        (permissions.can_hold, "hold"),
-        (permissions.can_assess, "assess"),
         (permissions.can_merge, "merge"),
         (permissions.can_close, "close"),
         (permissions.can_open_discussion, "discuss"),
@@ -351,27 +318,17 @@ fn audience_label(audience: RequestAudience) -> &'static str {
     }
 }
 
-fn state_label(state: RequestState, held: bool) -> &'static str {
-    match (state, held) {
-        (RequestState::ReadyForReview, true) => "on-hold",
-        (RequestState::Working, _) => "working",
-        (RequestState::ReadyForReview, false) => "ready",
-        (RequestState::Completed, _) => "completed",
-    }
-}
-
-fn outcome_label(outcome: RequestAssessmentOutcome) -> &'static str {
-    match outcome {
-        RequestAssessmentOutcome::Accepted => "Accepted",
-        RequestAssessmentOutcome::Neutral => "Neutral",
-        RequestAssessmentOutcome::Rejected => "Rejected",
+fn state_label(state: RequestState) -> &'static str {
+    match state {
+        RequestState::Working => "working",
+        RequestState::ReadyForReview => "ready",
+        RequestState::Completed => "completed",
     }
 }
 
 fn exit_reason_label(reason: RequestReviewExitReason) -> &'static str {
     match reason {
         RequestReviewExitReason::AuthorReturned => "author returned to Working",
-        RequestReviewExitReason::ChangesRequested => "changes requested",
         RequestReviewExitReason::RevisionPushed => "revision pushed",
         RequestReviewExitReason::ContentEdited => "identity edited",
     }
@@ -383,13 +340,11 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn list_uses_authoritative_response_hold_state() {
+    fn list_renders_ready_state_and_wait() {
         let request: RequestListItemResponse = serde_json::from_value(json!({
             "id": "req_one", "name": "fix-refs", "title": "Fix refs",
             "author_role": "Public", "audience": "Public", "head_oid": oid('b'),
-            "state": "ReadyForReview",
-            "assessment_outcome": null, "ready_at_unix": 10,
-            "held_at_unix": 11, "updated_at_unix": 20,
+            "state": "ReadyForReview", "ready_at_unix": 10, "updated_at_unix": 20,
             "mergeability": {
                 "status": "NotMaintainer",
                 "current_main_oid": oid('a'),
@@ -400,20 +355,17 @@ mod tests {
         .unwrap();
 
         let rendered = request_list_line(&request, 70);
-        assert!(rendered.contains("on-hold"), "{rendered}");
+        assert!(rendered.contains("ready"), "{rendered}");
         assert!(rendered.contains("1m"), "{rendered}");
     }
 
     #[test]
-    fn detail_uses_server_capabilities_and_renders_hold_invitees_and_publication() {
+    fn detail_uses_server_capabilities_and_renders_invitees_and_publication() {
         let mut request = summary();
         request.state = RequestState::ReadyForReview;
         request.first_ready_at_unix = Some(10);
         request.ready_at_unix = Some(11);
-        request.held_at_unix = Some(12);
-        request.held_by_user_id = Some("scope_usr_maintainer".to_string());
         request.permissions.can_edit_identity = true;
-        request.permissions.can_hold = true;
         request.invitees = serde_json::from_value(json!([{
             "user": {"id": "scope_usr_devon", "handle": "devon"},
             "invited_by_user_id": "scope_usr_author",
@@ -423,10 +375,10 @@ mod tests {
 
         let rendered = request_detail_lines(&request).join("\n");
 
-        assert!(rendered.contains("on-hold"), "{rendered}");
+        assert!(rendered.contains("ready"), "{rendered}");
         assert!(rendered.contains("published"), "{rendered}");
         assert!(rendered.contains("@devon"), "{rendered}");
-        assert!(rendered.contains("edit, hold"), "{rendered}");
+        assert!(rendered.contains("edit"), "{rendered}");
     }
 
     #[test]
@@ -482,19 +434,6 @@ mod tests {
         assert_eq!(wait_label(Some(4_000), 3_600), "<1m");
     }
 
-    #[test]
-    fn mutation_effects_report_hold_clear() {
-        let mut before = summary();
-        before.state = RequestState::ReadyForReview;
-        before.held_at_unix = Some(12);
-        let after = summary();
-
-        assert_eq!(
-            mutation_effect_lines(&before, &after),
-            vec!["Review hold cleared"]
-        );
-    }
-
     fn summary() -> RequestSummaryResponse {
         serde_json::from_str(
             r#"{
@@ -504,19 +443,15 @@ mod tests {
                 "base_main_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "head_oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"Working",
                 "activity_version":1,
-                "first_ready_at_unix":null,"ready_at_unix":null,"held_at_unix":null,
-                "held_by_user_id":null,"assessment_outcome":null,
-                "assessment_body_markdown":null,"assessed_at_unix":null,
-                "assessed_by_user_id":null,"completed_at_unix":null,
+                "first_ready_at_unix":null,"ready_at_unix":null,"completed_at_unix":null,
                 "completed_by_user_id":null,"merged_at_unix":null,"merged_by_user_id":null,
                 "merged_head_oid":null,"merged_main_oid":null,"created_at_unix":1,
                 "updated_at_unix":2,"invitees":[],
-                "assessment_previews":[],
                 "permissions":{"can_view_activity":false,"can_open_discussion":false,"can_reply_to_discussion":false,
                     "can_edit_identity":false,"can_pull_branch":false,"can_push_branch":false,
                     "can_mark_ready":false,"can_return_to_working":false,
-                    "can_manage_invitees":false,"can_leave_request":false,"can_hold":false,
-                    "can_request_changes":false,"can_assess":false,"can_close":false,"can_merge":false},
+                    "can_manage_invitees":false,"can_leave_request":false,
+                    "can_close":false,"can_merge":false},
                 "mergeability":{"status":"Working",
                     "current_main_oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "request_head_oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","reason":null}

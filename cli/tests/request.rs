@@ -83,33 +83,6 @@ fn request_edit_requires_a_title_or_description_file_before_login() {
 }
 
 #[test]
-fn rejected_assessment_requires_a_message_before_login() {
-    let dir = TempDir::new("assess-rejected-message");
-    create_repo_with_head(dir.path());
-
-    scope_failure(
-        dir.path(),
-        ["request", "assess", "rejected"],
-        "the following required arguments were not provided",
-    );
-}
-
-#[test]
-fn request_assess_rejects_obsolete_dispositions_before_login() {
-    let dir = TempDir::new("assess-outcome");
-    create_repo_with_head(dir.path());
-
-    for outcome in [
-        "changes-requested",
-        "duplicate",
-        "needs-response",
-        "resolved",
-    ] {
-        scope_failure(dir.path(), ["request", "assess", outcome], "invalid value");
-    }
-}
-
-#[test]
 fn request_help_exposes_the_complete_approved_vocabulary() {
     let dir = TempDir::new("request-help");
     create_repo_with_head(dir.path());
@@ -122,24 +95,8 @@ fn request_help_exposes_the_complete_approved_vocabulary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     for command in [
-        "assess",
-        "close",
-        "discuss",
-        "edit",
-        "hold",
-        "invite",
-        "leave",
-        "list",
-        "merge",
-        "push",
-        "ready",
-        "request-changes",
-        "show",
-        "start",
-        "status",
-        "unhold",
-        "uninvite",
-        "working",
+        "close", "discuss", "edit", "invite", "leave", "list", "merge", "push", "ready", "show",
+        "start", "status", "uninvite", "working",
     ] {
         assert!(
             stdout.lines().any(|line| {
@@ -158,22 +115,8 @@ fn request_command_help_uses_the_shared_target_flags() {
     create_repo_with_head(dir.path());
 
     for command in [
-        "assess",
-        "close",
-        "discuss",
-        "edit",
-        "hold",
-        "invite",
-        "leave",
-        "merge",
-        "push",
-        "ready",
-        "request-changes",
-        "show",
-        "status",
-        "unhold",
-        "uninvite",
-        "working",
+        "close", "discuss", "edit", "invite", "leave", "merge", "push", "ready", "show", "status",
+        "uninvite", "working",
     ] {
         let output = scope_command(dir.path())
             .args(["request", command, "--help"])

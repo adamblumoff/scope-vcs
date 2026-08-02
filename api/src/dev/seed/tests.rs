@@ -6,7 +6,7 @@ use super::*;
 use crate::AppState;
 use crate::git::import::git_stdout_text;
 use crate::git::storage::restore_git_segments;
-use scope_domain::requests::{RequestAssessmentOutcome, RequestState};
+use scope_domain::requests::RequestState;
 use scope_object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
 use std::sync::Arc;
 
@@ -97,10 +97,6 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     );
     let accepted = catalog.requests.get("req_demo_accepted").unwrap();
     assert_eq!(accepted.state, RequestState::Completed);
-    assert_eq!(
-        accepted.assessment_outcome,
-        Some(RequestAssessmentOutcome::Accepted)
-    );
     assert_eq!(accepted.merged_main_oid, accepted.merged_head_oid);
     assert_ne!(
         accepted.merged_main_oid,
@@ -112,10 +108,6 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     );
     let neutral = catalog.requests.get("req_demo_neutral").unwrap();
     assert_eq!(neutral.state, RequestState::Completed);
-    assert_eq!(
-        neutral.assessment_outcome,
-        Some(RequestAssessmentOutcome::Neutral)
-    );
     assert_eq!(neutral.audience, RequestAudience::Public);
 }
 

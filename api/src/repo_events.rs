@@ -33,10 +33,6 @@ pub(crate) enum RepoChangeReason {
     PushReceived,
     RequestReady,
     RequestWorking,
-    RequestHeld,
-    RequestUnheld,
-    RequestChangesRequested,
-    RequestAssessed,
     RequestInviteeAdded,
     RequestInviteeRemoved,
     #[cfg(test)]
@@ -66,10 +62,6 @@ impl RepoChangeReason {
             Self::PushReceived => "push-received",
             Self::RequestReady => "request-ready",
             Self::RequestWorking => "request-working",
-            Self::RequestHeld => "request-held",
-            Self::RequestUnheld => "request-unheld",
-            Self::RequestChangesRequested => "request-changes-requested",
-            Self::RequestAssessed => "request-assessed",
             Self::RequestInviteeAdded => "request-invitee-added",
             Self::RequestInviteeRemoved => "request-invitee-removed",
             #[cfg(test)]

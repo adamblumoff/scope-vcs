@@ -48,9 +48,6 @@ pub fn edit_request_identity(
         )?;
     }
     let request = open_request_mut(requests, &input.request_id)?;
-    if request.held_at_unix.is_some() {
-        return Err(DomainError::conflict("request cannot be edited while held"));
-    }
     if request.state == RequestState::ReadyForReview {
         return Err(DomainError::conflict(
             "request cannot be edited while ready for review",

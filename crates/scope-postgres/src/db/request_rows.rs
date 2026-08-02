@@ -7,8 +7,7 @@ use sea_orm::{
 use {
     crate::error::PostgresError,
     scope_domain::requests::{
-        Request, RequestActorRole, RequestAssessmentOutcome, RequestAudience, RequestEvent,
-        RequestState,
+        Request, RequestActorRole, RequestAudience, RequestEvent, RequestState,
     },
 };
 
@@ -21,9 +20,7 @@ pub struct RequestListRow {
     pub audience: RequestAudience,
     pub head_oid: String,
     pub state: RequestState,
-    pub assessment_outcome: Option<RequestAssessmentOutcome>,
     pub ready_at_unix: Option<u64>,
-    pub held_at_unix: Option<u64>,
     pub is_merged: bool,
     pub updated_at_unix: u64,
     pub has_git_snapshot: bool,
@@ -39,9 +36,7 @@ impl From<Request> for RequestListRow {
             audience: request.audience,
             head_oid: request.head_oid,
             state: request.state,
-            assessment_outcome: request.assessment_outcome,
             ready_at_unix: request.ready_at_unix,
-            held_at_unix: request.held_at_unix,
             is_merged: request.merged_at_unix.is_some(),
             updated_at_unix: request.updated_at_unix,
             has_git_snapshot: request.git_snapshot.is_some(),
@@ -268,30 +263,6 @@ where
         .col_expr(
             entities::request::Column::ReadyAtUnix,
             Expr::value(row.ready_at_unix),
-        )
-        .col_expr(
-            entities::request::Column::HeldAtUnix,
-            Expr::value(row.held_at_unix),
-        )
-        .col_expr(
-            entities::request::Column::HeldByUserId,
-            Expr::value(row.held_by_user_id),
-        )
-        .col_expr(
-            entities::request::Column::AssessmentOutcome,
-            Expr::value(row.assessment_outcome),
-        )
-        .col_expr(
-            entities::request::Column::AssessmentBodyMarkdown,
-            Expr::value(row.assessment_body_markdown),
-        )
-        .col_expr(
-            entities::request::Column::AssessedAtUnix,
-            Expr::value(row.assessed_at_unix),
-        )
-        .col_expr(
-            entities::request::Column::AssessedByUserId,
-            Expr::value(row.assessed_by_user_id),
         )
         .col_expr(
             entities::request::Column::CompletedAtUnix,

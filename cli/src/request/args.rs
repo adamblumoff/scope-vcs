@@ -1,5 +1,5 @@
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use scope_api_contract::{RequestAssessmentOutcome, RequestAudience};
+use scope_api_contract::RequestAudience;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -28,14 +28,6 @@ pub(super) enum RequestCommand {
     Uninvite(RequestUninviteArgs),
     #[command(about = "Leave a request that invited you")]
     Leave(RequestLeaveArgs),
-    #[command(about = "Place a ready request on hold")]
-    Hold(RequestHoldArgs),
-    #[command(about = "Release a request review hold")]
-    Unhold(RequestUnholdArgs),
-    #[command(about = "Return a request to Working for changes")]
-    RequestChanges(RequestChangesArgs),
-    #[command(about = "Complete a request with a review assessment")]
-    Assess(RequestAssessArgs),
     #[command(about = "Merge a request into main")]
     Merge(RequestMergeArgs),
     #[command(about = "Start a top-level discussion on a request")]
@@ -147,45 +139,10 @@ pub(super) struct RequestLeaveArgs {
 }
 
 #[derive(Parser)]
-pub(super) struct RequestHoldArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestUnholdArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestChangesArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
-}
-
-#[derive(Parser)]
-pub(super) struct RequestAssessArgs {
-    #[command(flatten)]
-    pub(super) target: RequestTargetArgs,
-    #[arg(value_enum)]
-    pub(super) outcome: RequestAssessmentArg,
-    #[arg(
-        required_if_eq("outcome", "rejected"),
-        long,
-        value_name = "MARKDOWN",
-        help = "Assessment message (required when rejecting)"
-    )]
-    pub(super) message: Option<String>,
-    #[arg(long, help = "Confirm request completion")]
-    pub(super) yes: bool,
-}
-
-#[derive(Parser)]
 pub(super) struct RequestMergeArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
-    #[arg(long, help = "Confirm the merge and any resulting assessment")]
+    #[arg(long, help = "Confirm the merge")]
     pub(super) yes: bool,
 }
 
@@ -226,23 +183,6 @@ impl From<RequestAudienceArg> for RequestAudience {
         match audience {
             RequestAudienceArg::Public => RequestAudience::Public,
             RequestAudienceArg::Private => RequestAudience::Private,
-        }
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-pub(super) enum RequestAssessmentArg {
-    Accepted,
-    Neutral,
-    Rejected,
-}
-
-impl From<RequestAssessmentArg> for RequestAssessmentOutcome {
-    fn from(outcome: RequestAssessmentArg) -> Self {
-        match outcome {
-            RequestAssessmentArg::Accepted => RequestAssessmentOutcome::Accepted,
-            RequestAssessmentArg::Neutral => RequestAssessmentOutcome::Neutral,
-            RequestAssessmentArg::Rejected => RequestAssessmentOutcome::Rejected,
         }
     }
 }

@@ -116,7 +116,6 @@ async fn merge_route_persists_git_content_once() {
     let merged = response_json(merged).await;
     assert_eq!(merged_status, StatusCode::OK, "{merged}");
     assert_eq!(merged["request"]["state"], "Completed");
-    assert_eq!(merged["request"]["assessment_outcome"], "Accepted");
     assert_eq!(merged["request"]["merged_head_oid"], request_head);
     assert_ne!(merged["request"]["merged_main_oid"], request_head);
     assert_eq!(

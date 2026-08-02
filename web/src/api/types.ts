@@ -19,7 +19,6 @@ import type {
   RequestActorRole,
   RequestAudience,
   RequestDetailResponse,
-  RequestAssessmentOutcome,
   RequestEventKind,
   RequestEventResponse,
   RequestListResponse,
@@ -114,7 +113,6 @@ export type RequestMergeability = RequestMergeabilityResponse
 export type RequestMergeabilityState = RequestMergeabilityStatus
 export type RequestEvent = RequestEventResponse
 export type RequestWorkflowState = RequestState
-export type RequestWorkflowAssessmentOutcome = RequestAssessmentOutcome
 export type RequestWorkflowEventKind = RequestEventKind
 export type RequestWorkflowActorRole = RequestActorRole
 export type RequestWorkflowAudience = RequestAudience

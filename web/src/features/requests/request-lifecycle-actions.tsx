@@ -1,14 +1,13 @@
 import type { RequestSummary } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { CheckCircle2, LoaderCircle, Pause, Play, RotateCcw, XCircle } from 'lucide-react'
+import { CheckCircle2, RotateCcw, XCircle } from 'lucide-react'
 import { useState } from 'react'
-import { RequestAssessmentDialog } from './request-assessment-dialog'
 import { RequestConfirmDialog } from './request-confirm-dialog'
 import { RequestReadyDialog } from './request-ready-dialog'
 import type { RequestActionController } from './use-request-actions'
 
-type Dialog = 'assess' | 'close' | 'merge' | 'ready' | 'request_changes' | 'working' | null
+type Dialog = 'close' | 'merge' | 'ready' | 'working' | null
 
 export function RequestLifecycleActions({
   actions,
@@ -25,9 +24,6 @@ export function RequestLifecycleActions({
   const canMerge = permissions.can_merge && request.mergeability.status === 'Ready'
   const hasActions = permissions.can_mark_ready ||
     permissions.can_return_to_working ||
-    permissions.can_hold ||
-    permissions.can_request_changes ||
-    permissions.can_assess ||
     canMerge ||
     permissions.can_close
 
@@ -46,32 +42,6 @@ export function RequestLifecycleActions({
           <Button disabled={busy} onClick={() => setDialog('working')} size="sm" type="button" variant="secondary">
             <RotateCcw />
             Return to Working
-          </Button>
-        ) : null}
-        {permissions.can_hold ? (
-          <Button
-            disabled={busy}
-            onClick={() => void actions.run({
-              action: request.held_at_unix === null ? 'hold' : 'release_hold',
-            })}
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            {actions.pending === 'hold' || actions.pending === 'release_hold' ? (
-              <LoaderCircle className="animate-spin" />
-            ) : request.held_at_unix === null ? <Pause /> : <Play />}
-            {request.held_at_unix === null ? 'Hold' : 'Release hold'}
-          </Button>
-        ) : null}
-        {permissions.can_request_changes ? (
-          <Button disabled={busy} onClick={() => setDialog('request_changes')} size="sm" type="button" variant="secondary">
-            Request changes
-          </Button>
-        ) : null}
-        {permissions.can_assess ? (
-          <Button disabled={busy} onClick={() => setDialog('assess')} size="sm" type="button" variant="secondary">
-            Assess…
           </Button>
         ) : null}
         {canMerge ? (
@@ -94,17 +64,6 @@ export function RequestLifecycleActions({
         pending={actions.pending === 'ready'}
         request={request}
       />
-      <RequestAssessmentDialog
-        onConfirm={(outcome, body_markdown) => actions.run({
-          action: 'assess',
-          body_markdown,
-          outcome,
-        })}
-        onOpenChange={(open) => setDialog(open ? 'assess' : null)}
-        open={dialog === 'assess'}
-        pending={actions.pending === 'assess'}
-        request={request}
-      />
       <RequestConfirmDialog
         confirmLabel="Return to Working"
         onConfirm={() => actions.run({ action: 'working' })}
@@ -116,17 +75,6 @@ export function RequestLifecycleActions({
         <p>The author must mark the current package Ready again before review can continue.</p>
       </RequestConfirmDialog>
       <RequestConfirmDialog
-        confirmLabel="Request changes"
-        onConfirm={() => actions.run({ action: 'request_changes' })}
-        onOpenChange={(open) => setDialog(open ? 'request_changes' : null)}
-        open={dialog === 'request_changes'}
-        pending={actions.pending === 'request_changes'}
-        title="Request changes from the author?"
-      >
-        <p>No written explanation is required.</p>
-        <p>Any active hold will be cleared in the same transaction.</p>
-      </RequestConfirmDialog>
-      <RequestConfirmDialog
         confirmLabel="Merge request"
         onConfirm={() => actions.run({ action: 'merge' })}
         onOpenChange={(open) => setDialog(open ? 'merge' : null)}
@@ -134,11 +82,7 @@ export function RequestLifecycleActions({
         pending={actions.pending === 'merge'}
         title="Merge this request?"
       >
-        {request.state === 'ReadyForReview' ? (
-          <p>This completes the request as Accepted and merges it into main.</p>
-        ) : (
-          <p>This request is already Accepted and will be merged into main.</p>
-        )}
+        <p>This completes the request and merges it into main.</p>
       </RequestConfirmDialog>
       <RequestConfirmDialog
         confirmLabel="Close request"
@@ -152,7 +96,7 @@ export function RequestLifecycleActions({
         {request.first_ready_at_unix === null ? (
           <p>This never-published request will be deleted and will not enter public history.</p>
         ) : (
-          <p>This published request will become Completed and remain in public history without an assessment.</p>
+          <p>This published request will become Completed and remain in public history.</p>
         )}
       </RequestConfirmDialog>
     </>

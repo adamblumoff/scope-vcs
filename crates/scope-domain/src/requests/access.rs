@@ -30,9 +30,6 @@ pub struct RequestPermissions {
     pub can_return_to_working: bool,
     pub can_manage_invitees: bool,
     pub can_leave_request: bool,
-    pub can_hold: bool,
-    pub can_request_changes: bool,
-    pub can_assess: bool,
     pub can_close: bool,
     pub can_merge: bool,
 }
@@ -87,7 +84,6 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     let working = request.state == RequestState::Working;
     let ready = request.state == RequestState::ReadyForReview;
     let completed = request.state == RequestState::Completed;
-    let held = request.held_at_unix.is_some();
 
     let exact_visible = if private {
         maintainer
@@ -116,7 +112,7 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     } else {
         author || invitee || maintainer
     };
-    let branch_mutable = exact_visible && branch_actor && !completed && (!held || maintainer);
+    let branch_mutable = exact_visible && branch_actor && !completed;
     let discussion_visible = exact_visible;
     let activity_stream_visible = discussion_visible && (listable || published);
     // Public discussion stays open after completion; completed private requests are read-only.
@@ -125,31 +121,15 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     let permissions = RequestPermissions {
         can_open_discussion: can_discuss,
         can_reply_to_discussion: can_discuss,
-        can_edit_identity: exact_visible
-            && !completed
-            && (author || maintainer)
-            && (!held || maintainer),
+        can_edit_identity: exact_visible && !completed && (author || maintainer),
         can_pull_branch: request_ref_readable,
         can_push_branch: branch_mutable,
         can_mark_ready: exact_visible && working && author,
-        can_return_to_working: exact_visible && ready && author && !held,
-        can_manage_invitees: exact_visible
-            && public
-            && !completed
-            && (author || maintainer)
-            && (!held || maintainer),
-        can_leave_request: exact_visible && public && invitee && !completed && !held,
-        can_hold: exact_visible && ready && maintainer,
-        can_request_changes: exact_visible && ready && maintainer,
-        can_assess: exact_visible && ready && maintainer,
+        can_return_to_working: exact_visible && ready && author,
+        can_manage_invitees: exact_visible && public && !completed && (author || maintainer),
+        can_leave_request: exact_visible && public && invitee && !completed,
         can_close: exact_visible && working && author,
-        can_merge: exact_visible
-            && maintainer
-            && request.merged_at_unix.is_none()
-            && (ready
-                || (completed
-                    && request.assessment_outcome
-                        == Some(super::RequestAssessmentOutcome::Accepted))),
+        can_merge: exact_visible && maintainer && request.merged_at_unix.is_none() && ready,
     };
 
     RequestPolicyDecision {
@@ -167,15 +147,10 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
 
 pub fn request_list_mergeability(
     state: RequestState,
-    assessment_outcome: Option<super::RequestAssessmentOutcome>,
     has_git_snapshot: bool,
-    is_merged: bool,
     access: RepositoryAccess,
 ) -> RequestMergeability {
-    let completed_and_mergeable = state == RequestState::Completed
-        && assessment_outcome == Some(super::RequestAssessmentOutcome::Accepted)
-        && !is_merged;
-    let (status, reason) = if state == RequestState::Completed && !completed_and_mergeable {
+    let (status, reason) = if state == RequestState::Completed {
         (
             RequestMergeabilityStatus::Completed,
             Some("request is completed"),
@@ -205,11 +180,5 @@ pub fn request_list_mergeability(
 }
 
 pub fn request_mergeability(request: &Request, access: RepositoryAccess) -> RequestMergeability {
-    request_list_mergeability(
-        request.state,
-        request.assessment_outcome,
-        request.git_snapshot.is_some(),
-        request.merged_at_unix.is_some(),
-        access,
-    )
+    request_list_mergeability(request.state, request.git_snapshot.is_some(), access)
 }

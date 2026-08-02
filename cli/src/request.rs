@@ -1,11 +1,10 @@
 use crate::{
     api::{
         CreateRequestDiscussionParams, RequestActivityParams, RequestTarget, StartRequestParams,
-        add_request_invitee, assess_request, close_request as api_close_request,
-        create_request_discussion, edit_request_identity, get_request, get_request_activity,
-        hold_request, leave_request, list_requests, mark_request_ready, merge_request,
-        remove_request_invitee, request_changes, return_request_to_working,
-        start_request as api_start_request, unhold_request,
+        add_request_invitee, close_request as api_close_request, create_request_discussion,
+        edit_request_identity, get_request, get_request_activity, leave_request, list_requests,
+        mark_request_ready, merge_request, remove_request_invitee, return_request_to_working,
+        start_request as api_start_request,
     },
     git_repo::{
         GitRepo, current_branch, ensure_clean_working_tree, ensure_git_repo_ready, head_oid,
@@ -32,9 +31,7 @@ mod tests;
 mod text;
 use actions::*;
 pub use args::RequestArgs;
-use args::{
-    RequestAssessArgs, RequestAudienceArg, RequestCommand, RequestStartArgs, RequestTargetArgs,
-};
+use args::{RequestAudienceArg, RequestCommand, RequestStartArgs, RequestTargetArgs};
 use confirm::require_confirmation;
 use local::{
     fetch_main_projection, load_context, load_context_and_request_id, maybe_request_id_for_context,
@@ -66,10 +63,6 @@ pub fn prepare_request_command(args: RequestArgs) -> anyhow::Result<PreparedRequ
         RequestCommand::Invite(_) => ("scope request invite", false),
         RequestCommand::Uninvite(_) => ("scope request uninvite", false),
         RequestCommand::Leave(_) => ("scope request leave", false),
-        RequestCommand::Hold(_) => ("scope request hold", false),
-        RequestCommand::Unhold(_) => ("scope request unhold", false),
-        RequestCommand::RequestChanges(_) => ("scope request request-changes", false),
-        RequestCommand::Assess(_) => ("scope request assess", false),
         RequestCommand::Merge(_) => ("scope request merge", false),
         RequestCommand::Discuss(_) => ("scope request discuss", false),
         RequestCommand::Show(_) => ("scope request show", false),
@@ -150,23 +143,6 @@ pub fn run_request_command(
         ),
         RequestCommand::Leave(args) => {
             leave_invited_request(&git_repo, client, api_url, session_token, args.target)
-        }
-        RequestCommand::Hold(args) => {
-            hold_request_command(&git_repo, client, api_url, session_token, args.target, true)
-        }
-        RequestCommand::Unhold(args) => hold_request_command(
-            &git_repo,
-            client,
-            api_url,
-            session_token,
-            args.target,
-            false,
-        ),
-        RequestCommand::RequestChanges(args) => {
-            request_changes_command(&git_repo, client, api_url, session_token, args.target)
-        }
-        RequestCommand::Assess(args) => {
-            assess_request_command(&git_repo, client, api_url, session_token, args)
         }
         RequestCommand::Merge(args) => merge_request_command(
             &git_repo,

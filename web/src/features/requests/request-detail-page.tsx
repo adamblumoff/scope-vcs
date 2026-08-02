@@ -164,14 +164,8 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     [createReply, loadReplies, reopenAndReply],
   )
   const isMaintainer = live.repo.access.actor !== 'Public'
-  const isContributor = actor.id === request.author_user_id ||
-    request.invitees.some((invitee) => invitee.user.id === actor.id)
-  const heldContributor = request.held_at_unix !== null && isContributor && !isMaintainer
   const hasLifecycleActions = request.permissions.can_mark_ready ||
     request.permissions.can_return_to_working ||
-    request.permissions.can_hold ||
-    request.permissions.can_request_changes ||
-    request.permissions.can_assess ||
     request.permissions.can_merge ||
     request.permissions.can_close
 
@@ -232,14 +226,8 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             <div className="flex flex-wrap items-center gap-2">
               <LifecycleBadge state={live.repo.lifecycle_state} />
               <Badge variant={requestStatusTone(request)}>{requestStatusLabel(request)}</Badge>
-              {request.held_at_unix !== null ? <Badge variant="warning">On hold</Badge> : null}
               <Badge variant={requestMergeabilityTone(request)}>{requestMergeabilityLabel(request)}</Badge>
             </div>
-            {heldContributor ? (
-              <p className="text-sm text-warning-foreground">
-                Maintainer review is on hold. Author and invitee changes are disabled until release.
-              </p>
-            ) : null}
             {requestActions.error ? (
               <p className="text-sm text-destructive" role="alert">{requestActions.error}</p>
             ) : null}

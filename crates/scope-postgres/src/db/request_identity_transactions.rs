@@ -25,7 +25,6 @@ impl RequestStore {
         let (repo, mut request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         let actor_is_author = input.actor_user_id == request.author_user_id;
-        let actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
         input.actor_can_edit_identity =
             request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
                 .await?
@@ -39,7 +38,6 @@ impl RequestStore {
                     request_id: request.id.clone(),
                     actor_user_id: input.actor_user_id.clone(),
                     actor_is_author,
-                    actor_is_maintainer,
                     actor_can_mutate: input.actor_can_edit_identity,
                     reason: RequestReviewExitReason::ContentEdited,
                     event_id: format!("{}:review-invalidated", input.event_id),
