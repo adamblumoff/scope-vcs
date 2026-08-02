@@ -415,7 +415,7 @@ async fn close_open_request_persists_exact_closer() {
     assert_eq!(stored.closed_by_user_id.as_deref(), Some("user_public"));
 }
 
-fn postgres_store() -> MetadataStore {
+pub(crate) fn postgres_store() -> MetadataStore {
     let target = super::super::TestDatabaseTarget::required().unwrap();
     let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
     store
@@ -448,7 +448,7 @@ fn catalog_with_repo() -> crate::db::CatalogFixture {
     catalog
 }
 
-async fn start_public_request(store: &MetadataStore) {
+pub(crate) async fn start_public_request(store: &MetadataStore) {
     store
         .requests()
         .start_request(public_start_input())

@@ -94,7 +94,7 @@ pub use repositories::{
 };
 pub use requests::{
     request, request_change_block, request_discussion, request_discussion_read_state,
-    request_discussion_reply, request_event, request_invitee,
+    request_discussion_reply, request_event, request_invitee, request_rating,
 };
 pub use runs::{
     push_trigger_evaluation, run, run_attempt, run_attempt_step, run_log, runner, runner_grant,

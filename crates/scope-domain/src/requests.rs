@@ -50,6 +50,11 @@ pub use model::{
 };
 mod queue;
 pub use queue::RequestQueueSection;
+mod ratings;
+pub use ratings::{
+    CreateRequestRatingInput, REQUEST_RATING_REASON_MAX_BYTES, RequestRating,
+    create_request_rating, eligible_rating_subject_user_id,
+};
 mod submission;
 pub use submission::{
     MergeRequestInput, RequestLifecycleMutation, SubmitRequestInput, merge_request, submit_request,

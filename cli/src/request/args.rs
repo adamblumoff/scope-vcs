@@ -28,6 +28,8 @@ pub(super) enum RequestCommand {
     Leave(RequestLeaveArgs),
     #[command(about = "Merge a request into main")]
     Merge(RequestMergeArgs),
+    #[command(about = "Rate the other terminal request participant")]
+    Rate(RequestRateArgs),
     #[command(about = "Start a top-level discussion on a request")]
     Discuss(RequestDiscussArgs),
     #[command(about = "Show one request")]
@@ -136,6 +138,16 @@ pub(super) struct RequestMergeArgs {
     pub(super) target: RequestTargetArgs,
     #[arg(long, help = "Confirm the merge")]
     pub(super) yes: bool,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestRateArgs {
+    #[command(flatten)]
+    pub(super) target: RequestTargetArgs,
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=5), help = "Rating from 1 to 5")]
+    pub(super) score: u8,
+    #[arg(long, help = "Required reason for the rating")]
+    pub(super) reason: String,
 }
 
 #[derive(Parser)]

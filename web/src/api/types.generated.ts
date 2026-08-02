@@ -168,6 +168,12 @@ export type RequestListResponse = { requests: Array<RequestListItemResponse>, ne
 
 export type RequestDetailResponse = { request: RequestSummaryResponse, };
 
+export type CreateRequestRatingRequest = { score: number, reason: string, };
+
+export type RequestRatingResponse = { id: string, request_id: string, rater: RequestActorSummaryResponse, subject: RequestActorSummaryResponse, score: number, reason: string, created_at_unix: number, };
+
+export type RequestRatingsResponse = { ratings: Array<RequestRatingResponse>, eligible_subject: RequestActorSummaryResponse | null, };
+
 export type RequestMutationResponse = { request: RequestSummaryResponse, };
 
 export type RequestListItemResponse = { id: string, name: string, title: string, author_role: RequestActorRole, audience: RequestAudience, head_oid: GitOid, state: RequestState, submitted_at_unix: number | null, updated_at_unix: number, mergeability: RequestMergeabilityResponse, };
@@ -285,6 +291,7 @@ export const ApiRouteTemplates = {
   repoRequest: "/v1/repos/{owner}/{repo}/requests/{request_id}",
   repoRequestSubmit: "/v1/repos/{owner}/{repo}/requests/{request_id}/submit",
   repoRequestMerge: "/v1/repos/{owner}/{repo}/requests/{request_id}/merge",
+  repoRequestRatings: "/v1/repos/{owner}/{repo}/requests/{request_id}/ratings",
   repoRequestInvitees: "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees",
   repoRequestInviteesMe: "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees/me",
   repoSession: "/v1/repos/{owner}/{repo}/session",

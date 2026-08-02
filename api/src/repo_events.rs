@@ -32,6 +32,7 @@ pub(crate) enum RepoChangeReason {
     FirstPushApplied,
     PushReceived,
     RequestSubmitted,
+    RequestRated,
     RequestInviteeAdded,
     RequestInviteeRemoved,
     #[cfg(test)]
@@ -60,6 +61,7 @@ impl RepoChangeReason {
             Self::FirstPushApplied => "first-push-applied",
             Self::PushReceived => "push-received",
             Self::RequestSubmitted => "request-submitted",
+            Self::RequestRated => "request-rated",
             Self::RequestInviteeAdded => "request-invitee-added",
             Self::RequestInviteeRemoved => "request-invitee-removed",
             #[cfg(test)]

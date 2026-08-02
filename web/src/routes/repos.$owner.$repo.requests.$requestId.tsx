@@ -5,6 +5,9 @@ import { loadRequestForRequest } from '@/api/repos'
 import {
   type LoadRequestChangeBlockFilesInput,
   loadRequestChangeBlockFilesForRequest,
+  loadRequestRatingsForRequest,
+  rateRequestForRequest,
+  type RateRequestInput,
 } from '@/api/requests'
 import {
   type RequestActionCommand,
@@ -44,12 +47,13 @@ import { useCallback, useMemo } from 'react'
 const loadRequestPage = createServerFn({ method: 'GET' })
   .validator((data: ReturnType<typeof requestParamsForRoute>) => data)
   .handler(async ({ data }) => {
-    const [detail, account, discussionPage] = await Promise.all([
+    const [detail, account, discussionPage, ratings] = await Promise.all([
       loadOptionalRequestForRequest(data),
       loadOptionalAccountSession(),
       loadOptionalSelectedRequestResource(() => loadRequestDiscussionsForRequest(data)),
+      loadOptionalSelectedRequestResource(() => loadRequestRatingsForRequest(data)),
     ])
-    return { account, detail, discussionPage }
+    return { account, detail, discussionPage, ratings }
   })
 
 const loadDiscussions = createServerFn({ method: 'GET' })
@@ -104,6 +108,10 @@ const runRequestAction = createServerFn({ method: 'POST' })
   .validator((data: RequestActionInput) => data)
   .handler(({ data }) => performRequestActionForRequest(data))
 
+const rateRequest = createServerFn({ method: 'POST' })
+  .validator((data: RateRequestInput) => data)
+  .handler(({ data }) => rateRequestForRequest(data))
+
 export const Route = createFileRoute('/repos/$owner/$repo/requests/$requestId')({
   loader: ({ params }) => loadRequestPage({ data: requestParamsForRoute(params) }),
   component: RequestRoute,
@@ -143,8 +151,13 @@ function RequestRoute() {
       }
     }
   }, [navigate, repoParams, requestParams, router])
+  const rateParticipant = useCallback(async (input: RateRequestInput) => {
+    const rating = await rateRequest({ data: input })
+    await router.invalidate()
+    return rating
+  }, [router])
 
-  if (!page.detail || !page.discussionPage) {
+  if (!page.detail || !page.discussionPage || !page.ratings) {
     return <RequestUnavailablePage params={repoParams} />
   }
 
@@ -166,6 +179,8 @@ function RequestRoute() {
       performAction={performAction}
       reopenAndReply={(data) => reopenAndReply({ data })}
       reopenDiscussion={(data) => reopenDiscussion({ data })}
+      ratings={page.ratings}
+      rateRequest={rateParticipant}
       resolveDiscussion={(data) => resolveDiscussion({ data })}
       updateDescription={(data) => updateDescription({ data })}
     />

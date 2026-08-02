@@ -195,6 +195,11 @@ pub fn router(state: AppState) -> Router {
             post(http::requests::merge_request),
         )
         .route(
+            routes::REPO_REQUEST_RATINGS,
+            get(http::request_ratings::list_request_ratings)
+                .post(http::request_ratings::create_request_rating),
+        )
+        .route(
             routes::REPO_REQUEST_INVITEES,
             axum::routing::put(http::requests::add_request_invitee)
                 .delete(http::requests::remove_request_invitee),

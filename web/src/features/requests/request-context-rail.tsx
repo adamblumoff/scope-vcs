@@ -1,8 +1,10 @@
-import type { RequestSummary } from '@/api/types'
+import type { RequestParams, RequestRating, RequestRatings, RequestSummary } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { GitBranch, GitCommitHorizontal } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { RequestInvitees } from './request-invitees'
+import { RequestRatingsSection } from './request-ratings-section'
+import type { RateRequestInput } from '@/api/requests'
 import {
   formatUnixDate,
   requestAudienceLabel,
@@ -13,9 +15,15 @@ import type { RequestActionController } from './use-request-actions'
 
 export function RequestContextRail({
   actions,
+  onRate,
+  params,
+  ratings,
   request,
 }: {
   actions: RequestActionController
+  onRate: (input: RateRequestInput) => Promise<RequestRating>
+  params: RequestParams
+  ratings: RequestRatings
   request: RequestSummary
 }) {
   return (
@@ -35,6 +43,8 @@ export function RequestContextRail({
         <RailValue label="Closed" value={formatUnixDate(request.closed_at_unix)} />
         <RailValue label="Merged" value={formatUnixDate(request.merged_at_unix)} />
       </RailSection>
+
+      <RequestRatingsSection initial={ratings} onRate={onRate} params={params} />
 
       <RailSection icon={<GitCommitHorizontal />} title="Git state">
         <RailValue label="Base" value={shortOid(request.base_main_oid)} />

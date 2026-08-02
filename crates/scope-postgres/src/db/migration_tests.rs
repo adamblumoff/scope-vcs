@@ -153,6 +153,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0006_drop_request_credits",
             "m0007_drop_review_ceremony",
             "m0008_one_way_request_submission",
+            "m0009_request_ratings",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -201,7 +202,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 41);
+    assert_eq!(scope_table_count, 42);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
     assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
     let review_columns = db
@@ -825,6 +826,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0006_drop_request_credits",
             "m0007_drop_review_ceremony",
             "m0008_one_way_request_submission",
+            "m0009_request_ratings",
         ]
     );
 }
@@ -851,6 +853,7 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0006_drop_request_credits",
             "m0007_drop_review_ceremony",
             "m0008_one_way_request_submission",
+            "m0009_request_ratings",
         ]
     );
 }

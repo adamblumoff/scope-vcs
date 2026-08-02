@@ -3,7 +3,7 @@ use crate::{
         CreateRequestDiscussionParams, RequestActivityParams, RequestTarget, StartRequestParams,
         add_request_invitee, close_request as api_close_request, create_request_discussion,
         edit_request_identity, get_request, get_request_activity, leave_request, list_requests,
-        merge_request, remove_request_invitee, start_request as api_start_request,
+        merge_request, rate_request, remove_request_invitee, start_request as api_start_request,
         submit_request as api_submit_request,
     },
     git_repo::{
@@ -63,6 +63,7 @@ pub fn prepare_request_command(args: RequestArgs) -> anyhow::Result<PreparedRequ
         RequestCommand::Uninvite(_) => ("scope request uninvite", false),
         RequestCommand::Leave(_) => ("scope request leave", false),
         RequestCommand::Merge(_) => ("scope request merge", false),
+        RequestCommand::Rate(_) => ("scope request rate", false),
         RequestCommand::Discuss(_) => ("scope request discuss", false),
         RequestCommand::Show(_) => ("scope request show", false),
         RequestCommand::List(_) => ("scope request list", false),
@@ -147,6 +148,15 @@ pub fn run_request_command(
             session_token,
             args.target,
             args.yes,
+        ),
+        RequestCommand::Rate(args) => rate_request_command(
+            &git_repo,
+            client,
+            api_url,
+            session_token,
+            args.target,
+            args.score,
+            args.reason,
         ),
         RequestCommand::Discuss(args) => start_request_discussion(
             &git_repo,

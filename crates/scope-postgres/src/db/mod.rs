@@ -63,6 +63,7 @@ pub use request_invitees::{
 };
 mod request_queue;
 pub use request_queue::{RequestQueueCursor, RequestQueuePageQuery, RequestQueueRow};
+mod request_ratings;
 mod request_rows;
 pub use request_rows::RequestListRow;
 mod request_merge;

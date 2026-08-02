@@ -63,6 +63,23 @@ fn request_discuss_requires_a_body_before_login() {
 }
 
 #[test]
+fn request_rate_requires_score_and_reason_before_login() {
+    let dir = TempDir::new("rate-request");
+    create_repo_with_head(dir.path());
+
+    scope_failure(
+        dir.path(),
+        ["request", "rate"],
+        "the following required arguments were not provided",
+    );
+    scope_failure(
+        dir.path(),
+        ["request", "rate", "--score", "6", "--reason", "Excellent"],
+        "not in 1..=5",
+    );
+}
+
+#[test]
 fn request_submit_reaches_auth_without_extra_arguments() {
     let dir = TempDir::new("submit-request");
     create_repo_with_head(dir.path());

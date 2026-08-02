@@ -5,8 +5,11 @@ import type {
   RepoLiveState,
   RepoParams,
   RequestMutation,
+  RequestRating,
+  RequestRatings,
 } from '@/api/types'
 import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
+import type { RateRequestInput } from '@/api/requests'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { Badge } from '@/components/ui/badge'
@@ -99,6 +102,8 @@ type RequestDetailPageProps = {
   performAction: (command: RequestActionCommand) => Promise<RequestActionResult>
   reopenAndReply: (input: CreateReplyInput) => Promise<RequestDiscussionReplyMutation>
   reopenDiscussion: (input: RequestDiscussionActionInput) => Promise<RequestDiscussionMutation>
+  ratings: RequestRatings
+  rateRequest: (input: RateRequestInput) => Promise<RequestRating>
   resolveDiscussion: (input: RequestDiscussionActionInput) => Promise<RequestDiscussionMutation>
   updateDescription: (input: UpdateDescriptionInput) => Promise<RequestMutation>
 }
@@ -121,6 +126,8 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     performAction,
     reopenAndReply,
     reopenDiscussion,
+    ratings,
+    rateRequest,
     resolveDiscussion,
     updateDescription,
   } = props
@@ -244,7 +251,15 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         actions={discussionActions}
         actor={actor}
         canResolve={canResolveDiscussion}
-        contextRail={<RequestContextRail actions={requestActions} request={request} />}
+        contextRail={(
+          <RequestContextRail
+            actions={requestActions}
+            onRate={rateRequest}
+            params={discussionParams}
+            ratings={ratings}
+            request={request}
+          />
+        )}
         description={description}
         header={requestHeader}
         initialPage={discussionPage}

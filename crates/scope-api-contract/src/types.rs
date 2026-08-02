@@ -304,6 +304,32 @@ pub struct RequestDetailResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CreateRequestRatingRequest {
+    pub score: u8,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestRatingResponse {
+    pub id: String,
+    pub request_id: String,
+    pub rater: RequestActorSummaryResponse,
+    pub subject: RequestActorSummaryResponse,
+    pub score: u8,
+    pub reason: String,
+    pub created_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestRatingsResponse {
+    pub ratings: Vec<RequestRatingResponse>,
+    pub eligible_subject: Option<RequestActorSummaryResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestMutationResponse {
     pub request: RequestSummaryResponse,
 }

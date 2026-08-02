@@ -2,6 +2,7 @@ use super::*;
 
 mod helpers;
 mod queue;
+mod ratings;
 pub(super) use helpers::{create_owner_request, create_public_request, rebuild_request_projection};
 
 use scope_postgres::db::AddRequestInviteeCommand;

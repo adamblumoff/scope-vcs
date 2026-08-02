@@ -3,6 +3,7 @@ use scope_domain::requests::{
     Request, RequestActorRole, RequestAudience, RequestChangeBlock, RequestDiscussion,
     RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
     RequestDiscussionSubject, RequestEvent, RequestEventKind, RequestEventPayload, RequestInvitee,
+    RequestRating,
 };
 use scope_domain::store::SourceBlob;
 
@@ -113,6 +114,57 @@ pub mod request {
 
     fn decode_optional_time(value: Option<i64>, field: &str) -> Result<Option<u64>, PostgresError> {
         value.map(|value| i64_to_u64(value, field)).transpose()
+    }
+}
+
+pub mod request_rating {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_request_ratings")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub request_id: String,
+        pub rater_user_id: String,
+        pub subject_user_id: String,
+        pub score: i32,
+        pub reason: String,
+        pub created_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(rating: &RequestRating) -> Result<Self, PostgresError> {
+            Ok(Self {
+                id: rating.id.clone(),
+                request_id: rating.request_id.clone(),
+                rater_user_id: rating.rater_user_id.clone(),
+                subject_user_id: rating.subject_user_id.clone(),
+                score: i32::from(rating.score),
+                reason: rating.reason.clone(),
+                created_at_unix: u64_to_i64(
+                    rating.created_at_unix,
+                    "request rating creation time",
+                )?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RequestRating, PostgresError> {
+            Ok(RequestRating {
+                id: self.id,
+                request_id: self.request_id,
+                rater_user_id: self.rater_user_id,
+                subject_user_id: self.subject_user_id,
+                score: self.score.try_into().map_err(PostgresError::internal)?,
+                reason: self.reason,
+                created_at_unix: i64_to_u64(self.created_at_unix, "request rating creation time")?,
+            })
+        }
     }
 }
 

@@ -157,6 +157,24 @@ pub fn merge_request(
     )
 }
 
+pub fn rate_request(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    target: RequestTarget<'_>,
+    score: u8,
+    reason: String,
+) -> anyhow::Result<RequestRatingResponse> {
+    execute_request(
+        client
+            .post(request_action_url(api_url, target, "ratings"))
+            .bearer_auth(session_token)
+            .json(&CreateRequestRatingRequest { score, reason }),
+        target,
+        "rate request participant",
+    )
+}
+
 pub fn edit_request_identity(
     client: &Client,
     api_url: &str,

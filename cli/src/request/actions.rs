@@ -1,3 +1,4 @@
+use super::text::terminal_text;
 use super::*;
 pub(super) fn load_exact_request(
     git_repo: &GitRepo,
@@ -177,6 +178,34 @@ pub(super) fn merge_request_command(
         api_target(&context, &request_id),
     )?;
     print_request_mutation_receipt("Merged", Some(&before.request), &response);
+    Ok(())
+}
+
+pub(super) fn rate_request_command(
+    git_repo: &GitRepo,
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    target: RequestTargetArgs,
+    score: u8,
+    reason: String,
+) -> anyhow::Result<()> {
+    let (context, request_id, _) =
+        load_exact_request(git_repo, client, api_url, session_token, target)?;
+    let response = rate_request(
+        client,
+        api_url,
+        session_token,
+        api_target(&context, &request_id),
+        score,
+        reason,
+    )?;
+    println!(
+        "Rated @{} {}/5 — {}",
+        terminal_text(&response.subject.handle),
+        response.score,
+        terminal_text(&response.reason)
+    );
     Ok(())
 }
 

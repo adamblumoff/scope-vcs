@@ -58,6 +58,7 @@ pub const REPO_REQUEST_QUEUE: &str = "/v1/repos/{owner}/{repo}/requests/queue";
 pub const REPO_REQUEST: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}";
 pub const REPO_REQUEST_SUBMIT: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/submit";
 pub const REPO_REQUEST_MERGE: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/merge";
+pub const REPO_REQUEST_RATINGS: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/ratings";
 pub const REPO_REQUEST_INVITEES: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees";
 pub const REPO_REQUEST_INVITEES_ME: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/invitees/me";
@@ -267,6 +268,10 @@ pub fn repo_request_submit(owner: &str, repo: &str, request_id: &str) -> String 
 
 pub fn repo_request_merge(owner: &str, repo: &str, request_id: &str) -> String {
     format!("{}/merge", repo_request(owner, repo, request_id))
+}
+
+pub fn repo_request_ratings(owner: &str, repo: &str, request_id: &str) -> String {
+    format!("{}/ratings", repo_request(owner, repo, request_id))
 }
 
 pub fn repo_request_invitees(owner: &str, repo: &str, request_id: &str) -> String {
