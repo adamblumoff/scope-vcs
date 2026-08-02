@@ -8,16 +8,14 @@ can produce changes far faster than humans can review them.
 
 GitHub's collaboration model assumes that creating a contribution is expensive
 and that maintainer attention is comparatively available. Agentic coding
-reverses that relationship. Producing another patch, proposal, or pull request
-is nearly free; understanding whether it deserves attention remains expensive.
+reverses that relationship. Producing another patch or request is nearly free;
+understanding whether it deserves attention remains expensive.
 
 Scope should be built around that new constraint:
 
-> Maintainers define what earns access to their attention. Everything else
-> remains invisible.
-
-That sentence is both the product promise and the organizing principle for the
-system.
+> Maintainers define what earns their attention. Scope starts with an explicit
+> submission boundary and can automate admission only after the underlying
+> collaboration loop has earned that complexity.
 
 ## The two boundaries
 
@@ -35,17 +33,43 @@ maintainer to expose the entire codebase.
 
 ### The attention boundary
 
-Maintainers decide which requests are worthy of human review. A submitted
-request is not automatically placed in a maintainer's queue. It must first pass
-the repository's qualification process.
+Today, the contributor owns the first attention decision. A request can remain
+a private draft while its participants work on it. The contributor submits it
+once when they want maintainer review, and every submitted request enters the
+Open queue. The request remains mutable until it is merged or closed.
 
-Only qualified requests enter maintainer-facing attention surfaces. Rejected,
-duplicate, irrelevant, or incomplete requests remain outside the normal
-maintainer workflow. They may still exist for contributor feedback, abuse
-handling, and operational auditing, but they do not become inbox work.
+This is intentionally similar to draft and open GitHub pull requests. Scope
+does not qualify requests, run an automated admission gate, or ask contributors
+to perform a separate review ceremony today.
 
-Private files solve access control. Qualification solves attention control.
-Both matter, but qualification is the urgent wedge in an agentic world.
+The long-term attention boundary may add repository-defined qualification. If
+it does, only qualified requests should enter the maintainer's normal queue.
+That is a later product layer, not part of the current request lifecycle.
+
+Private files solve access control. Submission currently solves attention
+intent. Qualification may later solve attention admission.
+
+## What exists today
+
+The current foundation is deliberately small:
+
+- Public and private repository projections enforce the code boundary.
+- Trusted `.scope` control paths cannot be changed through contributor
+  requests.
+- Every repository has a tracked `.scope/RULES.md`, even when the file is
+  empty.
+- Scope links those rules into repository-level Codex and Claude context when
+  their files or tool directories signal that the repository uses them.
+- `scope push` requires the rules file and required agent-context links to be
+  committed and current.
+- Requests move through Draft, Open, Closed, and Merged. Submission is a
+  one-way Draft-to-Open transition; Open requests remain mutable.
+- The request queue has Your work, Open, and Closed sections.
+- Credits, staking, assessment, hold, and request-changes ceremony have been
+  removed.
+- Verified request participants can rate one another after closeout, and a
+  small aggregate rating context is available without turning reputation into
+  admission or ranking.
 
 ## `.scope/RULES.md`
 
@@ -53,7 +77,7 @@ Every public contributor workspace receives a trusted `.scope/RULES.md`. This
 is the maintainer's natural-language contract for what a worthwhile
 contribution looks like.
 
-The file can describe whatever matters to that repository:
+The file may be empty. When a repository has rules, they can describe:
 
 - work that is currently wanted or explicitly unwanted;
 - required evidence, tests, benchmarks, or reproduction steps;
@@ -61,137 +85,113 @@ The file can describe whatever matters to that repository:
 - acceptable change size and scope;
 - duplicate-work policy;
 - security, licensing, or provenance requirements; and
-- any other condition the maintainer wants evaluated before review.
+- any other condition the maintainer wants contributors or their agents to
+  follow.
 
 Markdown is the right starting format. Maintainers already express these rules
 in contribution guides, issue templates, and repository documentation. Scope
-should make that practice operational without forcing maintainers to learn a
-new policy language or encode judgment as a rigid schema.
+makes the file reliably available without forcing maintainers to learn a new
+policy language.
 
 `RULES.md` is a control-plane document:
 
 - It is maintained from a trusted source.
-- It is projected into public contributor workspaces so humans and agents can
-  read it while working.
-- It is read-only from the perspective of a submitted request.
+- It is projected into public contributor workspaces.
+- Repository-level agent context points agents to it while they work.
+- It is read-only from the perspective of a contributor request.
 - It is not accepted as part of the contributor's source changes.
-- Evaluation always uses the trusted version, never a version supplied by the
-  contributor.
 
 A local Git workspace cannot literally make a file impossible to delete. The
-server therefore owns the real invariant: any submitted delta that modifies,
-renames, replaces, or deletes a protected `.scope` path is invalid and is
-rejected before qualification. The trusted file is restored from the base
-projection whenever Scope constructs evaluation input.
+server therefore owns the real invariant: a contributor delta that modifies,
+renames, replaces, or deletes a protected `.scope` path is invalid. Scope's CLI
+also validates the committed rules and agent-context links before push.
 
-This protection should be implemented as a platform rule, not as prose inside
-`RULES.md`.
+These protections are platform rules, not prose inside `RULES.md`.
 
-## Qualification, not proposals
+## The request lifecycle today
 
-Adding a proposal step does not solve contribution slop. If proposals are cheap
-to generate, the proposal queue becomes the same problem in a different form.
-Scope should evaluate the actual request before asking a maintainer to look at
-it.
+The request lifecycle has four states:
 
-The initial request lifecycle should be small and explicit:
+1. **Draft** — participants can work without surfacing the request to the
+   maintainer queue.
+2. **Open** — the author has submitted once and the request is visible for
+   review.
+3. **Closed** — the request ended without merging.
+4. **Merged** — the request was applied to the repository.
 
-1. **Submitted** — an immutable request revision is ready for evaluation.
-2. **Evaluating** — the maintainer's configured qualification loop is running.
-3. **Qualified** — the request passed and becomes visible to maintainers.
-4. **Rejected** — the request failed and remains outside maintainer attention.
+Submission is contributor discretion. There is no platform-defined notion of
+"qualified" today. After submission, participants can continue pushing
+revisions, editing request identity, and using discussions. Scope records those
+changes without forcing the request back through another submission state.
 
-An evaluator failure is not a qualification. It should fail closed, remain out
-of the maintainer queue, and give the contributor a clear retryable error.
+The queue follows the same simple model:
 
-Qualification can be nondeterministic. Scope does not need to interpret
-`RULES.md` or pretend every useful judgment can be reduced to a boolean
-configuration file. Instead, Scope supplies a stable contract through which a
-maintainer-selected loop evaluates:
+- **Your work** contains requests involving the signed-in user, including
+  drafts that should not appear elsewhere.
+- **Open** contains submitted requests visible to the viewer.
+- **Closed** contains closed and merged history visible to the viewer.
 
-- the immutable request revision;
-- the trusted `.scope/RULES.md`;
-- the permitted repository context; and
-- relevant request history or external evidence.
+## Reputation without an economy
 
-The loop returns:
+Scope should not launch with credits, bidding, staking, or reputation-based
+admission. Those systems create an economy before the product has earned one,
+make onboarding confusing, and disadvantage new participants.
 
-- `qualified` or `rejected`;
-- a contributor-facing explanation;
-- structured evidence where available; and
-- evaluator identity and version information for reproducibility.
+The current model is verified participant ratings:
 
-The evaluator may run tests, invoke an agent, use an AI model, query an issue
-tracker, check licenses, inspect provenance, or combine several of these.
-Maintainers own what qualification means; Scope owns the integrity of the
-boundary and the delivery of the result.
-
-Scope must apply authentication, rate limits, request-size limits, and resource
-budgets before invoking a maintainer's evaluator. Otherwise spam can consume
-compute even if it never reaches a human.
-
-## Duplicate detection
-
-Duplicate detection belongs inside the maintainer-configured qualification
-loop. It is a semantic problem, so requiring it to be deterministic would
-produce a weak system and unnecessary platform complexity.
-
-A maintainer should be able to connect a model or service that compares a
-request with open work, prior requests, issues, and known attempts. The result
-becomes one input to qualification. Scope does not need a universal duplicate
-model in its first version.
-
-The important product behavior is not how the duplicate was discovered. It is
-that the contributor receives useful feedback while the maintainer never has
-to triage the duplicate.
-
-## Reputation instead of staking
-
-Scope should not launch with credits, bidding, or staking. Those systems create
-an economy before the product has earned one, make onboarding confusing, and
-force an arbitrary answer to how new accounts acquire credits.
-
-The simpler model is verified reputation:
-
-- People receive a one-to-five-star rating for completed work.
-- The parties to a real request may review one another after it closes.
-- A rating includes a short reason rather than only a number.
+- People can leave a one-to-five-star rating after a real request closes or
+  merges.
+- A rating includes a short reason.
 - Reviews are tied to the underlying collaboration and are not anonymous.
-- New accounts are **unrated**, not zero-star.
-- Reputation helps order already-qualified requests; it never bypasses
-  qualification.
+- New accounts are unrated, not zero-star.
+- Global context exposes only a total score and rating count.
+- Ratings do not rank requests, control submission, or grant permissions.
 
-A bare global average is not enough. Scope should show the number of verified
-reviews and enough context to distinguish a new contributor from an established
-one. A 4.8 based on two interactions is not equivalent to a 4.8 based on one
-hundred.
+This is enough until real use shows which additional reputation signals are
+valuable. Averages, ranking, recency weighting, project-local reputation,
+appeals, and anti-brigading machinery should not be added speculatively.
 
-The first version should remain simple: one overall rating and a short
-structured note from verified participants. Recency weighting, project-local
-reputation, separate quality dimensions, appeals, and stronger anti-brigading
-systems can be added when real usage demonstrates the need.
+## Qualification is a later layer
 
-Ranking must leave room for newcomers. A dedicated newcomer lane, aging
-mechanism, or explicit exploration allocation should prevent established
-accounts from permanently occupying every visible position. Reputation ranks
-qualified work; it should not turn lack of history into exclusion.
+Automated qualification remains a plausible long-term answer to contribution
+volume, but Scope should not add an agent evaluator merely because
+`.scope/RULES.md` exists. The simple request workflow needs real use first.
 
-## The integration strategy
+Future design work must answer:
 
-GitHub's deepest moat is its integration ecosystem. Scope cannot win by
-rebuilding every external tool itself. It needs a first-class SDK and stable
-automation surfaces that let other systems participate without giving up
-Scope's domain rules.
+- what revision and rule version were evaluated;
+- how an Open request is updated and re-evaluated;
+- how failures, retries, overrides, and rule changes behave;
+- what explanation and evidence the contributor receives;
+- how evaluator identity and version are recorded;
+- how compute, authentication, rate limits, and abuse are bounded; and
+- whether qualification gates submission or only maintainer attention.
 
-The first major extension point should be the qualification-provider contract:
+If repeated use proves that qualification is needed, the likely extension
+contract is:
 
 ```text
 evaluate(
-  immutable request revision,
+  request revision,
   trusted RULES.md,
   permitted repository context
 ) -> qualified | rejected + explanation + evidence
 ```
+
+The evaluator may run tests, invoke an agent, query an issue tracker, inspect
+provenance, or combine several checks. Maintainers should own what
+qualification means; Scope should own protected inputs, allowed transitions,
+visibility, resource limits, and delivery of the result.
+
+Duplicate detection belongs inside that future maintainer-configured loop. It
+is a semantic input to qualification, not a universal platform model that
+Scope needs today.
+
+## The integration strategy
+
+GitHub's deepest moat is its integration ecosystem. Scope cannot win by
+rebuilding every external tool itself. It needs stable automation surfaces
+that let other systems participate without giving up Scope's domain rules.
 
 The CLI is the foundation of that portability. Automation should be possible
 without a browser through:
@@ -201,72 +201,86 @@ without a browser through:
 - documented exit codes;
 - narrowly scoped credentials;
 - versioned event and webhook payloads; and
-- reproducible request and evaluator identities.
+- reproducible request and actor identities.
 
-Models, test systems, security scanners, issue trackers, agent runtimes, and
-other developer tools should be able to implement the provider contract. The
-domain remains responsible for request states, protected inputs, visibility,
-and allowed transitions; adapters remain thin.
-
-A strong CLI and SDK do not merely provide convenience. They are how Scope
-starts competing with an incumbent integration ecosystem.
+The next automation work should strengthen the workflows Scope already has:
+repository access, rules synchronization, request creation and revision,
+discussion, merge, close, and ratings. A qualification-provider SDK should wait
+until the qualification product contract is designed.
 
 ## Product experience
 
 ### For contributors
 
 A contributor should know the rules before spending effort. Their workspace
-contains the public code projection and the repository's trusted `RULES.md`.
-When they submit work, they see whether it is evaluating, qualified, or
-rejected. Rejection includes enough explanation to improve the request without
-requiring maintainer intervention.
+contains the public code projection and the repository's trusted rules, and
+their agent receives the same repository-level context. They can keep work in
+Draft, submit it once, and continue improving the Open request in response to
+review.
 
-The system should encourage better work, not merely hide bad work.
+The system should encourage better work without pretending automated judgment
+is already trustworthy enough to gate participation.
 
 ### For maintainers
 
-A maintainer configures the rules and chooses the evaluation loop. Their normal
-request queue contains qualified work only. They can trust that every visible
-request was evaluated against the correct rule version and immutable request
-revision.
+A maintainer sees submitted work in one Open queue and terminal work in Closed.
+They do not receive private drafts as inbox work. Discussions, revisions,
+merge, close, and participant ratings remain attached to the request instead
+of being split across lifecycle ceremonies.
 
-The system should reduce attention spent on triage without removing maintainer
-control or pretending automated judgment is infallible.
+The system should reduce workflow overhead now and leave room for a stronger
+attention gate later.
 
 ## Sequencing
 
-The product should be built in this order:
+### Shipped foundation
 
-1. Continue strengthening public/private repository projections.
-2. Project and protect `.scope/RULES.md` in public contributor workspaces.
-3. Define the domain-owned request lifecycle and qualification-provider
-   contract.
-4. Enforce the rule that only qualified requests enter maintainer attention
-   surfaces.
-5. Expose qualification through a strong CLI and provider SDK.
-6. Let maintainers compose duplicate detection and other checks into their
-   loops.
-7. Add participant-only post-request reputation with a fair newcomer path.
-8. Expand the integration ecosystem around the stable contracts.
+1. Enforce public/private repository projections and protected control paths.
+2. Project `.scope/RULES.md`, inject it into repository-level agent context,
+   and require the committed links on push.
+3. Replace credits and review ceremony with Draft, Open, Closed, and Merged.
+4. Make submission one-way while keeping Open requests mutable.
+5. Ship the Your work, Open, and Closed request queue.
+6. Add verified participant ratings and minimal aggregate reputation context.
 
-Agent task scopes, multiple competing attempts, hardened workflow systems, and
-more elaborate reputation mechanics are valid later directions. They should
-not delay the core attention boundary.
+### Now
+
+7. Dogfood and harden the complete contribution loop: draft privacy, revision
+   pushes, discussions, search, merge, close, ratings, and consistent Git/API/
+   CLI/web behavior.
+8. Strengthen noninteractive CLI and event contracts around those proven
+   workflows so agents and integrations can use Scope reliably.
+
+### Later, after real usage
+
+9. Decide whether contribution volume requires qualification and design its
+   explanations, overrides, failure modes, rule-version behavior, and resource
+   limits.
+10. If justified, add a qualification-provider contract and gate maintainer
+    attention without complicating contributor drafts.
+11. Let maintainers compose duplicate detection and other checks into that
+    contract.
+12. Expand the integration ecosystem around stable, exercised contracts.
+
+Agent task scopes, multiple competing attempts, hosted evaluators, and more
+elaborate reputation mechanics are valid later directions. They should not
+delay proving the simple contribution loop.
 
 ## What Scope should resist
 
 Scope should resist:
 
+- qualification machinery before real request volume demonstrates the need;
 - proposal queues that merely relocate slop;
 - a large qualification DSL before repeated use cases justify one;
 - a platform-owned universal AI evaluator;
-- allowing reputation, payment, or popularity to purchase qualification;
-- exposing rejected requests in the maintainer's normal workflow;
-- trusting contributor-supplied control files;
-- building speculative integrations instead of a strong extension contract;
+- allowing reputation, payment, or popularity to control admission;
+- treating contributor-supplied control files as trusted input;
+- rebuilding credits, staking, assessment, or mutable submission ceremony;
+- building speculative integrations instead of strong exercised contracts;
   and
 - turning early reputation into an irreversible social hierarchy.
 
-The product wins when maintainers retain control, contributors receive clear
-rules and useful feedback, and the scarce resource—human attention—is spent
-only where it can create value.
+The product wins when contributors can work freely, maintainers can recognize
+intentional submissions, repository rules reach both humans and agents, and
+future automation is added only where it measurably protects human attention.
