@@ -45,7 +45,6 @@ pub(super) fn load_context_and_request_id(
     request_id: Option<String>,
 ) -> anyhow::Result<(RequestContext, String)> {
     let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
-    crate::request::render::print_repo_access(&context.repo);
     let request_id = request_id_for_context(
         git_repo,
         client,

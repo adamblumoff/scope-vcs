@@ -7,89 +7,92 @@ use crate::api::{
     RequestMutationResponse, RequestPermissionsResponse, RequestState, RequestSummaryResponse,
 };
 
-pub(super) fn print_repo_access(repo: &RepoSummaryResponse) {
-    println!("Scope repo: {}/{}", repo.owner_handle, repo.name);
-    println!("Permission: {}", access_label(repo.access.actor));
+pub(super) fn repo_access_lines(repo: &RepoSummaryResponse) -> Vec<String> {
+    vec![
+        format!("Scope repo: {}/{}", repo.owner_handle, repo.name),
+        format!("Permission: {}", access_label(repo.access.actor)),
+    ]
 }
 
-pub(super) fn print_request_detail(detail: &RequestDetailResponse) {
-    for line in request_detail_lines(&detail.request) {
-        println!("{line}");
-    }
+pub(super) fn request_detail_lines_for_response(detail: &RequestDetailResponse) -> Vec<String> {
+    request_detail_lines(&detail.request)
 }
 
-pub(super) fn print_request_activity(activity: &RequestActivityPageResponse) {
+pub(super) fn request_activity_lines_for_response(
+    activity: &RequestActivityPageResponse,
+) -> Vec<String> {
     let lines = request_activity_lines(activity);
     if lines.is_empty() {
-        return;
+        return Vec::new();
     }
-    println!("Activity:");
+    let mut rendered = vec!["Activity:".to_string()];
     for line in lines {
-        println!("  {line}");
+        rendered.push(format!("  {line}"));
     }
+    rendered
 }
 
-pub(super) fn print_request_mutation_receipt(
+pub(super) fn request_mutation_receipt_lines(
     action: &str,
     before: Option<&RequestSummaryResponse>,
     response: &RequestMutationResponse,
-) {
+) -> Vec<String> {
     let action = terminal_text(action);
-    println!("{action} · {}", request_line(&response.request));
+    let mut lines = vec![format!("{action} · {}", request_line(&response.request))];
     if let Some(before) = before {
-        for line in mutation_effect_lines(before, &response.request) {
-            println!("{line}");
-        }
+        lines.extend(mutation_effect_lines(before, &response.request));
     }
+    lines
 }
 
-pub(super) fn print_invitee_added_receipt(response: &RequestInviteeMutationResponse) {
-    println!(
+pub(super) fn invitee_added_receipt(response: &RequestInviteeMutationResponse) -> String {
+    format!(
         "Invited @{} · can now push request {}",
         terminal_text(&response.invitee.user.handle),
         response.request.name
-    );
+    )
 }
 
-pub(super) fn print_invitee_removed_receipt(response: &RequestInviteeMutationResponse) {
-    println!(
+pub(super) fn invitee_removed_receipt(response: &RequestInviteeMutationResponse) -> String {
+    format!(
         "Removed @{} from request {}",
         terminal_text(&response.invitee.user.handle),
         response.request.name
-    );
+    )
 }
 
-pub(super) fn print_leave_receipt(request_id: &str, response: &LeaveRequestResponse) {
-    println!(
+pub(super) fn leave_receipt(request_id: &str, response: &LeaveRequestResponse) -> String {
+    format!(
         "@{} left request {}",
         terminal_text(&response.invitee.user.handle),
         request_id
-    );
+    )
 }
 
-pub(super) fn print_close_receipt(request_id: &str, response: &RequestCloseResponse) {
+pub(super) fn close_receipt(request_id: &str, response: &RequestCloseResponse) -> String {
     if response.deleted {
-        println!("Closed and removed draft request {request_id}");
+        format!("Closed and removed draft request {request_id}")
     } else if let Some(request) = response.request.as_ref() {
-        println!("Closed request {} · remains in history", request.name);
+        format!("Closed request {} · remains in history", request.name)
     } else {
-        println!("Closed request {request_id}");
+        format!("Closed request {request_id}")
     }
 }
 
-pub(super) fn print_discussion_receipt(response: &RequestDiscussionMutationResponse) {
+pub(super) fn discussion_receipt_lines(
+    response: &RequestDiscussionMutationResponse,
+) -> Vec<String> {
     let discussion = &response.discussion;
-    println!(
-        "Discussion opened: {} [{}] by @{}",
-        discussion.id,
-        discussion_status_label(discussion.status),
-        terminal_text(&discussion.author.handle)
-    );
-    println!("Replies: {}", discussion.reply_count);
-    println!(
-        "{}",
-        terminal_text(discussion.body_markdown.as_deref().unwrap_or("Code change"))
-    );
+    vec![
+        format!(
+            "Discussion opened: {} [{}] by @{}",
+            discussion.id,
+            discussion_status_label(discussion.status),
+            terminal_text(&discussion.author.handle)
+        ),
+        format!("Replies: {}", discussion.reply_count),
+        terminal_text(discussion.body_markdown.as_deref().unwrap_or("Code change")),
+    ]
 }
 
 pub(super) fn request_line(request: &RequestSummaryResponse) -> String {

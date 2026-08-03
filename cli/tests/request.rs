@@ -80,6 +80,68 @@ fn request_rate_requires_score_and_reason_before_login() {
 }
 
 #[test]
+fn json_usage_errors_use_the_shared_schema_and_exit_two() {
+    let dir = TempDir::new("request-json-usage");
+    create_repo_with_head(dir.path());
+
+    let output = scope_command(dir.path())
+        .args([
+            "--json", "request", "rate", "--score", "6", "--reason", "Invalid",
+        ])
+        .output()
+        .unwrap();
+
+    assert_failure(&output, "request JSON usage error");
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.status.code(), Some(2));
+    let error: scope_api_contract::ErrorResponse = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error.code, scope_api_contract::ErrorCode::BadRequest);
+    assert!(!error.retryable);
+}
+
+#[test]
+fn global_json_rejects_commands_without_typed_results() {
+    let dir = TempDir::new("json-command-scope");
+    create_repo_with_head(dir.path());
+
+    let output = scope_command(dir.path())
+        .args(["--json", "rules", "sync"])
+        .output()
+        .unwrap();
+
+    assert_failure(&output, "unsupported JSON command");
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.status.code(), Some(2));
+    let error: scope_api_contract::ErrorResponse = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error.code, scope_api_contract::ErrorCode::BadRequest);
+    assert_eq!(
+        error.message,
+        "--json currently supports request commands only"
+    );
+}
+
+#[test]
+fn json_mode_preserves_successful_help_and_version_control_flow() {
+    let dir = TempDir::new("json-help");
+    create_repo_with_head(dir.path());
+
+    for args in [
+        vec!["--json", "--help"],
+        vec!["request", "--json", "--help"],
+        vec!["--json", "--version"],
+    ] {
+        let output = scope_command(dir.path()).args(&args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.stdout.is_empty(), "{args:?}");
+        assert!(output.stderr.is_empty(), "{args:?}");
+    }
+}
+
+#[test]
 fn request_submit_reaches_auth_without_extra_arguments() {
     let dir = TempDir::new("submit-request");
     create_repo_with_head(dir.path());
@@ -95,16 +157,45 @@ fn request_submit_reaches_auth_without_extra_arguments() {
 }
 
 #[test]
-fn request_show_and_list_accept_json_output() {
+fn every_request_command_accepts_the_global_json_mode_and_returns_json_failures() {
     let dir = TempDir::new("request-json");
     create_repo_with_head(dir.path());
 
-    for args in [["request", "show", "--json"], ["request", "list", "--json"]] {
-        let output = scope_command(dir.path()).args(args).output().unwrap();
+    let commands = [
+        vec!["--json", "request", "start", "change"],
+        vec!["request", "push", "--json"],
+        vec!["--json", "request", "submit", "--yes"],
+        vec!["request", "edit", "--title", "Updated", "--json"],
+        vec!["--json", "request", "invite", "river"],
+        vec!["request", "uninvite", "river", "--json"],
+        vec!["--json", "request", "leave"],
+        vec!["request", "merge", "--yes", "--json"],
+        vec![
+            "--json", "request", "rate", "--score", "5", "--reason", "Clear",
+        ],
+        vec!["request", "discuss", "--body", "Question", "--json"],
+        vec!["--json", "request", "show"],
+        vec!["request", "list", "--json"],
+        vec!["--json", "request", "status"],
+        vec!["request", "close", "--yes", "--json"],
+    ];
+    for args in commands {
+        let output = scope_command(dir.path()).args(&args).output().unwrap();
         assert_failure(&output, "request JSON output");
+        assert!(
+            output.stdout.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
         let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(!stderr.contains("unexpected argument"), "{stderr}");
-        assert!(stderr.contains("start browser login"), "{stderr}");
+        let error: scope_api_contract::ErrorResponse = serde_json::from_str(stderr.trim()).unwrap();
+        assert_eq!(
+            error.code,
+            scope_api_contract::ErrorCode::Unauthorized,
+            "{args:?}: {stderr}"
+        );
+        assert!(!error.retryable);
+        assert_eq!(output.status.code(), Some(3));
     }
 }
 
