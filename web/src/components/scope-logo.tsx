@@ -8,7 +8,7 @@ export function ScopeLogo({ className }: { className?: string }) {
       decoding="async"
       height={96}
       src="/brand/scope-lockup.svg"
-      width={382}
+      width={386}
     />
   )
 }

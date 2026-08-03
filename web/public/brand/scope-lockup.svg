@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 381.936700079 96" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 386.436700079 96" role="img" aria-labelledby="title desc">
   <title id="title">Scope lockup</title>
   <desc id="desc">The Scope name in outlined Geist Semibold paired with a one-source, two-view branching symbol on a measured x-height alignment plane.</desc>
   <metadata id="geometry-contract">
@@ -7,10 +7,10 @@
       "markOuterRight": 88.5,
       "alignmentPlane": {"top": 19, "center": 48, "bottom": 77},
       "wordSourceBounds": {"left": 5.142000198364258, "right": 236.47200202941895, "xHeightTop": 0.022998809814453125, "xHeightBottom": 49.82000160217285},
-      "wordTransform": {"x": 91.51096462072829, "y": 18.973212625370238, "scale": 1.164728733611662},
-      "visibleGap": 9,
+      "wordTransform": {"x": 96.01096462072829, "y": 18.973212625370238, "scale": 1.164728733611662},
+      "visibleGap": 13.5,
       "outerClearspace": {"left": 15, "right": 15},
-      "canvas": {"width": 381.9367000790678, "height": 96}
+      "canvas": {"width": 386.4367000790678, "height": 96}
     }
   </metadata>
   <defs>
@@ -27,7 +27,7 @@
     <circle cx="76" cy="69" r="8"/>
   </g>
   <circle cx="24" cy="48" r="9" fill="#111722"/>
-  <g fill="#111722" transform="translate(91.510964621 18.973212625) scale(1.164728734)">
+  <g fill="#111722" transform="translate(96.010964621 18.973212625) scale(1.164728734)">
     <use href="#scope-s" transform="translate(1.642 48.75)"/>
     <use href="#scope-c" transform="translate(45.014 48.75)"/>
     <use href="#scope-o" transform="translate(90.527 48.75)"/>
