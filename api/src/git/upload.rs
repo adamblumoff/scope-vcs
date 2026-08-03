@@ -1,6 +1,6 @@
 use crate::{
     auth::scope::principal_for_user_id,
-    config::{DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK, UNPUBLISHED_GIT_ERROR},
+    config::{AWAITING_FIRST_PUSH_GIT_ERROR, DEFAULT_GIT_BRANCH, GIT_UPLOAD_PACK},
     error::ApiError,
     git::{
         GitRemoteMode,
@@ -28,7 +28,7 @@ use scope_domain::policy::Principal;
 use scope_domain::projection::Projection;
 use scope_domain::projection::{ProjectionViewKey, project_graph};
 use scope_domain::requests::{Request, RequestViewer, canonical_request_ref, request_policy};
-use scope_domain::store::{RepoPublicationState, RepositoryActor};
+use scope_domain::store::{RepoLifecycleState, RepositoryActor};
 use scope_git_process::{
     ProcessLimits, STDERR_DIAGNOSTIC_BYTES, run as run_process, truncated_stderr,
 };
@@ -53,7 +53,7 @@ pub(crate) async fn git_projection_for_request(
 ) -> Result<Projection, ApiError> {
     let (repo, principal, _) =
         git_read_principal_for_request(state, headers, owner, repo_name, mode).await?;
-    if repo.record.publication_state != RepoPublicationState::Published {
+    if repo.record.lifecycle_state != RepoLifecycleState::Ready {
         return Err(unpublished_git_read_error(
             &repo, owner, repo_name, &principal,
         ));
@@ -86,7 +86,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             }
             Err(error) => return Err(error),
         };
-    if repo.record.publication_state != RepoPublicationState::Published {
+    if repo.record.lifecycle_state != RepoLifecycleState::Ready {
         return Err(unpublished_git_read_error(
             &repo, owner, repo_name, &principal,
         ));
@@ -337,7 +337,7 @@ fn unpublished_git_read_error(
     principal: &Principal,
 ) -> ApiError {
     if repo.access_for_principal(principal).actor == RepositoryActor::Owner {
-        ApiError::forbidden(UNPUBLISHED_GIT_ERROR)
+        ApiError::forbidden(AWAITING_FIRST_PUSH_GIT_ERROR)
     } else {
         ApiError::not_found(format!("repo {owner}/{repo_name} not found"))
     }

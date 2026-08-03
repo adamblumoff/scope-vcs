@@ -13,7 +13,7 @@ async fn published_receive_pack_accepts_git_push_token() {
 
     assert!(matches!(
         access,
-        ReceivePackAccess::PublishedMember { author_id, .. } if author_id == test_owner_id()
+        ReceivePackAccess::ReadyMember { author_id, .. } if author_id == test_owner_id()
     ));
 }
 
@@ -62,7 +62,7 @@ async fn owner_can_create_first_push_intent_for_unpublished_repo() {
         .metadata
         .repositories()
         .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
-            repo.record.publication_state = RepoPublicationState::Unpublished;
+            repo.record.lifecycle_state = RepoLifecycleState::AwaitingFirstPush;
         })
         .await
         .unwrap();
@@ -171,7 +171,7 @@ async fn receive_pack_requires_credentials_before_repo_state_is_revealed() {
         .metadata
         .repositories()
         .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
-            repo.record.publication_state = RepoPublicationState::Unpublished;
+            repo.record.lifecycle_state = RepoLifecycleState::AwaitingFirstPush;
         })
         .await
         .unwrap();
@@ -207,7 +207,7 @@ async fn published_receive_pack_accepts_member_scope_session() {
 
     assert!(matches!(
         access,
-        ReceivePackAccess::PublishedMember { author_id, .. } if author_id == member_id
+        ReceivePackAccess::ReadyMember { author_id, .. } if author_id == member_id
     ));
 }
 
@@ -281,7 +281,7 @@ async fn private_upload_pack_without_credentials_challenges_for_auth() {
     let state = test_state_with_repo();
     {
         let mut repo = test_repo(&test_owner_id());
-        repo.record.default_visibility = Visibility::Private;
+        repo.repo_config = repo_config(Visibility::Private);
         repo.policy = Policy::new(Visibility::Private);
         repo.graph.commits.push(LogicalCommit {
             id: "rv1".to_string(),
@@ -321,7 +321,7 @@ async fn unpublished_upload_pack_member_scope_session_stays_hidden() {
         .metadata
         .repositories()
         .mutate_repository_for_tests(TEST_REPO_ID, move |repo| {
-            repo.record.publication_state = RepoPublicationState::Unpublished;
+            repo.record.lifecycle_state = RepoLifecycleState::AwaitingFirstPush;
             repo.members.push(test_repository_member(
                 TEST_REPO_ID,
                 member_id,
@@ -379,10 +379,7 @@ async fn real_git_first_push_over_http_applies_immediately() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
-    assert_eq!(
-        repo.record.publication_state,
-        RepoPublicationState::Published
-    );
+    assert_eq!(repo.record.lifecycle_state, RepoLifecycleState::Ready);
     assert!(repo.first_push_token.is_none());
     let live_tree = repo.live_tree();
     assert_eq!(repo.repo_config, repo_config(Visibility::Public));

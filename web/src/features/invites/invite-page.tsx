@@ -45,7 +45,7 @@ export function InvitePage({
           owner: accepted.repo.owner_handle,
           repo: accepted.repo.name,
         },
-        to: '/repos/$owner/$repo',
+        to: '/$owner/$repo',
       })
     } catch (error) {
       setAcceptError(error instanceof Error ? error.message : 'invite failed')

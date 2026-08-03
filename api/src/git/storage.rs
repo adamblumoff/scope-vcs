@@ -16,7 +16,7 @@ use axum::{body::Body, http::StatusCode, response::Response};
 use futures_util::StreamExt;
 use scope_domain::policy::Principal;
 use scope_domain::projection::{ProjectionViewKey, project_graph};
-use scope_domain::store::{RepoPublicationState, SourceBlob};
+use scope_domain::store::{RepoLifecycleState, SourceBlob};
 use scope_git::{GitSegmentManifest, is_git_segment_manifest};
 use scope_object_store::source_blob_bytes;
 use sha2::{Digest, Sha256};
@@ -245,7 +245,7 @@ pub(crate) fn ensure_first_push_receive_pack_staging_repo(
     Ok(repo_root)
 }
 
-pub(crate) async fn ensure_published_receive_pack_staging_repo(
+pub(crate) async fn ensure_ready_receive_pack_staging_repo(
     state: &AppState,
     owner: &str,
     repo_name: &str,
@@ -257,8 +257,8 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
         .git_push_context(owner, repo_name, author_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-    if repo.publication_state != RepoPublicationState::Published {
-        return Err(ApiError::conflict("repo must be published before push"));
+    if repo.lifecycle_state != RepoLifecycleState::Ready {
+        return Err(ApiError::conflict("repo must be ready before push"));
     }
     let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
     if let Some(parent) = repo_root.parent() {
@@ -299,7 +299,7 @@ pub(crate) async fn ensure_published_receive_pack_staging_repo(
         &["config", "http.receivepack", "true"],
         "enabling receive-pack",
     )?;
-    install_published_pre_receive_hook(&repo_root)?;
+    install_ready_pre_receive_hook(&repo_root)?;
     Ok(repo_root)
 }
 
@@ -406,7 +406,7 @@ pub(crate) fn install_first_push_pre_receive_hook(repo_root: &FsPath) -> Result<
     write_receive_pack_hook(&hook, &script)
 }
 
-pub(crate) fn install_published_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
+pub(crate) fn install_ready_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     let hook = repo_root.join("hooks").join("pre-receive");
     let script = format!(
         r#"#!/bin/sh

@@ -14,7 +14,7 @@ use scope_domain::{
         },
     },
     store::{
-        RepoPublicationState, RepositoryMember, RepositoryMemberPermissions, StoredRepository,
+        RepoLifecycleState, RepositoryMember, RepositoryMemberPermissions, StoredRepository,
         UserAccount,
     },
 };
@@ -773,7 +773,7 @@ fn catalog_with_repo() -> CatalogFixture {
         email_verified: true,
     };
     let mut repository = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
-    repository.record.publication_state = RepoPublicationState::Published;
+    repository.record.lifecycle_state = RepoLifecycleState::Ready;
     let member = UserAccount {
         id: "user_member".to_string(),
         handle: "member".to_string(),
@@ -789,7 +789,7 @@ fn catalog_with_repo() -> CatalogFixture {
     });
     let mut other_repository =
         StoredRepository::new(&owner, "repo-two", Visibility::Private).unwrap();
-    other_repository.record.publication_state = RepoPublicationState::Published;
+    other_repository.record.lifecycle_state = RepoLifecycleState::Ready;
     let mut catalog = CatalogFixture::default();
     catalog.users.insert(owner.id.clone(), owner);
     catalog.users.insert(member.id.clone(), member);

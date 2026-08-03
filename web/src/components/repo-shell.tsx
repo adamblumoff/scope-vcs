@@ -55,8 +55,7 @@ export function RepoShell({
       subheader={() => (
         <RepositoryContextStrip
           facts={[
-            { id: 'lifecycle', label: repo.lifecycle_state, semantic: repo.lifecycle_state === 'Published' ? 'success' : 'warning' },
-            { id: 'visibility', label: repo.default_visibility },
+            { id: 'lifecycle', label: repo.lifecycle_state, semantic: repo.lifecycle_state === 'Ready' ? 'success' : 'warning' },
             ...(repo.access.actor === 'Public'
               ? []
               : [{ id: 'actor', label: repo.access.actor }]),

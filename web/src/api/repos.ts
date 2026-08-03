@@ -1,4 +1,3 @@
-export { loadHomeForRequest } from './home'
 export {
   loadRepoContentForRequest,
   loadRepoFileForRequest,

@@ -1,5 +1,5 @@
 use crate::{
-    FirstPushTokenStatus, RepoConfig, RepoPublicationState, RepositoryActor, RequestActorRole,
+    FirstPushTokenStatus, RepoConfig, RepoLifecycleState, RepositoryActor, RequestActorRole,
     RequestAudience, RequestDiscussionStatus, RequestEventKind, RequestEventPayload,
     RequestMergeabilityStatus, RequestState, SessionIdentity, Visibility,
 };
@@ -193,7 +193,7 @@ pub struct CliSessionTokenResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CreateRepoRequest {
     pub name: String,
-    pub visibility: Option<Visibility>,
+    pub file_default_visibility: Option<Visibility>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -209,12 +209,18 @@ pub struct RepoSummaryResponse {
     pub id: String,
     pub owner_handle: String,
     pub name: String,
-    pub lifecycle_state: RepoPublicationState,
-    pub default_visibility: Visibility,
+    pub lifecycle_state: RepoLifecycleState,
     pub change_version: u64,
     pub access: RepositoryAccessResponse,
     pub open_request_count: usize,
     pub request_permissions: RepoRequestPermissionsResponse,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct OwnerProfileResponse {
+    pub handle: String,
+    pub repositories: Vec<RepoSummaryResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -268,7 +274,7 @@ pub struct GitPushTokenResponse {
 pub struct RepoConfigResponse {
     pub config: RepoConfig,
     pub config_hash: String,
-    pub lifecycle_state: RepoPublicationState,
+    pub lifecycle_state: RepoLifecycleState,
     pub access: RepositoryAccessResponse,
     pub head_oid: Option<String>,
 }

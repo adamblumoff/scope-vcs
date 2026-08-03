@@ -105,7 +105,6 @@ async fn create_push_intent_rejects_stale_local_config_base_hash() {
         .metadata
         .repositories()
         .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
-            repo.record.default_visibility = Visibility::Private;
             repo.policy = Policy::new(Visibility::Private);
             repo.repo_config = repo_config(Visibility::Private);
         })

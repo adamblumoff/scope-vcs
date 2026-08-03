@@ -4,9 +4,10 @@ use scope_domain::{
         Visibility::{Private, Public},
     },
     repo_collaboration::{CreateRepositoryInviteCommand, create_or_refresh_repository_invite},
+    repo_config::ConfigVisibility,
     store::{
         FirstPushToken, FirstPushTokenStatus, MainPushMode,
-        RepoPublicationState::{Published, Unpublished},
+        RepoLifecycleState::{AwaitingFirstPush, Ready},
         RepositoryMember, RepositoryMemberPermissions, StoredRepository, UserAccount,
     },
 };
@@ -24,7 +25,7 @@ fn test_owner() -> UserAccount {
 
 fn test_repo(visibility: Visibility) -> StoredRepository {
     let mut repo = StoredRepository::new(&test_owner(), "repo", visibility).unwrap();
-    repo.record.publication_state = Published;
+    repo.record.lifecycle_state = Ready;
     repo
 }
 
@@ -54,8 +55,11 @@ fn create_repository_makes_private_owner_repo_pending_first_push() {
     let repo = StoredRepository::new(&owner, "Draft.Repo", Private).unwrap();
 
     assert_eq!(repo.record.id, "owner/draft.repo");
-    assert_eq!(repo.record.publication_state, Unpublished);
-    assert_eq!(repo.record.default_visibility, Private);
+    assert_eq!(repo.record.lifecycle_state, AwaitingFirstPush);
+    assert_eq!(
+        repo.repo_config.visibility.default_visibility(),
+        ConfigVisibility::Private
+    );
     assert!(repo.graph.commits.is_empty());
     let root = ScopePath::root();
     assert_eq!(repo.policy.effective_visibility(&root), Private);
@@ -78,8 +82,8 @@ fn published_push_policy_uses_repository_permissions() {
     add_member(&mut repo, "user_member", true);
 
     for (user, mode) in [
-        (TEST_OWNER_ID, MainPushMode::Published),
-        ("user_member", MainPushMode::Published),
+        (TEST_OWNER_ID, MainPushMode::Ready),
+        ("user_member", MainPushMode::Ready),
         ("user_other", MainPushMode::Denied),
     ] {
         assert_eq!(repo.push_policy_for_user_id(user).mode, mode);
@@ -111,7 +115,7 @@ fn first_push_token_reports_active_expired_and_used_shape() {
 #[test]
 fn unpublished_repo_is_owner_only_even_with_reader_membership() {
     let mut repo = test_repo(Public);
-    repo.record.publication_state = Unpublished;
+    repo.record.lifecycle_state = AwaitingFirstPush;
     add_member(&mut repo, "user_reader", false);
     let owner_principal = user_principal(TEST_OWNER_ID);
     let reader_principal = user_principal("user_reader");

@@ -18,6 +18,7 @@ pub const CLI_SESSION: &str = "/v1/cli/session";
 pub const CLI_SESSIONS: &str = "/v1/cli/sessions";
 pub const CLI_SESSION_BY_ID: &str = "/v1/cli/sessions/{session_id}";
 pub const REPOS: &str = "/v1/repos";
+pub const OWNER_REPOSITORIES: &str = "/v1/users/{handle}/repos";
 pub const RUNNERS: &str = "/v1/runners";
 pub const RUNNER: &str = "/v1/runners/{runner_id}";
 pub const RUNNER_UPGRADE: &str = "/v1/runners/{runner_id}/upgrade";
@@ -114,6 +115,10 @@ pub fn cli_device_login_poll(device_code: &str) -> String {
 
 pub fn repo(owner: &str, repo: &str) -> String {
     format!("/v1/repos/{}/{}", path_segment(owner), path_segment(repo))
+}
+
+pub fn owner_repositories(handle: &str) -> String {
+    format!("/v1/users/{}/repos", path_segment(handle))
 }
 
 pub fn runner(runner_id: &str) -> String {

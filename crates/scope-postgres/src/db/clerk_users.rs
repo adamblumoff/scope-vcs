@@ -1,6 +1,6 @@
 use super::{AuthStore, acquire_aggregate_lock, auth::load_user_by_id, entities};
 use crate::error::PostgresError;
-use scope_domain::account::ExternalIdentity;
+use scope_domain::account::{ExternalIdentity, handles::is_reserved_handle};
 use scope_domain::store::UserAccount;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
@@ -260,6 +260,10 @@ async fn handle_is_available<C>(
 where
     C: sea_orm::ConnectionTrait,
 {
+    if is_reserved_handle(handle) {
+        return Ok(false);
+    }
+
     let owner = entities::user::Entity::find()
         .filter(entities::user::Column::Handle.eq(handle.to_string()))
         .one(conn)
@@ -303,6 +307,7 @@ fn normalize_email(email: &str) -> String {
 mod tests {
     use super::*;
     use crate::db::{MetadataStore, TestDatabaseTarget};
+    use sea_orm::{DatabaseBackend, MockDatabase};
     use std::collections::HashSet;
     use tokio::{sync::Barrier, task::JoinSet};
 
@@ -374,5 +379,21 @@ mod tests {
         assert_eq!(handles.len(), users.len());
         assert!(handles.contains(&"shared".to_string()));
         assert!(handles.iter().all(|handle| handle.starts_with("shared")));
+    }
+
+    #[tokio::test]
+    async fn reserved_preferred_handles_are_allocated_with_a_suffix() {
+        for reserved in scope_domain::account::handles::RESERVED_HANDLES {
+            let db = MockDatabase::new(DatabaseBackend::Postgres)
+                .append_query_results([Vec::<entities::user::Model>::new()])
+                .into_connection();
+
+            assert_eq!(
+                unique_user_handle(&db, reserved, "scope-user")
+                    .await
+                    .unwrap(),
+                format!("{reserved}-2")
+            );
+        }
     }
 }

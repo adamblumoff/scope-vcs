@@ -1,4 +1,5 @@
 pub mod cli_auth;
+pub mod handles;
 
 use crate::store::UserAccount;
 use serde::{Deserialize, Serialize};

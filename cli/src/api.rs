@@ -41,7 +41,7 @@ pub struct CreatePushIntentParams<'a> {
 pub struct RepoConfigContext {
     pub config: DomainRepoConfig,
     pub config_hash: String,
-    pub lifecycle_state: RepoPublicationState,
+    pub lifecycle_state: RepoLifecycleState,
     pub access: RepositoryAccessResponse,
     pub head_oid: Option<String>,
 }
@@ -132,7 +132,7 @@ pub fn create_repo(
 ) -> anyhow::Result<CreateRepoResponse> {
     let request = CreateRepoRequest {
         name,
-        visibility: None,
+        file_default_visibility: None,
     };
     let response = client
         .post(format!("{api_url}{}", scope_api_contract::routes::REPOS))

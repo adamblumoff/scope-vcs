@@ -12,8 +12,7 @@ use scope_domain::{
     },
     store::{
         FileChangeKind as DomainFileChangeKind, FirstPushTokenStatus as DomainFirstPushTokenStatus,
-        RepoPublicationState as DomainRepoPublicationState,
-        RepositoryActor as DomainRepositoryActor,
+        RepoLifecycleState as DomainRepoLifecycleState, RepositoryActor as DomainRepositoryActor,
         RepositoryInviteState as DomainRepositoryInviteState,
         RepositoryMemberPermissions as DomainRepositoryMemberPermissions, UserAccount,
     },
@@ -93,7 +92,7 @@ wire_enum!(RepositoryInviteState => DomainRepositoryInviteState {
     Revoked,
     Expired,
 });
-wire_enum!(RepoPublicationState => DomainRepoPublicationState { Unpublished, Published });
+wire_enum!(RepoLifecycleState => DomainRepoLifecycleState { AwaitingFirstPush, Ready });
 wire_enum!(FirstPushTokenStatus => DomainFirstPushTokenStatus { Active, Expired, Used });
 wire_enum!(FileChangeKind => DomainFileChangeKind { Added, Modified, Deleted });
 

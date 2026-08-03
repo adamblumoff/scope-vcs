@@ -209,11 +209,7 @@ fn start_request_branch(
         args.remote.as_deref(),
     )?;
     print_repo_access(&context.repo);
-    let audience = start_audience(
-        context.repo.access.actor,
-        context.repo.default_visibility,
-        args.audience,
-    )?;
+    let audience = start_audience(context.repo.access.actor, args.audience)?;
     fetch_main_projection(git_repo, &context, audience, session_token)?;
     let branch = args.name.trim().to_string();
     scope_domain::requests::validate_request_name(&branch)
@@ -456,11 +452,10 @@ fn close_request_branch(
 
 fn start_audience(
     actor: crate::api::RepositoryActor,
-    default_visibility: crate::api::Visibility,
     requested: Option<RequestAudienceArg>,
 ) -> anyhow::Result<crate::api::RequestAudience> {
+    use crate::api::RepositoryActor;
     use crate::api::RequestAudience;
-    use crate::api::{RepositoryActor, Visibility};
 
     match actor {
         RepositoryActor::Public => match requested.map(Into::into) {
@@ -471,57 +466,56 @@ fn start_audience(
         },
         RepositoryActor::Owner | RepositoryActor::Member => Ok(requested
             .map(Into::into)
-            .unwrap_or(match default_visibility {
-                Visibility::Public => RequestAudience::Public,
-                Visibility::Private => RequestAudience::Private,
-            })),
+            .unwrap_or(RequestAudience::Private)),
     }
 }
 
 #[cfg(test)]
 mod audience_tests {
     use super::*;
-    use crate::api::RequestAudience;
-    use crate::api::{RepositoryActor, Visibility};
+    use crate::api::{RepositoryActor, RequestAudience};
 
     #[test]
-    fn maintainers_default_request_audience_from_repo_visibility() {
-        for (actor, visibility, expected) in [
-            (
-                RepositoryActor::Owner,
-                Visibility::Public,
-                RequestAudience::Public,
-            ),
-            (
-                RepositoryActor::Owner,
-                Visibility::Private,
-                RequestAudience::Private,
-            ),
-            (
-                RepositoryActor::Member,
-                Visibility::Public,
-                RequestAudience::Public,
-            ),
-            (
-                RepositoryActor::Member,
-                Visibility::Private,
-                RequestAudience::Private,
-            ),
-        ] {
-            assert_eq!(start_audience(actor, visibility, None).unwrap(), expected);
+    fn maintainers_default_to_private_requests() {
+        for actor in [RepositoryActor::Owner, RepositoryActor::Member] {
+            assert_eq!(
+                start_audience(actor, None).unwrap(),
+                RequestAudience::Private
+            );
         }
     }
 
     #[test]
-    fn explicit_maintainer_audience_overrides_repo_visibility() {
+    fn maintainers_can_explicitly_choose_request_audience() {
+        for actor in [RepositoryActor::Owner, RepositoryActor::Member] {
+            for (requested, expected) in [
+                (RequestAudienceArg::Public, RequestAudience::Public),
+                (RequestAudienceArg::Private, RequestAudience::Private),
+            ] {
+                assert_eq!(start_audience(actor, Some(requested)).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn public_contributors_default_to_public_requests() {
         assert_eq!(
-            start_audience(
-                RepositoryActor::Owner,
-                Visibility::Private,
-                Some(RequestAudienceArg::Public),
-            )
-            .unwrap(),
+            start_audience(RepositoryActor::Public, None).unwrap(),
             RequestAudience::Public
+        );
+    }
+
+    #[test]
+    fn public_contributors_can_only_choose_public_requests() {
+        assert_eq!(
+            start_audience(RepositoryActor::Public, Some(RequestAudienceArg::Public)).unwrap(),
+            RequestAudience::Public
+        );
+        assert_eq!(
+            start_audience(RepositoryActor::Public, Some(RequestAudienceArg::Private))
+                .unwrap_err()
+                .to_string(),
+            "public contributors can only start public requests"
         );
     }
 }

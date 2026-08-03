@@ -22,7 +22,7 @@ use axum::{
 };
 use scope_api_contract::{
     CreatePushIntentRequest, CreatePushIntentResponse, CreateRepoRequest, CreateRepoResponse,
-    RepoConfigResponse, RepoSummaryResponse,
+    OwnerProfileResponse, RepoConfigResponse, RepoSummaryResponse,
 };
 use scope_domain::repo_actions::reviewed_update_domain_error;
 use scope_domain::repo_config::{
@@ -39,24 +39,28 @@ use scope_postgres::db::{RepoSummaryRead, RepositoryMutation};
 
 const MAX_PUSH_INTENT_CONFIG_BYTES: usize = 4096;
 
-pub(crate) async fn list_repos(
+pub(crate) async fn get_owner_repositories(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<RepoSummaryResponse>>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let user_id = user.id.clone();
-    let mut repositories = Vec::new();
-    for summary in state
+    Path(handle): Path<String>,
+) -> Result<Json<OwnerProfileResponse>, ApiError> {
+    let user = optional_scope_user(&state, &headers).await?;
+    let profile = state
         .metadata
         .repositories()
-        .repo_summaries_for_user(&user_id)
+        .owner_profile(&handle, user.as_ref().map(|user| user.id.as_str()))
         .await?
-    {
+        .ok_or_else(|| ApiError::not_found(format!("user {handle} not found")))?;
+    let mut repositories = Vec::new();
+    for summary in profile.repositories {
         repositories.push(repo_summary_response(&state, summary).await?);
     }
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
 
-    Ok(Json(repositories))
+    Ok(Json(OwnerProfileResponse {
+        handle: profile.handle,
+        repositories,
+    }))
 }
 
 pub(crate) async fn create_repo(
@@ -66,7 +70,7 @@ pub(crate) async fn create_repo(
 ) -> Result<Json<CreateRepoResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let default_visibility = input
-        .visibility
+        .file_default_visibility
         .map(Into::into)
         .unwrap_or(Visibility::Private);
     let api_origin = public_api_origin()?;
@@ -184,7 +188,7 @@ pub(crate) async fn get_repo_config(
 
     Ok(Json(RepoConfigResponse {
         config_hash: repo_config_fingerprint(&repo.repo_config)?,
-        lifecycle_state: repo.publication_state.into(),
+        lifecycle_state: repo.lifecycle_state.into(),
         access: repository_access_response(repo.access),
         head_oid: repo.git_head.as_ref().map(|head| head.head_oid.clone()),
         config: repo.repo_config.into(),
@@ -207,7 +211,7 @@ pub(crate) async fn create_push_intent(
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
     let access = repo.access;
 
-    if repo.publication_state == scope_domain::store::RepoPublicationState::Unpublished {
+    if repo.lifecycle_state == scope_domain::store::RepoLifecycleState::AwaitingFirstPush {
         if access.actor != RepositoryActor::Owner {
             return Err(ApiError::not_found(format!(
                 "repo {owner}/{repo_name} not found"
@@ -440,7 +444,6 @@ async fn repo_summary_response(
         owner_handle: summary.owner_handle,
         name: summary.name,
         lifecycle_state: summary.lifecycle_state.into(),
-        default_visibility: summary.default_visibility.into(),
         change_version: summary.change_version,
         access: repository_access_response(summary.access),
         open_request_count,

@@ -114,39 +114,6 @@ where
     Ok(())
 }
 
-pub(super) async fn load_live_projection_file_count_for_audience<C>(
-    conn: &C,
-    repo_id: &str,
-    repo_version: u64,
-    audience: ProjectionAudience,
-) -> Result<Option<usize>, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    let expected_version = projection_repo_version(repo_version)?;
-    let Some(model) = entities::projection_read_model::Entity::find()
-        .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
-        .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
-        .filter(
-            entities::projection_read_model::Column::Source.eq(LIVE_PROJECTION_SOURCE.to_string()),
-        )
-        .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
-        .filter(
-            entities::projection_read_model::Column::IdentityVersion
-                .eq(scope_git::PROJECTION_IDENTITY_VERSION),
-        )
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-    else {
-        return Ok(None);
-    };
-
-    Ok(Some(usize::try_from(model.file_count).map_err(|_| {
-        PostgresError::internal_message("projection file count cannot be negative")
-    })?))
-}
-
 pub(super) async fn load_live_projection_file_for_audience<C>(
     conn: &C,
     repo_id: &str,

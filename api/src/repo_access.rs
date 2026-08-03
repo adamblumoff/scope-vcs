@@ -1,8 +1,8 @@
 use crate::{error::ApiError, state::AppState};
 use scope_domain::{
     policy::{Principal, ScopePath},
-    projection_views::has_visible_projected_history,
-    store::{RepoPublicationState, RepositoryAccess, StoredRepository},
+    projection_views::has_visible_projected_non_control_files,
+    store::{RepoLifecycleState, RepositoryAccess, StoredRepository},
 };
 
 pub(crate) async fn find_repo(
@@ -23,10 +23,15 @@ pub(crate) fn ensure_repo_read(
     repo: &StoredRepository,
     principal: &Principal,
 ) -> Result<(), ApiError> {
-    if can_read_path(state, repo, principal, &ScopePath::root())?
-        || (repo.record.publication_state == RepoPublicationState::Published
-            && has_visible_projected_history(repo, principal))
-    {
+    let access = repo.access_for_principal(principal);
+    let readable = if access.actor == scope_domain::store::RepositoryActor::Public {
+        repo.record.lifecycle_state == RepoLifecycleState::Ready
+            && has_visible_projected_non_control_files(repo, principal)
+    } else {
+        can_read_path(state, repo, principal, &ScopePath::root())?
+    };
+
+    if readable {
         Ok(())
     } else {
         Err(ApiError::not_found(format!(

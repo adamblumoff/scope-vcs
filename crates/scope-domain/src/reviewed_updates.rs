@@ -4,7 +4,7 @@ use super::{
     repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
     repo_control::{REPO_RULES_PATH, is_public_request_protected_path},
     store::{
-        GitHead, GitSegment, LogicalCommitOrigin, RepoPublicationState, RequestMergeOrigin,
+        GitHead, GitSegment, LogicalCommitOrigin, RepoLifecycleState, RequestMergeOrigin,
         SourceBlob, StoredRepository,
     },
 };
@@ -195,7 +195,6 @@ pub fn apply_reviewed_update_to_repo(
     }
 
     let next_policy = policy_from_config_for_tree(&update.config, new_tree.keys())?;
-    let next_default_visibility = update.config.visibility.default_visibility().into();
     let next_config = update.config.clone();
 
     repo.graph.commits.push(LogicalCommit {
@@ -209,13 +208,12 @@ pub fn apply_reviewed_update_to_repo(
     });
     repo.live_files = new_tree;
     repo.policy = next_policy;
-    repo.record.default_visibility = next_default_visibility;
     repo.repo_config = next_config;
     repo.visibility_events.extend(visibility_events);
     repo.git_segments.push(update.git_segment);
     repo.git_head = Some(update.git_head);
     repo.first_push_token = None;
-    repo.record.publication_state = RepoPublicationState::Published;
+    repo.record.lifecycle_state = RepoLifecycleState::Ready;
     repo.bump_change_version();
     Ok(())
 }
@@ -273,7 +271,7 @@ fn apply_accepted_content_push(repo: &mut StoredRepository, accepted: AcceptedCo
     repo.git_segments.push(accepted.git_segment);
     repo.git_head = Some(accepted.git_head);
     repo.first_push_token = None;
-    repo.record.publication_state = RepoPublicationState::Published;
+    repo.record.lifecycle_state = RepoLifecycleState::Ready;
 }
 
 pub fn accept_content_push(
@@ -559,7 +557,6 @@ pub fn apply_reviewed_config_to_repo(
     }
 
     repo.policy = policy_from_config_for_tree(&update.config, live_tree.keys())?;
-    repo.record.default_visibility = update.config.visibility.default_visibility().into();
     repo.repo_config = update.config;
     repo.visibility_events.extend(visibility_events);
     repo.bump_change_version();

@@ -2,8 +2,8 @@ use super::{
     RepositoryStore, begin_metadata_read_snapshot, entities,
     projection_encoding::ProjectionAudience,
     projection_read_models::{
-        ProjectionFileLookup, load_live_projection_file_count_for_audience,
-        load_live_projection_file_for_audience, load_live_projection_files_for_audience,
+        ProjectionFileLookup, load_live_projection_file_for_audience,
+        load_live_projection_files_for_audience,
     },
     repository_from_model,
 };
@@ -15,13 +15,14 @@ use std::{collections::BTreeMap, sync::Arc};
 use {
     crate::error::PostgresError,
     scope_domain::{
-        policy::{Policy, Principal, PrincipalKind, ScopePath, Visibility},
+        policy::{Policy, Principal, PrincipalKind, ScopePath},
         projection_views::{
-            ProjectionViewFile, ProjectionViewFileContent, has_visible_projected_history,
+            ProjectionViewFile, ProjectionViewFileContent, has_visible_projected_non_control_files,
             projected_files as domain_projected_files,
         },
+        repo_control::is_repo_control_path,
         store::{
-            RepoPublicationState, RepositoryAccess, RepositoryActor, RepositoryMemberPermissions,
+            RepoLifecycleState, RepositoryAccess, RepositoryActor, RepositoryMemberPermissions,
             StoredRepository, repo_id, repository_access_for_user_id,
         },
     },
@@ -32,10 +33,15 @@ pub struct RepoSummaryRead {
     pub id: String,
     pub owner_handle: String,
     pub name: String,
-    pub lifecycle_state: RepoPublicationState,
-    pub default_visibility: Visibility,
+    pub lifecycle_state: RepoLifecycleState,
     pub change_version: u64,
     pub access: RepositoryAccess,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnerProfileRead {
+    pub handle: String,
+    pub repositories: Vec<RepoSummaryRead>,
 }
 
 #[derive(Clone, Debug, FromQueryResult)]
@@ -45,22 +51,23 @@ struct RepoReadRow {
     name: String,
     owner_user_id: String,
     publication_state: String,
-    default_visibility: String,
     change_version: i64,
     policy: Json,
 }
 
 impl RepositoryStore {
-    pub async fn repo_summaries_for_user(
+    pub async fn owner_profile(
         &self,
-        user_id: &str,
-    ) -> Result<Vec<RepoSummaryRead>, PostgresError> {
-        let user_id = user_id.to_string();
+        handle: &str,
+        viewer_user_id: Option<&str>,
+    ) -> Result<Option<OwnerProfileRead>, PostgresError> {
+        let handle = handle.to_string();
+        let viewer_user_id = viewer_user_id.map(str::to_string);
         let db = Arc::clone(&self.db);
         let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
-        let summaries = repo_summaries_for_user_tx(&tx, &user_id).await?;
+        let profile = owner_profile_tx(&tx, &handle, viewer_user_id.as_deref()).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(summaries)
+        Ok(profile)
     }
 
     pub async fn repo_summary(
@@ -115,49 +122,39 @@ impl RepositoryStore {
     }
 }
 
-async fn repo_summaries_for_user_tx<C>(
+async fn owner_profile_tx<C>(
     conn: &C,
-    user_id: &str,
-) -> Result<Vec<RepoSummaryRead>, PostgresError>
+    handle: &str,
+    viewer_user_id: Option<&str>,
+) -> Result<Option<OwnerProfileRead>, PostgresError>
 where
     C: ConnectionTrait,
 {
-    let owner_rows = repo_read_rows_for_owner(conn, user_id).await?;
-    let member_rows = entities::repository_member::Entity::find()
-        .filter(entities::repository_member::Column::UserId.eq(user_id.to_string()))
-        .order_by_asc(entities::repository_member::Column::RepoId)
-        .all(conn)
+    let Some(owner) = entities::user::Entity::find()
+        .filter(entities::user::Column::Handle.eq(handle.to_string()))
+        .one(conn)
         .await
-        .map_err(PostgresError::internal)?;
-    let mut member_permissions = BTreeMap::new();
-    for member in member_rows {
-        let repo_id = member.repo_id.clone();
-        member_permissions.insert(repo_id, member.try_into_domain()?.permissions);
-    }
-    let member_repo_ids = member_permissions.keys().cloned().collect::<Vec<_>>();
-    let member_repo_rows = repo_read_rows_by_ids(conn, member_repo_ids).await?;
+        .map_err(PostgresError::internal)?
+    else {
+        return Ok(None);
+    };
 
-    let mut rows = owner_rows
-        .into_iter()
-        .map(|row| (row.id.clone(), (row, None)))
-        .collect::<BTreeMap<_, _>>();
-    for row in member_repo_rows {
-        if row.owner_user_id == user_id {
-            continue;
-        }
+    let rows = repo_read_rows_for_owner(conn, &owner.id).await?;
+    let member_permissions = member_permissions_for_rows(conn, &rows, viewer_user_id).await?;
+    let mut repositories = Vec::new();
+    for row in rows {
         let permissions = member_permissions.get(&row.id).copied();
-        rows.entry(row.id.clone()).or_insert((row, permissions));
-    }
-
-    let mut summaries = Vec::new();
-    for (row, permissions) in rows.into_values() {
-        let access = access_for_row(&row, Some(user_id), permissions)?;
-        if let Some(summary) = summary_for_user_list_row(row, access)? {
-            summaries.push(summary);
+        let access = access_for_row(&row, viewer_user_id, permissions)?;
+        if let Some(summary) = summary_for_viewer_row(conn, row, access).await? {
+            repositories.push(summary);
         }
     }
-    summaries.sort_by(|left, right| left.id.cmp(&right.id));
-    Ok(summaries)
+    repositories.sort_by(|left, right| left.id.cmp(&right.id));
+
+    Ok(Some(OwnerProfileRead {
+        handle: owner.handle,
+        repositories,
+    }))
 }
 
 async fn repo_summary_tx<C>(
@@ -174,7 +171,7 @@ where
     };
     let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
     let access = access_for_row(&row, viewer_user_id, permissions)?;
-    summary_for_viewer_row(conn, row, viewer_user_id, access).await
+    summary_for_viewer_row(conn, row, access).await
 }
 
 async fn repo_live_files_tx<C>(
@@ -193,20 +190,15 @@ where
     let access = access_for_row(&row, viewer_user_id, permissions)?;
     let audience = live_projection_audience(access);
 
+    if access.actor == RepositoryActor::Public && !public_surface_visible(conn, &row).await? {
+        return Ok(None);
+    }
+
     if let Some(files) =
         load_live_projection_files_for_audience(conn, &row.id, row.change_version()?, audience)
             .await?
     {
-        let visible_projection = if !files.is_empty() {
-            true
-        } else if needs_public_projection_visibility(&row, viewer_user_id, access) {
-            let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
-            let principal = principal_for_access(viewer_user_id, access);
-            has_visible_projected_history(&repo, &principal)
-        } else {
-            false
-        };
-        return if row_is_readable_with_visible_projection(&row, access, visible_projection)? {
+        return if row_is_readable(&row, access)? {
             Ok(Some(files))
         } else {
             Ok(None)
@@ -215,9 +207,7 @@ where
 
     let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
     let principal = principal_for_access(viewer_user_id, access);
-    let visible_projection = repo.record.publication_state == RepoPublicationState::Published
-        && has_visible_projected_history(&repo, &principal);
-    if !row_is_readable_with_visible_projection(&row, access, visible_projection)? {
+    if !row_is_readable(&row, access)? {
         return Ok(None);
     }
     Ok(Some(domain_projected_files(&repo, &principal)))
@@ -238,11 +228,10 @@ where
     };
     let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
     let access = access_for_row(&row, viewer_user_id, permissions)?;
-    let visibility_depends_on_projection =
-        needs_public_projection_visibility(&row, viewer_user_id, access);
-    if !visibility_depends_on_projection
-        && !row_is_readable_with_visible_projection(&row, access, false)?
-    {
+    if access.actor == RepositoryActor::Public && !public_surface_visible(conn, &row).await? {
+        return Ok(None);
+    }
+    if !row_is_readable(&row, access)? {
         return Ok(None);
     }
     let audience = live_projection_audience(access);
@@ -258,21 +247,11 @@ where
         ProjectionFileLookup::Found(content) => Some(content),
         ProjectionFileLookup::Missing => None,
         ProjectionFileLookup::NotReady => {
-            if visibility_depends_on_projection {
-                let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
-                let principal = principal_for_access(viewer_user_id, access);
-                if !has_visible_projected_history(&repo, &principal) {
-                    return Ok(None);
-                }
-            }
             return Err(PostgresError::unavailable(
                 "repository projection is rebuilding; retry shortly",
             ));
         }
     };
-    if !row_is_readable_with_visible_projection(&row, access, content.is_some())? {
-        return Ok(None);
-    }
     Ok(content)
 }
 
@@ -309,25 +288,6 @@ where
         .map_err(PostgresError::internal)
 }
 
-async fn repo_read_rows_by_ids<C>(
-    conn: &C,
-    repo_ids: Vec<String>,
-) -> Result<Vec<RepoReadRow>, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    if repo_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    repo_read_query()
-        .filter(entities::repository::Column::Id.is_in(repo_ids))
-        .order_by_asc(entities::repository::Column::Id)
-        .into_model::<RepoReadRow>()
-        .all(conn)
-        .await
-        .map_err(PostgresError::internal)
-}
-
 fn repo_read_query() -> sea_orm::Select<entities::repository::Entity> {
     entities::repository::Entity::find()
         .select_only()
@@ -336,7 +296,6 @@ fn repo_read_query() -> sea_orm::Select<entities::repository::Entity> {
         .column(entities::repository::Column::Name)
         .column(entities::repository::Column::OwnerUserId)
         .column(entities::repository::Column::PublicationState)
-        .column(entities::repository::Column::DefaultVisibility)
         .column(entities::repository::Column::ChangeVersion)
         .column(entities::repository::Column::Policy)
 }
@@ -367,6 +326,42 @@ where
     Ok(Some(member.try_into_domain()?.permissions))
 }
 
+async fn member_permissions_for_rows<C>(
+    conn: &C,
+    rows: &[RepoReadRow],
+    viewer_user_id: Option<&str>,
+) -> Result<BTreeMap<String, RepositoryMemberPermissions>, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    let Some(user_id) = viewer_user_id else {
+        return Ok(BTreeMap::new());
+    };
+    let repo_ids = rows
+        .iter()
+        .filter(|row| row.owner_user_id != user_id)
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    if repo_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let members = entities::repository_member::Entity::find()
+        .filter(entities::repository_member::Column::RepoId.is_in(repo_ids))
+        .filter(entities::repository_member::Column::UserId.eq(user_id.to_string()))
+        .all(conn)
+        .await
+        .map_err(PostgresError::internal)?;
+
+    let mut permissions = BTreeMap::new();
+    for member in members {
+        permissions.insert(
+            member.repo_id.clone(),
+            member.try_into_domain()?.permissions,
+        );
+    }
+    Ok(permissions)
+}
+
 async fn hydrate_repo_from_row_id<C>(
     conn: &C,
     repo_id: &str,
@@ -387,51 +382,15 @@ where
 async fn summary_for_viewer_row<C>(
     conn: &C,
     row: RepoReadRow,
-    viewer_user_id: Option<&str>,
     access: RepositoryAccess,
 ) -> Result<Option<RepoSummaryRead>, PostgresError>
 where
     C: ConnectionTrait,
 {
-    let visible_projection = if needs_public_projection_visibility(&row, viewer_user_id, access) {
-        match load_live_projection_file_count_for_audience(
-            conn,
-            &row.id,
-            row.change_version()?,
-            ProjectionAudience::Public,
-        )
-        .await?
-        {
-            Some(count) if count > 0 => true,
-            Some(_) | None => {
-                let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
-                let principal = principal_for_access(viewer_user_id, access);
-                has_visible_projected_history(&repo, &principal)
-            }
-        }
-    } else {
-        false
-    };
-
-    if !row_is_readable_with_visible_projection(&row, access, visible_projection)? {
+    if access.actor == RepositoryActor::Public && !public_surface_visible(conn, &row).await? {
         return Ok(None);
     }
-    Ok(Some(summary_from_row(row, access)?))
-}
-
-fn summary_for_user_list_row(
-    row: RepoReadRow,
-    access: RepositoryAccess,
-) -> Result<Option<RepoSummaryRead>, PostgresError> {
-    if access.actor == RepositoryActor::Public {
-        return Ok(None);
-    }
-    let publication_state = row.publication_state()?;
-    let lifecycle_allows_read = publication_state == RepoPublicationState::Published
-        || access.actor == RepositoryActor::Owner;
-    let policy = row.policy()?;
-    if !lifecycle_allows_read || !policy.can_read(&ScopePath::root(), access.can_read_private_files)
-    {
+    if !row_is_readable(&row, access)? {
         return Ok(None);
     }
     Ok(Some(summary_from_row(row, access)?))
@@ -442,14 +401,12 @@ fn summary_from_row(
     access: RepositoryAccess,
 ) -> Result<RepoSummaryRead, PostgresError> {
     let lifecycle_state = row.publication_state()?;
-    let default_visibility = row.default_visibility()?;
     let change_version = repo_change_version_for_access(row.change_version()?, access);
     Ok(RepoSummaryRead {
         id: row.id,
         owner_handle: row.owner_handle,
         name: row.name,
         lifecycle_state,
-        default_visibility,
         change_version,
         access,
     })
@@ -472,58 +429,51 @@ fn access_for_row(
     ))
 }
 
-fn row_is_readable_with_visible_projection(
-    row: &RepoReadRow,
-    access: RepositoryAccess,
-    visible_projection: bool,
-) -> Result<bool, PostgresError> {
+fn row_is_readable(row: &RepoReadRow, access: RepositoryAccess) -> Result<bool, PostgresError> {
     let publication_state = row.publication_state()?;
     let policy = row.policy()?;
-    Ok(readable_from_facts(
-        publication_state,
-        &policy,
-        access.actor == RepositoryActor::Public,
-        access,
-        visible_projection,
-    ))
-}
-
-fn needs_public_projection_visibility(
-    row: &RepoReadRow,
-    _viewer_user_id: Option<&str>,
-    access: RepositoryAccess,
-) -> bool {
-    if access.actor != RepositoryActor::Public {
-        return false;
-    }
-    if row.publication_state().ok() != Some(RepoPublicationState::Published) {
-        return false;
-    }
-    let Ok(policy) = row.policy() else {
-        return true;
-    };
-    !policy.can_read(&ScopePath::root(), false)
+    Ok(readable_from_facts(publication_state, &policy, access))
 }
 
 fn readable_from_facts(
-    publication_state: RepoPublicationState,
+    publication_state: RepoLifecycleState,
     policy: &Policy,
-    principal_is_public: bool,
     access: RepositoryAccess,
-    visible_projection: bool,
 ) -> bool {
     let root = ScopePath::root();
     match access.actor {
         RepositoryActor::Owner => policy.can_read(&root, true),
         RepositoryActor::Member => {
-            publication_state == RepoPublicationState::Published
+            publication_state == RepoLifecycleState::Ready
                 && policy.can_read(&root, access.can_read_private_files)
         }
-        RepositoryActor::Public => {
-            publication_state == RepoPublicationState::Published
-                && ((principal_is_public && policy.can_read(&root, false)) || visible_projection)
-        }
+        RepositoryActor::Public => publication_state == RepoLifecycleState::Ready,
     }
+}
+
+async fn public_surface_visible<C>(conn: &C, row: &RepoReadRow) -> Result<bool, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    if row.publication_state()? != RepoLifecycleState::Ready {
+        return Ok(false);
+    }
+    if let Some(files) = load_live_projection_files_for_audience(
+        conn,
+        &row.id,
+        row.change_version()?,
+        ProjectionAudience::Public,
+    )
+    .await?
+    {
+        return Ok(files.iter().any(|file| !is_repo_control_path(&file.path)));
+    }
+
+    let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
+    Ok(has_visible_projected_non_control_files(
+        &repo,
+        &Principal::public(),
+    ))
 }
 
 fn live_projection_audience(access: RepositoryAccess) -> ProjectionAudience {
@@ -565,12 +515,8 @@ fn decode_enum<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, Postgre
 }
 
 impl RepoReadRow {
-    fn publication_state(&self) -> Result<RepoPublicationState, PostgresError> {
+    fn publication_state(&self) -> Result<RepoLifecycleState, PostgresError> {
         decode_enum(&self.publication_state)
-    }
-
-    fn default_visibility(&self) -> Result<Visibility, PostgresError> {
-        decode_enum(&self.default_visibility)
     }
 
     fn policy(&self) -> Result<Policy, PostgresError> {

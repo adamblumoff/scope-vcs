@@ -27,10 +27,10 @@ async fn next_event(stream: &mut axum::body::BodyDataStream) -> String {
 }
 
 #[tokio::test]
-async fn repo_events_stay_public_when_only_canonical_rules_are_public() {
+async fn repo_events_stay_private_when_only_canonical_rules_are_public() {
     let state = test_state_with_repo();
     let mut repo = repo_with_readme(&state);
-    repo.record.default_visibility = Visibility::Private;
+    repo.repo_config = repo_config(Visibility::Private);
     repo.policy = Policy::new(Visibility::Private);
     repo.policy
         .add_rule(VisibilityRule::public(
@@ -42,11 +42,7 @@ async fn repo_events_stay_public_when_only_canonical_rules_are_public() {
 
     let response = events(state, None).await;
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let mut stream = response.into_body().into_data_stream();
-    let initial = next_event(&mut stream).await;
-    assert!(initial.contains(r#""kind":"Connected""#));
-    assert!(initial.contains(r#""version":0"#));
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -4,6 +4,7 @@ use super::{
     store::{SourceBlob, StoredRepository, repo_relative_scope_path},
 };
 use crate::error::DomainError;
+use crate::repo_control::is_repo_control_path;
 use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,22 +252,18 @@ pub fn repo_scope_path(path: &str) -> Result<ScopePath, DomainError> {
     repo_relative_scope_path(path).map_err(DomainError::invalid_input)
 }
 
-pub fn has_visible_projected_files(repo: &StoredRepository, principal: &Principal) -> bool {
+pub fn has_visible_projected_non_control_files(
+    repo: &StoredRepository,
+    principal: &Principal,
+) -> bool {
     let projection = project_graph(
         &repo.graph,
         &repo.visibility_events,
         ProjectionViewKey::from_access(repo.access_for_principal(principal)),
     );
-    !projection_tree(&projection).is_empty()
-}
-
-pub fn has_visible_projected_history(repo: &StoredRepository, principal: &Principal) -> bool {
-    let projection = project_graph(
-        &repo.graph,
-        &repo.visibility_events,
-        ProjectionViewKey::from_access(repo.access_for_principal(principal)),
-    );
-    !projection.commits.is_empty()
+    projection_tree(&projection)
+        .keys()
+        .any(|path| !is_repo_control_path(path))
 }
 
 fn projection_preview_files(

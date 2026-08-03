@@ -12,7 +12,7 @@ use {
     scope_domain::{
         requests::{MergeRequestInput, RequestLifecycleMutation, merge_request},
         reviewed_updates::ReviewedUpdateInput,
-        store::{GitHead, RepoPublicationState, RequestMergeOrigin},
+        store::{GitHead, RepoLifecycleState, RequestMergeOrigin},
     },
 };
 
@@ -66,14 +66,12 @@ impl RequestStore {
                 "repo changed since merge was prepared; retry merge",
             ));
         }
-        let publication_state: RepoPublicationState = serde_json::from_value(
+        let publication_state: RepoLifecycleState = serde_json::from_value(
             serde_json::Value::String(repo_row.publication_state.clone()),
         )
         .map_err(PostgresError::internal)?;
-        if publication_state != RepoPublicationState::Published {
-            return Err(PostgresError::conflict(
-                "repo must be published before merge",
-            ));
+        if publication_state != RepoLifecycleState::Ready {
+            return Err(PostgresError::conflict("repo must be ready before merge"));
         }
         let head = entities::git_head::Entity::find_by_id(repo_id.clone())
             .one(&tx)

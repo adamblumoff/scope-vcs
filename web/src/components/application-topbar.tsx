@@ -88,7 +88,7 @@ function RepositoryIdentity({
       className="group flex min-w-0 max-w-[calc(100vw-205px)] items-baseline gap-1.5 rounded-md py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:max-w-[360px]"
       params={{ owner, repo }}
       title={`${owner}/${repo}`}
-      to="/repos/$owner/$repo"
+      to="/$owner/$repo"
     >
       <span className="max-w-[38%] truncate text-[12px] font-medium text-muted-foreground transition-colors group-hover:text-foreground/80 sm:max-w-[130px] sm:text-[13px]">{owner}</span>
       <span aria-hidden className="text-muted-foreground/45">/</span>

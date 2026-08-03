@@ -334,7 +334,7 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
         request: keepRevision ? requestRevision?.request : undefined,
         revision: keepRevision ? requestRevision?.revision : undefined,
       },
-      to: '/repos/$owner/$repo/history',
+      to: '/$owner/$repo/history',
     })
   }
 

@@ -149,7 +149,7 @@ function RunHeader({
     <Link
       className="hover:text-foreground"
       params={{ owner: params.owner, repo: params.repo }}
-      to="/repos/$owner/$repo/runs"
+      to="/$owner/$repo/runs"
     >
       Runs /
     </Link>

@@ -5,8 +5,8 @@ import { ArrowRight } from 'lucide-react'
 import type { ComponentProps } from 'react'
 
 type RepoActionRoute =
-  | '/repos/$owner/$repo'
-  | '/repos/$owner/$repo/settings'
+  | '/$owner/$repo'
+  | '/$owner/$repo/settings'
 
 type RepoPrimaryAction = {
   label: string
@@ -44,13 +44,13 @@ function repoPrimaryAction(
     }
   }
 
-  return includeOpen ? { label: 'Open', to: '/repos/$owner/$repo' } : null
+  return includeOpen ? { label: 'Open', to: '/$owner/$repo' } : null
 }
 
 function repoAttentionAction(
   repo: RepoSummary,
 ): RepoAttentionAction | null {
-  if (repo.lifecycle_state === 'Unpublished') {
+  if (repo.lifecycle_state === 'AwaitingFirstPush') {
     if (repo.access.actor !== 'Owner') {
       return null
     }
@@ -59,7 +59,7 @@ function repoAttentionAction(
       icon: 'init',
       label: 'Initialization incomplete',
       primaryLabel: 'Clean up',
-      to: '/repos/$owner/$repo/settings',
+      to: '/$owner/$repo/settings',
     }
   }
 

@@ -14,7 +14,7 @@ if (!owner || !repo || extra) {
   throw new Error('SCOPE_SMOKE_REPO must be an owner/repository pair')
 }
 
-const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
+const repoPath = `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
 
 test('public repository exposes only its projected source', async () => {
   await withPage(repoPath, async (page) => {
@@ -115,7 +115,7 @@ test('public repository navigates to history after client hydration', async () =
 })
 
 test('repository chrome persists across navigation and request revalidation', async () => {
-  await withPage(`/repos/${owner}/update-demo`, async (page) => {
+  await withPage(`/${owner}/update-demo`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Repository' }).waitFor()
     await page.waitForFunction(() => {
       const link = document.querySelector('a[href$="/requests"]')
@@ -206,7 +206,7 @@ test('public repository requests route is anonymously readable', async () => {
 })
 
 test('seeded request timeline keeps its order and exposes nested reply branches', async () => {
-  await withPage(`/repos/${owner}/update-demo/requests/req_demo_ready`, async (page) => {
+  await withPage(`/${owner}/update-demo/requests/req_demo_ready`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Add bounded retry timing' }).waitFor()
     const threads = page.locator('.request-discussion-thread')
     await threads.first().waitFor()
@@ -250,7 +250,7 @@ test('seeded request timeline keeps its order and exposes nested reply branches'
 
 test('request queue search is keyboard accessible and mobile rows do not overflow', async () => {
   await withPage(
-    `/repos/${owner}/update-demo/requests`,
+    `/${owner}/update-demo/requests`,
     async (page) => {
       const readyRow = page.getByRole('link', {
         name: /Add bounded retry timing/,

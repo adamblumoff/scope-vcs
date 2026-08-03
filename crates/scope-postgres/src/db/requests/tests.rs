@@ -7,9 +7,7 @@ use scope_domain::{
         ReopenAndReplyToRequestDiscussionInput, RequestActorRole, RequestAudience,
         RequestDiscussionStatus, RequestState,
     },
-    store::{
-        DEFAULT_GIT_FILE_MODE, RepoPublicationState, SourceBlob, StoredRepository, UserAccount,
-    },
+    store::{DEFAULT_GIT_FILE_MODE, RepoLifecycleState, SourceBlob, StoredRepository, UserAccount},
 };
 
 #[tokio::test]
@@ -439,7 +437,7 @@ fn catalog_with_repo() -> crate::db::CatalogFixture {
         email_verified: true,
     };
     let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
-    repo.record.publication_state = RepoPublicationState::Published;
+    repo.record.lifecycle_state = RepoLifecycleState::Ready;
 
     let mut catalog = crate::db::CatalogFixture::default();
     catalog.users.insert(owner.id.clone(), owner);

@@ -15,7 +15,7 @@ import {
 } from '@/routes/-repo-history-actions'
 import { createFileRoute } from '@tanstack/react-router'
 
-export const Route = createFileRoute('/repos/$owner/$repo/history')({
+export const Route = createFileRoute('/$owner/$repo/history')({
   validateSearch: parseHistorySearch,
   staleTime: Infinity,
   loader: async ({ params }) => {

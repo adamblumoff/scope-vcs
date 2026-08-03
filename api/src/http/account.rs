@@ -83,7 +83,7 @@ pub(crate) async fn get_session(
         identity: user.as_ref().map(SessionIdentity::from),
         repo: SessionRepo {
             id: repo.record.id.clone(),
-            publication_state: repo.record.publication_state.into(),
+            lifecycle_state: repo.record.lifecycle_state.into(),
             access: repository_access_response(access),
         },
         capabilities: session_capabilities_response(can_read, access),

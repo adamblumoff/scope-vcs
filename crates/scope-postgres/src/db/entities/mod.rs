@@ -15,7 +15,7 @@ use scope_domain::runs::{
     },
 };
 use scope_domain::store::{
-    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitHead, GitPushToken, GitSegment, RepoPublicationState,
+    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitHead, GitPushToken, GitSegment, RepoLifecycleState,
     RepoRecord, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
     RepositoryMemberPermissions, SourceBlob, StoredRepository, UserAccount,
     is_supported_git_file_mode,

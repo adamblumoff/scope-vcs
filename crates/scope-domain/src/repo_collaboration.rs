@@ -192,7 +192,7 @@ pub fn ensure_can_manage_members(
         Ok(())
     } else if repo.is_owner_user(user_id) {
         Err(DomainError::conflict(
-            "repository must be published before inviting members",
+            "repository must be ready before inviting members",
         ))
     } else {
         Err(DomainError::forbidden("owner role required"))

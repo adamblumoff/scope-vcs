@@ -61,7 +61,7 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
       <PageHeader
         actions={(
           <Button asChild size="sm" variant="secondary">
-            <Link params={params} to="/repos/$owner/$repo/requests">
+            <Link params={params} to="/$owner/$repo/requests">
               Requests
             </Link>
           </Button>
@@ -209,7 +209,7 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
               request={request}
             />
             <Button asChild className="h-9" size="sm" variant="secondary">
-              <Link params={params} to="/repos/$owner/$repo/requests">Requests</Link>
+              <Link params={params} to="/$owner/$repo/requests">Requests</Link>
             </Button>
             {request.permissions.can_view_activity ? (
               <Button

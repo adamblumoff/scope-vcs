@@ -156,7 +156,7 @@ async fn stale_request_projection_identity_returns_the_rebuilding_response() {
 
 #[tokio::test]
 async fn public_readers_do_not_see_private_request_branches() {
-    let state = test_state_with_repo();
+    let state = test_state_with_readme().await;
     cache_test_jwks(&state);
     create_owner_request(&state, "req_private", REQUEST_HEAD).await;
     let app = router(state);
@@ -213,7 +213,7 @@ async fn request_list_rejects_malformed_cursors() {
 
 #[tokio::test]
 async fn request_list_pages_one_hundred_and_one_visible_rows_without_overlap() {
-    let state = test_state_with_repo();
+    let state = test_state_with_readme().await;
     cache_test_jwks(&state);
     for index in 0..=100 {
         create_owner_request(

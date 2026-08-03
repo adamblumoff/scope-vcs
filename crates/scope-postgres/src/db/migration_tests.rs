@@ -135,6 +135,29 @@ fn without_migration_rewritten_state(snapshot: String) -> serde_json::Value {
     snapshot
 }
 
+fn without_removed_repo_visibility(snapshot: serde_json::Value) -> serde_json::Value {
+    let mut snapshot = snapshot;
+    if let Some(repositories) = snapshot["repositories"].as_array_mut() {
+        for repository in repositories {
+            let repository = repository
+                .as_object_mut()
+                .expect("repository snapshot is an object");
+            repository.remove("default_visibility");
+            if repository
+                .get("publication_state")
+                .and_then(|state| state.as_str())
+                == Some("Published")
+            {
+                repository.insert(
+                    "publication_state".to_string(),
+                    serde_json::Value::String("Ready".to_string()),
+                );
+            }
+        }
+    }
+    snapshot
+}
+
 #[tokio::test]
 async fn fresh_database_reaches_exact_latest_schema() {
     let (_target, db, _lease) = isolated_database().await;
@@ -154,6 +177,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0007_drop_review_ceremony",
             "m0008_one_way_request_submission",
             "m0009_request_ratings",
+            "m0010_file_visibility_source_of_truth",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -226,6 +250,24 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .try_get::<i64>("", "count")
         .unwrap();
     assert_eq!(review_columns, 0);
+    let repository_visibility_columns = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "
+                SELECT count(*) AS count
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'scope_repositories'
+                  AND column_name = 'default_visibility'
+            "
+            .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(repository_visibility_columns, 0);
 }
 
 #[tokio::test]
@@ -333,8 +375,9 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
     )
     .await
     .unwrap();
-    let before =
-        without_migration_rewritten_state(representative_business_snapshot(db.as_ref()).await);
+    let before = without_removed_repo_visibility(without_migration_rewritten_state(
+        representative_business_snapshot(db.as_ref()).await,
+    ));
 
     migrations::apply(db.as_ref()).await.unwrap();
 
@@ -827,6 +870,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0007_drop_review_ceremony",
             "m0008_one_way_request_submission",
             "m0009_request_ratings",
+            "m0010_file_visibility_source_of_truth",
         ]
     );
 }
@@ -854,6 +898,7 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0007_drop_review_ceremony",
             "m0008_one_way_request_submission",
             "m0009_request_ratings",
+            "m0010_file_visibility_source_of_truth",
         ]
     );
 }

@@ -368,7 +368,7 @@ function RequestQueueRow({
     <Link
       className="group grid min-w-0 gap-3 py-4 outline-none transition-colors [contain-intrinsic-size:auto_76px] [content-visibility:auto] hover:bg-muted/45 focus-visible:bg-muted/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-3"
       params={{ ...params, requestId: request.id }}
-      to="/repos/$owner/$repo/requests/$requestId"
+      to="/$owner/$repo/requests/$requestId"
     >
       <div className="min-w-0">
         <h3 className="break-words text-sm font-semibold leading-6 tracking-[-0.008em] group-hover:underline">

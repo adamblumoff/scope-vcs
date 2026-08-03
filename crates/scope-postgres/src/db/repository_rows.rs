@@ -104,11 +104,6 @@ where
         row.publication_state
     );
     set_if_changed!(
-        default_visibility,
-        before_row.default_visibility,
-        row.default_visibility
-    );
-    set_if_changed!(
         change_version,
         before_row.change_version,
         row.change_version

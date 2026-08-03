@@ -39,19 +39,19 @@ test('rejects unresolved repository paths and unsafe URL schemes', () => {
 test('resolves relative README links to repository file routes', () => {
   assert.equal(
     resolveReadmeUrl('./guide.md#usage', context),
-    '/repos/scope/demo?file=docs%2Fguide.md#readme-usage',
+    '/scope/demo?file=docs%2Fguide.md#readme-usage',
   )
   assert.equal(
     resolveReadmeUrl('../LICENSE', context),
-    '/repos/scope/demo?file=LICENSE',
+    '/scope/demo?file=LICENSE',
   )
   assert.equal(
     resolveReadmeUrl('/CONTRIBUTING.md', context),
-    '/repos/scope/demo?file=CONTRIBUTING.md',
+    '/scope/demo?file=CONTRIBUTING.md',
   )
   assert.equal(
     resolveReadmeUrl('My%20Guide.md', context),
-    '/repos/scope/demo?file=docs%2FMy%20Guide.md',
+    '/scope/demo?file=docs%2FMy%20Guide.md',
   )
 })
 

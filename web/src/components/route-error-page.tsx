@@ -42,7 +42,7 @@ export function RouteErrorContent({
       <Button asChild className="mt-5" size="sm" variant="secondary">
         <Link to="/">
           <ArrowLeft className="size-3.5" />
-          <span>Repos</span>
+          <span>Home</span>
         </Link>
       </Button>
     </div>

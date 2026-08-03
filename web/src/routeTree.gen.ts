@@ -11,20 +11,22 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as CliLoginRouteImport } from './routes/cli-login'
 import { Route as AccountRouteImport } from './routes/account'
+import { Route as OwnerRouteImport } from './routes/$owner'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as OwnerIndexRouteImport } from './routes/$owner.index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as InvitesTokenRouteImport } from './routes/invites.$token'
-import { Route as ReposOwnerRepoRouteImport } from './routes/repos.$owner.$repo'
-import { Route as ReposOwnerRepoIndexRouteImport } from './routes/repos.$owner.$repo.index'
-import { Route as ReposOwnerRepoSettingsRouteImport } from './routes/repos.$owner.$repo.settings'
-import { Route as ReposOwnerRepoRunsRouteImport } from './routes/repos.$owner.$repo.runs'
-import { Route as ReposOwnerRepoRequestsRouteImport } from './routes/repos.$owner.$repo.requests'
-import { Route as ReposOwnerRepoHistoryRouteImport } from './routes/repos.$owner.$repo.history'
-import { Route as ReposOwnerRepoRunsIndexRouteImport } from './routes/repos.$owner.$repo.runs.index'
-import { Route as ReposOwnerRepoRequestsIndexRouteImport } from './routes/repos.$owner.$repo.requests.index'
-import { Route as ReposOwnerRepoRunsRunIdRouteImport } from './routes/repos.$owner.$repo.runs.$runId'
-import { Route as ReposOwnerRepoRequestsRequestIdRouteImport } from './routes/repos.$owner.$repo.requests.$requestId'
+import { Route as OwnerRepoRouteImport } from './routes/$owner.$repo'
+import { Route as OwnerRepoIndexRouteImport } from './routes/$owner.$repo.index'
+import { Route as OwnerRepoSettingsRouteImport } from './routes/$owner.$repo.settings'
+import { Route as OwnerRepoRunsRouteImport } from './routes/$owner.$repo.runs'
+import { Route as OwnerRepoRequestsRouteImport } from './routes/$owner.$repo.requests'
+import { Route as OwnerRepoHistoryRouteImport } from './routes/$owner.$repo.history'
+import { Route as OwnerRepoRunsIndexRouteImport } from './routes/$owner.$repo.runs.index'
+import { Route as OwnerRepoRequestsIndexRouteImport } from './routes/$owner.$repo.requests.index'
+import { Route as OwnerRepoRunsRunIdRouteImport } from './routes/$owner.$repo.runs.$runId'
+import { Route as OwnerRepoRequestsRequestIdRouteImport } from './routes/$owner.$repo.requests.$requestId'
 
 const CliLoginRoute = CliLoginRouteImport.update({
   id: '/cli-login',
@@ -36,10 +38,20 @@ const AccountRoute = AccountRouteImport.update({
   path: '/account',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OwnerRoute = OwnerRouteImport.update({
+  id: '/$owner',
+  path: '/$owner',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const OwnerIndexRoute = OwnerIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => OwnerRoute,
 } as any)
 const SignUpSplatRoute = SignUpSplatRouteImport.update({
   id: '/sign-up/$',
@@ -56,76 +68,77 @@ const InvitesTokenRoute = InvitesTokenRouteImport.update({
   path: '/invites/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ReposOwnerRepoRoute = ReposOwnerRepoRouteImport.update({
-  id: '/repos/$owner/$repo',
-  path: '/repos/$owner/$repo',
-  getParentRoute: () => rootRouteImport,
+const OwnerRepoRoute = OwnerRepoRouteImport.update({
+  id: '/$repo',
+  path: '/$repo',
+  getParentRoute: () => OwnerRoute,
 } as any)
-const ReposOwnerRepoIndexRoute = ReposOwnerRepoIndexRouteImport.update({
+const OwnerRepoIndexRoute = OwnerRepoIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => ReposOwnerRepoRoute,
+  getParentRoute: () => OwnerRepoRoute,
 } as any)
-const ReposOwnerRepoSettingsRoute = ReposOwnerRepoSettingsRouteImport.update({
+const OwnerRepoSettingsRoute = OwnerRepoSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => ReposOwnerRepoRoute,
+  getParentRoute: () => OwnerRepoRoute,
 } as any)
-const ReposOwnerRepoRunsRoute = ReposOwnerRepoRunsRouteImport.update({
+const OwnerRepoRunsRoute = OwnerRepoRunsRouteImport.update({
   id: '/runs',
   path: '/runs',
-  getParentRoute: () => ReposOwnerRepoRoute,
+  getParentRoute: () => OwnerRepoRoute,
 } as any)
-const ReposOwnerRepoRequestsRoute = ReposOwnerRepoRequestsRouteImport.update({
+const OwnerRepoRequestsRoute = OwnerRepoRequestsRouteImport.update({
   id: '/requests',
   path: '/requests',
-  getParentRoute: () => ReposOwnerRepoRoute,
+  getParentRoute: () => OwnerRepoRoute,
 } as any)
-const ReposOwnerRepoHistoryRoute = ReposOwnerRepoHistoryRouteImport.update({
+const OwnerRepoHistoryRoute = OwnerRepoHistoryRouteImport.update({
   id: '/history',
   path: '/history',
-  getParentRoute: () => ReposOwnerRepoRoute,
+  getParentRoute: () => OwnerRepoRoute,
 } as any)
-const ReposOwnerRepoRunsIndexRoute = ReposOwnerRepoRunsIndexRouteImport.update({
+const OwnerRepoRunsIndexRoute = OwnerRepoRunsIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => ReposOwnerRepoRunsRoute,
+  getParentRoute: () => OwnerRepoRunsRoute,
 } as any)
-const ReposOwnerRepoRequestsIndexRoute =
-  ReposOwnerRepoRequestsIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => ReposOwnerRepoRequestsRoute,
-  } as any)
-const ReposOwnerRepoRunsRunIdRoute = ReposOwnerRepoRunsRunIdRouteImport.update({
+const OwnerRepoRequestsIndexRoute = OwnerRepoRequestsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => OwnerRepoRequestsRoute,
+} as any)
+const OwnerRepoRunsRunIdRoute = OwnerRepoRunsRunIdRouteImport.update({
   id: '/$runId',
   path: '/$runId',
-  getParentRoute: () => ReposOwnerRepoRunsRoute,
+  getParentRoute: () => OwnerRepoRunsRoute,
 } as any)
-const ReposOwnerRepoRequestsRequestIdRoute =
-  ReposOwnerRepoRequestsRequestIdRouteImport.update({
+const OwnerRepoRequestsRequestIdRoute =
+  OwnerRepoRequestsRequestIdRouteImport.update({
     id: '/$requestId',
     path: '/$requestId',
-    getParentRoute: () => ReposOwnerRepoRequestsRoute,
+    getParentRoute: () => OwnerRepoRequestsRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/$owner': typeof OwnerRouteWithChildren
   '/account': typeof AccountRoute
   '/cli-login': typeof CliLoginRoute
+  '/$owner/$repo': typeof OwnerRepoRouteWithChildren
   '/invites/$token': typeof InvitesTokenRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
-  '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
-  '/repos/$owner/$repo/requests': typeof ReposOwnerRepoRequestsRouteWithChildren
-  '/repos/$owner/$repo/runs': typeof ReposOwnerRepoRunsRouteWithChildren
-  '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
-  '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
-  '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
-  '/repos/$owner/$repo/runs/$runId': typeof ReposOwnerRepoRunsRunIdRoute
-  '/repos/$owner/$repo/requests/': typeof ReposOwnerRepoRequestsIndexRoute
-  '/repos/$owner/$repo/runs/': typeof ReposOwnerRepoRunsIndexRoute
+  '/$owner/': typeof OwnerIndexRoute
+  '/$owner/$repo/history': typeof OwnerRepoHistoryRoute
+  '/$owner/$repo/requests': typeof OwnerRepoRequestsRouteWithChildren
+  '/$owner/$repo/runs': typeof OwnerRepoRunsRouteWithChildren
+  '/$owner/$repo/settings': typeof OwnerRepoSettingsRoute
+  '/$owner/$repo/': typeof OwnerRepoIndexRoute
+  '/$owner/$repo/requests/$requestId': typeof OwnerRepoRequestsRequestIdRoute
+  '/$owner/$repo/runs/$runId': typeof OwnerRepoRunsRunIdRoute
+  '/$owner/$repo/requests/': typeof OwnerRepoRequestsIndexRoute
+  '/$owner/$repo/runs/': typeof OwnerRepoRunsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -134,52 +147,57 @@ export interface FileRoutesByTo {
   '/invites/$token': typeof InvitesTokenRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
-  '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
-  '/repos/$owner/$repo': typeof ReposOwnerRepoIndexRoute
-  '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
-  '/repos/$owner/$repo/runs/$runId': typeof ReposOwnerRepoRunsRunIdRoute
-  '/repos/$owner/$repo/requests': typeof ReposOwnerRepoRequestsIndexRoute
-  '/repos/$owner/$repo/runs': typeof ReposOwnerRepoRunsIndexRoute
+  '/$owner': typeof OwnerIndexRoute
+  '/$owner/$repo/history': typeof OwnerRepoHistoryRoute
+  '/$owner/$repo/settings': typeof OwnerRepoSettingsRoute
+  '/$owner/$repo': typeof OwnerRepoIndexRoute
+  '/$owner/$repo/requests/$requestId': typeof OwnerRepoRequestsRequestIdRoute
+  '/$owner/$repo/runs/$runId': typeof OwnerRepoRunsRunIdRoute
+  '/$owner/$repo/requests': typeof OwnerRepoRequestsIndexRoute
+  '/$owner/$repo/runs': typeof OwnerRepoRunsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$owner': typeof OwnerRouteWithChildren
   '/account': typeof AccountRoute
   '/cli-login': typeof CliLoginRoute
+  '/$owner/$repo': typeof OwnerRepoRouteWithChildren
   '/invites/$token': typeof InvitesTokenRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/repos/$owner/$repo': typeof ReposOwnerRepoRouteWithChildren
-  '/repos/$owner/$repo/history': typeof ReposOwnerRepoHistoryRoute
-  '/repos/$owner/$repo/requests': typeof ReposOwnerRepoRequestsRouteWithChildren
-  '/repos/$owner/$repo/runs': typeof ReposOwnerRepoRunsRouteWithChildren
-  '/repos/$owner/$repo/settings': typeof ReposOwnerRepoSettingsRoute
-  '/repos/$owner/$repo/': typeof ReposOwnerRepoIndexRoute
-  '/repos/$owner/$repo/requests/$requestId': typeof ReposOwnerRepoRequestsRequestIdRoute
-  '/repos/$owner/$repo/runs/$runId': typeof ReposOwnerRepoRunsRunIdRoute
-  '/repos/$owner/$repo/requests/': typeof ReposOwnerRepoRequestsIndexRoute
-  '/repos/$owner/$repo/runs/': typeof ReposOwnerRepoRunsIndexRoute
+  '/$owner/': typeof OwnerIndexRoute
+  '/$owner/$repo/history': typeof OwnerRepoHistoryRoute
+  '/$owner/$repo/requests': typeof OwnerRepoRequestsRouteWithChildren
+  '/$owner/$repo/runs': typeof OwnerRepoRunsRouteWithChildren
+  '/$owner/$repo/settings': typeof OwnerRepoSettingsRoute
+  '/$owner/$repo/': typeof OwnerRepoIndexRoute
+  '/$owner/$repo/requests/$requestId': typeof OwnerRepoRequestsRequestIdRoute
+  '/$owner/$repo/runs/$runId': typeof OwnerRepoRunsRunIdRoute
+  '/$owner/$repo/requests/': typeof OwnerRepoRequestsIndexRoute
+  '/$owner/$repo/runs/': typeof OwnerRepoRunsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/$owner'
     | '/account'
     | '/cli-login'
+    | '/$owner/$repo'
     | '/invites/$token'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/repos/$owner/$repo'
-    | '/repos/$owner/$repo/history'
-    | '/repos/$owner/$repo/requests'
-    | '/repos/$owner/$repo/runs'
-    | '/repos/$owner/$repo/settings'
-    | '/repos/$owner/$repo/'
-    | '/repos/$owner/$repo/requests/$requestId'
-    | '/repos/$owner/$repo/runs/$runId'
-    | '/repos/$owner/$repo/requests/'
-    | '/repos/$owner/$repo/runs/'
+    | '/$owner/'
+    | '/$owner/$repo/history'
+    | '/$owner/$repo/requests'
+    | '/$owner/$repo/runs'
+    | '/$owner/$repo/settings'
+    | '/$owner/$repo/'
+    | '/$owner/$repo/requests/$requestId'
+    | '/$owner/$repo/runs/$runId'
+    | '/$owner/$repo/requests/'
+    | '/$owner/$repo/runs/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -188,41 +206,44 @@ export interface FileRouteTypes {
     | '/invites/$token'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/repos/$owner/$repo/history'
-    | '/repos/$owner/$repo/settings'
-    | '/repos/$owner/$repo'
-    | '/repos/$owner/$repo/requests/$requestId'
-    | '/repos/$owner/$repo/runs/$runId'
-    | '/repos/$owner/$repo/requests'
-    | '/repos/$owner/$repo/runs'
+    | '/$owner'
+    | '/$owner/$repo/history'
+    | '/$owner/$repo/settings'
+    | '/$owner/$repo'
+    | '/$owner/$repo/requests/$requestId'
+    | '/$owner/$repo/runs/$runId'
+    | '/$owner/$repo/requests'
+    | '/$owner/$repo/runs'
   id:
     | '__root__'
     | '/'
+    | '/$owner'
     | '/account'
     | '/cli-login'
+    | '/$owner/$repo'
     | '/invites/$token'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/repos/$owner/$repo'
-    | '/repos/$owner/$repo/history'
-    | '/repos/$owner/$repo/requests'
-    | '/repos/$owner/$repo/runs'
-    | '/repos/$owner/$repo/settings'
-    | '/repos/$owner/$repo/'
-    | '/repos/$owner/$repo/requests/$requestId'
-    | '/repos/$owner/$repo/runs/$runId'
-    | '/repos/$owner/$repo/requests/'
-    | '/repos/$owner/$repo/runs/'
+    | '/$owner/'
+    | '/$owner/$repo/history'
+    | '/$owner/$repo/requests'
+    | '/$owner/$repo/runs'
+    | '/$owner/$repo/settings'
+    | '/$owner/$repo/'
+    | '/$owner/$repo/requests/$requestId'
+    | '/$owner/$repo/runs/$runId'
+    | '/$owner/$repo/requests/'
+    | '/$owner/$repo/runs/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  OwnerRoute: typeof OwnerRouteWithChildren
   AccountRoute: typeof AccountRoute
   CliLoginRoute: typeof CliLoginRoute
   InvitesTokenRoute: typeof InvitesTokenRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
-  ReposOwnerRepoRoute: typeof ReposOwnerRepoRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -241,12 +262,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AccountRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/$owner': {
+      id: '/$owner'
+      path: '/$owner'
+      fullPath: '/$owner'
+      preLoaderRoute: typeof OwnerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/$owner/': {
+      id: '/$owner/'
+      path: '/'
+      fullPath: '/$owner/'
+      preLoaderRoute: typeof OwnerIndexRouteImport
+      parentRoute: typeof OwnerRoute
     }
     '/sign-up/$': {
       id: '/sign-up/$'
@@ -269,136 +304,146 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InvitesTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/repos/$owner/$repo': {
-      id: '/repos/$owner/$repo'
-      path: '/repos/$owner/$repo'
-      fullPath: '/repos/$owner/$repo'
-      preLoaderRoute: typeof ReposOwnerRepoRouteImport
-      parentRoute: typeof rootRouteImport
+    '/$owner/$repo': {
+      id: '/$owner/$repo'
+      path: '/$repo'
+      fullPath: '/$owner/$repo'
+      preLoaderRoute: typeof OwnerRepoRouteImport
+      parentRoute: typeof OwnerRoute
     }
-    '/repos/$owner/$repo/': {
-      id: '/repos/$owner/$repo/'
+    '/$owner/$repo/': {
+      id: '/$owner/$repo/'
       path: '/'
-      fullPath: '/repos/$owner/$repo/'
-      preLoaderRoute: typeof ReposOwnerRepoIndexRouteImport
-      parentRoute: typeof ReposOwnerRepoRoute
+      fullPath: '/$owner/$repo/'
+      preLoaderRoute: typeof OwnerRepoIndexRouteImport
+      parentRoute: typeof OwnerRepoRoute
     }
-    '/repos/$owner/$repo/settings': {
-      id: '/repos/$owner/$repo/settings'
+    '/$owner/$repo/settings': {
+      id: '/$owner/$repo/settings'
       path: '/settings'
-      fullPath: '/repos/$owner/$repo/settings'
-      preLoaderRoute: typeof ReposOwnerRepoSettingsRouteImport
-      parentRoute: typeof ReposOwnerRepoRoute
+      fullPath: '/$owner/$repo/settings'
+      preLoaderRoute: typeof OwnerRepoSettingsRouteImport
+      parentRoute: typeof OwnerRepoRoute
     }
-    '/repos/$owner/$repo/runs': {
-      id: '/repos/$owner/$repo/runs'
+    '/$owner/$repo/runs': {
+      id: '/$owner/$repo/runs'
       path: '/runs'
-      fullPath: '/repos/$owner/$repo/runs'
-      preLoaderRoute: typeof ReposOwnerRepoRunsRouteImport
-      parentRoute: typeof ReposOwnerRepoRoute
+      fullPath: '/$owner/$repo/runs'
+      preLoaderRoute: typeof OwnerRepoRunsRouteImport
+      parentRoute: typeof OwnerRepoRoute
     }
-    '/repos/$owner/$repo/requests': {
-      id: '/repos/$owner/$repo/requests'
+    '/$owner/$repo/requests': {
+      id: '/$owner/$repo/requests'
       path: '/requests'
-      fullPath: '/repos/$owner/$repo/requests'
-      preLoaderRoute: typeof ReposOwnerRepoRequestsRouteImport
-      parentRoute: typeof ReposOwnerRepoRoute
+      fullPath: '/$owner/$repo/requests'
+      preLoaderRoute: typeof OwnerRepoRequestsRouteImport
+      parentRoute: typeof OwnerRepoRoute
     }
-    '/repos/$owner/$repo/history': {
-      id: '/repos/$owner/$repo/history'
+    '/$owner/$repo/history': {
+      id: '/$owner/$repo/history'
       path: '/history'
-      fullPath: '/repos/$owner/$repo/history'
-      preLoaderRoute: typeof ReposOwnerRepoHistoryRouteImport
-      parentRoute: typeof ReposOwnerRepoRoute
+      fullPath: '/$owner/$repo/history'
+      preLoaderRoute: typeof OwnerRepoHistoryRouteImport
+      parentRoute: typeof OwnerRepoRoute
     }
-    '/repos/$owner/$repo/runs/': {
-      id: '/repos/$owner/$repo/runs/'
+    '/$owner/$repo/runs/': {
+      id: '/$owner/$repo/runs/'
       path: '/'
-      fullPath: '/repos/$owner/$repo/runs/'
-      preLoaderRoute: typeof ReposOwnerRepoRunsIndexRouteImport
-      parentRoute: typeof ReposOwnerRepoRunsRoute
+      fullPath: '/$owner/$repo/runs/'
+      preLoaderRoute: typeof OwnerRepoRunsIndexRouteImport
+      parentRoute: typeof OwnerRepoRunsRoute
     }
-    '/repos/$owner/$repo/requests/': {
-      id: '/repos/$owner/$repo/requests/'
+    '/$owner/$repo/requests/': {
+      id: '/$owner/$repo/requests/'
       path: '/'
-      fullPath: '/repos/$owner/$repo/requests/'
-      preLoaderRoute: typeof ReposOwnerRepoRequestsIndexRouteImport
-      parentRoute: typeof ReposOwnerRepoRequestsRoute
+      fullPath: '/$owner/$repo/requests/'
+      preLoaderRoute: typeof OwnerRepoRequestsIndexRouteImport
+      parentRoute: typeof OwnerRepoRequestsRoute
     }
-    '/repos/$owner/$repo/runs/$runId': {
-      id: '/repos/$owner/$repo/runs/$runId'
+    '/$owner/$repo/runs/$runId': {
+      id: '/$owner/$repo/runs/$runId'
       path: '/$runId'
-      fullPath: '/repos/$owner/$repo/runs/$runId'
-      preLoaderRoute: typeof ReposOwnerRepoRunsRunIdRouteImport
-      parentRoute: typeof ReposOwnerRepoRunsRoute
+      fullPath: '/$owner/$repo/runs/$runId'
+      preLoaderRoute: typeof OwnerRepoRunsRunIdRouteImport
+      parentRoute: typeof OwnerRepoRunsRoute
     }
-    '/repos/$owner/$repo/requests/$requestId': {
-      id: '/repos/$owner/$repo/requests/$requestId'
+    '/$owner/$repo/requests/$requestId': {
+      id: '/$owner/$repo/requests/$requestId'
       path: '/$requestId'
-      fullPath: '/repos/$owner/$repo/requests/$requestId'
-      preLoaderRoute: typeof ReposOwnerRepoRequestsRequestIdRouteImport
-      parentRoute: typeof ReposOwnerRepoRequestsRoute
+      fullPath: '/$owner/$repo/requests/$requestId'
+      preLoaderRoute: typeof OwnerRepoRequestsRequestIdRouteImport
+      parentRoute: typeof OwnerRepoRequestsRoute
     }
   }
 }
 
-interface ReposOwnerRepoRequestsRouteChildren {
-  ReposOwnerRepoRequestsRequestIdRoute: typeof ReposOwnerRepoRequestsRequestIdRoute
-  ReposOwnerRepoRequestsIndexRoute: typeof ReposOwnerRepoRequestsIndexRoute
+interface OwnerRepoRequestsRouteChildren {
+  OwnerRepoRequestsRequestIdRoute: typeof OwnerRepoRequestsRequestIdRoute
+  OwnerRepoRequestsIndexRoute: typeof OwnerRepoRequestsIndexRoute
 }
 
-const ReposOwnerRepoRequestsRouteChildren: ReposOwnerRepoRequestsRouteChildren =
-  {
-    ReposOwnerRepoRequestsRequestIdRoute: ReposOwnerRepoRequestsRequestIdRoute,
-    ReposOwnerRepoRequestsIndexRoute: ReposOwnerRepoRequestsIndexRoute,
-  }
-
-const ReposOwnerRepoRequestsRouteWithChildren =
-  ReposOwnerRepoRequestsRoute._addFileChildren(
-    ReposOwnerRepoRequestsRouteChildren,
-  )
-
-interface ReposOwnerRepoRunsRouteChildren {
-  ReposOwnerRepoRunsRunIdRoute: typeof ReposOwnerRepoRunsRunIdRoute
-  ReposOwnerRepoRunsIndexRoute: typeof ReposOwnerRepoRunsIndexRoute
+const OwnerRepoRequestsRouteChildren: OwnerRepoRequestsRouteChildren = {
+  OwnerRepoRequestsRequestIdRoute: OwnerRepoRequestsRequestIdRoute,
+  OwnerRepoRequestsIndexRoute: OwnerRepoRequestsIndexRoute,
 }
 
-const ReposOwnerRepoRunsRouteChildren: ReposOwnerRepoRunsRouteChildren = {
-  ReposOwnerRepoRunsRunIdRoute: ReposOwnerRepoRunsRunIdRoute,
-  ReposOwnerRepoRunsIndexRoute: ReposOwnerRepoRunsIndexRoute,
+const OwnerRepoRequestsRouteWithChildren =
+  OwnerRepoRequestsRoute._addFileChildren(OwnerRepoRequestsRouteChildren)
+
+interface OwnerRepoRunsRouteChildren {
+  OwnerRepoRunsRunIdRoute: typeof OwnerRepoRunsRunIdRoute
+  OwnerRepoRunsIndexRoute: typeof OwnerRepoRunsIndexRoute
 }
 
-const ReposOwnerRepoRunsRouteWithChildren =
-  ReposOwnerRepoRunsRoute._addFileChildren(ReposOwnerRepoRunsRouteChildren)
-
-interface ReposOwnerRepoRouteChildren {
-  ReposOwnerRepoHistoryRoute: typeof ReposOwnerRepoHistoryRoute
-  ReposOwnerRepoRequestsRoute: typeof ReposOwnerRepoRequestsRouteWithChildren
-  ReposOwnerRepoRunsRoute: typeof ReposOwnerRepoRunsRouteWithChildren
-  ReposOwnerRepoSettingsRoute: typeof ReposOwnerRepoSettingsRoute
-  ReposOwnerRepoIndexRoute: typeof ReposOwnerRepoIndexRoute
+const OwnerRepoRunsRouteChildren: OwnerRepoRunsRouteChildren = {
+  OwnerRepoRunsRunIdRoute: OwnerRepoRunsRunIdRoute,
+  OwnerRepoRunsIndexRoute: OwnerRepoRunsIndexRoute,
 }
 
-const ReposOwnerRepoRouteChildren: ReposOwnerRepoRouteChildren = {
-  ReposOwnerRepoHistoryRoute: ReposOwnerRepoHistoryRoute,
-  ReposOwnerRepoRequestsRoute: ReposOwnerRepoRequestsRouteWithChildren,
-  ReposOwnerRepoRunsRoute: ReposOwnerRepoRunsRouteWithChildren,
-  ReposOwnerRepoSettingsRoute: ReposOwnerRepoSettingsRoute,
-  ReposOwnerRepoIndexRoute: ReposOwnerRepoIndexRoute,
-}
-
-const ReposOwnerRepoRouteWithChildren = ReposOwnerRepoRoute._addFileChildren(
-  ReposOwnerRepoRouteChildren,
+const OwnerRepoRunsRouteWithChildren = OwnerRepoRunsRoute._addFileChildren(
+  OwnerRepoRunsRouteChildren,
 )
+
+interface OwnerRepoRouteChildren {
+  OwnerRepoHistoryRoute: typeof OwnerRepoHistoryRoute
+  OwnerRepoRequestsRoute: typeof OwnerRepoRequestsRouteWithChildren
+  OwnerRepoRunsRoute: typeof OwnerRepoRunsRouteWithChildren
+  OwnerRepoSettingsRoute: typeof OwnerRepoSettingsRoute
+  OwnerRepoIndexRoute: typeof OwnerRepoIndexRoute
+}
+
+const OwnerRepoRouteChildren: OwnerRepoRouteChildren = {
+  OwnerRepoHistoryRoute: OwnerRepoHistoryRoute,
+  OwnerRepoRequestsRoute: OwnerRepoRequestsRouteWithChildren,
+  OwnerRepoRunsRoute: OwnerRepoRunsRouteWithChildren,
+  OwnerRepoSettingsRoute: OwnerRepoSettingsRoute,
+  OwnerRepoIndexRoute: OwnerRepoIndexRoute,
+}
+
+const OwnerRepoRouteWithChildren = OwnerRepoRoute._addFileChildren(
+  OwnerRepoRouteChildren,
+)
+
+interface OwnerRouteChildren {
+  OwnerRepoRoute: typeof OwnerRepoRouteWithChildren
+  OwnerIndexRoute: typeof OwnerIndexRoute
+}
+
+const OwnerRouteChildren: OwnerRouteChildren = {
+  OwnerRepoRoute: OwnerRepoRouteWithChildren,
+  OwnerIndexRoute: OwnerIndexRoute,
+}
+
+const OwnerRouteWithChildren = OwnerRoute._addFileChildren(OwnerRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  OwnerRoute: OwnerRouteWithChildren,
   AccountRoute: AccountRoute,
   CliLoginRoute: CliLoginRoute,
   InvitesTokenRoute: InvitesTokenRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
-  ReposOwnerRepoRoute: ReposOwnerRepoRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

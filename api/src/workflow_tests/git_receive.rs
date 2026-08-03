@@ -316,7 +316,7 @@ async fn published_receive_pack_staging_restores_accepted_git_head_from_bucket_s
         git_stdout_text(&bare, &["rev-parse", DEFAULT_GIT_BRANCH], "first push head").unwrap();
     apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
 
-    let restored = ensure_published_receive_pack_staging_repo(
+    let restored = ensure_ready_receive_pack_staging_repo(
         &state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,

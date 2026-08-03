@@ -21,8 +21,8 @@ async fn permissioned_scope_sessions_share_raw_live_head() {
         .metadata
         .repositories()
         .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
-            repo.record.publication_state = RepoPublicationState::Unpublished;
-            repo.record.default_visibility = Visibility::Private;
+            repo.record.lifecycle_state = RepoLifecycleState::AwaitingFirstPush;
+            repo.repo_config = repo_config(Visibility::Private);
             repo.policy = Policy::new(Visibility::Private);
         })
         .await

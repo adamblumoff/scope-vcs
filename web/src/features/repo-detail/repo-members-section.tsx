@@ -129,7 +129,7 @@ export function RepositoryMembersSection({
   repo: RepoSummary
   updateMember: (input: UpdateRepoMemberInput) => Promise<RepoMember>
 }) {
-  const canInvite = repo.lifecycle_state === 'Published'
+  const canInvite = repo.lifecycle_state === 'Ready'
   const pendingInvites = collaboration.invites.filter(
     (invite) => invite.state === 'Pending',
   )

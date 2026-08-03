@@ -23,9 +23,9 @@ pub enum RepositoryActor {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RepoPublicationState {
-    Unpublished,
-    Published,
+pub enum RepoLifecycleState {
+    AwaitingFirstPush,
+    Ready,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +50,7 @@ pub struct RepositoryAccess {
 pub enum MainPushMode {
     Denied,
     FirstPush,
-    Published,
+    Ready,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,19 +75,19 @@ impl RepositoryAccess {
 
 pub fn repository_access_for_user_id(
     owner_user_id: &str,
-    publication_state: RepoPublicationState,
+    lifecycle_state: RepoLifecycleState,
     member_permissions: Option<RepositoryMemberPermissions>,
     user_id: &str,
 ) -> RepositoryAccess {
-    let published = publication_state == RepoPublicationState::Published;
+    let ready = lifecycle_state == RepoLifecycleState::Ready;
     if owner_user_id == user_id {
         return RepositoryAccess {
             actor: RepositoryActor::Owner,
             can_read_private_files: true,
-            can_push: published,
+            can_push: ready,
             can_change_file_visibility: true,
             can_apply_changes: true,
-            can_manage_members: published,
+            can_manage_members: ready,
             can_delete_repo: true,
         };
     }
@@ -97,10 +97,10 @@ pub fn repository_access_for_user_id(
     };
     RepositoryAccess {
         actor: RepositoryActor::Member,
-        can_read_private_files: published,
-        can_push: published && permissions.can_push,
-        can_change_file_visibility: published && permissions.can_change_file_visibility,
-        can_apply_changes: published && permissions.can_apply_changes,
+        can_read_private_files: ready,
+        can_push: ready && permissions.can_push,
+        can_change_file_visibility: ready && permissions.can_change_file_visibility,
+        can_apply_changes: ready && permissions.can_apply_changes,
         can_manage_members: false,
         can_delete_repo: false,
     }
@@ -108,24 +108,20 @@ pub fn repository_access_for_user_id(
 
 pub fn repository_push_policy_for_user_id(
     owner_user_id: &str,
-    publication_state: RepoPublicationState,
+    lifecycle_state: RepoLifecycleState,
     member_permissions: Option<RepositoryMemberPermissions>,
     user_id: &str,
 ) -> RepositoryPushPolicy {
-    let access = repository_access_for_user_id(
-        owner_user_id,
-        publication_state,
-        member_permissions,
-        user_id,
-    );
-    let mode = if publication_state == RepoPublicationState::Unpublished && owner_user_id == user_id
-    {
-        MainPushMode::FirstPush
-    } else if publication_state == RepoPublicationState::Published && access.can_push {
-        MainPushMode::Published
-    } else {
-        MainPushMode::Denied
-    };
+    let access =
+        repository_access_for_user_id(owner_user_id, lifecycle_state, member_permissions, user_id);
+    let mode =
+        if lifecycle_state == RepoLifecycleState::AwaitingFirstPush && owner_user_id == user_id {
+            MainPushMode::FirstPush
+        } else if lifecycle_state == RepoLifecycleState::Ready && access.can_push {
+            MainPushMode::Ready
+        } else {
+            MainPushMode::Denied
+        };
     RepositoryPushPolicy { access, mode }
 }
 
@@ -280,8 +276,7 @@ pub struct RepoRecord {
     pub owner_handle: String,
     pub name: String,
     pub owner_user_id: String,
-    pub publication_state: RepoPublicationState,
-    pub default_visibility: Visibility,
+    pub lifecycle_state: RepoLifecycleState,
     pub change_version: u64,
 }
 
@@ -358,8 +353,7 @@ impl StoredRepository {
                 owner_handle: owner.handle.clone(),
                 name,
                 owner_user_id: owner.id.clone(),
-                publication_state: RepoPublicationState::Unpublished,
-                default_visibility,
+                lifecycle_state: RepoLifecycleState::AwaitingFirstPush,
                 change_version: 1,
             },
             repo_config: RepoConfig::with_default_visibility(config_default),
@@ -398,7 +392,7 @@ impl StoredRepository {
     pub fn access_for_user_id(&self, user_id: &str) -> RepositoryAccess {
         repository_access_for_user_id(
             &self.record.owner_user_id,
-            self.record.publication_state,
+            self.record.lifecycle_state,
             self.member_for_user(user_id)
                 .map(|member| member.permissions),
             user_id,
@@ -406,7 +400,7 @@ impl StoredRepository {
     }
 
     pub fn is_waiting_for_first_push(&self) -> bool {
-        self.record.publication_state == RepoPublicationState::Unpublished
+        self.record.lifecycle_state == RepoLifecycleState::AwaitingFirstPush
     }
 
     pub fn graph_has_file(&self, path: &ScopePath) -> bool {
@@ -445,7 +439,7 @@ impl StoredRepository {
 
     pub fn can_read_path(&self, principal: &Principal, path: &ScopePath) -> bool {
         if principal.kind == PrincipalKind::Public {
-            return self.record.publication_state == RepoPublicationState::Published
+            return self.record.lifecycle_state == RepoLifecycleState::Ready
                 && self.policy.can_read(path, false);
         }
 
@@ -453,7 +447,7 @@ impl StoredRepository {
         match access.actor {
             RepositoryActor::Owner => self.policy.can_read(path, true),
             RepositoryActor::Member => {
-                self.record.publication_state == RepoPublicationState::Published
+                self.record.lifecycle_state == RepoLifecycleState::Ready
                     && self.policy.can_read(path, access.can_read_private_files)
             }
             RepositoryActor::Public => false,
@@ -467,7 +461,7 @@ impl StoredRepository {
     pub fn push_policy_for_user_id(&self, user_id: &str) -> RepositoryPushPolicy {
         repository_push_policy_for_user_id(
             &self.record.owner_user_id,
-            self.record.publication_state,
+            self.record.lifecycle_state,
             self.member_for_user(user_id)
                 .map(|member| member.permissions),
             user_id,

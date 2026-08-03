@@ -112,7 +112,7 @@ const rateRequest = createServerFn({ method: 'POST' })
   .validator((data: RateRequestInput) => data)
   .handler(({ data }) => rateRequestForRequest(data))
 
-export const Route = createFileRoute('/repos/$owner/$repo/requests/$requestId')({
+export const Route = createFileRoute('/$owner/$repo/requests/$requestId')({
   loader: ({ params }) => loadRequestPage({ data: requestParamsForRoute(params) }),
   component: RequestRoute,
 })
@@ -139,7 +139,7 @@ function RequestRoute() {
     const result = await runRequestAction({ data: { ...requestParams, ...command } })
     try {
       if (result.deleted) {
-        await navigate({ params: repoParams, to: '/repos/$owner/$repo/requests' })
+        await navigate({ params: repoParams, to: '/$owner/$repo/requests' })
       } else {
         await router.invalidate()
       }

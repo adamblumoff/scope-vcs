@@ -4,7 +4,7 @@ use super::{
     repo_config::repo_config_from_policy,
     reviewed_updates::ReviewedUpdateError,
     store::{
-        CatalogError, FirstPushToken, GitPushToken, RepoPublicationState, RepoStorageCleanup,
+        CatalogError, FirstPushToken, GitPushToken, RepoLifecycleState, RepoStorageCleanup,
         SourceBlob, StoredRepository, UserAccount,
     },
 };
@@ -160,8 +160,7 @@ pub fn set_visibility(
         }
     }
 
-    let record_visibility_history =
-        repo.record.publication_state == RepoPublicationState::Published;
+    let record_visibility_history = repo.record.lifecycle_state == RepoLifecycleState::Ready;
     let live_tree = if record_visibility_history {
         repo.live_tree()
     } else {
@@ -195,9 +194,10 @@ pub fn set_visibility(
             .map_err(DomainError::invalid_input)?;
     }
     repo.visibility_events.extend(visibility_events);
+    let default_visibility = repo.repo_config.visibility.default_visibility().into();
     repo.repo_config = repo_config_from_policy(
         &repo.policy,
-        repo.record.default_visibility,
+        default_visibility,
         repo.repo_config.history.clone(),
     )
     .map_err(DomainError::invalid_input)?;

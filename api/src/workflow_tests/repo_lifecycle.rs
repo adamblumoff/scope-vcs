@@ -95,7 +95,7 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     let response = request(
         state.clone(),
         "GET",
-        "/v1/repos",
+        "/v1/users/owner/repos",
         Some(bearer_header()),
         None,
     )
@@ -103,7 +103,8 @@ async fn create_repo_route_creates_user_and_lists_repo() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body[0]["id"], "owner/scope_app");
+    assert_eq!(body["handle"], "owner");
+    assert_eq!(body["repositories"][0]["id"], "owner/scope_app");
 }
 
 #[tokio::test]
