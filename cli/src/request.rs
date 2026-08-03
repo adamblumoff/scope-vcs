@@ -238,7 +238,14 @@ fn start_request_branch(
     )?;
     if let Err(switch_error) = run_git_in_repo(
         git_repo,
-        &["switch", "--no-track", "-c", &branch, &remote_main],
+        &[
+            "switch",
+            "--quiet",
+            "--no-track",
+            "-c",
+            &branch,
+            &remote_main,
+        ],
     ) {
         let cleanup = api_close_request(
             client,

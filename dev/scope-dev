@@ -350,10 +350,12 @@ doctor() {
   local issuer dev_email secret_key
   issuer="$(get_clerk_issuer)"
   dev_email="$(get_dev_user_email)"
-  secret_key="$(read_dotenv_value "$ROOT/web/.env.local" "CLERK_SECRET_KEY")"
-  if [[ -z "$secret_key" || "$secret_key" != sk_test_* ]]; then
-    echo "web/.env.local must define a Clerk development secret key (sk_test_)" >&2
-    exit 1
+  if [[ "${SCOPE_DEV_HEADLESS_E2E:-0}" != "1" ]]; then
+    secret_key="$(read_dotenv_value "$ROOT/web/.env.local" "CLERK_SECRET_KEY")"
+    if [[ -z "$secret_key" || "$secret_key" != sk_test_* ]]; then
+      echo "web/.env.local must define a Clerk development secret key (sk_test_)" >&2
+      exit 1
+    fi
   fi
 
   echo "doctor ok"
@@ -429,7 +431,9 @@ up() {
   doctor >/dev/null
   stop_owned_processes
   assert_port_free 8080 "api"
-  assert_port_free 3000 "web"
+  if [[ "${SCOPE_DEV_HEADLESS_E2E:-0}" != "1" ]]; then
+    assert_port_free 3000 "web"
+  fi
   ensure_dir "$STATE_DIR"
   ensure_dir "$DATA_DIR"
   rm -f "$API_OUT_LOG" "$API_ERR_LOG" "$WEB_OUT_LOG" "$WEB_ERR_LOG"
@@ -440,10 +444,12 @@ up() {
     exit 1
   fi
   start_worker
-  start_web
-  if ! wait_http "http://localhost:3000" 45; then
-    echo "web did not become ready; see $WEB_ERR_LOG" >&2
-    exit 1
+  if [[ "${SCOPE_DEV_HEADLESS_E2E:-0}" != "1" ]]; then
+    start_web
+    if ! wait_http "http://localhost:3000" 45; then
+      echo "web did not become ready; see $WEB_ERR_LOG" >&2
+      exit 1
+    fi
   fi
   status
 }

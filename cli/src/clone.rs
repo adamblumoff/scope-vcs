@@ -1,8 +1,8 @@
 use crate::{
-    api::{api_url, get_repo_config, http_client},
+    api::{RepositoryActor, api_url, get_repo, get_repo_config, http_client},
     auth::read_stored_session_token,
     git_repo::{clone_with_bearer, install_scope_fetch_auth},
-    repo_config::write_worktree_scope_repo_config_with_base,
+    repo_config::{default_scope_repo_config, write_worktree_scope_repo_config_with_base},
 };
 use anyhow::{Context, bail};
 use scope_domain::repo_config::RepoConfig;
@@ -20,27 +20,38 @@ pub fn clone_repo(repository: &str, destination: Option<&Path>) -> anyhow::Resul
     let session_token =
         read_stored_session_token(&api_url)?.context("not signed in; run scope login")?;
     let client = http_client()?;
-    let repo_config = get_repo_config(
+    let repo = get_repo(
         &client,
         &api_url,
         &session_token,
         &target.owner,
         &target.repo,
     )?;
-    let remote_url = git_remote_url(
-        &api_url,
-        &permissioned_git_remote_path(&target.owner, &target.repo),
-    );
+    let (git_remote_path, repo_config) = match repo.access.actor {
+        RepositoryActor::Public => (
+            public_git_remote_path(&target.owner, &target.repo),
+            default_scope_repo_config(),
+        ),
+        RepositoryActor::Member | RepositoryActor::Owner => {
+            let context = get_repo_config(
+                &client,
+                &api_url,
+                &session_token,
+                &target.owner,
+                &target.repo,
+            )?;
+            (
+                permissioned_git_remote_path(&target.owner, &target.repo),
+                context.config,
+            )
+        }
+    };
+    let remote_url = git_remote_url(&api_url, &git_remote_path);
     let checkout_dir = destination
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_clone_dir(&target.repo));
 
-    clone_and_configure(
-        &remote_url,
-        &session_token,
-        &checkout_dir,
-        &repo_config.config,
-    )
+    clone_and_configure(&remote_url, &session_token, &checkout_dir, &repo_config)
 }
 
 fn clone_and_configure(
@@ -83,6 +94,10 @@ fn git_remote_url(api_url: &str, git_remote_path: &str) -> String {
 
 pub fn permissioned_git_remote_path(owner: &str, repo: &str) -> String {
     format!("/git/permissioned/{owner}/{repo}")
+}
+
+pub fn public_git_remote_path(owner: &str, repo: &str) -> String {
+    format!("/git/public/{owner}/{repo}")
 }
 
 pub fn default_clone_dir(repo: &str) -> PathBuf {
@@ -141,6 +156,18 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&helper.stdout).trim(),
             "!scope git-credential"
+        );
+    }
+
+    #[test]
+    fn projection_paths_are_explicit_for_public_and_repository_actors() {
+        assert_eq!(
+            public_git_remote_path("adam", "sample"),
+            "/git/public/adam/sample"
+        );
+        assert_eq!(
+            permissioned_git_remote_path("adam", "sample"),
+            "/git/permissioned/adam/sample"
         );
     }
 }

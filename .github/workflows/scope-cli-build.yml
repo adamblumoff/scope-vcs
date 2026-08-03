@@ -5,28 +5,30 @@ on:
     paths:
       - ".github/scripts/deploy-railway.sh"
       - ".github/workflows/scope-cli-build.yml"
-      - "api/src/app.rs"
-      - "api/src/http/responses.rs"
-      - "api/src/http/routes.rs"
-      - "api/src/http/type_exports.rs"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "api/**"
       - "cli/**"
       - "crates/**"
+      - "dev/**"
       - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
+      - "worker/**"
   push:
     branches:
       - main
     paths:
       - ".github/scripts/deploy-railway.sh"
       - ".github/workflows/scope-cli-build.yml"
-      - "api/src/app.rs"
-      - "api/src/http/responses.rs"
-      - "api/src/http/routes.rs"
-      - "api/src/http/type_exports.rs"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "api/**"
       - "cli/**"
       - "crates/**"
+      - "dev/**"
       - "rust-toolchain.toml"
       - "web/src/api/types.generated.ts"
+      - "worker/**"
   workflow_dispatch:
 
 concurrency:
@@ -172,9 +174,114 @@ jobs:
           path: cli/dist/${{ matrix.artifact }}
           if-no-files-found: error
 
+  e2e:
+    name: Two-actor contribution flow
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: scope_dev
+          POSTGRES_PASSWORD: scope
+          POSTGRES_USER: scope
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scope -d scope_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.94.0
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+            cli/target
+          key: ${{ runner.os }}-cli-e2e-cargo-${{ hashFiles('Cargo.lock', 'cli/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-cli-e2e-cargo-${{ hashFiles('Cargo.lock', 'cli/Cargo.lock') }}
+            ${{ runner.os }}-cli-e2e-cargo-
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install web dependencies
+        working-directory: web
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.0 --activate
+          pnpm install --frozen-lockfile
+
+      - name: Configure isolated local stack
+        shell: bash
+        run: |
+          clerk_host='scope-e2e.clerk.accounts.dev$'
+          clerk_payload="$(printf '%s' "$clerk_host" | base64 | tr '/+' '_-' | tr -d '=\n')"
+          printf '%s\n' \
+            'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
+            'SCOPE_DEV_USER_EMAIL=smoke@example.test' \
+            'SCOPE_DEV_USER_HANDLE=dev' > .env.local
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\n' \
+            "$clerk_payload" > web/.env.local
+
+      - name: Prebuild local stack and CLI
+        run: |
+          cargo build -p api --features local-dev --locked
+          cargo build -p worker --locked
+          cargo build --manifest-path cli/Cargo.toml --locked --bin scope
+
+      - name: Start seeded local stack
+        env:
+          SCOPE_DEV_HEADLESS_E2E: "1"
+        run: ./dev/scope-dev up
+
+      - name: Exercise the two-actor contribution flow
+        env:
+          SCOPE_API_URL: http://localhost:8080
+          SCOPE_CLI_E2E: "1"
+        run: >-
+          cargo test
+          --manifest-path cli/Cargo.toml
+          --test contribution_flow
+          --locked
+          -- --nocapture
+
+      - name: Print local stack logs
+        if: failure()
+        shell: bash
+        run: |
+          for log in .tmp/local-dev/*.log; do
+            [[ -f "$log" ]] || continue
+            echo "::group::$log"
+            tail -n 300 "$log"
+            echo "::endgroup::"
+          done
+
+      - name: Stop local stack
+        if: always()
+        run: ./dev/scope-dev down
+
   deploy:
     name: Deploy scope-cli
-    needs: build
+    needs: [build, e2e]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:

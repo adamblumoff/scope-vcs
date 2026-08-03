@@ -62,7 +62,6 @@ pub fn scope_failure_with_code<const N: usize>(
     assert!(stderr.contains(expected), "{stderr}");
     stderr
 }
-
 #[allow(dead_code)]
 pub fn create_repo_with_head(cwd: &Path) {
     run_git(cwd, ["-c", "init.defaultBranch=main", "init"]);
