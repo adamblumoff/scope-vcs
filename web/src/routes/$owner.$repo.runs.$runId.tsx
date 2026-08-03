@@ -32,7 +32,7 @@ const retryRepoRun = createServerFn({ method: 'POST' })
   .validator(parseRunActionInput)
   .handler(({ data }) => retryRepoRunForRequest(data))
 
-export const Route = createFileRoute('/repos/$owner/$repo/runs/$runId')({
+export const Route = createFileRoute('/$owner/$repo/runs/$runId')({
   loader: ({ params }) => loadRepoRunDetail({
     data: runInput(params),
   }),

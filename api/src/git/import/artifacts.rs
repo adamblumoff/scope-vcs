@@ -10,7 +10,7 @@ use scope_domain::runs::{
     trigger::{PushTriggerInput, PushWorkflowFile},
     workflow::WorkflowPath,
 };
-use scope_domain::store::RepoPublicationState;
+use scope_domain::store::RepoLifecycleState;
 use scope_git::DEFAULT_GIT_BRANCH;
 use std::{path::Path as FsPath, time::Instant};
 
@@ -19,7 +19,7 @@ const MAX_PUSH_WORKFLOW_FILES: usize = 64;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReviewedUpdateMode {
     FirstPush,
-    PublishedPush,
+    ReadyPush,
     RequestMerge,
 }
 
@@ -38,7 +38,7 @@ pub(crate) async fn receive_pack_update_from_staging_repo(
         staging_repo,
         author_id,
         config,
-        ReviewedUpdateMode::PublishedPush,
+        ReviewedUpdateMode::ReadyPush,
     )
     .await
 }
@@ -107,10 +107,8 @@ async fn reviewed_update_from_staging_repo_mode(
         .git_push_context(owner, repo_name, author_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
-    if mode != ReviewedUpdateMode::FirstPush
-        && repo.publication_state != RepoPublicationState::Published
-    {
-        return Err(ApiError::conflict("repo must be published before push"));
+    if mode != ReviewedUpdateMode::FirstPush && repo.lifecycle_state != RepoLifecycleState::Ready {
+        return Err(ApiError::conflict("repo must be ready before push"));
     }
     let message = pushed_commit_message(staging_repo, &head_oid)?;
     let base_head_oid = repo.git_head.as_ref().map(|head| head.head_oid.as_str());

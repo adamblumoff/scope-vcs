@@ -46,7 +46,7 @@ export function resolveReadmeUrl(
   }
 
   if (parts.length === 0) return ''
-  const repositoryPath = `/repos/${encodeURIComponent(context.owner)}/${encodeURIComponent(context.repo)}`
+  const repositoryPath = `/${encodeURIComponent(context.owner)}/${encodeURIComponent(context.repo)}`
   return `${repositoryPath}?file=${encodeURIComponent(parts.join('/'))}${fragment}`
 }
 

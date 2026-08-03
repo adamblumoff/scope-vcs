@@ -34,7 +34,7 @@ const nextSteps = [
   {
     command: 'scope push',
     copyLabel: 'Copy push command',
-    description: 'Review and publish the repository’s first version.',
+    description: 'Review and push the repository’s first version.',
   },
 ] as const
 

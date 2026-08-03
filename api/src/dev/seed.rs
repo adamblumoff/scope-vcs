@@ -18,8 +18,8 @@ use scope_domain::{
         start_request,
     },
     store::{
-        GitHead, GitSegment, LogicalCommitOrigin, RepoPublicationState, SourceBlob,
-        StoredRepository, UserAccount,
+        GitHead, GitSegment, LogicalCommitOrigin, RepoLifecycleState, SourceBlob, StoredRepository,
+        UserAccount,
     },
 };
 use scope_object_store::{ContentObjectKind, ObjectStore, put_content_object, put_source_blob};
@@ -125,7 +125,7 @@ fn published_demo(
         ],
     ));
     populate_seed_live_files(&mut repo);
-    repo.record.publication_state = RepoPublicationState::Published;
+    repo.record.lifecycle_state = RepoLifecycleState::Ready;
     let (head, segment) = git_segment_state(
         object_store,
         "public-demo-live",
@@ -177,7 +177,7 @@ fn update_demo(
         )?],
     ));
     populate_seed_live_files(&mut repo);
-    repo.record.publication_state = RepoPublicationState::Published;
+    repo.record.lifecycle_state = RepoLifecycleState::Ready;
     let initial = SeedGitCommit {
         files: &[
             ("README.md", UPDATE_DEMO_INITIAL_README),

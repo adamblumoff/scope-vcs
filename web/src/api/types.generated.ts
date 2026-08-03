@@ -16,7 +16,7 @@ export type RepositoryMemberPermissions = { can_push: boolean, can_change_file_v
 
 export type RepositoryInviteState = "Pending" | "Accepted" | "Revoked" | "Expired";
 
-export type RepoPublicationState = "Unpublished" | "Published";
+export type RepoLifecycleState = "AwaitingFirstPush" | "Ready";
 
 export type RepoChangeEvent = { repo_id: string, version: number, kind: RepoChangeKind, };
 
@@ -60,7 +60,7 @@ export type SessionResponse = { identity: SessionIdentity | null, repo: SessionR
 
 export type SessionIdentity = { user_id: string, email: string | null, email_verified: boolean, };
 
-export type SessionRepo = { id: string, publication_state: RepoPublicationState, access: RepositoryAccessResponse, };
+export type SessionRepo = { id: string, lifecycle_state: RepoLifecycleState, access: RepositoryAccessResponse, };
 
 export type SessionCapabilities = { read: boolean, can_read_private_files: boolean, can_push: boolean, can_change_file_visibility: boolean, can_apply_changes: boolean, can_manage_members: boolean, can_delete_repo: boolean, };
 
@@ -90,11 +90,13 @@ export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
 
 export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
 
-export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoPublicationState, default_visibility: Visibility, change_version: number, access: RepositoryAccessResponse, open_request_count: number, request_permissions: RepoRequestPermissionsResponse, };
+export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoLifecycleState, change_version: number, access: RepositoryAccessResponse, open_request_count: number, request_permissions: RepoRequestPermissionsResponse, };
+
+export type OwnerProfileResponse = { handle: string, repositories: Array<RepoSummaryResponse>, };
 
 export type RepoRequestPermissionsResponse = { can_start_request: boolean, };
 
-export type CreateRepoRequest = { name: string, visibility: Visibility | null, };
+export type CreateRepoRequest = { name: string, file_default_visibility: Visibility | null, };
 
 export type CreateRepoResponse = { repo: RepoSummaryResponse, init: RepoInitResponse, };
 
@@ -106,7 +108,7 @@ export type CreatePushIntentResponse = { token: string, base_head_oid: GitOid | 
 
 export type RepoInitResponse = { repo: RepoSummaryResponse, git_remote_url: string, remote_name: string, push_branch: string, token: FirstPushTokenResponse | null, push_token: GitPushTokenResponse | null, };
 
-export type RepoConfigResponse = { config: RepoConfig, config_hash: string, lifecycle_state: RepoPublicationState, access: RepositoryAccessResponse, head_oid: string | null, };
+export type RepoConfigResponse = { config: RepoConfig, config_hash: string, lifecycle_state: RepoLifecycleState, access: RepositoryAccessResponse, head_oid: string | null, };
 
 export type FirstPushTokenResponse = { status: FirstPushTokenStatus, created_at_unix: number, expires_at_unix: number, used_at_unix: number | null, secret: string | null, };
 
@@ -286,6 +288,7 @@ export const ApiRouteTemplates = {
   cliSessions: "/v1/cli/sessions",
   cliSessionById: "/v1/cli/sessions/{session_id}",
   repos: "/v1/repos",
+  ownerRepositories: "/v1/users/{handle}/repos",
   repo: "/v1/repos/{owner}/{repo}",
   repoConfig: "/v1/repos/{owner}/{repo}/config",
   repoOperations: "/v1/repos/{owner}/{repo}/operations",

@@ -7,7 +7,7 @@ pub(crate) use repo_collaboration::*;
 pub(crate) use requests::*;
 use scope_api_contract::{
     DeviceLoginStatus, FileChangeKind, FirstPushTokenResponse, GitOid, GitPushTokenResponse,
-    RepoInitResponse, RepoPublicationState, RepoRequestPermissionsResponse, RepoSummaryResponse,
+    RepoInitResponse, RepoLifecycleState, RepoRequestPermissionsResponse, RepoSummaryResponse,
     RepositoryAccessResponse, RequestChangeBlockResponse, SessionIdentity, UserResponse,
     Visibility,
 };
@@ -16,8 +16,8 @@ use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 use scope_domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
 use scope_domain::policy::ScopePath;
 use scope_domain::store::{
-    FirstPushToken, GitPushToken, RepoPublicationState as DomainRepoPublicationState,
-    RepositoryAccess, RepositoryActor, StoredRepository, UserAccount,
+    FirstPushToken, GitPushToken, RepoLifecycleState as DomainRepoLifecycleState, RepositoryAccess,
+    RepositoryActor, StoredRepository, UserAccount,
 };
 use serde::{Deserialize, Serialize};
 
@@ -284,7 +284,7 @@ pub(crate) struct SessionResponse {
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct SessionRepo {
     pub(crate) id: String,
-    pub(crate) publication_state: RepoPublicationState,
+    pub(crate) lifecycle_state: RepoLifecycleState,
     pub(crate) access: RepositoryAccessResponse,
 }
 
@@ -451,8 +451,7 @@ pub(crate) fn repo_summary_for_user(
     if access.actor == RepositoryActor::Public {
         return None;
     }
-    let lifecycle_allows_read = repo.record.publication_state
-        == DomainRepoPublicationState::Published
+    let lifecycle_allows_read = repo.record.lifecycle_state == DomainRepoLifecycleState::Ready
         || access.actor == RepositoryActor::Owner;
     if !lifecycle_allows_read
         || !repo
@@ -466,8 +465,7 @@ pub(crate) fn repo_summary_for_user(
         id: repo.record.id.clone(),
         owner_handle: repo.record.owner_handle.clone(),
         name: repo.record.name.clone(),
-        lifecycle_state: repo.record.publication_state.into(),
-        default_visibility: repo.record.default_visibility.into(),
+        lifecycle_state: repo.record.lifecycle_state.into(),
         change_version: repo_change_version_for_access(repo, access),
         access: repository_access_response(access),
         open_request_count,

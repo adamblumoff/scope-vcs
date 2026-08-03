@@ -28,7 +28,7 @@ pub fn start(
     let bundle = create_bundle(&repo, &request_id)?;
     let client = run_client()?;
     let session = session_from_cache_or_browser(&client, &api_url)?;
-    println!("Uploading unpublished snapshot for {}", short_oid(&git_oid));
+    println!("Uploading first-push snapshot for {}", short_oid(&git_oid));
     let run = create_manual_run(
         &client,
         &api_url,

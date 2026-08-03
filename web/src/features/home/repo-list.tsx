@@ -2,15 +2,16 @@ import type { CliInstallCommands, RepoSummary } from '@/api/types'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { CopyableCodeBlock } from '@/components/copyable-code-block'
-import { VisibilityBadge } from '@/components/visibility-badge'
 import { Link } from '@tanstack/react-router'
 import { ChevronRight, GitBranch } from 'lucide-react'
 
 export function RepoList({
   cliInstallCommands,
+  isOwner,
   repositories,
 }: {
   cliInstallCommands: CliInstallCommands
+  isOwner: boolean
   repositories: RepoSummary[]
 }) {
   if (repositories.length === 0) {
@@ -21,14 +22,15 @@ export function RepoList({
         </div>
         <div className="max-w-[420px]">
           <div className="text-base font-semibold leading-6">
-            No repositories yet
+            {isOwner ? 'No repositories yet' : 'No repositories to show'}
           </div>
           <p className="mt-1 leading-6 text-muted-foreground">
-            Install the CLI, then initialize an existing Git repository with at
-            least one commit.
+            {isOwner
+              ? 'Install the CLI, then initialize an existing Git repository with at least one commit.'
+              : 'This user does not have any repositories with public project files.'}
           </p>
         </div>
-        <div className="mt-1 w-full max-w-[460px] space-y-2.5 text-left">
+        {isOwner && <div className="mt-1 w-full max-w-[460px] space-y-2.5 text-left">
           <CopyableCodeBlock
             copyLabel="Copy macOS/Linux install command"
             value={cliInstallCommands.posix}
@@ -39,7 +41,7 @@ export function RepoList({
           />
           <CopyableCodeBlock copyLabel="Copy init command" value="scope init" />
           <CopyableCodeBlock copyLabel="Copy push command" value="scope push" />
-        </div>
+        </div>}
       </div>
     )
   }
@@ -53,7 +55,7 @@ export function RepoList({
       <ul className="divide-y divide-border">
         {repositories.map((repo) => (
           <li key={repo.id}>
-            <RepoListRow repo={repo} />
+            <RepoListRow isOwner={isOwner} repo={repo} />
           </li>
         ))}
       </ul>
@@ -61,8 +63,8 @@ export function RepoList({
   )
 }
 
-function RepoListRow({ repo }: { repo: RepoSummary }) {
-  const showLifecycle = repo.lifecycle_state !== 'Published'
+function RepoListRow({ isOwner, repo }: { isOwner: boolean; repo: RepoSummary }) {
+  const showLifecycle = repo.lifecycle_state !== 'Ready'
 
   return (
     <div className="group relative flex min-h-16 items-center gap-3 px-3 py-3 transition-colors hover:bg-muted/45">
@@ -74,7 +76,7 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
         <Link
           className="font-mono text-sm leading-5 tracking-tight outline-none after:absolute after:inset-0"
           params={{ owner: repo.owner_handle, repo: repo.name }}
-          to="/repos/$owner/$repo"
+          to="/$owner/$repo"
         >
           <span className="text-muted-foreground">{repo.owner_handle}/</span>
           <span className="font-semibold text-foreground">
@@ -82,9 +84,8 @@ function RepoListRow({ repo }: { repo: RepoSummary }) {
           </span>
         </Link>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          <VisibilityBadge compact visibility={repo.default_visibility} />
-          {showLifecycle && <LifecycleBadge state={repo.lifecycle_state} />}
-          <span>{repo.access.actor}</span>
+          {isOwner && showLifecycle && <LifecycleBadge state={repo.lifecycle_state} />}
+          {repo.access.actor !== 'Public' && <span>{repo.access.actor}</span>}
         </div>
       </div>
 

@@ -1,9 +1,8 @@
 import { buildCliInstallCommands } from '@/api/cli-install'
-import { loadHomeForRequest } from '@/api/repos'
-import { HomePage } from '@/features/home/home-page'
+import { loadAuthenticatedAccountForRequest } from '@/api/profile'
 import { MarketingLandingPage } from '@/features/marketing/marketing-landing-page'
 import { detectCliPlatform } from '@/lib/cli-platform'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
 const loadIndex = createServerFn({ method: 'GET' }).handler(async () => {
@@ -24,10 +23,12 @@ const loadIndex = createServerFn({ method: 'GET' }).handler(async () => {
     } as const
   }
 
-  return {
-    home: await loadHomeForRequest(),
-    kind: 'home',
-  } as const
+  const account = await loadAuthenticatedAccountForRequest()
+  const handle = account.user?.handle
+  if (!handle) {
+    throw new Error('Signed-in account is missing a Scope handle.')
+  }
+  throw redirect({ href: `/${encodeURIComponent(handle)}` })
 })
 
 export const Route = createFileRoute('/')({
@@ -46,6 +47,4 @@ function IndexRoute() {
       />
     )
   }
-
-  return <HomePage home={state.home} />
 }

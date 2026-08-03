@@ -26,7 +26,7 @@ use scope_domain::projection::{
 };
 use scope_domain::repo_config::{ConfigVisibility, RepoConfig};
 use scope_domain::store::{
-    GitPushToken, LogicalCommitOrigin, RepoPublicationState, RepoRecord, RepoStorageCleanup,
+    GitPushToken, LogicalCommitOrigin, RepoLifecycleState, RepoRecord, RepoStorageCleanup,
     RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
     StoredRepository, UserAccount,
 };
@@ -238,7 +238,7 @@ async fn test_state_with_first_push_token() -> (AppState, String) {
         .metadata
         .repositories()
         .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
-            repo.record.publication_state = RepoPublicationState::Unpublished;
+            repo.record.lifecycle_state = RepoLifecycleState::AwaitingFirstPush;
             repo.first_push_token = Some(token);
         })
         .await
@@ -496,14 +496,9 @@ async fn persist_and_promote_test_update(
 }
 
 async fn published_staging_repo(state: &AppState) -> PathBuf {
-    ensure_published_receive_pack_staging_repo(
-        state,
-        TEST_REPO_OWNER,
-        TEST_REPO_NAME,
-        &test_owner_id(),
-    )
-    .await
-    .unwrap()
+    ensure_ready_receive_pack_staging_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME, &test_owner_id())
+        .await
+        .unwrap()
 }
 
 fn git_head_oid(repo: &FsPath) -> String {
@@ -520,8 +515,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
             owner_handle: TEST_REPO_OWNER.to_string(),
             name: TEST_REPO_NAME.to_string(),
             owner_user_id: owner_id.to_string(),
-            publication_state: RepoPublicationState::Published,
-            default_visibility: Visibility::Public,
+            lifecycle_state: RepoLifecycleState::Ready,
             change_version: 1,
         },
         repo_config: RepoConfig::with_default_visibility(ConfigVisibility::Public),

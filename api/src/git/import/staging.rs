@@ -5,9 +5,7 @@ use scope_domain::reviewed_updates::{
 use scope_domain::runs::trigger::PushTriggerInput;
 use scope_domain::store::{GitHead, GitSegment, SourceBlob, StoredRepository};
 use scope_domain::{
-    error::DomainError,
-    policy::{ScopePath, Visibility},
-    repo_actions::reviewed_update_domain_error,
+    error::DomainError, policy::ScopePath, repo_actions::reviewed_update_domain_error,
 };
 use scope_domain::{repo_config::RepoConfig, repo_control::is_private_control_path};
 use std::collections::BTreeSet;
@@ -89,8 +87,8 @@ pub(super) fn receive_pack_update_changes_visibility(
         return previous_config != &update.config;
     }
 
-    if Visibility::from(update.config.visibility.default_visibility())
-        != repo.record.default_visibility
+    if update.config.visibility.default_visibility()
+        != repo.repo_config.visibility.default_visibility()
     {
         return true;
     }

@@ -327,7 +327,7 @@ mod tests {
     use scope_domain::{
         policy::Visibility,
         requests::{RequestActorRole, RequestAudience, StartRequestInput},
-        store::{RepoPublicationState, StoredRepository, UserAccount},
+        store::{RepoLifecycleState, StoredRepository, UserAccount},
     };
     use std::sync::Arc;
     use tokio::sync::Barrier;
@@ -540,7 +540,7 @@ mod tests {
         let owner = user("user_owner", "owner");
         let author = user("user_author", "author");
         let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
-        repo.record.publication_state = RepoPublicationState::Published;
+        repo.record.lifecycle_state = RepoLifecycleState::Ready;
         let mut catalog = crate::db::CatalogFixture::default();
         catalog.users.insert(owner.id.clone(), owner);
         catalog.users.insert(author.id.clone(), author);

@@ -1,7 +1,7 @@
 use crate::{
     agent_context::ensure_repo_rules_ready_for_push,
     api::{
-        CreatePushIntentParams, PushTriggerEvaluationResponse, RepoPublicationState,
+        CreatePushIntentParams, PushTriggerEvaluationResponse, RepoLifecycleState,
         RepositoryAccessResponse, RepositoryActor, api_url, create_push_intent,
         get_push_trigger_evaluation, get_repo_config, http_client,
     },
@@ -98,7 +98,7 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool, wait: bool) -> anyhow
         }
     }
     let local_remote_head = scope_remote_head_oid(&git_repo, &remote, DEFAULT_SCOPE_BRANCH)?;
-    if push_context.lifecycle_state == RepoPublicationState::Published
+    if push_context.lifecycle_state == RepoLifecycleState::Ready
         && local_remote_head.as_deref() != push_context.head_oid.as_deref()
     {
         fetch_scope_remote_with_bearer(
@@ -111,7 +111,7 @@ pub fn run(explicit_remote: Option<&str>, no_review: bool, wait: bool) -> anyhow
     }
     let reviewed_base_oid = if no_review {
         None
-    } else if push_context.lifecycle_state == RepoPublicationState::Published {
+    } else if push_context.lifecycle_state == RepoLifecycleState::Ready {
         Some(scope_remote_head_oid(
             &git_repo,
             &remote,
@@ -331,13 +331,17 @@ pub fn load_scope_remote(
 
 pub fn ensure_scope_remote_can_receive_push(
     target: &ScopeRemote,
-    lifecycle_state: RepoPublicationState,
+    lifecycle_state: RepoLifecycleState,
     access: &RepositoryAccessResponse,
 ) -> anyhow::Result<()> {
-    if lifecycle_state == RepoPublicationState::Unpublished {
-        ensure_unpublished_repo_can_receive_first_push(&target.owner, &target.repo, access.actor)
+    if lifecycle_state == RepoLifecycleState::AwaitingFirstPush {
+        ensure_awaiting_first_push_repo_can_receive_first_push(
+            &target.owner,
+            &target.repo,
+            access.actor,
+        )
     } else {
-        ensure_published_repo_can_receive_push(
+        ensure_ready_repo_can_receive_push(
             &target.owner,
             &target.repo,
             lifecycle_state,
@@ -366,7 +370,7 @@ pub fn push_reviewed_head_with_intent(
     })
 }
 
-fn ensure_unpublished_repo_can_receive_first_push(
+fn ensure_awaiting_first_push_repo_can_receive_first_push(
     owner: &str,
     repo: &str,
     actor: RepositoryActor,
@@ -377,17 +381,17 @@ fn ensure_unpublished_repo_can_receive_first_push(
     Ok(())
 }
 
-fn ensure_published_repo_can_receive_push(
+fn ensure_ready_repo_can_receive_push(
     owner: &str,
     repo: &str,
-    lifecycle_state: RepoPublicationState,
+    lifecycle_state: RepoLifecycleState,
     can_push: bool,
 ) -> anyhow::Result<()> {
     match lifecycle_state {
-        RepoPublicationState::Unpublished => {
+        RepoLifecycleState::AwaitingFirstPush => {
             bail!("repo {owner}/{repo} is waiting for its first push. Run: scope init");
         }
-        RepoPublicationState::Published => {}
+        RepoLifecycleState::Ready => {}
     }
 
     if !can_push {
@@ -435,11 +439,16 @@ mod tests {
 
     #[test]
     fn first_push_requires_owner_access() {
-        ensure_unpublished_repo_can_receive_first_push("owner", "repo", RepositoryActor::Owner)
-            .unwrap();
+        ensure_awaiting_first_push_repo_can_receive_first_push(
+            "owner",
+            "repo",
+            RepositoryActor::Owner,
+        )
+        .unwrap();
         for actor in [RepositoryActor::Member, RepositoryActor::Public] {
             assert!(
-                ensure_unpublished_repo_can_receive_first_push("owner", "repo", actor).is_err()
+                ensure_awaiting_first_push_repo_can_receive_first_push("owner", "repo", actor)
+                    .is_err()
             );
         }
     }
@@ -447,12 +456,12 @@ mod tests {
     #[test]
     fn published_push_requires_write_access() {
         for (state, can_push, allowed) in [
-            (RepoPublicationState::Published, true, true),
-            (RepoPublicationState::Published, false, false),
-            (RepoPublicationState::Unpublished, true, false),
+            (RepoLifecycleState::Ready, true, true),
+            (RepoLifecycleState::Ready, false, false),
+            (RepoLifecycleState::AwaitingFirstPush, true, false),
         ] {
             assert_eq!(
-                ensure_published_repo_can_receive_push("owner", "repo", state, can_push).is_ok(),
+                ensure_ready_repo_can_receive_push("owner", "repo", state, can_push).is_ok(),
                 allowed,
             );
         }

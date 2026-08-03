@@ -48,7 +48,7 @@ const loadRepoFile = createServerFn({ method: 'GET' })
     }
   })
 
-export const Route = createFileRoute('/repos/$owner/$repo/')({
+export const Route = createFileRoute('/$owner/$repo/')({
   validateSearch: parseRepoCodeSearch,
   staleTime: Infinity,
   loader: ({ params }) => loadRepoContent({ data: params }),

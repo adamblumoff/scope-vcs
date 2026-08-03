@@ -7,7 +7,7 @@ use {
             Request, RequestActorRole, RequestAudience, RequestPolicyDecision, RequestViewer,
             StartRequestInput, request_policy,
         },
-        store::{RepoPublicationState, RepositoryActor, StoredRepository},
+        store::{RepoLifecycleState, RepositoryActor, StoredRepository},
     },
 };
 
@@ -19,9 +19,9 @@ pub(super) fn authorize_start_request(
         RepositoryActor::Owner => RequestActorRole::Owner,
         RepositoryActor::Member => RequestActorRole::Member,
         RepositoryActor::Public => {
-            if repo.record.publication_state != RepoPublicationState::Published {
+            if repo.record.lifecycle_state != RepoLifecycleState::Ready {
                 return Err(PostgresError::permission_denied(
-                    "published repository required",
+                    "ready repository required",
                 ));
             }
             input.audience = RequestAudience::Public;

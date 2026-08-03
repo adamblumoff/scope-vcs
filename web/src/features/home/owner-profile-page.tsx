@@ -1,8 +1,7 @@
-import type { HomeState } from '@/api/types'
+import type { ProfileState } from '@/api/types'
 import { ApplicationTopbar } from '@/components/application-topbar'
 import { AppShell } from '@/components/app-shell'
 import { PageContent, PageHeader } from '@/components/page-header'
-import { PageErrorAlert } from '@/components/page-error-alert'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useHomeFlash } from '@/lib/home-flash'
@@ -17,14 +16,15 @@ type ThemeMode = 'dark' | 'light'
 const THEME_STORAGE_KEY = 'scope-theme'
 const THEME_CHANGE_EVENT = 'scope-theme-change'
 
-export function HomePage({ home }: { home: HomeState }) {
+export function OwnerProfilePage({ state }: { state: ProfileState }) {
   const theme = useSyncExternalStore(
     subscribeToTheme,
     readBrowserTheme,
     readServerTheme,
   )
   const flash = useHomeFlash()
-  const { account, repositories } = home
+  const { account, profile } = state
+  const isOwner = account.user?.handle === profile.handle
 
   function toggleTheme() {
     const nextTheme = nextThemeMode(theme)
@@ -34,37 +34,42 @@ export function HomePage({ home }: { home: HomeState }) {
   return (
     <AppShell
       header={() => (
-        <ApplicationTopbar contextLabel={account?.user?.handle ?? 'Repositories'}>
+        <ApplicationTopbar contextLabel={profile.handle}>
           <div className="flex min-w-0 items-center gap-2">
-              <Button
-                aria-label="CLI sessions"
-                asChild
-                size="icon-sm"
-                title="CLI sessions"
-                type="button"
-                variant="secondary"
-              >
-                <Link to="/account">
-                  <KeyRound className="size-3.5" />
+            {account.user ? (
+              <>
+                <Button
+                  aria-label="CLI sessions"
+                  asChild
+                  size="icon-sm"
+                  title="CLI sessions"
+                  type="button"
+                  variant="secondary"
+                >
+                  <Link to="/account">
+                    <KeyRound className="size-3.5" />
+                  </Link>
+                </Button>
+                <UserButton />
+              </>
+            ) : (
+              <Button asChild size="sm" variant="secondary">
+                <Link
+                  params={{ _splat: '' }}
+                  search={{ redirect_url: `/${profile.handle}` }}
+                  to="/sign-in/$"
+                >
+                  Sign in
                 </Link>
               </Button>
-              <UserButton />
-              <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+            )}
+            <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
           </div>
         </ApplicationTopbar>
       )}
     >
       <PageContent>
-        <PageHeader
-          description={account?.identity?.email ?? account?.identity?.user_id}
-          title="Repositories"
-        />
-
-        {home.error && (
-          <PageErrorAlert title="Repositories unavailable">
-            {home.error}
-          </PageErrorAlert>
-        )}
+        <PageHeader description="Repositories" title={`@${profile.handle}`} />
 
         {flash && (
           <Alert className="mt-6">
@@ -75,8 +80,9 @@ export function HomePage({ home }: { home: HomeState }) {
         )}
 
         <RepoList
-          cliInstallCommands={home.cliInstallCommands}
-          repositories={repositories}
+          cliInstallCommands={state.cliInstallCommands}
+          isOwner={isOwner}
+          repositories={profile.repositories}
         />
       </PageContent>
     </AppShell>

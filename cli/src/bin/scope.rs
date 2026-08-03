@@ -31,7 +31,7 @@ enum CommandKind {
     Push(PushArgs),
     #[command(about = "Pull main and every visible request from Scope")]
     Pull(PullArgs),
-    #[command(about = "Review repo visibility config locally")]
+    #[command(about = "Review file visibility config locally")]
     Review,
     #[command(about = "Manage repository contribution rules for coding agents")]
     Rules(RulesArgs),

@@ -50,7 +50,7 @@ const deleteRepoInvite = createServerFn({ method: 'POST' })
   .validator(parseDeleteRepoInviteInput)
   .handler(({ data }) => deleteRepoInviteForRequest(data))
 
-export const Route = createFileRoute('/repos/$owner/$repo/settings')({
+export const Route = createFileRoute('/$owner/$repo/settings')({
   loader: ({ params }) => loadRepoSettings({ data: params }),
   errorComponent: RepoContentError,
   component: RepoSettingsRoute,

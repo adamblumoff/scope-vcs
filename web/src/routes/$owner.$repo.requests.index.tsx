@@ -13,7 +13,7 @@ const loadRequestQueuePage = createServerFn({ method: 'GET' })
   .validator(parseLoadRequestQueueInput)
   .handler(async ({ data }) => loadRequestQueueForRequest(data))
 
-export const Route = createFileRoute('/repos/$owner/$repo/requests/')({
+export const Route = createFileRoute('/$owner/$repo/requests/')({
   loader: async ({ params }) => {
     const [yourWork, open, closed] = await Promise.all([
       loadRequestQueuePage({ data: { ...params, section: 'your_work' } }),

@@ -2,7 +2,7 @@ use super::*;
 
 fn history_repo(commits: Vec<LogicalCommit>, public_path: Option<&str>) -> StoredRepository {
     let mut repo = test_repo(&test_owner_id());
-    repo.record.default_visibility = Visibility::Private;
+    repo.repo_config = repo_config(Visibility::Private);
     repo.policy = Policy::new(Visibility::Private);
     if let Some(path) = public_path {
         repo.policy

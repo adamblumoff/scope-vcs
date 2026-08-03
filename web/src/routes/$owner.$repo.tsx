@@ -14,7 +14,7 @@ const loadRepoLiveState = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(({ data }) => loadRepoLiveStateForRequest(data))
 
-export const Route = createFileRoute('/repos/$owner/$repo')({
+export const Route = createFileRoute('/$owner/$repo')({
   loader: ({ params }) => loadRepoLiveState({ data: params }),
   errorComponent: RepoLayoutError,
   component: RepoLayoutRoute,

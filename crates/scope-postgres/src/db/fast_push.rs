@@ -8,7 +8,7 @@ use {
     scope_domain::{
         reviewed_updates::ReviewedUpdateInput,
         store::{
-            MainPushMode, RepoPublicationState, RepositoryActor, repository_push_policy_for_user_id,
+            MainPushMode, RepoLifecycleState, RepositoryActor, repository_push_policy_for_user_id,
         },
     },
 };
@@ -46,11 +46,11 @@ impl RepositoryStore {
             .await
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::not_found(format!("repo {owner}/{name} not found")))?;
-        let publication_state: RepoPublicationState = serde_json::from_value(
+        let publication_state: RepoLifecycleState = serde_json::from_value(
             serde_json::Value::String(repo_row.publication_state.clone()),
         )
         .map_err(PostgresError::internal)?;
-        if publication_state != RepoPublicationState::Published {
+        if publication_state != RepoLifecycleState::Ready {
             return Ok(None);
         }
         let head = entities::git_head::Entity::find_by_id(repo_id.clone())
@@ -79,7 +79,7 @@ impl RepositoryStore {
             member_permissions,
             &author_id,
         );
-        if push_policy.mode != MainPushMode::Published {
+        if push_policy.mode != MainPushMode::Ready {
             let message = if push_policy.access.actor == RepositoryActor::Public {
                 "repo membership required"
             } else {

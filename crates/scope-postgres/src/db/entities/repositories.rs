@@ -12,7 +12,6 @@ pub mod repository {
         pub name: String,
         pub owner_user_id: String,
         pub publication_state: String,
-        pub default_visibility: String,
         pub change_version: i64,
         pub repo_config: Json,
         pub policy: Json,
@@ -30,8 +29,7 @@ pub mod repository {
                 owner_handle: repo.record.owner_handle.clone(),
                 name: repo.record.name.clone(),
                 owner_user_id: repo.record.owner_user_id.clone(),
-                publication_state: encode_enum(repo.record.publication_state)?,
-                default_visibility: encode_enum(repo.record.default_visibility)?,
+                publication_state: encode_enum(repo.record.lifecycle_state)?,
                 change_version: u64_to_i64(
                     repo.record.change_version,
                     "repository change version",
@@ -48,16 +46,14 @@ pub mod repository {
             invitations: Vec<RepositoryInvite>,
             history: crate::db::history_rows::RepositoryHistory,
         ) -> Result<StoredRepository, PostgresError> {
-            let publication_state = decode_enum::<RepoPublicationState>(self.publication_state)?;
-            let default_visibility = decode_enum::<Visibility>(self.default_visibility)?;
+            let lifecycle_state = decode_enum::<RepoLifecycleState>(self.publication_state)?;
             Ok(StoredRepository {
                 record: RepoRecord {
                     id: self.id.clone(),
                     owner_handle: self.owner_handle,
                     name: self.name,
                     owner_user_id: self.owner_user_id,
-                    publication_state,
-                    default_visibility,
+                    lifecycle_state,
                     change_version: i64_to_u64(self.change_version, "repository change version")?,
                 },
                 repo_config: decode_json(self.repo_config)?,

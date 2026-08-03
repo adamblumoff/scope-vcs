@@ -37,7 +37,7 @@ export function RepoDetailPage({
       <WorkbenchHeader
         actions={(
           <>
-            {repo.lifecycle_state === 'Published' && (
+            {repo.lifecycle_state === 'Ready' && (
               <RepoCloneDropdown
                 cloneRemoteUrl={content.clone_remote_url}
                 repo={repo}

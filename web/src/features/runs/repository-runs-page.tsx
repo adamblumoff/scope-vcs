@@ -133,7 +133,7 @@ function RecentRuns({
                 className="group flex min-h-16 min-w-0 items-center gap-3 px-2 py-4 outline-none hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 key={run.id}
                 params={{ ...params, runId: run.id }}
-                to="/repos/$owner/$repo/runs/$runId"
+                to="/$owner/$repo/runs/$runId"
               >
                 <StatusDot state={run.state} />
                 <span className="min-w-0 flex-1">

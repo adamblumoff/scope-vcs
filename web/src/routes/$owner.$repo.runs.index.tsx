@@ -24,7 +24,7 @@ const loadRepoOperations = createServerFn({ method: 'GET' })
     }
   })
 
-export const Route = createFileRoute('/repos/$owner/$repo/runs/')({
+export const Route = createFileRoute('/$owner/$repo/runs/')({
   loader: ({ params }) => loadRepoOperations({ data: params }),
   errorComponent: RunsPageError,
   pendingComponent: RunsPagePending,

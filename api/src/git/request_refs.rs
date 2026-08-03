@@ -24,7 +24,7 @@ use scope_domain::{
         RecordRequestRevisionInput, Request, RequestAudience, RequestChangeBlock, RequestViewer,
         canonical_request_ref, request_policy,
     },
-    store::{RepoPublicationState, RepositoryActor, SourceBlob},
+    store::{RepoLifecycleState, RepositoryActor, SourceBlob},
 };
 use scope_object_store::source_blob_bytes;
 use sha2::{Digest, Sha256};
@@ -165,7 +165,7 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
     actor_user_id: &str,
 ) -> Result<PathBuf, ApiError> {
     let repo = find_repo(state, owner, repo_name).await?;
-    if repo.record.publication_state != RepoPublicationState::Published {
+    if repo.record.lifecycle_state != RepoLifecycleState::Ready {
         return Err(ApiError::not_found(format!(
             "repo {owner}/{repo_name} not found"
         )));

@@ -35,8 +35,9 @@ import type {
   ReviewFileDiffResponse,
   RepoFileResponse,
   RepoFileContentResponse,
-  RepoPublicationState as GeneratedRepoPublicationState,
+  RepoLifecycleState as GeneratedRepoLifecycleState,
   RepoSummaryResponse,
+  OwnerProfileResponse,
   RepositoryAccessResponse,
   RepositoryActor as GeneratedRepositoryActor,
   RepositoryCollaborationResponse,
@@ -63,8 +64,7 @@ import type {
 export type Visibility = GeneratedVisibility
 export type VisibilityState = Visibility | 'Mixed'
 export type RepositoryActor = GeneratedRepositoryActor
-export type RepoPublicationState = GeneratedRepoPublicationState
-export type RepoLifecycleState = RepoPublicationState
+export type RepoLifecycleState = GeneratedRepoLifecycleState
 export type TokenStatus = FirstPushTokenStatus
 export type FileChangeKind = GeneratedFileChangeKind
 export type ProjectionPreviewAudience = GeneratedProjectionPreviewAudience
@@ -77,6 +77,7 @@ export type CliExchangeGrant = CliExchangeGrantResponse
 export type CliSession = CliSessionResponse
 export type CliSessions = CliSessionsResponse
 export type RepoSummary = RepoSummaryResponse
+export type OwnerProfile = OwnerProfileResponse
 export type RepoAccess = RepositoryAccessResponse
 export type RepoMemberPermissions = RepositoryMemberPermissions
 export type RepoMember = RepositoryMemberResponse
@@ -147,11 +148,10 @@ export type RunStepLogsInput = RunActionInput & {
   step_index: number
 }
 
-export type HomeState = {
-  account: AccountSession | null
+export type ProfileState = {
+  account: AccountSession
   cliInstallCommands: CliInstallCommands
-  error: string | null
-  repositories: RepoSummary[]
+  profile: OwnerProfile
 }
 
 export type CliInstallCommands = {

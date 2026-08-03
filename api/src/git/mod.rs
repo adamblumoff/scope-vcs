@@ -45,7 +45,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flate2::read::GzDecoder;
-use scope_domain::store::{MainPushMode, RepoPublicationState};
+use scope_domain::store::{MainPushMode, RepoLifecycleState};
 use serde::Deserialize;
 use std::{
     fs,
@@ -112,7 +112,7 @@ pub(crate) enum ReceivePackAccess {
         author_id: String,
         push_intent: ValidatedPushIntent,
     },
-    PublishedMember {
+    ReadyMember {
         author_id: String,
         push_intent: ValidatedPushIntent,
     },
@@ -433,16 +433,16 @@ pub(crate) async fn receive_pack_access(
                     push_intent,
                 });
             }
-            match repo.record.publication_state {
-                RepoPublicationState::Unpublished => Err(ApiError::conflict(
-                    "repo is waiting for publish and cannot receive another push",
+            match repo.record.lifecycle_state {
+                RepoLifecycleState::AwaitingFirstPush => Err(ApiError::conflict(
+                    "repo is awaiting its first push and cannot receive another push",
                 )),
-                RepoPublicationState::Published => match credential {
+                RepoLifecycleState::Ready => match credential {
                     InitialPushCredential::GitPushToken { secret } => {
                         let author_id = authorize_git_write_token_for_repo(&repo, &secret)
                             .map_err(git_credential_error)?;
                         push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
-                        Ok(ReceivePackAccess::PublishedMember {
+                        Ok(ReceivePackAccess::ReadyMember {
                             author_id,
                             push_intent,
                         })
@@ -459,11 +459,11 @@ pub(crate) async fn receive_pack_access(
                     .repositories()
                     .git_push_context(owner, repo_name, &user.id)
                     .await?
-                && context.publication_state == RepoPublicationState::Published
+                && context.lifecycle_state == RepoLifecycleState::Ready
                 && context.access.can_push
             {
                 push_intent.ensure_repo_user(&context.repo_id, &user.id)?;
-                return Ok(ReceivePackAccess::PublishedMember {
+                return Ok(ReceivePackAccess::ReadyMember {
                     author_id: user.id,
                     push_intent,
                 });
@@ -481,7 +481,7 @@ pub(crate) async fn receive_pack_access(
                 });
             }
             if push_policy.mode == MainPushMode::Denied {
-                if repo.record.publication_state == RepoPublicationState::Published
+                if repo.record.lifecycle_state == RepoLifecycleState::Ready
                     && actor_can_receive_request_push(
                         state,
                         &repo,
@@ -497,16 +497,16 @@ pub(crate) async fn receive_pack_access(
                     "repo {owner}/{repo_name} not found"
                 )));
             }
-            match repo.record.publication_state {
-                RepoPublicationState::Unpublished => Err(ApiError::conflict(
-                    "repo is waiting for publish and cannot receive another push",
+            match repo.record.lifecycle_state {
+                RepoLifecycleState::AwaitingFirstPush => Err(ApiError::conflict(
+                    "repo is awaiting its first push and cannot receive another push",
                 )),
-                RepoPublicationState::Published => {
+                RepoLifecycleState::Ready => {
                     if let Some(secret) = push_intent_secret.as_deref() {
                         match state.validate_push_intent_secret(secret) {
                             Ok(push_intent) => {
                                 push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
-                                return Ok(ReceivePackAccess::PublishedMember {
+                                return Ok(ReceivePackAccess::ReadyMember {
                                     author_id,
                                     push_intent,
                                 });
@@ -614,14 +614,14 @@ async fn handle_git_receive_pack_body(
         ReceivePackAccess::FirstPush { .. } => {
             ensure_first_push_receive_pack_staging_repo(state, owner, repo_name)?
         }
-        ReceivePackAccess::PublishedMember { author_id, .. } => {
-            ensure_published_receive_pack_staging_repo(state, owner, repo_name, author_id).await?
+        ReceivePackAccess::ReadyMember { author_id, .. } => {
+            ensure_ready_receive_pack_staging_repo(state, owner, repo_name, author_id).await?
         }
         ReceivePackAccess::RequestContributor { author_id } => {
             ensure_request_receive_pack_staging_repo(state, owner, repo_name, author_id).await?
         }
     });
-    if let ReceivePackAccess::PublishedMember { author_id, .. } = &access
+    if let ReceivePackAccess::ReadyMember { author_id, .. } = &access
         && let Err(error) =
             seed_editable_request_refs(state, owner, repo_name, author_id, &staging_repo).await
     {
@@ -629,7 +629,7 @@ async fn handle_git_receive_pack_body(
     }
     let remote_user = match &access {
         ReceivePackAccess::FirstPush { author_id, .. } => author_id.as_str(),
-        ReceivePackAccess::PublishedMember { author_id, .. } => author_id.as_str(),
+        ReceivePackAccess::ReadyMember { author_id, .. } => author_id.as_str(),
         ReceivePackAccess::RequestContributor { author_id } => author_id.as_str(),
     };
     let main_push_author_id = remote_user.to_string();
@@ -724,7 +724,7 @@ async fn handle_git_receive_pack_body(
                         "request refs cannot be pushed during first push",
                     ));
                 }
-                ReceivePackAccess::PublishedMember { author_id, .. }
+                ReceivePackAccess::ReadyMember { author_id, .. }
                 | ReceivePackAccess::RequestContributor { author_id } => author_id,
             };
             persist_request_ref_revision(
@@ -819,7 +819,7 @@ async fn handle_git_receive_pack_body(
                     "git receive-pack first push applied"
                 );
             }
-            ReceivePackAccess::PublishedMember {
+            ReceivePackAccess::ReadyMember {
                 author_id,
                 push_intent,
             } => {
@@ -876,7 +876,7 @@ async fn handle_git_receive_pack_body(
                     receive_ms = receive_elapsed.as_millis(),
                     import_ms = import_started_at.elapsed().as_millis(),
                     change_count,
-                    "git receive-pack published update persisted"
+                    "git receive-pack ready-repository update persisted"
                 );
             }
         }

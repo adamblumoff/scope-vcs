@@ -14,7 +14,7 @@ use scope_domain::{
         apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
     },
     store::{
-        LogicalCommitOrigin, NativePublicCommit, RepoPublicationState, RequestMergeOrigin,
+        LogicalCommitOrigin, NativePublicCommit, RepoLifecycleState, RequestMergeOrigin,
         SourceBlob, StoredRepository, UserAccount,
     },
 };
@@ -160,7 +160,7 @@ fn published_test_repo(default_visibility: Visibility) -> StoredRepository {
         email_verified: true,
     };
     let mut repo = StoredRepository::new(&owner, "repo", default_visibility).unwrap();
-    repo.record.publication_state = RepoPublicationState::Published;
+    repo.record.lifecycle_state = RepoLifecycleState::Ready;
     let rules_path = path("/.scope/RULES.md");
     repo.live_files.insert(rules_path.clone(), blob(""));
     repo.policy

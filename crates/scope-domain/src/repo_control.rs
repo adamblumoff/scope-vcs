@@ -1,5 +1,7 @@
 use crate::{policy::ScopePath, runs::workflow::WorkflowPath};
 
+pub const REPO_CONTROL_ROOT: &str = "/.scope";
+pub const REPO_CONTROL_PREFIX: &str = "/.scope/";
 pub const REPO_RULES_PATH: &str = "/.scope/RULES.md";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +26,7 @@ pub fn classify_repo_control_path(path: &ScopePath) -> Option<RepoControlPath> {
 }
 
 pub fn is_repo_control_path(path: &ScopePath) -> bool {
-    path.as_str() == "/.scope" || path.as_str().starts_with("/.scope/")
+    path.as_str() == REPO_CONTROL_ROOT || path.as_str().starts_with(REPO_CONTROL_PREFIX)
 }
 
 pub fn is_repo_rules_path(path: &ScopePath) -> bool {

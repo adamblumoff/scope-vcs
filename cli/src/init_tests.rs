@@ -112,8 +112,7 @@ fn repo_init(remote_name: &str, git_remote_url: &str) -> RepoInitResponse {
             "id": "repo_test",
             "owner_handle": "adam",
             "name": "sample",
-            "lifecycle_state": "Unpublished",
-            "default_visibility": "Private",
+            "lifecycle_state": "AwaitingFirstPush",
             "change_version": 1,
             "access": {
                 "actor": "Owner",

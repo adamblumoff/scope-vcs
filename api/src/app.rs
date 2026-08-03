@@ -133,9 +133,10 @@ pub fn router(state: AppState) -> Router {
             routes::ATTEMPT_STEP_COMPLETE,
             post(http::runner_protocol::complete_step),
         )
+        .route(routes::REPOS, post(http::repos::create_repo))
         .route(
-            routes::REPOS,
-            get(http::repos::list_repos).post(http::repos::create_repo),
+            routes::OWNER_REPOSITORIES,
+            get(http::repos::get_owner_repositories),
         )
         .route(
             routes::REPO,

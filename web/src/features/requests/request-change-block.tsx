@@ -155,7 +155,7 @@ function historyHref(
     revision,
     path,
   })
-  return `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/history?${query}`
+  return `/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/history?${query}`
 }
 
 function shortOid(oid: string) {

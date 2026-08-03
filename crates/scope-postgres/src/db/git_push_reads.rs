@@ -9,7 +9,7 @@ use {
     scope_domain::{
         projection::SourceGraph,
         repo_config::RepoConfig,
-        store::{GitHead, RepoPublicationState, RepositoryAccess, repo_id},
+        store::{GitHead, RepoLifecycleState, RepositoryAccess, repo_id},
     },
 };
 
@@ -17,7 +17,7 @@ use {
 pub struct GitPushContext {
     pub repo_id: String,
     pub owner_user_id: String,
-    pub publication_state: RepoPublicationState,
+    pub lifecycle_state: RepoLifecycleState,
     pub access: RepositoryAccess,
     pub repo_config: RepoConfig,
     pub git_head: Option<GitHead>,
@@ -76,7 +76,7 @@ impl RepositoryStore {
         let context = GitPushContext {
             repo_id: id,
             owner_user_id: repo.record.owner_user_id.clone(),
-            publication_state: repo.record.publication_state,
+            lifecycle_state: repo.record.lifecycle_state,
             access: repo.access_for_user_id(user_id),
             repo_config: repo.repo_config,
             git_head: repo.git_head,

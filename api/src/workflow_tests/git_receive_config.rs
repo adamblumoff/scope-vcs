@@ -69,7 +69,6 @@ async fn push_only_member_cannot_publish_private_path_via_config() {
         &[("/README.md", ConfigVisibility::Public)],
     );
     let mut repo = repo_with_readme(&state);
-    repo.record.default_visibility = Visibility::Private;
     repo.repo_config = existing_config;
     repo.policy = Policy::new(Visibility::Private);
     repo.policy

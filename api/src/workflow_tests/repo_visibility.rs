@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 
 async fn mutate_repo(state: &AppState, configure: impl FnOnce(&mut StoredRepository)) {
     state
@@ -41,7 +42,7 @@ fn change(
 }
 
 fn set_private(repo: &mut StoredRepository, public_path: Option<&str>) {
-    repo.record.default_visibility = Visibility::Private;
+    repo.repo_config = repo_config(Visibility::Private);
     repo.policy = Policy::new(Visibility::Private);
     if let Some(path) = public_path {
         repo.policy
@@ -194,7 +195,7 @@ async fn public_file_content_reports_visible_projection_rebuilds() {
 async fn file_content_hides_unpublished_repo_during_projection_rebuild() {
     let state = test_state_with_repo();
     mutate_repo(&state, |repo| {
-        repo.record.publication_state = RepoPublicationState::Unpublished;
+        repo.record.lifecycle_state = RepoLifecycleState::AwaitingFirstPush;
         repo.graph.commits.push(commit(
             "rv1",
             None,
@@ -279,7 +280,7 @@ async fn published_repo_projection_preview_serves_public_file_subset() {
 }
 
 #[tokio::test]
-async fn published_default_private_repo_exposes_only_canonical_rules() {
+async fn canonical_rules_alone_do_not_publish_a_repository() {
     let state = test_state_with_repo();
     mutate_repo(&state, |repo| {
         set_private(repo, Some("/.scope/RULES.md"));
@@ -316,9 +317,7 @@ async fn published_default_private_repo_exposes_only_canonical_rules() {
         .await
         .unwrap();
     let files = get(state.clone(), "/v1/repos/owner/repo/files", None).await;
-    assert_eq!(files.status(), StatusCode::OK);
-    let files = response_json(files).await;
-    assert_eq!(files[0]["path"], "/.scope/RULES.md");
+    assert_eq!(files.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         get(
             state,
@@ -332,18 +331,62 @@ async fn published_default_private_repo_exposes_only_canonical_rules() {
 }
 
 #[tokio::test]
-async fn logged_in_non_member_reads_empty_public_repo_as_public() {
+async fn logged_in_non_member_cannot_read_repo_without_public_project_files() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     let auth = bearer_header_for("user_other", "other@example.com");
     let repo = get(state.clone(), "/v1/repos/owner/repo", Some(&auth)).await;
-    assert_eq!(repo.status(), StatusCode::OK);
-    let repo = response_json(repo).await;
-    assert_eq!(repo["id"], TEST_REPO_ID);
-    assert_eq!(repo["access"]["actor"], "Public");
-    assert_eq!(repo["change_version"], 0);
+    assert_eq!(repo.status(), StatusCode::NOT_FOUND);
 
     let files = get(state, "/v1/repos/owner/repo/files", Some(&auth)).await;
-    assert_eq!(files.status(), StatusCode::OK);
-    assert!(response_json(files).await.as_array().unwrap().is_empty());
+    assert_eq!(files.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn owner_profile_lists_only_repositories_visible_to_the_viewer() {
+    let state = test_state_with_repo();
+
+    let anonymous = get(state.clone(), "/v1/users/owner/repos", None).await;
+    assert_eq!(anonymous.status(), StatusCode::OK);
+    assert_eq!(response_json(anonymous).await["repositories"], json!([]));
+
+    cache_test_jwks(&state);
+    let owner = get(
+        state.clone(),
+        "/v1/users/owner/repos",
+        Some(&bearer_header()),
+    )
+    .await;
+    assert_eq!(owner.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(owner).await["repositories"][0]["id"],
+        TEST_REPO_ID
+    );
+
+    mutate_repo(&state, |repo| add_mixed_commit(&state, repo)).await;
+    state
+        .metadata
+        .jobs()
+        .run_ready_outbox_jobs(
+            "owner-profile-test",
+            10,
+            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &crate::persistence_ids::generate_persistence_id,
+        )
+        .await
+        .unwrap();
+
+    let anonymous = get(state.clone(), "/v1/users/owner/repos", None).await;
+    assert_eq!(anonymous.status(), StatusCode::OK);
+    let profile = response_json(anonymous).await;
+    assert_eq!(profile["handle"], "owner");
+    assert_eq!(profile["repositories"][0]["id"], TEST_REPO_ID);
+    assert!(
+        profile["repositories"][0]
+            .get("default_visibility")
+            .is_none()
+    );
+
+    let unknown = get(state, "/v1/users/missing/repos", None).await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 }

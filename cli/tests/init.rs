@@ -265,8 +265,7 @@ fn create_repo_response() -> serde_json::Value {
         "id": "repo_test",
         "owner_handle": "adam",
         "name": "sample",
-        "lifecycle_state": "Unpublished",
-        "default_visibility": "Private",
+        "lifecycle_state": "AwaitingFirstPush",
         "change_version": 1,
         "access": {
             "actor": "Owner",

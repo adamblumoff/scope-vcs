@@ -64,10 +64,7 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
-    assert_eq!(
-        repo.record.publication_state,
-        RepoPublicationState::Published
-    );
+    assert_eq!(repo.record.lifecycle_state, RepoLifecycleState::Ready);
     assert!(repo.first_push_token.is_none());
     assert_eq!(
         repo.live_tree()
