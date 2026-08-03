@@ -1,18 +1,26 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, error::ErrorKind};
 use scope_cli::{
     api::{api_url, http_client},
+    auth::cached_cli_session,
+    error::CliError,
     git_credential::run_git_credential,
     git_repo::discover_git_repo,
     login::session_from_cache_or_browser,
     request::{RequestArgs, prepare_request_command, run_request_command},
     review::run_standalone_review,
 };
-use std::path::PathBuf;
+use std::{path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
 #[command(name = "scope")]
 #[command(about = "Scope VCS command line")]
 struct Cli {
+    #[arg(
+        long,
+        global = true,
+        help = "Print one machine-readable JSON document for request commands"
+    )]
+    json: bool,
     #[command(subcommand)]
     command: CommandKind,
 }
@@ -157,8 +165,61 @@ enum RunnerCacheCommand {
     },
 }
 
-fn main() -> anyhow::Result<()> {
-    match Cli::parse().command {
+fn main() -> ExitCode {
+    let json_requested = std::env::args_os().any(|arg| arg == "--json");
+    let matches = match Cli::command()
+        .version(scope_cli::build::version_identity())
+        .try_get_matches()
+    {
+        Ok(matches) => matches,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            error.exit()
+        }
+        Err(error) if json_requested => {
+            let response = scope_cli::api::ErrorResponse::new(
+                scope_cli::api::ErrorCode::BadRequest,
+                error.to_string(),
+            );
+            eprintln!("{}", serde_json::to_string(&response).unwrap());
+            return ExitCode::from(2);
+        }
+        Err(error) => error.exit(),
+    };
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
+    let json = cli.json;
+    match run(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            if json {
+                let response = scope_cli::error::response(&error);
+                eprintln!("{}", serde_json::to_string(&response).unwrap());
+            } else {
+                eprintln!("{error:#}");
+            }
+            ExitCode::from(scope_cli::error::exit_code(&error))
+        }
+    }
+}
+
+fn run(cli: Cli) -> anyhow::Result<()> {
+    if cli.json && !matches!(&cli.command, CommandKind::Request(_)) {
+        return Err(
+            scope_cli::error::CliError::new(scope_cli::api::ErrorResponse::new(
+                scope_cli::api::ErrorCode::BadRequest,
+                "--json currently supports request commands only",
+            ))
+            .into(),
+        );
+    }
+    match cli.command {
         CommandKind::Init(args) => scope_cli::init::run(args.name),
         CommandKind::Push(args) => {
             scope_cli::push::run(args.remote.as_deref(), args.no_review, args.wait)
@@ -169,7 +230,7 @@ fn main() -> anyhow::Result<()> {
             run_standalone_review(&repo)
         }
         CommandKind::Rules(args) => run_rules(args.command),
-        CommandKind::Request(args) => run_request(args),
+        CommandKind::Request(args) => run_request(args, cli.json),
         CommandKind::Clone(args) => {
             scope_cli::clone::clone_repo(&args.repository, args.destination.as_deref())
         }
@@ -199,12 +260,23 @@ fn run_rules(command: RulesCommand) -> anyhow::Result<()> {
     }
 }
 
-fn run_request(args: RequestArgs) -> anyhow::Result<()> {
+fn run_request(args: RequestArgs, json: bool) -> anyhow::Result<()> {
     let command = prepare_request_command(args)?;
     let api_url = api_url();
     let client = http_client()?;
-    let session = session_from_cache_or_browser(&client, &api_url)?;
-    run_request_command(command, &client, &api_url, &session.token)
+    let session = if json {
+        let Some(session) = cached_cli_session(&client, &api_url)? else {
+            return Err(CliError::new(scope_cli::api::ErrorResponse::new(
+                scope_cli::api::ErrorCode::Unauthorized,
+                "not signed in; run scope login",
+            ))
+            .into());
+        };
+        session
+    } else {
+        session_from_cache_or_browser(&client, &api_url)?
+    };
+    run_request_command(command, &client, &api_url, &session.token, json)?.render(json)
 }
 
 fn run_workflow(args: RunArgs) -> anyhow::Result<()> {
@@ -219,19 +291,25 @@ fn run_workflow(args: RunArgs) -> anyhow::Result<()> {
             scope_cli::run::retry(run_id, args.remote.as_deref(), args.no_watch)
         }
         ("watch" | "cancel", Some(_)) => {
-            anyhow::bail!(
+            Err(CliError::usage(
                 "--runner is only valid when starting a workflow; --no-watch is not valid for watch or cancel"
             )
+            .into())
         }
         ("retry", Some(_)) => {
-            anyhow::bail!("--runner is only valid when starting a workflow")
+            Err(CliError::usage("--runner is only valid when starting a workflow").into())
         }
         ("watch" | "cancel" | "retry", None) => {
-            anyhow::bail!("scope run {} requires a run ID", args.target)
+            Err(CliError::usage(format!(
+                "scope run {} requires a run ID",
+                args.target
+            ))
+            .into())
         }
-        (_, Some(_)) => anyhow::bail!(
+        (_, Some(_)) => Err(CliError::usage(
             "a run ID is accepted only by `scope run watch`, `scope run cancel`, or `scope run retry`"
-        ),
+        )
+        .into()),
         (workflow, None) => scope_cli::run::start(
             workflow,
             args.runner.as_deref(),

@@ -30,10 +30,10 @@ function errorMessage(payload: unknown, status: number) {
   if (
     payload &&
     typeof payload === 'object' &&
-    'error' in payload &&
-    typeof payload.error === 'string'
+    'message' in payload &&
+    typeof payload.message === 'string'
   ) {
-    return payload.error
+    return payload.message
   }
 
   return `request failed: ${status}`

@@ -835,7 +835,7 @@ fn complete_canceled(
 }
 
 fn runner_client() -> anyhow::Result<Client> {
-    Client::builder()
+    crate::api::http_client_builder()
         .timeout(Duration::from_secs(35))
         .build()
         .context("build runner HTTP client")

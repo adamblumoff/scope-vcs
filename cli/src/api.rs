@@ -1,11 +1,17 @@
+use crate::error::CliError;
 use anyhow::Context;
-use reqwest::{StatusCode, blocking::Client};
+use reqwest::{
+    StatusCode,
+    blocking::{Client, ClientBuilder, Response},
+    header::{HeaderMap, HeaderValue},
+};
 pub use scope_api_contract::routes::{
     cli_browser_login_exchange as cli_browser_login_exchange_path,
     cli_device_login_poll as cli_device_login_poll_path,
 };
 pub use scope_api_contract::*;
 use scope_domain::repo_config::RepoConfig as DomainRepoConfig;
+use serde::de::DeserializeOwned;
 use std::{env, time::Duration};
 
 mod requests;
@@ -58,10 +64,139 @@ pub fn api_url() -> String {
 }
 
 pub fn http_client() -> anyhow::Result<Client> {
-    Client::builder()
+    http_client_builder()
         .timeout(Duration::from_secs(20))
         .build()
         .context("build HTTP client")
+}
+
+pub(crate) fn decode_json_response<T: DeserializeOwned>(
+    response: Response,
+    context: &str,
+) -> anyhow::Result<T> {
+    let response = successful_response(response, context)?;
+    response
+        .json()
+        .with_context(|| format!("parse {context} response"))
+}
+
+pub(crate) fn successful_response(response: Response, context: &str) -> anyhow::Result<Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+
+    let status = response.status();
+    let mut error = response
+        .json::<ErrorResponse>()
+        .unwrap_or_else(|_| fallback_error_response(status, context));
+    error.message = terminal_safe(&error.message);
+    error.instruction = error
+        .instruction
+        .as_deref()
+        .map(terminal_safe)
+        .filter(|instruction| !instruction.is_empty());
+    error.fields.paths = error
+        .fields
+        .paths
+        .iter()
+        .map(|path| terminal_safe(path))
+        .filter(|path| !path.is_empty())
+        .collect();
+    Err(CliError::new(error).into())
+}
+
+fn fallback_error_response(status: StatusCode, context: &str) -> ErrorResponse {
+    let (code, message, retryable) = match status {
+        StatusCode::BAD_REQUEST => (
+            ErrorCode::BadRequest,
+            format!("Scope rejected the request while trying to {context}"),
+            false,
+        ),
+        StatusCode::UNAUTHORIZED => (
+            ErrorCode::Unauthorized,
+            "not signed in; run scope login".to_string(),
+            false,
+        ),
+        StatusCode::FORBIDDEN => (
+            ErrorCode::Forbidden,
+            format!("permission denied while trying to {context}"),
+            false,
+        ),
+        StatusCode::NOT_FOUND => (
+            ErrorCode::NotFound,
+            format!("the requested Scope resource was not found while trying to {context}"),
+            false,
+        ),
+        StatusCode::CONFLICT => (
+            ErrorCode::Conflict,
+            format!("Scope state changed while trying to {context}; reload and retry"),
+            false,
+        ),
+        StatusCode::TOO_MANY_REQUESTS => (
+            ErrorCode::TooManyRequests,
+            format!("Scope is temporarily rate limiting {context}"),
+            true,
+        ),
+        StatusCode::SERVICE_UNAVAILABLE | StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT => {
+            (
+                ErrorCode::ServiceUnavailable,
+                format!("Scope is temporarily unavailable while trying to {context}"),
+                true,
+            )
+        }
+        StatusCode::UPGRADE_REQUIRED => (
+            ErrorCode::CliUpgradeRequired,
+            format!("{context} requires a newer Scope CLI"),
+            false,
+        ),
+        _ => (
+            ErrorCode::Internal,
+            format!("Scope could not {context}; retry or contact support if this persists"),
+            false,
+        ),
+    };
+    let mut response = ErrorResponse::new(code, message);
+    response.retryable = retryable;
+    if code == ErrorCode::CliUpgradeRequired {
+        response.instruction = Some(format!("Upgrade with `{CLI_INSTALL_COMMAND}`, then retry."));
+    }
+    response
+}
+
+fn terminal_safe(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn http_client_builder() -> ClientBuilder {
+    Client::builder().default_headers(cli_identity_headers())
+}
+
+fn cli_identity_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CLI_PROTOCOL_HEADER,
+        HeaderValue::from_str(&CLI_PROTOCOL_VERSION.to_string())
+            .expect("CLI protocol is a valid header value"),
+    );
+    headers.insert(
+        CLI_VERSION_HEADER,
+        HeaderValue::from_static(crate::build::PACKAGE_VERSION),
+    );
+    headers.insert(
+        CLI_BUILD_HEADER,
+        HeaderValue::from_static(crate::build::BUILD_SHA),
+    );
+    headers
 }
 
 pub fn validate_session_token(
@@ -78,11 +213,8 @@ pub fn validate_session_token(
         return Ok(None);
     }
 
-    let session: AccountSessionResponse = response
-        .error_for_status()
-        .context("validate saved Scope login")?
-        .json()
-        .context("parse saved Scope login response")?;
+    let session: AccountSessionResponse =
+        decode_json_response(response, "validate saved Scope login")?;
     let AccountSessionResponse { identity, user, .. } = session;
     drop(identity);
     Ok(user)
@@ -93,15 +225,12 @@ pub fn account_session(
     api_url: &str,
     session_token: &str,
 ) -> anyhow::Result<AccountSessionResponse> {
-    client
+    let response = client
         .get(format!("{api_url}{ACCOUNT_SESSION_PATH}"))
         .bearer_auth(session_token)
         .send()
-        .context("load Scope account")?
-        .error_for_status()
-        .context("load Scope account")?
-        .json()
-        .context("parse Scope account response")
+        .context("load Scope account")?;
+    decode_json_response(response, "load Scope account")
 }
 
 pub fn revoke_cli_session(
@@ -118,9 +247,7 @@ pub fn revoke_cli_session(
         return Ok(());
     }
 
-    response
-        .error_for_status()
-        .context("revoke Scope CLI session")?;
+    successful_response(response, "revoke Scope CLI session")?;
     Ok(())
 }
 
@@ -140,21 +267,7 @@ pub fn create_repo(
         .json(&request)
         .send()
         .context("create Scope repository")?;
-    if response.status() == StatusCode::CONFLICT {
-        anyhow::bail!("{}", duplicate_repo_error_message(&request.name));
-    }
-
-    response
-        .error_for_status()
-        .context("create Scope repository")?
-        .json()
-        .context("parse create repository response")
-}
-
-fn duplicate_repo_error_message(name: &str) -> String {
-    format!(
-        "Scope repository {name:?} already exists for this account. Use `scope init --name <new-name>` to create a different repo, or run `scope push` if this checkout is already linked to Scope."
-    )
+    decode_json_response(response, "create Scope repository")
 }
 
 pub fn get_repo(
@@ -172,21 +285,7 @@ pub fn get_repo(
         .bearer_auth(session_token)
         .send()
         .with_context(|| format!("load Scope repo {owner}/{repo}"))?;
-    match response.status() {
-        StatusCode::UNAUTHORIZED => {
-            anyhow::bail!("not signed in; run scope login")
-        }
-        StatusCode::NOT_FOUND => {
-            anyhow::bail!("repo {owner}/{repo} not found")
-        }
-        _ => {}
-    }
-
-    response
-        .error_for_status()
-        .with_context(|| format!("load Scope repo {owner}/{repo}"))?
-        .json()
-        .context("parse repository response")
+    decode_json_response(response, &format!("load Scope repo {owner}/{repo}"))
 }
 
 pub fn get_repo_config(
@@ -204,24 +303,8 @@ pub fn get_repo_config(
         .bearer_auth(session_token)
         .send()
         .with_context(|| format!("get repo config for {owner}/{repo}"))?;
-    match response.status() {
-        StatusCode::UNAUTHORIZED => {
-            anyhow::bail!("not signed in; run scope login")
-        }
-        StatusCode::FORBIDDEN => {
-            anyhow::bail!("repo membership required for {owner}/{repo}")
-        }
-        StatusCode::NOT_FOUND => {
-            anyhow::bail!("repo {owner}/{repo} not found")
-        }
-        _ => {}
-    }
-
-    let response: RepoConfigResponse = response
-        .error_for_status()
-        .with_context(|| format!("get repo config for {owner}/{repo}"))?
-        .json()
-        .context("parse repo config response")?;
+    let response: RepoConfigResponse =
+        decode_json_response(response, &format!("get repo config for {owner}/{repo}"))?;
     Ok(RepoConfigContext {
         config: response.config.into(),
         config_hash: response.config_hash,
@@ -250,28 +333,10 @@ pub fn create_push_intent(
         })
         .send()
         .with_context(|| format!("create push intent for {}/{}", params.owner, params.repo))?;
-    match response.status() {
-        StatusCode::UNAUTHORIZED => {
-            anyhow::bail!("not signed in; run scope login")
-        }
-        StatusCode::FORBIDDEN => {
-            anyhow::bail!(
-                "you do not have write access to {}/{}",
-                params.owner,
-                params.repo
-            )
-        }
-        StatusCode::NOT_FOUND => {
-            anyhow::bail!("repo {}/{} not found", params.owner, params.repo)
-        }
-        _ => {}
-    }
-
-    response
-        .error_for_status()
-        .with_context(|| format!("create push intent for {}/{}", params.owner, params.repo))?
-        .json()
-        .context("parse push intent response")
+    decode_json_response(
+        response,
+        &format!("create push intent for {}/{}", params.owner, params.repo),
+    )
 }
 
 pub fn rollback_created_repo(
@@ -309,5 +374,48 @@ pub fn display_user(user: &UserResponse) -> String {
         format!("@{}", user.handle)
     } else {
         format!("@{} <{}>", user.handle, user.email)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    #[test]
+    fn shared_http_client_sends_cli_compatibility_identity() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = [0_u8; 8192];
+            let read = stream.read(&mut bytes).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            String::from_utf8(bytes[..read].to_vec()).unwrap()
+        });
+
+        let response = http_client()
+            .unwrap()
+            .get(format!("http://{address}/identity"))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(request.contains("x-scope-cli-protocol: 1\r\n"));
+        assert!(request.contains(&format!(
+            "x-scope-cli-version: {}\r\n",
+            crate::build::PACKAGE_VERSION
+        )));
+        assert!(request.contains(&format!(
+            "x-scope-cli-build: {}\r\n",
+            crate::build::BUILD_SHA
+        )));
     }
 }

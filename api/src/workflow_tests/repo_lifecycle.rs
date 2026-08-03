@@ -92,6 +92,20 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     let push_secret = body["init"]["push_token"]["secret"].as_str().unwrap();
     assert!(push_secret.starts_with("scope_git_"));
 
+    let duplicate = request(
+        state.clone(),
+        "POST",
+        "/v1/repos",
+        Some(bearer_header()),
+        Some(r#"{"name":"Scope_App"}"#.to_string()),
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    let duplicate: scope_api_contract::ErrorResponse =
+        serde_json::from_value(response_json(duplicate).await).unwrap();
+    assert_eq!(duplicate.code, scope_api_contract::ErrorCode::Conflict);
+    assert!(duplicate.instruction.unwrap().contains("scope init --name"));
+
     let response = request(
         state.clone(),
         "GET",

@@ -101,6 +101,7 @@ pub const GIT_INFO_REFS: &str = "/git/{mode}/{org}/{repo}/info/refs";
 pub const GIT_RECEIVE_PACK: &str = "/git/{mode}/{org}/{repo}/git-receive-pack";
 pub const GIT_UPLOAD_PACK: &str = "/git/{mode}/{org}/{repo}/git-upload-pack";
 pub const DEV_BENCH_CLI_SESSION: &str = "/v1/dev/bench/cli-session";
+pub const DEV_CLI_SESSION: &str = "/v1/dev/cli-session/{handle}";
 
 pub fn cli_browser_login_exchange(request_id: &str) -> String {
     format!(

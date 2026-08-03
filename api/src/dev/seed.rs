@@ -28,7 +28,10 @@ use std::{
     io::Write,
     path::Path as FsPath,
     process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+static SEED_TEMP_REPO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) const DEV_SEED_USER_ID: &str = "scope_usr_dev_seed";
 const PUBLIC_DEMO_README: &str =
@@ -39,8 +42,11 @@ const PUBLIC_DEMO_PLAN: &str =
     "# Internal Plan\n\nPrivate content stays out of public projections.\n";
 const UPDATE_DEMO_INITIAL_README: &str =
     "# Update Demo\n\nThis repository has a clean published baseline.\n";
+const UPDATE_DEMO_RULES: &str = "";
 const UPDATE_DEMO_RELEASE_GUIDE: &str =
     "# Release flow\n\nDocument the release before publishing the next version.\n";
+const UPDATE_DEMO_INTERNAL_NOTES: &str =
+    "# Internal notes\n\nOnly repository maintainers can read this file.\n";
 const UPDATE_DEMO_RETRY_HELPER: &str =
     "export function retryDelay(attempt: number) {\n  return Math.min(attempt * 250, 2000)\n}\n";
 const UPDATE_DEMO_TROUBLESHOOTING: &str =
@@ -84,6 +90,16 @@ pub(super) fn seed_user_account(seed_user: DevSeedUser) -> UserAccount {
         email: seed_user.email,
         email_verified: true,
     }
+}
+
+pub(super) fn actor_account(seed_user: DevSeedUser, handle: &str) -> Option<UserAccount> {
+    let owner = seed_user_account(seed_user);
+    if owner.handle == handle {
+        return Some(owner);
+    }
+    request_discussions::collaborators()
+        .into_iter()
+        .find(|actor| actor.handle == handle)
 }
 
 fn published_demo(
@@ -133,16 +149,22 @@ fn update_demo(
 ) -> Result<(StoredRepository, SeedRequestGallery), ApiError> {
     let mut repo = repo(owner, "update-demo", Visibility::Public)?;
     let initial_readme = blob(object_store, UPDATE_DEMO_INITIAL_README)?;
+    let rules = blob(object_store, UPDATE_DEMO_RULES)?;
+    let internal_notes = blob(object_store, UPDATE_DEMO_INTERNAL_NOTES)?;
+    let internal_path = ScopePath::parse("/internal/notes.md").map_err(ApiError::internal)?;
+    repo.policy
+        .add_rule(VisibilityRule::private(internal_path.clone()))
+        .map_err(ApiError::internal)?;
     let release_guide = blob(object_store, UPDATE_DEMO_RELEASE_GUIDE)?;
     repo.graph.commits.push(commit(
         &repo,
         "dev-update-1",
         "Seed update demo",
-        vec![add_change(
-            "/README.md",
-            initial_readme.clone(),
-            Visibility::Public,
-        )?],
+        vec![
+            add_change("/README.md", initial_readme.clone(), Visibility::Public)?,
+            add_change("/.scope/RULES.md", rules, Visibility::Public)?,
+            add_change(internal_path.as_str(), internal_notes, Visibility::Private)?,
+        ],
     ));
     repo.graph.commits.push(commit(
         &repo,
@@ -157,7 +179,11 @@ fn update_demo(
     populate_seed_live_files(&mut repo);
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
     let initial = SeedGitCommit {
-        files: &[("README.md", UPDATE_DEMO_INITIAL_README)],
+        files: &[
+            ("README.md", UPDATE_DEMO_INITIAL_README),
+            (".scope/RULES.md", UPDATE_DEMO_RULES),
+            ("internal/notes.md", UPDATE_DEMO_INTERNAL_NOTES),
+        ],
         message: "Seed update demo",
     };
     let accepted = SeedGitCommit {
@@ -780,8 +806,9 @@ fn temp_seed_git_repo_path(label: &str) -> Result<std::path::PathBuf, ApiError> 
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(ApiError::internal)?
         .as_nanos();
+    let sequence = SEED_TEMP_REPO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     Ok(std::env::temp_dir().join(format!(
-        "scope-vcs-dev-seed-{}-{}-{nanos}",
+        "scope-vcs-dev-seed-{}-{}-{nanos}-{sequence}",
         std::process::id(),
         label
     )))

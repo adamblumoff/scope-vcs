@@ -48,11 +48,15 @@ pub fn discover_git_repo(command_name: &str) -> anyhow::Result<GitRepo> {
 
 pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
     let repo = discover_git_repo(command_name)?;
-    if !git_success_in_repo(&repo, &["rev-parse", "--verify", "HEAD"]) {
+    if !git_repo_has_head(&repo) {
         bail!("create at least one Git commit before running {command_name}");
     }
 
     Ok(repo)
+}
+
+pub fn git_repo_has_head(repo: &GitRepo) -> bool {
+    git_success_in_repo(repo, &["rev-parse", "--verify", "HEAD"])
 }
 
 pub fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
@@ -117,6 +121,28 @@ pub fn changed_paths_since_scope_base_at_commit(
             Ok(parse_tree_paths_as_added(&output.stdout))
         }
     }
+}
+
+pub fn changed_file_paths_between(
+    repo: &GitRepo,
+    base_oid: &str,
+    commit_oid: &str,
+) -> anyhow::Result<Vec<String>> {
+    let output = git_output_in_repo(
+        repo,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            base_oid,
+            commit_oid,
+        ],
+    )?;
+    if !output.status.success() {
+        bail!("inspect committed request paths failed");
+    }
+    Ok(parse_nul_paths(&output.stdout))
 }
 
 pub fn worktree_file_paths(repo: &GitRepo) -> anyhow::Result<Vec<String>> {

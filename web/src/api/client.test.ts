@@ -18,8 +18,8 @@ test('loadJson parses success and preserves request init', async () => {
 })
 
 test('loadJson surfaces structured and malformed API errors', async () => {
-  globalThis.fetch = async () => jsonResponse({ error: 'access denied' }, 403)
-  await assert.rejects(loadJson('/v1/repos/hidden'), hasHttpError(403, 'access denied'))
+  globalThis.fetch = async () => jsonResponse({ message: 'repo is private' }, 403)
+  await assert.rejects(loadJson('/v1/repos/private'), hasHttpError(403, 'repo is private'))
 
   globalThis.fetch = async () => new Response('not json', { status: 502 })
   await assert.rejects(loadJson('/v1/repos'), hasHttpError(502, 'request failed: 502'))

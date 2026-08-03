@@ -803,7 +803,7 @@ async fn manual_run_rejects_oversized_workflow_before_parsing() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(
-        response_json(response).await["error"]
+        response_json(response).await["message"]
             .as_str()
             .unwrap()
             .contains("workflow definition exceeds")

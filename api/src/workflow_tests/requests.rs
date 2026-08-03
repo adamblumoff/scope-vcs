@@ -140,7 +140,7 @@ async fn stale_request_projection_identity_returns_the_rebuilding_response() {
     .await;
     assert_eq!(stale.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
-        response_json(stale).await["error"],
+        response_json(stale).await["message"],
         "repository projection is rebuilding; retry shortly"
     );
 

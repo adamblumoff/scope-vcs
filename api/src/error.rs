@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use scope_api_contract::{ErrorCode, ErrorResponse};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ErrorKind {
@@ -22,6 +23,9 @@ pub(crate) enum ErrorKind {
 pub(crate) struct ApiError {
     pub(crate) kind: ErrorKind,
     message: String,
+    code: ErrorCode,
+    paths: Vec<String>,
+    instruction: Option<String>,
 }
 
 macro_rules! message_errors {
@@ -57,7 +61,30 @@ impl ApiError {
         Self {
             kind,
             message: message.into(),
+            code: error_code(kind),
+            paths: Vec::new(),
+            instruction: None,
         }
+    }
+
+    pub(crate) fn protected_paths(paths: Vec<String>) -> Self {
+        let message = format!(
+            "public request cannot change maintainer-controlled paths: {}",
+            paths.join(", ")
+        );
+        let mut error = Self::new(ErrorKind::Conflict, message);
+        error.code = ErrorCode::ProtectedPath;
+        error.paths = paths;
+        error.instruction = Some(
+            "Move maintainer-controlled changes to a maintainer-authored change, then retry."
+                .to_string(),
+        );
+        error
+    }
+
+    pub(crate) fn with_instruction(mut self, instruction: impl Into<String>) -> Self {
+        self.instruction = Some(instruction.into());
+        self
     }
 
     pub(crate) fn status(&self) -> StatusCode {
@@ -115,7 +142,16 @@ impl From<scope_postgres::db::RepositoryCreationError<ApiError>> for ApiError {
     fn from(error: scope_postgres::db::RepositoryCreationError<ApiError>) -> Self {
         match error {
             scope_postgres::db::RepositoryCreationError::Cleanup(error) => error,
-            scope_postgres::db::RepositoryCreationError::Persistence(error) => error.into(),
+            scope_postgres::db::RepositoryCreationError::Persistence(error) => {
+                let error = Self::from(error);
+                if error.kind == ErrorKind::Conflict {
+                    error.with_instruction(
+                        "Use `scope init --name <new-name>` to create a different repository, or run `scope push` if this checkout is already linked to Scope.",
+                    )
+                } else {
+                    error
+                }
+            }
         }
     }
 }
@@ -168,7 +204,59 @@ impl From<scope_object_store::ObjectStoreError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
-        let body = serde_json::json!({ "error": self.into_message() });
+        let retryable = matches!(
+            self.kind,
+            ErrorKind::ServiceUnavailable | ErrorKind::TooManyRequests
+        );
+        let mut body = ErrorResponse::new(self.code, self.message);
+        body.fields.paths = self.paths;
+        body.instruction = self.instruction;
+        body.retryable = retryable;
         (status, Json(body)).into_response()
+    }
+}
+
+const fn error_code(kind: ErrorKind) -> ErrorCode {
+    match kind {
+        ErrorKind::BadRequest => ErrorCode::BadRequest,
+        ErrorKind::Conflict => ErrorCode::Conflict,
+        ErrorKind::Forbidden => ErrorCode::Forbidden,
+        ErrorKind::Internal => ErrorCode::Internal,
+        ErrorKind::NotFound => ErrorCode::NotFound,
+        ErrorKind::NotImplemented => ErrorCode::NotImplemented,
+        ErrorKind::PayloadTooLarge => ErrorCode::PayloadTooLarge,
+        ErrorKind::ServiceUnavailable => ErrorCode::ServiceUnavailable,
+        ErrorKind::TooManyRequests => ErrorCode::TooManyRequests,
+        ErrorKind::Unauthorized => ErrorCode::Unauthorized,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn protected_path_errors_preserve_paths_and_remediation() {
+        let response =
+            ApiError::protected_paths(vec![".scope/RULES.md".to_string()]).into_response();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
+        let error: ErrorResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error.code, ErrorCode::ProtectedPath);
+        assert_eq!(error.fields.paths, [".scope/RULES.md"]);
+        assert!(error.instruction.is_some());
+        assert!(!error.retryable);
+    }
+
+    #[tokio::test]
+    async fn temporary_errors_are_marked_retryable() {
+        let response = ApiError::service_unavailable("try later").into_response();
+        let body = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
+        let error: ErrorResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error.code, ErrorCode::ServiceUnavailable);
+        assert!(error.retryable);
     }
 }

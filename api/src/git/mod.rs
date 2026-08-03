@@ -305,7 +305,16 @@ pub(crate) async fn git_receive_pack(
         .await
     {
         Ok(response) => response,
-        Err(error) => git_error_response(error),
+        Err(error) => {
+            tracing::warn!(
+                owner = org,
+                repo,
+                status = %error.status(),
+                message = error.message(),
+                "git receive-pack failed"
+            );
+            git_error_response(error)
+        }
     }
 }
 

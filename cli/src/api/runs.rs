@@ -587,24 +587,7 @@ fn parse_json<T: serde::de::DeserializeOwned>(
 }
 
 fn successful(response: Response, context: &str) -> anyhow::Result<Response> {
-    if response.status().is_success() {
-        return Ok(response);
-    }
-    let status = response.status();
-    let message = response
-        .json::<serde_json::Value>()
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| status.to_string());
-    if status == StatusCode::UNAUTHORIZED {
-        anyhow::bail!("{context}: authentication failed: {message}");
-    }
-    anyhow::bail!("{context}: {message} ({status})")
+    successful_response(response, context)
 }
 
 #[cfg(test)]

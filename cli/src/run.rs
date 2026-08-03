@@ -1,5 +1,8 @@
 use crate::{
-    api::{RunStreamEvent, api_url, cancel_run, create_manual_run, retry_run, stream_run_events},
+    api::{
+        RunStreamEvent, api_url, cancel_run, create_manual_run, http_client_builder, retry_run,
+        stream_run_events,
+    },
     git_repo::{GitRepo, ensure_git_repo_ready, head_oid, warn_if_dirty_working_tree},
     git_transport::{ScopeRemote, select_scope_fetch_remote},
     login::session_from_cache_or_browser,
@@ -204,7 +207,7 @@ fn random_request_id() -> anyhow::Result<String> {
 }
 
 fn run_client() -> anyhow::Result<Client> {
-    Client::builder()
+    http_client_builder()
         .timeout(Duration::from_secs(120))
         .build()
         .context("build run HTTP client")

@@ -5,6 +5,7 @@ use axum::{
         Method,
         header::{AUTHORIZATION, CONTENT_TYPE},
     },
+    middleware,
     routing::{delete, get, patch, post},
 };
 use http::routes;
@@ -292,13 +293,19 @@ pub fn router(state: AppState) -> Router {
         .route(routes::GIT_UPLOAD_PACK, post(git::git_upload_pack_rpc));
 
     #[cfg(feature = "local-dev")]
-    let router = router.route(
-        routes::DEV_BENCH_CLI_SESSION,
-        post(crate::dev::create_bench_cli_session),
-    );
+    let router = router
+        .route(
+            routes::DEV_BENCH_CLI_SESSION,
+            post(crate::dev::create_bench_cli_session),
+        )
+        .route(
+            routes::DEV_CLI_SESSION,
+            post(crate::dev::create_dev_cli_session),
+        );
 
     router
         .with_state(state)
+        .layer(middleware::from_fn(http::cli_compatibility::enforce))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

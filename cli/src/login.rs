@@ -5,13 +5,14 @@ use crate::{
         CLI_EXCHANGE_GRANTS_EXCHANGE_PATH, CliExchangeGrantExchangeRequest,
         CliSessionTokenResponse, DeviceLoginPollResponse, DeviceLoginStartResponse,
         DeviceLoginStatus, account_session, api_url, cli_browser_login_exchange_path,
-        cli_device_login_poll_path, display_user, http_client, revoke_cli_session,
-        validate_session_token,
+        cli_device_login_poll_path, decode_json_response, display_user, http_client,
+        revoke_cli_session, validate_session_token,
     },
     auth::{
         cached_cli_session, delete_stored_session_token, read_stored_session_token,
         store_session_token,
     },
+    error::CliError,
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
@@ -24,7 +25,7 @@ use std::{
 
 pub fn login(headless: bool, exchange: Option<String>) -> anyhow::Result<()> {
     if headless && exchange.is_some() {
-        bail!("--headless and --exchange cannot be used together");
+        return Err(CliError::usage("--headless and --exchange cannot be used together").into());
     }
 
     let api_url = api_url();
@@ -67,7 +68,7 @@ pub fn whoami() -> anyhow::Result<()> {
     let api_url = api_url();
     let client = http_client()?;
     let Some(session) = cached_cli_session(&client, &api_url)? else {
-        bail!("not signed in; run scope login");
+        return Err(CliError::authentication("not signed in; run scope login").into());
     };
     println!("{}", display_user(&session.user));
     let _ = account_session(&client, &api_url, &session.token)?;
@@ -113,15 +114,12 @@ fn local_browser_login(client: &Client, api_url: &str) -> anyhow::Result<Authent
         .context("read local Scope login callback address")?
         .port();
     let callback_url = format!("http://127.0.0.1:{port}/scope-cli-callback");
-    let start: BrowserLoginStartResponse = client
+    let response = client
         .post(format!("{api_url}{CLI_BROWSER_LOGIN_PATH}"))
         .json(&BrowserLoginStartRequest { callback_url })
         .send()
-        .context("start browser login")?
-        .error_for_status()
-        .context("start browser login")?
-        .json()
-        .context("parse browser login response")?;
+        .context("start browser login")?;
+    let start: BrowserLoginStartResponse = decode_json_response(response, "start browser login")?;
 
     eprintln!("Opening browser to sign in:");
     eprintln!("{}", start.authorization_url);
@@ -132,7 +130,7 @@ fn local_browser_login(client: &Client, api_url: &str) -> anyhow::Result<Authent
 
     let callback_code =
         wait_for_browser_callback(&listener, &start.request_id, start.expires_at_unix)?;
-    let exchanged: CliSessionTokenResponse = client
+    let response = client
         .post(format!(
             "{api_url}{}",
             cli_browser_login_exchange_path(&start.request_id)
@@ -142,11 +140,9 @@ fn local_browser_login(client: &Client, api_url: &str) -> anyhow::Result<Authent
             callback_code,
         })
         .send()
-        .context("exchange browser login")?
-        .error_for_status()
-        .context("exchange browser login")?
-        .json()
-        .context("parse browser login exchange response")?;
+        .context("exchange browser login")?;
+    let exchanged: CliSessionTokenResponse =
+        decode_json_response(response, "exchange browser login")?;
     let user = validate_session_token(client, api_url, &exchanged.session_token)?
         .context("completed login did not create a valid CLI session")?;
     Ok(AuthenticatedSession {
@@ -160,17 +156,15 @@ fn exchange_login(
     api_url: &str,
     exchange_token: &str,
 ) -> anyhow::Result<AuthenticatedSession> {
-    let exchanged: CliSessionTokenResponse = client
+    let response = client
         .post(format!("{api_url}{CLI_EXCHANGE_GRANTS_EXCHANGE_PATH}"))
         .json(&CliExchangeGrantExchangeRequest {
             exchange_token: exchange_token.to_string(),
         })
         .send()
-        .context("exchange Scope login token")?
-        .error_for_status()
-        .context("exchange Scope login token")?
-        .json()
-        .context("parse Scope login exchange response")?;
+        .context("exchange Scope login token")?;
+    let exchanged: CliSessionTokenResponse =
+        decode_json_response(response, "exchange Scope login token")?;
     let user = validate_session_token(client, api_url, &exchanged.session_token)?
         .context("exchange token did not create a valid CLI session")?;
     Ok(AuthenticatedSession {
@@ -184,14 +178,11 @@ fn device_login(
     api_url: &str,
     open_browser: bool,
 ) -> anyhow::Result<AuthenticatedSession> {
-    let start: DeviceLoginStartResponse = client
+    let response = client
         .post(format!("{api_url}{CLI_DEVICE_LOGIN_PATH}"))
         .send()
-        .context("start browser login")?
-        .error_for_status()
-        .context("start browser login")?
-        .json()
-        .context("parse browser login response")?;
+        .context("start browser login")?;
+    let start: DeviceLoginStartResponse = decode_json_response(response, "start browser login")?;
 
     eprintln!("Open this URL to sign in:");
     eprintln!("{}", start.verification_url);
@@ -205,17 +196,14 @@ fn device_login(
             bail!("browser login expired");
         }
         thread::sleep(Duration::from_secs(start.poll_interval_secs.max(1)));
-        let poll: DeviceLoginPollResponse = client
+        let response = client
             .post(format!(
                 "{api_url}{}",
                 cli_device_login_poll_path(&start.device_code)
             ))
             .send()
-            .context("poll browser login")?
-            .error_for_status()
-            .context("poll browser login")?
-            .json()
-            .context("parse browser login poll response")?;
+            .context("poll browser login")?;
+        let poll: DeviceLoginPollResponse = decode_json_response(response, "poll browser login")?;
 
         if matches!(poll.status, DeviceLoginStatus::Complete) {
             let token = poll
