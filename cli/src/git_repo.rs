@@ -48,11 +48,15 @@ pub fn discover_git_repo(command_name: &str) -> anyhow::Result<GitRepo> {
 
 pub fn ensure_git_repo_ready(command_name: &str) -> anyhow::Result<GitRepo> {
     let repo = discover_git_repo(command_name)?;
-    if !git_success_in_repo(&repo, &["rev-parse", "--verify", "HEAD"]) {
+    if !git_repo_has_head(&repo) {
         bail!("create at least one Git commit before running {command_name}");
     }
 
     Ok(repo)
+}
+
+pub fn git_repo_has_head(repo: &GitRepo) -> bool {
+    git_success_in_repo(repo, &["rev-parse", "--verify", "HEAD"])
 }
 
 pub fn warn_if_dirty_working_tree(repo: &GitRepo) -> anyhow::Result<()> {
