@@ -10,7 +10,7 @@ if (!outputDir) {
 
 const baseUrl = (args['base-url'] ?? 'http://localhost:3000').replace(/\/$/, '')
 const auditRepo = process.env.UI_AUDIT_REPO ?? 'dev/public-demo'
-const repoRoute = `/repos/${auditRepo.replace(/^\/+|\/+$/g, '')}`
+const repoRoute = `/${auditRepo.replace(/^\/+|\/+$/g, '')}`
 const routes = (args.routes ?? `${repoRoute},${repoRoute}/requests,${repoRoute}/history`)
   .split(',')
   .map((route) => route.trim())

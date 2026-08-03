@@ -23,6 +23,8 @@ mod cli_sessions;
 mod content_push_transactions;
 mod entities;
 mod fast_push;
+#[cfg(test)]
+mod file_visibility_migration_tests;
 mod generated_ids;
 mod git_compaction;
 #[cfg(test)]

@@ -250,24 +250,6 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .try_get::<i64>("", "count")
         .unwrap();
     assert_eq!(review_columns, 0);
-    let repository_visibility_columns = db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "
-                SELECT count(*) AS count
-                FROM information_schema.columns
-                WHERE table_schema = current_schema()
-                  AND table_name = 'scope_repositories'
-                  AND column_name = 'default_visibility'
-            "
-            .to_string(),
-        ))
-        .await
-        .unwrap()
-        .unwrap()
-        .try_get::<i64>("", "count")
-        .unwrap();
-    assert_eq!(repository_visibility_columns, 0);
 }
 
 #[tokio::test]

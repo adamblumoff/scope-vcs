@@ -2,8 +2,8 @@ use super::{
     RepositoryStore, begin_metadata_read_snapshot, entities,
     projection_encoding::ProjectionAudience,
     projection_read_models::{
-        ProjectionFileLookup, load_live_projection_file_for_audience,
-        load_live_projection_files_for_audience,
+        ProjectionFileLookup, live_projection_has_non_control_file_for_audience,
+        load_live_projection_file_for_audience, load_live_projection_files_for_audience,
     },
     repository_from_model,
 };
@@ -20,7 +20,6 @@ use {
             ProjectionViewFile, ProjectionViewFileContent, has_visible_projected_non_control_files,
             projected_files as domain_projected_files,
         },
-        repo_control::is_repo_control_path,
         store::{
             RepoLifecycleState, RepositoryAccess, RepositoryActor, RepositoryMemberPermissions,
             StoredRepository, repo_id, repository_access_for_user_id,
@@ -458,7 +457,7 @@ where
     if row.publication_state()? != RepoLifecycleState::Ready {
         return Ok(false);
     }
-    if let Some(files) = load_live_projection_files_for_audience(
+    if let Some(visible) = live_projection_has_non_control_file_for_audience(
         conn,
         &row.id,
         row.change_version()?,
@@ -466,7 +465,7 @@ where
     )
     .await?
     {
-        return Ok(files.iter().any(|file| !is_repo_control_path(&file.path)));
+        return Ok(visible);
     }
 
     let repo = hydrate_repo_from_row_id(conn, &row.id).await?;

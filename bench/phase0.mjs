@@ -54,7 +54,7 @@ function cases() {
   ];
   if (token) {
     entries.push(
-      http('authenticated repo list', '/v1/repos', true),
+      http('authenticated owner profile', `/v1/users/${encodeURIComponent(owner)}/repos`, true),
       http('private projection preview', `${updateRepo}/projection-preview?audience=private&source=live`, true),
       pushCase('git push small first', { files: 100, bytesPerFile: 10 * 1024 }),
     );
@@ -136,7 +136,10 @@ async function pushFixture(spec) {
   await mkdir(outputRoot, { recursive: true });
   const created = await apiJson('/v1/repos', {
     method: 'POST',
-    body: { name: `bench-${Date.now()}-${Math.random().toString(16).slice(2)}`, visibility: 'Public' },
+    body: {
+      name: `bench-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      file_default_visibility: 'Public',
+    },
   });
   const fixture = {
     owner: created.repo.owner_handle,

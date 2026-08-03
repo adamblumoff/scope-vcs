@@ -17,6 +17,7 @@ use {
             projected_file_contents as domain_projected_file_contents,
             projected_files as domain_projected_files,
         },
+        repo_control::{REPO_CONTROL_PREFIX, REPO_CONTROL_ROOT},
         store::{RepositoryAccess, RepositoryActor, StoredRepository},
     },
 };
@@ -125,21 +126,8 @@ where
     C: ConnectionTrait,
 {
     let expected_version = projection_repo_version(repo_version)?;
-    let read_model_exists = entities::projection_read_model::Entity::find()
-        .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
-        .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
-        .filter(
-            entities::projection_read_model::Column::Source.eq(LIVE_PROJECTION_SOURCE.to_string()),
-        )
-        .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
-        .filter(
-            entities::projection_read_model::Column::IdentityVersion
-                .eq(scope_git::PROJECTION_IDENTITY_VERSION),
-        )
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-        .is_some();
+    let read_model_exists =
+        live_projection_read_model_exists(conn, repo_id, expected_version, audience).await?;
     if !read_model_exists {
         return Ok(ProjectionFileLookup::NotReady);
     }
@@ -224,6 +212,62 @@ where
     }
 
     Ok(Some(files))
+}
+
+pub(super) async fn live_projection_has_non_control_file_for_audience<C>(
+    conn: &C,
+    repo_id: &str,
+    repo_version: u64,
+    audience: ProjectionAudience,
+) -> Result<Option<bool>, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    let expected_version = projection_repo_version(repo_version)?;
+    let read_model_exists =
+        live_projection_read_model_exists(conn, repo_id, expected_version, audience).await?;
+    if !read_model_exists {
+        return Ok(None);
+    }
+
+    let file_exists = entities::projection_file::Entity::find()
+        .filter(entities::projection_file::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::projection_file::Column::RepoVersion.eq(expected_version))
+        .filter(entities::projection_file::Column::Source.eq(LIVE_PROJECTION_SOURCE.to_string()))
+        .filter(entities::projection_file::Column::Audience.eq(audience.as_str().to_string()))
+        .filter(entities::projection_file::Column::Path.ne(REPO_CONTROL_ROOT))
+        .filter(entities::projection_file::Column::Path.not_like(format!("{REPO_CONTROL_PREFIX}%")))
+        .one(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .is_some();
+    Ok(Some(file_exists))
+}
+
+async fn live_projection_read_model_exists<C>(
+    conn: &C,
+    repo_id: &str,
+    repo_version: i64,
+    audience: ProjectionAudience,
+) -> Result<bool, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    Ok(entities::projection_read_model::Entity::find()
+        .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::projection_read_model::Column::RepoVersion.eq(repo_version))
+        .filter(
+            entities::projection_read_model::Column::Source.eq(LIVE_PROJECTION_SOURCE.to_string()),
+        )
+        .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
+        .filter(
+            entities::projection_read_model::Column::IdentityVersion
+                .eq(scope_git::PROJECTION_IDENTITY_VERSION),
+        )
+        .one(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .is_some())
 }
 
 async fn load_live_projection_files<C>(
