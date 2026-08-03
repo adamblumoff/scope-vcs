@@ -18,7 +18,7 @@ test('loadJson parses success and preserves request init', async () => {
 })
 
 test('loadJson surfaces structured and malformed API errors', async () => {
-  globalThis.fetch = async () => jsonResponse({ error: 'repo is private' }, 403)
+  globalThis.fetch = async () => jsonResponse({ message: 'repo is private' }, 403)
   await assert.rejects(loadJson('/v1/repos/private'), hasHttpError(403, 'repo is private'))
 
   globalThis.fetch = async () => new Response('not json', { status: 502 })

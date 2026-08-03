@@ -7,13 +7,16 @@ use crate::{
         submit_request as api_submit_request,
     },
     git_repo::{
-        GitRepo, current_branch, ensure_clean_working_tree, ensure_git_repo_ready, head_oid,
-        run_git_in_repo, scope_remote_head_oid, try_run_git_in_repo, warn_if_dirty_working_tree,
+        GitRepo, changed_file_paths_between, current_branch, ensure_clean_working_tree,
+        ensure_git_repo_ready, head_oid, run_git_in_repo, scope_remote_head_oid,
+        try_run_git_in_repo, warn_if_dirty_working_tree,
     },
     push::DEFAULT_SCOPE_BRANCH,
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
+use scope_api_contract::{ErrorCode, ErrorResponse, RequestAudience};
+use scope_domain::{policy::ScopePath, repo_control::is_public_request_protected_path};
 use std::{
     fs,
     sync::atomic::{AtomicU64, Ordering},
@@ -319,12 +322,20 @@ fn push_request_branch(
         &request_id,
     )?;
     if !detail.request.permissions.can_push_branch {
-        bail!(
-            "request {} cannot be pushed by this user",
-            detail.request.id
-        );
+        return Err(crate::error::CliError::new(ErrorResponse::new(
+            ErrorCode::Forbidden,
+            format!(
+                "request {} cannot be pushed by this user",
+                detail.request.id
+            ),
+        ))
+        .into());
     }
     let request_head_oid = head_oid(git_repo)?;
+    let current_main_oid =
+        scope_remote_head_oid(git_repo, &context.target.remote, DEFAULT_SCOPE_BRANCH)?
+            .unwrap_or_else(|| detail.request.base_main_oid.to_string());
+    ensure_public_request_paths_allowed(git_repo, &detail, &current_main_oid, &request_head_oid)?;
     push_request_head(
         &context.target,
         session_token,
@@ -351,6 +362,39 @@ fn push_request_branch(
     )?;
     print_request_detail(&detail);
     Ok(())
+}
+
+fn ensure_public_request_paths_allowed(
+    git_repo: &GitRepo,
+    detail: &crate::api::RequestDetailResponse,
+    current_main_oid: &str,
+    request_head_oid: &str,
+) -> anyhow::Result<()> {
+    if detail.request.audience != RequestAudience::Public {
+        return Ok(());
+    }
+    let changed_paths = changed_file_paths_between(git_repo, current_main_oid, request_head_oid)?;
+    let protected_paths = changed_paths
+        .into_iter()
+        .filter_map(|path| {
+            let scope_path = ScopePath::parse(format!("/{path}")).ok()?;
+            is_public_request_protected_path(&scope_path).then_some(path)
+        })
+        .collect::<Vec<_>>();
+    if protected_paths.is_empty() {
+        return Ok(());
+    }
+
+    let message = format!(
+        "public request cannot change maintainer-controlled paths: {}",
+        protected_paths.join(", ")
+    );
+    let response = ErrorResponse::new(ErrorCode::ProtectedPath, message)
+        .with_paths(protected_paths)
+        .with_instruction(
+            "Move maintainer-controlled changes to a maintainer-authored change, then retry.",
+        );
+    Err(crate::error::CliError::new(response).into())
 }
 
 fn show_request_status(

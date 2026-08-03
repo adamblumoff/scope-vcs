@@ -1,10 +1,7 @@
 use super::*;
 use anyhow::Context;
-use reqwest::{
-    StatusCode,
-    blocking::{Client, RequestBuilder, Response},
-};
-use serde::{Deserialize, de::DeserializeOwned};
+use reqwest::blocking::{Client, RequestBuilder};
+use serde::de::DeserializeOwned;
 
 #[derive(Clone, Copy)]
 pub struct RequestTarget<'a> {
@@ -324,10 +321,7 @@ fn execute_repo_request<R: DeserializeOwned>(
 ) -> anyhow::Result<R> {
     let context = format!("{action} for {owner}/{repo}");
     let response = request.send().with_context(|| context.clone())?;
-    if response.status() == StatusCode::NOT_FOUND {
-        anyhow::bail!("repo {owner}/{repo} not found");
-    }
-    decode_response(response, &context)
+    decode_json_response(response, &context)
 }
 
 fn execute_request<R: DeserializeOwned>(
@@ -340,71 +334,13 @@ fn execute_request<R: DeserializeOwned>(
         target.request_id, target.owner, target.repo
     );
     let response = request.send().with_context(|| context.clone())?;
-    if response.status() == StatusCode::NOT_FOUND {
-        anyhow::bail!(
-            "request {} not found in {}/{}",
-            target.request_id,
-            target.owner,
-            target.repo
-        );
-    }
-    decode_response(response, &context)
-}
-
-fn decode_response<R: DeserializeOwned>(response: Response, context: &str) -> anyhow::Result<R> {
-    let response = require_compatible_response(response, context)?;
-    let status = response.status();
-    if status.is_success() {
-        return response
-            .json()
-            .with_context(|| format!("parse {context} response"));
-    }
-
-    if status == StatusCode::UNAUTHORIZED {
-        anyhow::bail!("not signed in; run scope login");
-    }
-    if let Ok(error) = response.json::<ApiErrorResponse>()
-        && let Some(message) = safe_api_error_message(&error.error)
-    {
-        anyhow::bail!("{message}");
-    }
-    anyhow::bail!("{context} failed ({})", status_label(status));
-}
-
-#[derive(Deserialize)]
-struct ApiErrorResponse {
-    error: String,
-}
-
-fn safe_api_error_message(message: &str) -> Option<String> {
-    let message = message.trim();
-    if message.is_empty() {
-        return None;
-    }
-    Some(
-        message
-            .chars()
-            .map(|character| {
-                if character.is_control() {
-                    ' '
-                } else {
-                    character
-                }
-            })
-            .collect(),
-    )
-}
-
-fn status_label(status: StatusCode) -> String {
-    match status.canonical_reason() {
-        Some(reason) => format!("HTTP {} {reason}", status.as_u16()),
-        None => format!("HTTP {}", status.as_u16()),
-    }
+    decode_json_response(response, &context)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::StatusCode;
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -442,7 +378,7 @@ mod tests {
     fn request_errors_surface_authoritative_safe_messages() {
         let (api_url, server) = serve_once(
             StatusCode::CONFLICT,
-            r#"{"error":"request cannot be submitted\u001b[31m"}"#,
+            r#"{"code":"conflict","message":"request cannot be submitted\u001b[31m","retryable":false}"#,
         );
 
         let error = submit_request(&Client::new(), &api_url, "token", target())
@@ -459,7 +395,7 @@ mod tests {
     fn request_errors_surface_the_cli_upgrade_instruction() {
         let (api_url, server) = serve_once(
             StatusCode::UPGRADE_REQUIRED,
-            r#"{"code":"cli_upgrade_required","message":"installed Scope CLI protocol 0; this API supports protocol 1","instruction":"Upgrade with `curl -fsSL https://scope-cli-production.up.railway.app/install.sh | sh`, then retry.","installed_protocol":0,"supported_protocol":1}"#,
+            r#"{"code":"cli_upgrade_required","message":"installed Scope CLI protocol 0; this API supports protocol 1","instruction":"Upgrade with `curl -fsSL https://scope-cli-production.up.railway.app/install.sh | sh`, then retry.","fields":{"installed_protocol":0,"supported_protocol":1},"retryable":false}"#,
         );
 
         let error = submit_request(&Client::new(), &api_url, "token", target())
@@ -473,7 +409,10 @@ mod tests {
 
     #[test]
     fn submit_posts_an_empty_payload() {
-        let (api_url, server) = serve_once(StatusCode::CONFLICT, r#"{"error":"fixture stop"}"#);
+        let (api_url, server) = serve_once(
+            StatusCode::CONFLICT,
+            r#"{"code":"conflict","message":"fixture stop","retryable":false}"#,
+        );
 
         submit_request(&Client::new(), &api_url, "token", target()).unwrap_err();
 
@@ -482,10 +421,10 @@ mod tests {
     }
 
     #[test]
-    fn hidden_request_not_found_never_echoes_server_detail() {
+    fn request_not_found_uses_the_authoritative_contract_message() {
         let (api_url, server) = serve_once(
             StatusCode::NOT_FOUND,
-            r#"{"error":"private request req_secret exists"}"#,
+            r#"{"code":"not_found","message":"request req_one not found in owner/repo","retryable":false}"#,
         );
 
         let error = get_request(
@@ -513,15 +452,17 @@ mod tests {
 
         assert_eq!(
             error,
-            "merge request req_one for owner/repo failed (HTTP 503 Service Unavailable)"
+            "Scope is temporarily unavailable while trying to merge request req_one for owner/repo"
         );
         server.join().unwrap();
     }
 
     #[test]
     fn invite_and_activity_wrappers_use_contract_methods_queries_and_payloads() {
-        let (api_url, invite_server) =
-            serve_once(StatusCode::CONFLICT, r#"{"error":"fixture stop"}"#);
+        let (api_url, invite_server) = serve_once(
+            StatusCode::CONFLICT,
+            r#"{"code":"conflict","message":"fixture stop","retryable":false}"#,
+        );
         add_request_invitee(
             &Client::new(),
             &api_url,

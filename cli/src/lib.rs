@@ -4,6 +4,7 @@ pub mod auth;
 pub mod build;
 pub mod clone;
 pub mod distribution;
+pub mod error;
 pub mod git_credential;
 pub mod git_repo;
 pub mod git_transport;

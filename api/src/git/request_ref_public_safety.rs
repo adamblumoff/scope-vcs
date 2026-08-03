@@ -388,9 +388,7 @@ fn ensure_public_request_path(
 ) -> Result<ScopePath, ApiError> {
     let scope_path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
     if is_public_request_protected_path(&scope_path) {
-        return Err(ApiError::conflict(
-            "public request cannot change a maintainer-controlled path",
-        ));
+        return Err(ApiError::protected_paths(vec![path.to_string()]));
     }
     if public_visible_paths
         .iter()

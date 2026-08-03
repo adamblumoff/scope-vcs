@@ -123,6 +123,28 @@ pub fn changed_paths_since_scope_base_at_commit(
     }
 }
 
+pub fn changed_file_paths_between(
+    repo: &GitRepo,
+    base_oid: &str,
+    commit_oid: &str,
+) -> anyhow::Result<Vec<String>> {
+    let output = git_output_in_repo(
+        repo,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            base_oid,
+            commit_oid,
+        ],
+    )?;
+    if !output.status.success() {
+        bail!("inspect committed request paths failed");
+    }
+    Ok(parse_nul_paths(&output.stdout))
+}
+
 pub fn worktree_file_paths(repo: &GitRepo) -> anyhow::Result<Vec<String>> {
     let output = git_output_in_repo(
         repo,
