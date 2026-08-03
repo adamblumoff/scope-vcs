@@ -13,7 +13,10 @@ use crate::{
     repo_events::RepoChangeBus,
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgets},
 };
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use scope_api_contract::CliSessionTokenResponse;
 use scope_object_store::{EncryptedObjectStore, ObjectStore};
 use scope_postgres::db::MetadataStore;
@@ -97,9 +100,32 @@ pub(crate) async fn create_bench_cli_session(
         ApiError::internal_message(format!("validating local dev benchmark auth: {error}"))
     })?;
     let user = seed::seed_user_account(settings.seed_user);
+    mint_cli_session(&state, &user).await
+}
+
+pub(crate) async fn create_dev_cli_session(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+) -> Result<Json<CliSessionTokenResponse>, ApiError> {
+    if !env::is_local_dev_env() {
+        return Err(ApiError::not_found("local dev auth is unavailable"));
+    }
+
+    let settings = env::validate_local_dev_environment().map_err(|error| {
+        ApiError::internal_message(format!("validating local dev auth: {error}"))
+    })?;
+    let user = seed::actor_account(settings.seed_user, &handle)
+        .ok_or_else(|| ApiError::not_found("seeded local dev actor not found"))?;
+    mint_cli_session(&state, &user).await
+}
+
+async fn mint_cli_session(
+    state: &AppState,
+    user: &scope_domain::store::UserAccount,
+) -> Result<Json<CliSessionTokenResponse>, ApiError> {
     let now_unix = unix_now()?;
     let auth = CliAuthService::new(state.metadata.auth());
-    let grant = auth.create_exchange_grant(&user, now_unix).await?;
+    let grant = auth.create_exchange_grant(user, now_unix).await?;
     let token = auth.exchange_grant(&grant.exchange_token, now_unix).await?;
 
     Ok(Json(CliSessionTokenResponse {

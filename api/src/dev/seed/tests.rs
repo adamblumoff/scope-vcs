@@ -10,6 +10,32 @@ use scope_domain::requests::RequestState;
 use scope_object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
 use std::sync::Arc;
 
+#[test]
+fn local_dev_actor_lookup_is_limited_to_seeded_identities() {
+    let seed_user = DevSeedUser {
+        email: "owner@example.test".to_string(),
+        handle: "dev".to_string(),
+    };
+
+    assert_eq!(
+        actor_account(seed_user.clone(), "dev").unwrap().handle,
+        "dev"
+    );
+    assert_eq!(
+        actor_account(seed_user.clone(), "river-contributor")
+            .unwrap()
+            .id,
+        DEV_SEED_CONTRIBUTOR_ID
+    );
+    assert_eq!(
+        actor_account(seed_user.clone(), "maya-maintainer")
+            .unwrap()
+            .id,
+        DEV_SEED_MAINTAINER_ID
+    );
+    assert!(actor_account(seed_user, "unknown").is_none());
+}
+
 #[tokio::test]
 async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     let store = EncryptedObjectStore::new(Arc::new(MemoryObjectStore::new()), [9; 32]);
