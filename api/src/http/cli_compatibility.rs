@@ -61,6 +61,7 @@ mod tests {
         middleware,
         routing::{get, post},
     };
+    use scope_api_contract::ErrorCode;
     use tower::ServiceExt;
 
     fn test_router() -> Router {
@@ -99,9 +100,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
         let body = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
         let error: ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(error.code, "cli_upgrade_required");
-        assert_eq!(error.installed_protocol, Some(0));
-        assert_eq!(error.supported_protocol, Some(1));
+        assert_eq!(error.code, ErrorCode::CliUpgradeRequired);
+        assert_eq!(error.fields.installed_protocol, Some(0));
+        assert_eq!(error.fields.supported_protocol, Some(1));
         assert!(error.message.contains("installed Scope CLI protocol 0"));
         assert!(error.message.contains("supports protocol 1"));
         assert!(error.instruction.unwrap().contains("install.sh | sh"));
@@ -118,8 +119,8 @@ mod tests {
         let body = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
         let error: ErrorResponse = serde_json::from_slice(&body).unwrap();
         assert!(error.message.contains("protocol missing"));
-        assert_eq!(error.installed_protocol, None);
-        assert_eq!(error.supported_protocol, Some(1));
+        assert_eq!(error.fields.installed_protocol, None);
+        assert_eq!(error.fields.supported_protocol, Some(1));
     }
 
     #[tokio::test]
@@ -132,8 +133,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
         let body = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
         let error: ErrorResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(error.installed_protocol, Some(2));
-        assert_eq!(error.supported_protocol, Some(1));
+        assert_eq!(error.fields.installed_protocol, Some(2));
+        assert_eq!(error.fields.supported_protocol, Some(1));
         assert_eq!(
             error.instruction.as_deref(),
             Some("This Scope CLI requires API protocol 2. Retry after the Scope API is updated.")

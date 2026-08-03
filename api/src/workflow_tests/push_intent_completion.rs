@@ -125,7 +125,7 @@ async fn create_push_intent_rejects_stale_local_config_base_hash() {
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(
-        response_json(response).await["error"],
+        response_json(response).await["message"],
         "repo config changed since review; rerun scope review"
     );
 
@@ -156,7 +156,7 @@ async fn create_push_intent_rejects_oversized_config_for_git_header_transport() 
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(
-        response_json(response).await["error"]
+        response_json(response).await["message"]
             .as_str()
             .unwrap()
             .contains("repo config exceeds")

@@ -1,13 +1,14 @@
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use scope_cli::{
     api::{api_url, http_client},
+    error::CliError,
     git_credential::run_git_credential,
     git_repo::discover_git_repo,
     login::session_from_cache_or_browser,
     request::{RequestArgs, prepare_request_command, run_request_command},
     review::run_standalone_review,
 };
-use std::path::PathBuf;
+use std::{path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
 #[command(name = "scope")]
@@ -157,7 +158,17 @@ enum RunnerCacheCommand {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error:#}");
+            ExitCode::from(scope_cli::error::exit_code(&error))
+        }
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     let matches = Cli::command()
         .version(scope_cli::build::version_identity())
         .get_matches();
@@ -223,19 +234,25 @@ fn run_workflow(args: RunArgs) -> anyhow::Result<()> {
             scope_cli::run::retry(run_id, args.remote.as_deref(), args.no_watch)
         }
         ("watch" | "cancel", Some(_)) => {
-            anyhow::bail!(
+            Err(CliError::usage(
                 "--runner is only valid when starting a workflow; --no-watch is not valid for watch or cancel"
             )
+            .into())
         }
         ("retry", Some(_)) => {
-            anyhow::bail!("--runner is only valid when starting a workflow")
+            Err(CliError::usage("--runner is only valid when starting a workflow").into())
         }
         ("watch" | "cancel" | "retry", None) => {
-            anyhow::bail!("scope run {} requires a run ID", args.target)
+            Err(CliError::usage(format!(
+                "scope run {} requires a run ID",
+                args.target
+            ))
+            .into())
         }
-        (_, Some(_)) => anyhow::bail!(
+        (_, Some(_)) => Err(CliError::usage(
             "a run ID is accepted only by `scope run watch`, `scope run cancel`, or `scope run retry`"
-        ),
+        )
+        .into()),
         (workflow, None) => scope_cli::run::start(
             workflow,
             args.runner.as_deref(),

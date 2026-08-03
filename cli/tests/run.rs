@@ -7,10 +7,11 @@ fn run_control_commands_require_an_id_before_repository_or_auth_work() {
     let dir = TempDir::new("run-control-id");
     create_repo_with_head(dir.path());
     for command in ["watch", "cancel", "retry"] {
-        scope_failure(
+        scope_failure_with_code(
             dir.path(),
             ["run", command],
             &format!("scope run {command} requires a run ID"),
+            2,
         );
     }
 }
@@ -18,10 +19,11 @@ fn run_control_commands_require_an_id_before_repository_or_auth_work() {
 #[test]
 fn runner_selection_is_only_valid_when_starting_a_workflow() {
     let dir = TempDir::new("run-control-runner");
-    scope_failure(
+    scope_failure_with_code(
         dir.path(),
         ["run", "retry", "run_123", "--runner", "linux-box"],
         "--runner is only valid when starting a workflow",
+        2,
     );
 }
 

@@ -3,6 +3,7 @@
 //! Durable policy stays in `scope-domain`; this crate owns only serialized shapes
 //! and route construction.
 
+mod error;
 mod repo_config;
 mod runs;
 mod types;
@@ -12,6 +13,7 @@ mod cli_compatibility;
 
 pub mod routes;
 pub use cli_compatibility::*;
+pub use error::*;
 pub use repo_config::*;
 pub use runs::*;
 pub use types::*;

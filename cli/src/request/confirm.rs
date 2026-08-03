@@ -1,4 +1,6 @@
+use crate::error::CliError;
 use anyhow::bail;
+use scope_api_contract::{ErrorCode, ErrorResponse};
 use std::io::{self, IsTerminal, Write};
 
 pub(super) fn require_confirmation(prompt: &str, yes: bool) -> anyhow::Result<()> {
@@ -6,7 +8,11 @@ pub(super) fn require_confirmation(prompt: &str, yes: bool) -> anyhow::Result<()
         return Ok(());
     }
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
-        bail!("{prompt}; rerun with --yes to confirm");
+        return Err(CliError::new(ErrorResponse::new(
+            ErrorCode::BadRequest,
+            format!("{prompt}; rerun with --yes to confirm"),
+        ))
+        .into());
     }
     eprint!("{prompt}\nContinue? [y/N] ");
     io::stderr().flush()?;
@@ -30,9 +36,11 @@ mod tests {
 
     #[test]
     fn noninteractive_confirmation_requires_yes() {
-        let error = require_confirmation("consequential action", false)
-            .unwrap_err()
-            .to_string();
-        assert_eq!(error, "consequential action; rerun with --yes to confirm");
+        let error = require_confirmation("consequential action", false).unwrap_err();
+        assert_eq!(crate::error::exit_code(&error), 2);
+        assert_eq!(
+            error.to_string(),
+            "consequential action; rerun with --yes to confirm"
+        );
     }
 }

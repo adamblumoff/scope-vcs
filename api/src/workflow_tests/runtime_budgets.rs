@@ -53,7 +53,7 @@ async fn receive_pack_capacity_exhaustion_returns_backpressure() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let body = response_json(response).await;
     assert_eq!(
-        body["error"],
+        body["message"],
         "Git receive-pack capacity is exhausted; retry later"
     );
 }
