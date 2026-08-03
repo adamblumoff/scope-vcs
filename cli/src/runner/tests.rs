@@ -11,6 +11,45 @@ use scope_domain::runs::workflow::{
 use std::{env, fs};
 
 #[test]
+fn runner_client_sends_cli_compatibility_identity() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = [0_u8; 8192];
+        let read = stream.read(&mut bytes).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        String::from_utf8(bytes[..read].to_vec()).unwrap()
+    });
+
+    let response = runner_client()
+        .unwrap()
+        .get(format!("http://{address}/identity"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let request = server.join().unwrap().to_ascii_lowercase();
+    assert!(request.contains("x-scope-cli-protocol: 1\r\n"));
+    assert!(request.contains(&format!(
+        "x-scope-cli-version: {}\r\n",
+        crate::build::PACKAGE_VERSION
+    )));
+    assert!(request.contains(&format!(
+        "x-scope-cli-build: {}\r\n",
+        crate::build::BUILD_SHA
+    )));
+}
+
+#[test]
 fn repository_and_systemd_inputs_are_strict() {
     assert_eq!(parse_repository("owner/repo").unwrap(), ("owner", "repo"));
     assert!(parse_repository("owner").is_err());

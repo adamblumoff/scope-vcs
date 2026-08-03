@@ -5,6 +5,7 @@ use axum::{
         Method,
         header::{AUTHORIZATION, CONTENT_TYPE},
     },
+    middleware,
     routing::{delete, get, patch, post},
 };
 use http::routes;
@@ -298,6 +299,7 @@ pub fn router(state: AppState) -> Router {
 
     router
         .with_state(state)
+        .layer(middleware::from_fn(http::cli_compatibility::enforce))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

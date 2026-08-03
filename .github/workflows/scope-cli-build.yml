@@ -143,6 +143,8 @@ jobs:
       - name: Build scope
         working-directory: cli
         shell: bash
+        env:
+          SCOPE_BUILD_SHA: ${{ github.sha }}
         run: |
           if [ "${{ matrix.builder }}" = "cross" ]; then
             cross build --release --locked --target "${{ matrix.target }}" --bin scope

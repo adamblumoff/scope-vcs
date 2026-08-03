@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use scope_cli::{
     api::{api_url, http_client},
     git_credential::run_git_credential,
@@ -158,7 +158,11 @@ enum RunnerCacheCommand {
 }
 
 fn main() -> anyhow::Result<()> {
-    match Cli::parse().command {
+    let matches = Cli::command()
+        .version(scope_cli::build::version_identity())
+        .get_matches();
+    let cli = Cli::from_arg_matches(&matches)?;
+    match cli.command {
         CommandKind::Init(args) => scope_cli::init::run(args.name),
         CommandKind::Push(args) => {
             scope_cli::push::run(args.remote.as_deref(), args.no_review, args.wait)
