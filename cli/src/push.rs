@@ -335,7 +335,11 @@ pub fn ensure_scope_remote_can_receive_push(
     access: &RepositoryAccessResponse,
 ) -> anyhow::Result<()> {
     if lifecycle_state == RepoLifecycleState::AwaitingFirstPush {
-        ensure_awaiting_first_push_repo_can_receive_first_push(&target.owner, &target.repo, access.actor)
+        ensure_awaiting_first_push_repo_can_receive_first_push(
+            &target.owner,
+            &target.repo,
+            access.actor,
+        )
     } else {
         ensure_ready_repo_can_receive_push(
             &target.owner,
@@ -435,11 +439,16 @@ mod tests {
 
     #[test]
     fn first_push_requires_owner_access() {
-        ensure_awaiting_first_push_repo_can_receive_first_push("owner", "repo", RepositoryActor::Owner)
-            .unwrap();
+        ensure_awaiting_first_push_repo_can_receive_first_push(
+            "owner",
+            "repo",
+            RepositoryActor::Owner,
+        )
+        .unwrap();
         for actor in [RepositoryActor::Member, RepositoryActor::Public] {
             assert!(
-                ensure_awaiting_first_push_repo_can_receive_first_push("owner", "repo", actor).is_err()
+                ensure_awaiting_first_push_repo_can_receive_first_push("owner", "repo", actor)
+                    .is_err()
             );
         }
     }
