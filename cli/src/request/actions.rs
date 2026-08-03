@@ -52,19 +52,27 @@ pub(super) fn submit_request_command(
     session_token: &str,
     target: RequestTargetArgs,
     yes: bool,
-) -> anyhow::Result<()> {
+    machine_output: bool,
+) -> anyhow::Result<RequestCommandOutcome> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
     let prompt = "Submit this request to its maintainers";
-    require_confirmation(prompt, yes)?;
+    require_confirmation(prompt, yes, !machine_output)?;
     let response = api_submit_request(
         client,
         api_url,
         session_token,
         api_target(&context, &request_id),
     )?;
-    print_request_mutation_receipt("Submitted", Some(&before.request), &response);
-    Ok(())
+    let human_lines = request_mutation_receipt_lines("Submitted", Some(&before.request), &response);
+    Ok(RequestCommandOutcome::new(
+        "request.submit",
+        RequestCommandResult::Mutation(RepoResponse {
+            repo: context.repo,
+            response,
+        }),
+        human_lines,
+    ))
 }
 
 pub(super) fn edit_request(
@@ -75,7 +83,7 @@ pub(super) fn edit_request(
     target: RequestTargetArgs,
     title: Option<String>,
     description_file: Option<std::path::PathBuf>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RequestCommandOutcome> {
     let description = description_file
         .map(|path| {
             fs::read_to_string(&path)
@@ -92,8 +100,16 @@ pub(super) fn edit_request(
         title,
         description,
     )?;
-    print_request_mutation_receipt("Edited request", Some(&before.request), &response);
-    Ok(())
+    let human_lines =
+        request_mutation_receipt_lines("Edited request", Some(&before.request), &response);
+    Ok(RequestCommandOutcome::new(
+        "request.edit",
+        RequestCommandResult::Mutation(RepoResponse {
+            repo: context.repo,
+            response,
+        }),
+        human_lines,
+    ))
 }
 
 fn exact_handle(handle: String) -> anyhow::Result<String> {
@@ -112,11 +128,11 @@ pub(super) fn invite_request(
     target: RequestTargetArgs,
     handle: String,
     invite: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RequestCommandOutcome> {
     let (context, request_id, _) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
     let handle = exact_handle(handle)?;
-    if invite {
+    let (command, response, human_line) = if invite {
         let response = add_request_invitee(
             client,
             api_url,
@@ -124,7 +140,8 @@ pub(super) fn invite_request(
             api_target(&context, &request_id),
             handle,
         )?;
-        print_invitee_added_receipt(&response);
+        let human_line = invitee_added_receipt(&response);
+        ("request.invite", response, human_line)
     } else {
         let response = remove_request_invitee(
             client,
@@ -133,9 +150,17 @@ pub(super) fn invite_request(
             api_target(&context, &request_id),
             handle,
         )?;
-        print_invitee_removed_receipt(&response);
-    }
-    Ok(())
+        let human_line = invitee_removed_receipt(&response);
+        ("request.uninvite", response, human_line)
+    };
+    Ok(RequestCommandOutcome::new(
+        command,
+        RequestCommandResult::Invitee(RepoResponse {
+            repo: context.repo,
+            response,
+        }),
+        vec![human_line],
+    ))
 }
 
 pub(super) fn leave_invited_request(
@@ -144,7 +169,7 @@ pub(super) fn leave_invited_request(
     api_url: &str,
     session_token: &str,
     target: RequestTargetArgs,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RequestCommandOutcome> {
     let (context, request_id, _) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
     let response = leave_request(
@@ -153,8 +178,16 @@ pub(super) fn leave_invited_request(
         session_token,
         api_target(&context, &request_id),
     )?;
-    print_leave_receipt(&request_id, &response);
-    Ok(())
+    let human_line = leave_receipt(&request_id, &response);
+    Ok(RequestCommandOutcome::new(
+        "request.leave",
+        RequestCommandResult::Leave(TargetResponse {
+            repo: context.repo,
+            request_id,
+            response,
+        }),
+        vec![human_line],
+    ))
 }
 
 pub(super) fn merge_request_command(
@@ -164,12 +197,14 @@ pub(super) fn merge_request_command(
     session_token: &str,
     target: RequestTargetArgs,
     yes: bool,
-) -> anyhow::Result<()> {
+    machine_output: bool,
+) -> anyhow::Result<RequestCommandOutcome> {
     let (context, request_id, before) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
     require_confirmation(
         &merge_confirmation(&before.request.name, before.request.state),
         yes,
+        !machine_output,
     )?;
     let response = merge_request(
         client,
@@ -177,8 +212,15 @@ pub(super) fn merge_request_command(
         session_token,
         api_target(&context, &request_id),
     )?;
-    print_request_mutation_receipt("Merged", Some(&before.request), &response);
-    Ok(())
+    let human_lines = request_mutation_receipt_lines("Merged", Some(&before.request), &response);
+    Ok(RequestCommandOutcome::new(
+        "request.merge",
+        RequestCommandResult::Mutation(RepoResponse {
+            repo: context.repo,
+            response,
+        }),
+        human_lines,
+    ))
 }
 
 pub(super) fn rate_request_command(
@@ -189,7 +231,7 @@ pub(super) fn rate_request_command(
     target: RequestTargetArgs,
     score: u8,
     reason: String,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RequestCommandOutcome> {
     let (context, request_id, _) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
     let response = rate_request(
@@ -200,13 +242,21 @@ pub(super) fn rate_request_command(
         score,
         reason,
     )?;
-    println!(
+    let human_line = format!(
         "Rated @{} {}/5 — {}",
         terminal_text(&response.subject.handle),
         response.score,
         terminal_text(&response.reason)
     );
-    Ok(())
+    Ok(RequestCommandOutcome::new(
+        "request.rate",
+        RequestCommandResult::Rating(TargetResponse {
+            repo: context.repo,
+            request_id,
+            response,
+        }),
+        vec![human_line],
+    ))
 }
 
 fn merge_confirmation(request_name: &str, _state: crate::api::RequestState) -> String {
@@ -268,8 +318,7 @@ pub(super) fn show_one_request(
     api_url: &str,
     session_token: &str,
     target: RequestTargetArgs,
-    json: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RequestCommandOutcome> {
     let (context, request_id, detail) =
         load_exact_request(git_repo, client, api_url, session_token, target)?;
     let activity = full_request_activity(
@@ -280,20 +329,17 @@ pub(super) fn show_one_request(
         0,
         detail.request.activity_version,
     )?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "request": detail.request,
-                "activity": activity,
-            }))
-            .context("serialize request detail")?
-        );
-    } else {
-        print_request_detail(&detail);
-        print_request_activity(&activity);
-    }
-    Ok(())
+    let mut human_lines = request_detail_lines_for_response(&detail);
+    human_lines.extend(request_activity_lines_for_response(&activity));
+    Ok(RequestCommandOutcome::new(
+        "request.show",
+        RequestCommandResult::Detail(DetailResult {
+            repo: context.repo,
+            request: detail.request,
+            activity: Some(activity),
+        }),
+        human_lines,
+    ))
 }
 
 pub(super) fn list_request_status(
@@ -302,22 +348,27 @@ pub(super) fn list_request_status(
     api_url: &str,
     session_token: &str,
     remote: Option<String>,
-    json: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RequestCommandOutcome> {
     let context = load_context(git_repo, client, api_url, session_token, remote.as_deref())?;
-    if !json {
-        print_repo_access(&context.repo);
-    }
-    print_request_list(client, api_url, session_token, &context, json)
+    let requests = load_request_list(client, api_url, session_token, &context)?;
+    let mut human_lines = repo_access_lines(&context.repo);
+    human_lines.extend(request_list_lines(&requests)?);
+    Ok(RequestCommandOutcome::new(
+        "request.list",
+        RequestCommandResult::List(ListResult {
+            repo: context.repo,
+            requests,
+        }),
+        human_lines,
+    ))
 }
 
-pub(super) fn print_request_list(
+pub(super) fn load_request_list(
     client: &Client,
     api_url: &str,
     session_token: &str,
     context: &local::RequestContext,
-    json: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<crate::api::RequestListItemResponse>> {
     let mut requests = Vec::new();
     let mut cursor = None;
     loop {
@@ -354,24 +405,26 @@ pub(super) fn print_request_list(
             .cmp(&right.updated_at_unix)
             .then_with(|| left.id.cmp(&right.id))
     });
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&requests).context("serialize request list")?
-        );
-    } else if requests.is_empty() {
-        println!("No visible requests.");
-    } else {
-        println!(" WAIT  STATE      REQUEST");
-        let now_unix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("system clock is before Unix epoch")?
-            .as_secs();
-        for request in requests {
-            println!("{}", request_list_line(&request, now_unix));
-        }
+    Ok(requests)
+}
+
+pub(super) fn request_list_lines(
+    requests: &[crate::api::RequestListItemResponse],
+) -> anyhow::Result<Vec<String>> {
+    if requests.is_empty() {
+        return Ok(vec!["No visible requests.".to_string()]);
     }
-    Ok(())
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_secs();
+    let mut lines = vec![" WAIT  STATE      REQUEST".to_string()];
+    lines.extend(
+        requests
+            .iter()
+            .map(|request| request_list_line(request, now_unix)),
+    );
+    Ok(lines)
 }
 
 #[cfg(test)]

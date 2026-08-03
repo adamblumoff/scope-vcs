@@ -76,6 +76,23 @@ pub fn exit_code(error: &anyhow::Error) -> u8 {
     ExitCategory::Unexpected as u8
 }
 
+pub fn response(error: &anyhow::Error) -> ErrorResponse {
+    if let Some(error) = error.downcast_ref::<CliError>() {
+        return error.response().clone();
+    }
+    if error
+        .downcast_ref::<reqwest::Error>()
+        .is_some_and(|error| error.is_connect() || error.is_timeout())
+    {
+        return ErrorResponse::new(
+            ErrorCode::ServiceUnavailable,
+            "Scope is temporarily unavailable; retry with bounded backoff",
+        )
+        .retryable();
+    }
+    ErrorResponse::new(ErrorCode::Internal, format!("{error:#}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

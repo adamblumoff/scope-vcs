@@ -1,6 +1,7 @@
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, error::ErrorKind};
 use scope_cli::{
     api::{api_url, http_client},
+    auth::cached_cli_session,
     error::CliError,
     git_credential::run_git_credential,
     git_repo::discover_git_repo,
@@ -14,6 +15,12 @@ use std::{path::PathBuf, process::ExitCode};
 #[command(name = "scope")]
 #[command(about = "Scope VCS command line")]
 struct Cli {
+    #[arg(
+        long,
+        global = true,
+        help = "Print one machine-readable JSON document for request commands"
+    )]
+    json: bool,
     #[command(subcommand)]
     command: CommandKind,
 }
@@ -159,20 +166,59 @@ enum RunnerCacheCommand {
 }
 
 fn main() -> ExitCode {
-    match run() {
+    let json_requested = std::env::args_os().any(|arg| arg == "--json");
+    let matches = match Cli::command()
+        .version(scope_cli::build::version_identity())
+        .try_get_matches()
+    {
+        Ok(matches) => matches,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            error.exit()
+        }
+        Err(error) if json_requested => {
+            let response = scope_cli::api::ErrorResponse::new(
+                scope_cli::api::ErrorCode::BadRequest,
+                error.to_string(),
+            );
+            eprintln!("{}", serde_json::to_string(&response).unwrap());
+            return ExitCode::from(2);
+        }
+        Err(error) => error.exit(),
+    };
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
+    let json = cli.json;
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error:#}");
+            if json {
+                let response = scope_cli::error::response(&error);
+                eprintln!("{}", serde_json::to_string(&response).unwrap());
+            } else {
+                eprintln!("{error:#}");
+            }
             ExitCode::from(scope_cli::error::exit_code(&error))
         }
     }
 }
 
-fn run() -> anyhow::Result<()> {
-    let matches = Cli::command()
-        .version(scope_cli::build::version_identity())
-        .get_matches();
-    let cli = Cli::from_arg_matches(&matches)?;
+fn run(cli: Cli) -> anyhow::Result<()> {
+    if cli.json && !matches!(&cli.command, CommandKind::Request(_)) {
+        return Err(
+            scope_cli::error::CliError::new(scope_cli::api::ErrorResponse::new(
+                scope_cli::api::ErrorCode::BadRequest,
+                "--json currently supports request commands only",
+            ))
+            .into(),
+        );
+    }
     match cli.command {
         CommandKind::Init(args) => scope_cli::init::run(args.name),
         CommandKind::Push(args) => {
@@ -184,7 +230,7 @@ fn run() -> anyhow::Result<()> {
             run_standalone_review(&repo)
         }
         CommandKind::Rules(args) => run_rules(args.command),
-        CommandKind::Request(args) => run_request(args),
+        CommandKind::Request(args) => run_request(args, cli.json),
         CommandKind::Clone(args) => {
             scope_cli::clone::clone_repo(&args.repository, args.destination.as_deref())
         }
@@ -214,12 +260,23 @@ fn run_rules(command: RulesCommand) -> anyhow::Result<()> {
     }
 }
 
-fn run_request(args: RequestArgs) -> anyhow::Result<()> {
+fn run_request(args: RequestArgs, json: bool) -> anyhow::Result<()> {
     let command = prepare_request_command(args)?;
     let api_url = api_url();
     let client = http_client()?;
-    let session = session_from_cache_or_browser(&client, &api_url)?;
-    run_request_command(command, &client, &api_url, &session.token)
+    let session = if json {
+        let Some(session) = cached_cli_session(&client, &api_url)? else {
+            return Err(CliError::new(scope_cli::api::ErrorResponse::new(
+                scope_cli::api::ErrorCode::Unauthorized,
+                "not signed in; run scope login",
+            ))
+            .into());
+        };
+        session
+    } else {
+        session_from_cache_or_browser(&client, &api_url)?
+    };
+    run_request_command(command, &client, &api_url, &session.token, json)?.render(json)
 }
 
 fn run_workflow(args: RunArgs) -> anyhow::Result<()> {
