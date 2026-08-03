@@ -352,6 +352,7 @@ fn execute_request<R: DeserializeOwned>(
 }
 
 fn decode_response<R: DeserializeOwned>(response: Response, context: &str) -> anyhow::Result<R> {
+    let response = require_compatible_response(response, context)?;
     let status = response.status();
     if status.is_success() {
         return response
@@ -452,6 +453,22 @@ mod tests {
         let request = server.join().unwrap();
         assert!(request.starts_with("POST /v1/repos/owner/repo/requests/req_one/submit "));
         assert!(request.contains("\r\n\r\n{}"), "{request}");
+    }
+
+    #[test]
+    fn request_errors_surface_the_cli_upgrade_instruction() {
+        let (api_url, server) = serve_once(
+            StatusCode::UPGRADE_REQUIRED,
+            r#"{"code":"cli_upgrade_required","message":"installed Scope CLI protocol 0; this API supports protocol 1","instruction":"Upgrade with `curl -fsSL https://scope-cli-production.up.railway.app/install.sh | sh`, then retry.","installed_protocol":0,"supported_protocol":1}"#,
+        );
+
+        let error = submit_request(&Client::new(), &api_url, "token", target())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("installed Scope CLI protocol 0"), "{error}");
+        assert!(error.contains(CLI_INSTALL_COMMAND), "{error}");
+        server.join().unwrap();
     }
 
     #[test]

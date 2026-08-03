@@ -587,6 +587,7 @@ fn parse_json<T: serde::de::DeserializeOwned>(
 }
 
 fn successful(response: Response, context: &str) -> anyhow::Result<Response> {
+    let response = super::require_compatible_response(response, context)?;
     if response.status().is_success() {
         return Ok(response);
     }

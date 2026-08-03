@@ -8,7 +8,10 @@ mod runs;
 mod types;
 mod wire;
 
+mod cli_compatibility;
+
 pub mod routes;
+pub use cli_compatibility::*;
 pub use repo_config::*;
 pub use runs::*;
 pub use types::*;

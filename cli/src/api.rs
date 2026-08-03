@@ -1,5 +1,9 @@
 use anyhow::Context;
-use reqwest::{StatusCode, blocking::Client};
+use reqwest::{
+    StatusCode,
+    blocking::{Client, ClientBuilder},
+    header::{HeaderMap, HeaderValue},
+};
 pub use scope_api_contract::routes::{
     cli_browser_login_exchange as cli_browser_login_exchange_path,
     cli_device_login_poll as cli_device_login_poll_path,
@@ -58,10 +62,50 @@ pub fn api_url() -> String {
 }
 
 pub fn http_client() -> anyhow::Result<Client> {
-    Client::builder()
+    http_client_builder()
         .timeout(Duration::from_secs(20))
         .build()
         .context("build HTTP client")
+}
+
+pub(crate) fn require_compatible_response(
+    response: reqwest::blocking::Response,
+    context: &str,
+) -> anyhow::Result<reqwest::blocking::Response> {
+    if response.status() != StatusCode::UPGRADE_REQUIRED {
+        return Ok(response);
+    }
+
+    if let Ok(error) = response.json::<ErrorResponse>() {
+        let instruction = error.instruction.unwrap_or_default();
+        if instruction.trim().is_empty() {
+            anyhow::bail!(error.message);
+        }
+        anyhow::bail!("{}\n{}", error.message, instruction.trim());
+    }
+    anyhow::bail!("{context} requires a newer Scope CLI; run `{CLI_INSTALL_COMMAND}`")
+}
+
+pub(crate) fn http_client_builder() -> ClientBuilder {
+    Client::builder().default_headers(cli_identity_headers())
+}
+
+fn cli_identity_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CLI_PROTOCOL_HEADER,
+        HeaderValue::from_str(&CLI_PROTOCOL_VERSION.to_string())
+            .expect("CLI protocol is a valid header value"),
+    );
+    headers.insert(
+        CLI_VERSION_HEADER,
+        HeaderValue::from_static(crate::build::PACKAGE_VERSION),
+    );
+    headers.insert(
+        CLI_BUILD_HEADER,
+        HeaderValue::from_static(crate::build::BUILD_SHA),
+    );
+    headers
 }
 
 pub fn validate_session_token(
@@ -140,6 +184,7 @@ pub fn create_repo(
         .json(&request)
         .send()
         .context("create Scope repository")?;
+    let response = require_compatible_response(response, "create Scope repository")?;
     if response.status() == StatusCode::CONFLICT {
         anyhow::bail!("{}", duplicate_repo_error_message(&request.name));
     }
@@ -250,6 +295,10 @@ pub fn create_push_intent(
         })
         .send()
         .with_context(|| format!("create push intent for {}/{}", params.owner, params.repo))?;
+    let response = require_compatible_response(
+        response,
+        &format!("create push intent for {}/{}", params.owner, params.repo),
+    )?;
     match response.status() {
         StatusCode::UNAUTHORIZED => {
             anyhow::bail!("not signed in; run scope login")
@@ -309,5 +358,77 @@ pub fn display_user(user: &UserResponse) -> String {
         format!("@{}", user.handle)
     } else {
         format!("@{} <{}>", user.handle, user.email)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    #[test]
+    fn shared_http_client_sends_cli_compatibility_identity() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = [0_u8; 8192];
+            let read = stream.read(&mut bytes).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            String::from_utf8(bytes[..read].to_vec()).unwrap()
+        });
+
+        let response = http_client()
+            .unwrap()
+            .get(format!("http://{address}/identity"))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(request.contains("x-scope-cli-protocol: 1\r\n"));
+        assert!(request.contains(&format!(
+            "x-scope-cli-version: {}\r\n",
+            crate::build::PACKAGE_VERSION
+        )));
+        assert!(request.contains(&format!(
+            "x-scope-cli-build: {}\r\n",
+            crate::build::BUILD_SHA
+        )));
+    }
+
+    #[test]
+    fn shared_compatibility_decoder_preserves_remediation() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = serde_json::to_string(&ErrorResponse::cli_upgrade_required(Some(0))).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = [0_u8; 8192];
+            let _read = stream.read(&mut bytes).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 426 Upgrade Required\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let response = http_client()
+            .unwrap()
+            .post(format!("http://{address}/mutation"))
+            .send()
+            .unwrap();
+        let error = require_compatible_response(response, "mutate fixture").unwrap_err();
+
+        server.join().unwrap();
+        assert!(error.to_string().contains("installed Scope CLI protocol 0"));
+        assert!(error.to_string().contains(CLI_INSTALL_COMMAND));
     }
 }
