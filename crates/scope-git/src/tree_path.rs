@@ -10,7 +10,6 @@ impl GitTreePath {
         let path = path.into();
         if path.is_empty()
             || path.starts_with('/')
-            || path.trim() != path
             || path.contains('\\')
             || path.chars().any(char::is_control)
             || path
@@ -21,6 +20,9 @@ impl GitTreePath {
         }
         if path.split('/').any(is_dot_git_filesystem_alias) {
             return Err(GitTreePathError::ReservedDotGit { path });
+        }
+        if path.trim_end() != path {
+            return Err(GitTreePathError::Unrepresentable { path });
         }
         Ok(Self(path))
     }
@@ -112,6 +114,7 @@ mod tests {
         for path in [
             "README.md",
             "docs/read me.md",
+            " leading-space.txt",
             ".scope/RULES.md",
             "src/café.rs",
         ] {
