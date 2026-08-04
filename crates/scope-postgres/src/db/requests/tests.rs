@@ -154,7 +154,11 @@ async fn completed_private_discussion_transitions_persist_nothing() {
         .record_working_request_upload(upload, &super::super::generated_ids::test_generated_id)
         .await
         .unwrap();
-    for id in ["discussion_open", "discussion_resolved"] {
+    for id in [
+        "discussion_open",
+        "discussion_resolved",
+        "discussion_retried",
+    ] {
         store
             .requests()
             .create_request_discussion(CreateRequestDiscussionInput {
@@ -182,11 +186,41 @@ async fn completed_private_discussion_transitions_persist_nothing() {
         .unwrap();
     store
         .requests()
+        .resolve_request_discussion(
+            "req_1".to_string(),
+            "discussion_retried".to_string(),
+            "user_owner".to_string(),
+            "event_retry_initial_resolve".to_string(),
+            5,
+        )
+        .await
+        .unwrap();
+    let retry_input = ReopenAndReplyToRequestDiscussionInput {
+        request_id: "req_1".to_string(),
+        discussion_id: "discussion_retried".to_string(),
+        reply_id: "reply_before_completion".to_string(),
+        actor_user_id: "user_owner".to_string(),
+        actor_is_maintainer: false,
+        actor_can_transition: false,
+        actor_can_participate: false,
+        event_id: "event_retry_reopened".to_string(),
+        client_reply_id: "client_retry_reopened".to_string(),
+        body_markdown: "Reopen before completion".to_string(),
+        reply_to_reply_id: None,
+        now_unix: 6,
+    };
+    store
+        .requests()
+        .reopen_and_reply_to_request_discussion(retry_input.clone())
+        .await
+        .unwrap();
+    store
+        .requests()
         .mutate_request_for_tests("req_1", |request| {
-            request.submitted_at_unix = Some(6);
-            request.closed_at_unix = Some(7);
+            request.submitted_at_unix = Some(7);
+            request.closed_at_unix = Some(8);
             request.closed_by_user_id = Some("user_owner".to_string());
-            request.updated_at_unix = 7;
+            request.updated_at_unix = 8;
         })
         .await
         .unwrap();
@@ -244,6 +278,18 @@ async fn completed_private_discussion_transitions_persist_nothing() {
         .unwrap_err();
     assert_eq!(
         reopen_error.kind,
+        crate::error::PostgresErrorKind::PermissionDenied
+    );
+    let retry_error = store
+        .requests()
+        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
+            now_unix: 10,
+            ..retry_input
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        retry_error.kind,
         crate::error::PostgresErrorKind::PermissionDenied
     );
 

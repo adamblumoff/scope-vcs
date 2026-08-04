@@ -331,7 +331,7 @@ pub fn reopen_and_reply_to_request_discussion(
         input.reply_to_reply_id.as_deref(),
     )?;
     let request = request_mut(requests, &input.request_id)?;
-    ensure_transition_allowed(request, input.actor_can_transition)?;
+    ensure_request_discussion_transition_allowed(request, input.actor_can_transition)?;
     let request_author_user_id = request.author_user_id.clone();
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
     ensure_can_transition(
@@ -420,7 +420,7 @@ fn transition_discussion(
 ) -> Result<RequestDiscussionMutation, DomainError> {
     validate_required_id("event id", &input.event_id)?;
     let request = request_mut(requests, &input.request_id)?;
-    ensure_transition_allowed(request, input.actor_can_transition)?;
+    ensure_request_discussion_transition_allowed(request, input.actor_can_transition)?;
     let request_author_user_id = request.author_user_id.clone();
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
     ensure_can_transition(
@@ -502,7 +502,7 @@ fn ensure_can_transition(
     }
 }
 
-fn ensure_transition_allowed(
+pub fn ensure_request_discussion_transition_allowed(
     request: &Request,
     actor_can_transition: bool,
 ) -> Result<(), DomainError> {

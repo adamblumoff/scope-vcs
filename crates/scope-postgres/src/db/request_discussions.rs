@@ -22,7 +22,8 @@ use {
         MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
         ReopenRequestDiscussionInput, RequestChangeBlock, RequestDiscussion,
         RequestDiscussionReadState, RequestDiscussionSubject, ResolveRequestDiscussionInput,
-        create_request_discussion, create_request_discussion_reply, mark_request_discussion_read,
+        create_request_discussion, create_request_discussion_reply,
+        ensure_request_discussion_transition_allowed, mark_request_discussion_read,
         reopen_and_reply_to_request_discussion, reopen_request_discussion,
         resolve_request_discussion,
     },
@@ -469,6 +470,7 @@ impl RequestStore {
         input.actor_can_participate = policy.permissions.can_reply_to_discussion;
         input.actor_can_transition = policy.permissions.can_transition_discussion;
         input.actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
+        ensure_request_discussion_transition_allowed(&request, input.actor_can_transition)?;
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?
             .filter(|discussion| discussion.request_id == input.request_id)
