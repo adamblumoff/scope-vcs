@@ -27,7 +27,8 @@ struct RecoveryEnvelope {
 
 enum StoredRecoveryEnvelope {
     Current(Box<ClaimRunResponse>),
-    Incompatible { schema_version: Option<u64> },
+    Legacy { schema_version: Option<u64> },
+    Newer { schema_version: u64 },
 }
 
 #[derive(Clone, Debug)]
@@ -421,10 +422,13 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
         }
         let claim = match load_recovery_envelope(&claim_path)? {
             StoredRecoveryEnvelope::Current(claim) => *claim,
-            StoredRecoveryEnvelope::Incompatible { schema_version } => {
+            StoredRecoveryEnvelope::Legacy { schema_version } => {
                 retire_incompatible_recovery_state(&entry.path(), schema_version)?;
                 continue;
             }
+            StoredRecoveryEnvelope::Newer { schema_version } => bail!(
+                "runner recovery schema {schema_version} is newer than supported schema {RECOVERY_SCHEMA_VERSION}; upgrade Scope to resume this attempt; recovery state was preserved"
+            ),
         };
         if !entry.path().join(RECOVERY_PROGRESS_FILE).is_file() {
             let container_name = container_name(&claim.attempt_id);
@@ -536,12 +540,15 @@ fn load_recovery_progress(path: &Path, claim: ClaimRunResponse) -> anyhow::Resul
 fn load_claim(path: &Path) -> anyhow::Result<ClaimRunResponse> {
     match load_recovery_envelope(path)? {
         StoredRecoveryEnvelope::Current(claim) => Ok(*claim),
-        StoredRecoveryEnvelope::Incompatible { schema_version } => bail!(
+        StoredRecoveryEnvelope::Legacy { schema_version } => bail!(
             "runner recovery schema {} is incompatible with required schema {RECOVERY_SCHEMA_VERSION}",
             schema_version.map_or_else(
                 || "missing or invalid".to_string(),
                 |version| version.to_string()
             )
+        ),
+        StoredRecoveryEnvelope::Newer { schema_version } => bail!(
+            "runner recovery schema {schema_version} is newer than supported schema {RECOVERY_SCHEMA_VERSION}"
         ),
     }
 }
@@ -554,8 +561,12 @@ fn load_recovery_envelope(path: &Path) -> anyhow::Result<StoredRecoveryEnvelope>
     let schema_version = value
         .get("schema_version")
         .and_then(serde_json::Value::as_u64);
-    if schema_version != Some(u64::from(RECOVERY_SCHEMA_VERSION)) {
-        return Ok(StoredRecoveryEnvelope::Incompatible { schema_version });
+    let current_version = u64::from(RECOVERY_SCHEMA_VERSION);
+    if let Some(schema_version) = schema_version.filter(|version| *version > current_version) {
+        return Ok(StoredRecoveryEnvelope::Newer { schema_version });
+    }
+    if schema_version != Some(current_version) {
+        return Ok(StoredRecoveryEnvelope::Legacy { schema_version });
     }
     let envelope: RecoveryEnvelope = serde_json::from_value(value).with_context(|| {
         format!(
@@ -790,7 +801,7 @@ mod tests {
         .unwrap();
         fs::write(work_dir.join(RECOVERY_PROGRESS_FILE), b"{}").unwrap();
 
-        let StoredRecoveryEnvelope::Incompatible { schema_version } =
+        let StoredRecoveryEnvelope::Legacy { schema_version } =
             load_recovery_envelope(&claim_path).unwrap()
         else {
             panic!("pre-V4 claim unexpectedly decoded as current recovery state");
@@ -805,5 +816,23 @@ mod tests {
         .unwrap();
         assert_eq!(terminated.as_deref(), Some("scope-attempt-v3"));
         assert!(!work_dir.exists());
+    }
+
+    #[test]
+    fn newer_recovery_schema_is_preserved_for_a_compatible_binary() {
+        let root = TestDir::new("runner-newer-recovery");
+        let work_dir = root.path().join("attempt-newer");
+        fs::create_dir(&work_dir).unwrap();
+        let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
+        fs::write(&claim_path, br#"{"schema_version":5}"#).unwrap();
+
+        let StoredRecoveryEnvelope::Newer { schema_version } =
+            load_recovery_envelope(&claim_path).unwrap()
+        else {
+            panic!("newer recovery schema was not preserved");
+        };
+
+        assert_eq!(schema_version, 5);
+        assert!(claim_path.exists());
     }
 }
