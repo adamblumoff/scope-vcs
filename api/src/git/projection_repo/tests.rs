@@ -47,6 +47,52 @@ fn generated_projection_matches_canonical_head_identity() {
 }
 
 #[test]
+fn generated_projection_preserves_a_leading_quote_in_a_file_name() {
+    let root = std::env::temp_dir().join(format!(
+        "scope-quoted-projection-path-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let projection = Projection {
+        repo_id: "repo".to_string(),
+        view_key: ProjectionViewKey::Public,
+        commits: vec![ProjectedCommit {
+            projected_id: "generated-base".to_string(),
+            logical_commit_id: "logical-base".to_string(),
+            parent_projected_id: None,
+            author: Some("owner".to_string()),
+            message: "base".to_string(),
+            changes: vec![projected_change("/\"quoted.txt", "quoted\n")],
+            materialization: ProjectionMaterialization::Generate,
+        }],
+    };
+
+    let repo = projection_bare_repo_with_loader(&root, &projection, None, |blob| {
+        Ok(blob.sha256.as_bytes().to_vec())
+    })
+    .unwrap();
+    let paths = git_command_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&repo)
+            .arg("ls-tree")
+            .arg("-r")
+            .arg("--name-only")
+            .arg("-z")
+            .arg("refs/heads/main"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(paths, b"\"quoted.txt\0");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn projection_identity_and_materializer_reject_the_same_reserved_path() {
     let root = std::env::temp_dir().join(format!(
         "scope-invalid-projection-path-{}-{}",

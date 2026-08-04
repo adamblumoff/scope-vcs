@@ -578,7 +578,7 @@ fn write_projection_tree(
         )?;
         let oid = String::from_utf8(oid).map_err(ApiError::bad_request)?;
         index_info.extend_from_slice(
-            format!("{} blob {}\t{path}\n", file.git_file_mode, oid.trim()).as_bytes(),
+            format!("{} blob {}\t{path}\0", file.git_file_mode, oid.trim()).as_bytes(),
         );
     }
 
@@ -588,6 +588,7 @@ fn write_projection_tree(
                 .arg("--git-dir")
                 .arg(repo_path)
                 .arg("update-index")
+                .arg("-z")
                 .arg("--index-info"),
             index_path,
             Some(&index_info),

@@ -19,10 +19,7 @@ impl GitTreePath {
         {
             return Err(GitTreePathError::Unrepresentable { path });
         }
-        if path
-            .split('/')
-            .any(|component| component.eq_ignore_ascii_case(".git"))
-        {
+        if path.split('/').any(is_dot_git_filesystem_alias) {
             return Err(GitTreePathError::ReservedDotGit { path });
         }
         Ok(Self(path))
@@ -44,6 +41,52 @@ impl GitTreePath {
         ScopePath::parse(format!("/{}", self.0))
             .expect("Git tree paths are canonical Scope file paths")
     }
+}
+
+fn is_dot_git_filesystem_alias(component: &str) -> bool {
+    is_ntfs_dot_git(component) || is_hfs_dot_git(component)
+}
+
+fn is_ntfs_dot_git(component: &str) -> bool {
+    let component = component.to_ascii_lowercase();
+    let suffix = component
+        .strip_prefix(".git")
+        .or_else(|| component.strip_prefix("git~1"));
+    let Some(suffix) = suffix else {
+        return false;
+    };
+    let suffix = suffix.trim_start_matches([' ', '.']);
+    suffix.is_empty() || suffix.starts_with(':')
+}
+
+fn is_hfs_dot_git(component: &str) -> bool {
+    component
+        .chars()
+        .filter(|character| !is_hfs_ignored(*character))
+        .collect::<String>()
+        .eq_ignore_ascii_case(".git")
+}
+
+fn is_hfs_ignored(character: char) -> bool {
+    matches!(
+        character,
+        '\u{200c}'
+            | '\u{200d}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'
+            | '\u{202b}'
+            | '\u{202c}'
+            | '\u{202d}'
+            | '\u{202e}'
+            | '\u{206a}'
+            | '\u{206b}'
+            | '\u{206c}'
+            | '\u{206d}'
+            | '\u{206e}'
+            | '\u{206f}'
+            | '\u{feff}'
+    )
 }
 
 impl fmt::Display for GitTreePath {
@@ -97,8 +140,17 @@ mod tests {
     }
 
     #[test]
-    fn rejects_dot_git_at_any_depth_and_ascii_case() {
-        for path in [".git", ".GiT/config", "vendor/.GIT/index"] {
+    fn rejects_dot_git_and_cross_platform_filesystem_aliases_at_any_depth() {
+        for path in [
+            ".git",
+            ".GiT/config",
+            "vendor/.GIT/index",
+            "vendor/.git./config",
+            "vendor/.git . . /config",
+            "vendor/git~1/config",
+            "vendor/.git::$INDEX_ALLOCATION/config",
+            "vendor/.g\u{200c}it/config",
+        ] {
             assert!(matches!(
                 GitTreePath::parse(path),
                 Err(GitTreePathError::ReservedDotGit { .. })
