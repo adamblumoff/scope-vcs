@@ -337,13 +337,29 @@ async fn successful_canary_with_lost_finalization_can_be_retried_after_its_deadl
         .unwrap_err();
     assert!(error.message.contains("can still finalize its cache"));
 
+    let retired = store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-abandoned",
+            90,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retired.canary_generation, 1);
+    assert_eq!(
+        retired.canaries[0].status(),
+        RunnerProtocolCanaryStatus::Failed
+    );
+
     let replacement = store
         .admin()
         .create_runner_protocol_canary(
             RunnerProtocolCanaryPhase::ColdWrite,
             "runner-1",
             "run-replacement",
-            90,
+            91,
         )
         .await
         .unwrap();

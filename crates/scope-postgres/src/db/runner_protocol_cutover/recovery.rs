@@ -14,6 +14,7 @@ use sea_orm::DatabaseTransaction;
 pub(super) async fn reconcile_abandoned_running_canary(
     tx: &DatabaseTransaction,
     snapshot: &mut RunnerProtocolCutoverSnapshot,
+    retries_running_canary: bool,
     now_unix: u64,
 ) -> Result<(), PostgresError> {
     debug_assert_eq!(
@@ -49,6 +50,9 @@ pub(super) async fn reconcile_abandoned_running_canary(
         }
         if !attempt.state.is_terminal() {
             if now_unix < attempt.lease_expires_at_unix {
+                if retries_running_canary {
+                    return Ok(());
+                }
                 return Err(PostgresError::conflict(format!(
                     "the running runner protocol canary attempt is active until unix timestamp {}; retry canary creation after that deadline",
                     attempt.lease_expires_at_unix
@@ -61,6 +65,9 @@ pub(super) async fn reconcile_abandoned_running_canary(
             save_attempt_steps(tx, &steps).await?;
         }
         if attempt.state == AttemptState::Succeeded && now_unix < attempt.token_expires_at_unix {
+            if retries_running_canary {
+                return Ok(());
+            }
             return Err(PostgresError::conflict(format!(
                 "the successful runner protocol canary can still finalize its cache until unix timestamp {}; retry canary creation after that deadline",
                 attempt.token_expires_at_unix
