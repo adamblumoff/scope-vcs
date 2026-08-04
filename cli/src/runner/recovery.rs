@@ -17,6 +17,18 @@ const RECOVERY_CLAIM_FILE: &str = "claim.json";
 const RECOVERY_CLAIM_TEMP_FILE: &str = ".claim.json.tmp";
 const RECOVERY_PROGRESS_FILE: &str = "progress.json";
 const RECOVERY_PROGRESS_TEMP_FILE: &str = ".progress.json.tmp";
+const RECOVERY_SCHEMA_VERSION: u8 = 4;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RecoveryEnvelope {
+    schema_version: u8,
+    claim: ClaimRunResponse,
+}
+
+enum StoredRecoveryEnvelope {
+    Current(Box<ClaimRunResponse>),
+    Incompatible { schema_version: Option<u64> },
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct RecoveryClaim {
@@ -96,7 +108,10 @@ pub(super) fn persist_recovery_claim(
         work_dir,
         RECOVERY_CLAIM_FILE,
         RECOVERY_CLAIM_TEMP_FILE,
-        claim,
+        &RecoveryEnvelope {
+            schema_version: RECOVERY_SCHEMA_VERSION,
+            claim: claim.clone(),
+        },
     )
 }
 
@@ -404,8 +419,14 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
         if !claim_path.is_file() {
             continue;
         }
+        let claim = match load_recovery_envelope(&claim_path)? {
+            StoredRecoveryEnvelope::Current(claim) => *claim,
+            StoredRecoveryEnvelope::Incompatible { schema_version } => {
+                retire_incompatible_recovery_state(&entry.path(), schema_version)?;
+                continue;
+            }
+        };
         if !entry.path().join(RECOVERY_PROGRESS_FILE).is_file() {
-            let claim = load_claim(&claim_path)?;
             let container_name = container_name(&claim.attempt_id);
             if !super::supervisor::terminate_container(&container_name) {
                 bail!("could not confirm incomplete Scope container {container_name} was removed");
@@ -414,7 +435,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
             fs::remove_dir_all(entry.path()).context("remove incomplete runner recovery state")?;
             continue;
         }
-        let recovery = load_recovery_claim(&claim_path)?;
+        let recovery = load_recovery_progress(&claim_path, claim)?;
         let container_name = container_name(&recovery.claim.attempt_id);
         let state = container_state(&container_name)?;
         match state {
@@ -485,6 +506,10 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
 
 fn load_recovery_claim(path: &Path) -> anyhow::Result<RecoveryClaim> {
     let claim = load_claim(path)?;
+    load_recovery_progress(path, claim)
+}
+
+fn load_recovery_progress(path: &Path, claim: ClaimRunResponse) -> anyhow::Result<RecoveryClaim> {
     let progress_path = path.with_file_name(RECOVERY_PROGRESS_FILE);
     let progress: RecoveryProgress = serde_json::from_slice(
         &fs::read(&progress_path)
@@ -509,10 +534,69 @@ fn load_recovery_claim(path: &Path) -> anyhow::Result<RecoveryClaim> {
 }
 
 fn load_claim(path: &Path) -> anyhow::Result<ClaimRunResponse> {
-    serde_json::from_slice(
-        &fs::read(path).with_context(|| format!("read recovery claim {}", path.display()))?,
-    )
-    .with_context(|| format!("parse recovery claim {}", path.display()))
+    match load_recovery_envelope(path)? {
+        StoredRecoveryEnvelope::Current(claim) => Ok(*claim),
+        StoredRecoveryEnvelope::Incompatible { schema_version } => bail!(
+            "runner recovery schema {} is incompatible with required schema {RECOVERY_SCHEMA_VERSION}",
+            schema_version.map_or_else(
+                || "missing or invalid".to_string(),
+                |version| version.to_string()
+            )
+        ),
+    }
+}
+
+fn load_recovery_envelope(path: &Path) -> anyhow::Result<StoredRecoveryEnvelope> {
+    let bytes =
+        fs::read(path).with_context(|| format!("read recovery claim {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse recovery envelope {}", path.display()))?;
+    let schema_version = value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64);
+    if schema_version != Some(u64::from(RECOVERY_SCHEMA_VERSION)) {
+        return Ok(StoredRecoveryEnvelope::Incompatible { schema_version });
+    }
+    let envelope: RecoveryEnvelope = serde_json::from_value(value).with_context(|| {
+        format!(
+            "parse recovery schema {RECOVERY_SCHEMA_VERSION} {}",
+            path.display()
+        )
+    })?;
+    Ok(StoredRecoveryEnvelope::Current(Box::new(envelope.claim)))
+}
+
+fn retire_incompatible_recovery_state(
+    work_dir: &Path,
+    schema_version: Option<u64>,
+) -> anyhow::Result<()> {
+    retire_incompatible_recovery_state_with(work_dir, schema_version, |container_name| {
+        super::supervisor::terminate_container(container_name)
+    })
+}
+
+fn retire_incompatible_recovery_state_with(
+    work_dir: &Path,
+    schema_version: Option<u64>,
+    terminate_container: impl FnOnce(&str) -> bool,
+) -> anyhow::Result<()> {
+    let attempt_id = work_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("incompatible runner recovery directory name must be UTF-8")?;
+    let container_name = container_name(attempt_id);
+    if !terminate_container(&container_name) {
+        bail!("could not confirm incompatible Scope container {container_name} was removed");
+    }
+    fs::remove_dir_all(work_dir).context("retire incompatible runner recovery state")?;
+    eprintln!(
+        "Retired incompatible Scope runner recovery schema {} for attempt {attempt_id}; local state and tainted caches from the pre-V4 attempt will not be resumed. Retry the run from Scope if it is still needed.",
+        schema_version.map_or_else(
+            || "missing or invalid".to_string(),
+            |version| version.to_string()
+        )
+    );
+    Ok(())
 }
 
 fn abandon_recovery_claim(
@@ -650,6 +734,7 @@ fn validate_work_root(root: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestDir;
 
     #[test]
     fn container_state_distinguishes_created_from_started_containers() {
@@ -690,5 +775,35 @@ mod tests {
             restored.pending_cache_finalization,
             Some(AttemptCacheFinalizationOutcome::Succeeded)
         );
+    }
+
+    #[test]
+    fn pre_v4_recovery_is_retired_before_current_schema_decoding() {
+        let root = TestDir::new("runner-v3-recovery");
+        let work_dir = root.path().join("attempt-v3");
+        fs::create_dir(&work_dir).unwrap();
+        let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
+        fs::write(
+            &claim_path,
+            br#"{"attempt_id":"attempt-v3","attempt_token":"secret"}"#,
+        )
+        .unwrap();
+        fs::write(work_dir.join(RECOVERY_PROGRESS_FILE), b"{}").unwrap();
+
+        let StoredRecoveryEnvelope::Incompatible { schema_version } =
+            load_recovery_envelope(&claim_path).unwrap()
+        else {
+            panic!("pre-V4 claim unexpectedly decoded as current recovery state");
+        };
+        assert_eq!(schema_version, None);
+
+        let mut terminated = None;
+        retire_incompatible_recovery_state_with(&work_dir, schema_version, |name| {
+            terminated = Some(name.to_string());
+            true
+        })
+        .unwrap();
+        assert_eq!(terminated.as_deref(), Some("scope-attempt-v3"));
+        assert!(!work_dir.exists());
     }
 }

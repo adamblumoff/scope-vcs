@@ -318,6 +318,19 @@ impl RunnerProtocolCanary {
         Ok(true)
     }
 
+    pub fn retire_abandoned(&mut self) -> Result<bool, DomainError> {
+        if self.status == RunnerProtocolCanaryStatus::Failed {
+            return Ok(false);
+        }
+        if self.status != RunnerProtocolCanaryStatus::Running {
+            return Err(DomainError::conflict(
+                "only a running runner protocol canary can be retired as abandoned",
+            ));
+        }
+        self.status = RunnerProtocolCanaryStatus::Failed;
+        Ok(true)
+    }
+
     fn move_to(
         &mut self,
         expected: RunnerProtocolCanaryStatus,
@@ -441,6 +454,24 @@ mod tests {
         .unwrap();
         assert!(pending.fail().unwrap());
         assert!(!pending.fail().unwrap());
+    }
+
+    #[test]
+    fn only_an_abandoned_running_canary_can_be_retired() {
+        let generation = CanaryGeneration::new(2).unwrap();
+        let mut pending = RunnerProtocolCanary::new(
+            generation,
+            RunnerProtocolCanaryPhase::WarmRead,
+            "runner-2",
+            "run-2",
+        )
+        .unwrap();
+        assert!(pending.retire_abandoned().is_err());
+
+        pending.start().unwrap();
+        assert!(pending.retire_abandoned().unwrap());
+        assert!(!pending.retire_abandoned().unwrap());
+        assert_eq!(pending.status(), RunnerProtocolCanaryStatus::Failed);
     }
 
     #[test]
