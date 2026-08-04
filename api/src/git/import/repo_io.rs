@@ -13,7 +13,7 @@ use scope_domain::{
     policy::ScopePath,
     repo_control::{RepoControlPath, classify_repo_control_path},
 };
-use scope_git::{StoredGitSegment, materialize_incremental_git_segment};
+use scope_git::{GitTreePath, StoredGitSegment, materialize_incremental_git_segment};
 use scope_object_store::{ContentObjectKind, object_key, put_content_object};
 use sha2::{Digest, Sha256};
 use std::{path::Path as FsPath, process::Command};
@@ -216,7 +216,7 @@ pub(super) fn git_changed_tree_entries(
             .ok_or_else(|| ApiError::internal_message("Git delta is missing a path"))?;
         let header = std::str::from_utf8(header).map_err(ApiError::bad_request)?;
         let path = std::str::from_utf8(path).map_err(ApiError::bad_request)?;
-        validate_pushed_file_path(path)?;
+        let path = validate_pushed_file_path(path)?;
         let values = header.split_whitespace().collect::<Vec<_>>();
         if values.len() != 5 || !values[0].starts_with(':') {
             return Err(ApiError::internal_message("invalid Git delta record"));
@@ -224,7 +224,7 @@ pub(super) fn git_changed_tree_entries(
         let new_mode = values[1];
         let new_oid = values[3];
         let status = values[4];
-        let scope_path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
+        let scope_path = path.to_scope_path();
         if status == "D" {
             pending.push((scope_path, None));
             continue;
@@ -452,34 +452,20 @@ pub(crate) struct GitTreeFile {
     pub(crate) size_bytes: usize,
 }
 
-pub(crate) fn validate_pushed_file_path(path: &str) -> Result<(), ApiError> {
-    if path.is_empty() || path.starts_with('/') || path.contains('\\') {
-        return Err(ApiError::bad_request(format!(
-            "unsupported Git file path {path:?}"
-        )));
-    }
-    if path.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
-        return Err(ApiError::bad_request(format!(
-            "unsupported Git file path {path:?}"
-        )));
-    }
-
-    let scope_path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
-    if scope_path.as_str() != format!("/{path}") {
-        return Err(ApiError::bad_request(format!(
-            "unsupported Git file path {path:?}"
-        )));
-    }
+pub(crate) fn validate_pushed_file_path(path: &str) -> Result<GitTreePath, ApiError> {
+    let path = GitTreePath::parse(path).map_err(ApiError::bad_request)?;
+    let scope_path = path.to_scope_path();
     if matches!(
         classify_repo_control_path(&scope_path),
         Some(RepoControlPath::Forbidden)
     ) {
         return Err(ApiError::bad_request(format!(
-            "Scope control path {path:?} is not a supported tracked control file"
+            "Scope control path {:?} is not a supported tracked control file",
+            path.as_str()
         )));
     }
 
-    Ok(())
+    Ok(path)
 }
 
 pub(crate) fn run_git(repo: Option<&FsPath>, args: &[&str], action: &str) -> Result<(), ApiError> {

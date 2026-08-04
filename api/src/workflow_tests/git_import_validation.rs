@@ -1,4 +1,58 @@
 use super::*;
+use std::process::Command;
+
+#[test]
+fn pushed_tree_rejects_case_insensitive_dot_git_from_a_raw_tree_object() {
+    let repo = temp_git_repo("reserved-dot-git-test");
+    commit_all(&repo, "initial");
+    let mut root_entries = git_stdout_text(&repo, &["ls-tree", "HEAD"], "read root tree")
+        .unwrap()
+        .into_bytes();
+    let malicious_blob = git_command_output(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.as_ref())
+            .arg("hash-object")
+            .arg("-w")
+            .arg("--stdin"),
+        Some(b"malicious"),
+    )
+    .unwrap();
+    root_entries.extend_from_slice(
+        format!(
+            "100644 blob {}\t.GiT\n",
+            String::from_utf8(malicious_blob).unwrap().trim()
+        )
+        .as_bytes(),
+    );
+    let tree = git_command_output(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.as_ref())
+            .arg("mktree"),
+        Some(&root_entries),
+    )
+    .unwrap();
+    let commit = git_command_output(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.as_ref())
+            .arg("commit-tree")
+            .arg(String::from_utf8(tree).unwrap().trim())
+            .env("GIT_AUTHOR_NAME", "Scope Test")
+            .env("GIT_AUTHOR_EMAIL", "scope-test@example.test")
+            .env("GIT_COMMITTER_NAME", "Scope Test")
+            .env("GIT_COMMITTER_EMAIL", "scope-test@example.test"),
+        Some(b"crafted reserved path\n"),
+    )
+    .unwrap();
+    let commit = String::from_utf8(commit).unwrap();
+
+    let error = validate_pushed_tree(&repo, commit.trim()).unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(error.message().contains("reserved .git component"));
+}
 
 #[test]
 fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
@@ -64,6 +118,8 @@ fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
         "line\nbreak.txt",
         "./README.md",
         "docs/../README.md",
+        ".git/config",
+        "vendor/.GIT/index",
         ".scope",
         ".scope/repo.json",
         ".scope/anything.json",

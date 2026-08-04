@@ -15,6 +15,7 @@ use scope_domain::{
     projection::{Projection, ProjectionMaterialization},
     store::is_supported_git_file_mode,
 };
+use scope_git::GitTreePath;
 use sha1::{Digest, Sha1};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -121,7 +122,7 @@ fn projection_bare_repo_with_loader(
         }
 
         for change in &projected.changes {
-            let path = change.path.as_str().to_string();
+            let path = GitTreePath::from_scope_path(&change.path).map_err(ApiError::internal)?;
             match &change.new_content {
                 Some(blob) => {
                     visible_tree.insert(
@@ -329,7 +330,7 @@ fn copy_and_verify_native_commit(
 fn finish_native_range(
     repo_path: &FsPath,
     index_path: &FsPath,
-    visible_tree: &BTreeMap<String, ProjectionTreeFile>,
+    visible_tree: &BTreeMap<GitTreePath, ProjectionTreeFile>,
     range: NativeRangeState,
 ) -> Result<(), ApiError> {
     if !git_is_ancestor(repo_path, &range.base_oid, &range.head_oid)? {
@@ -543,7 +544,7 @@ pub(crate) fn hash_field(hasher: &mut Sha1, label: &[u8], value: &[u8]) {
 fn write_projection_tree(
     repo_path: &FsPath,
     index_path: &FsPath,
-    visible_tree: &BTreeMap<String, ProjectionTreeFile>,
+    visible_tree: &BTreeMap<GitTreePath, ProjectionTreeFile>,
 ) -> Result<String, ApiError> {
     if index_path.exists() {
         fs::remove_file(index_path).map_err(ApiError::internal)?;
@@ -576,14 +577,8 @@ fn write_projection_tree(
             Some(&file.bytes),
         )?;
         let oid = String::from_utf8(oid).map_err(ApiError::bad_request)?;
-        let relative_path = git_relative_path(path)?;
         index_info.extend_from_slice(
-            format!(
-                "{} blob {}\t{relative_path}\n",
-                file.git_file_mode,
-                oid.trim()
-            )
-            .as_bytes(),
+            format!("{} blob {}\t{path}\n", file.git_file_mode, oid.trim()).as_bytes(),
         );
     }
 
@@ -614,27 +609,6 @@ fn write_projection_tree(
 struct ProjectionTreeFile {
     bytes: Vec<u8>,
     git_file_mode: String,
-}
-
-fn git_relative_path(path: &str) -> Result<String, ApiError> {
-    let Some(relative) = path.strip_prefix("/") else {
-        return Err(ApiError::internal_message(format!(
-            "projected Git path {path} is not absolute"
-        )));
-    };
-    if relative.is_empty()
-        || relative == "."
-        || relative == ".."
-        || relative.starts_with("../")
-        || relative.contains("/../")
-        || relative.contains("\\")
-        || relative.as_bytes().contains(&0)
-    {
-        return Err(ApiError::internal_message(format!(
-            "projected Git path {path} cannot be served"
-        )));
-    }
-    Ok(relative.to_string())
 }
 
 fn git_commit_tree(
