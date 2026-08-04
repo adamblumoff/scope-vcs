@@ -327,7 +327,9 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
     mark_recovery_step_conclusion_pending(&root, &claim, 0, StepConclusionRequest::Succeeded)
         .unwrap();
     mark_recovery_execution_started(&root, &claim, 90).unwrap();
-    let stored: ClaimRunResponse = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(stored["schema_version"], 4);
+    let stored: ClaimRunResponse = serde_json::from_value(stored["claim"].clone()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);
     let progress: RecoveryProgress =

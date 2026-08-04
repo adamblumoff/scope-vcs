@@ -299,6 +299,280 @@ async fn failed_canary_starts_a_bounded_replacement_generation() {
 }
 
 #[tokio::test]
+async fn successful_canary_with_lost_finalization_can_be_retried_after_its_deadline() {
+    let store = runs_tests::postgres_store();
+    runs_tests::register_runner(&store, "runner-1", "linux-box").await;
+    set_fenced(&store).await;
+    for run_id in ["run-abandoned", "run-replacement"] {
+        enqueue_canary(
+            &store,
+            RunnerProtocolCanaryPhase::ColdWrite,
+            run_id,
+            CANARY_IMAGE,
+            "linux-box",
+        )
+        .await;
+    }
+    store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-abandoned",
+            20,
+        )
+        .await
+        .unwrap();
+    let (attempt_id, token_hash) = complete_canary_attempt(&store, "run-abandoned").await;
+
+    let error = store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-replacement",
+            89,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("can still finalize its cache"));
+
+    let retired = store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-abandoned",
+            90,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retired.canary_generation, 1);
+    assert_eq!(
+        retired.canaries[0].status(),
+        RunnerProtocolCanaryStatus::Failed
+    );
+
+    let replacement = store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-replacement",
+            91,
+        )
+        .await
+        .unwrap();
+    assert_eq!(replacement.canary_generation, 2);
+    assert_eq!(replacement.canaries.len(), 1);
+    assert_eq!(replacement.canaries[0].run_id(), "run-replacement");
+    assert_eq!(
+        replacement.canaries[0].status(),
+        RunnerProtocolCanaryStatus::Pending
+    );
+
+    let late_ack = store
+        .runs()
+        .finalize_runner_protocol_canary_cache(&attempt_id, &token_hash, true, 91)
+        .await
+        .unwrap_err();
+    assert!(late_ack.message.contains("active protocol V4 canary"));
+    let current = store.admin().runner_protocol_cutover().await.unwrap();
+    assert_eq!(current.canary_generation, 2);
+    assert_eq!(current.canaries[0].run_id(), "run-replacement");
+}
+
+#[tokio::test]
+async fn expired_active_canary_is_terminalized_with_its_replacement() {
+    let store = runs_tests::postgres_store();
+    runs_tests::register_runner(&store, "runner-1", "linux-box").await;
+    set_fenced(&store).await;
+    for run_id in ["run-expired", "run-replacement"] {
+        enqueue_canary(
+            &store,
+            RunnerProtocolCanaryPhase::ColdWrite,
+            run_id,
+            CANARY_IMAGE,
+            "linux-box",
+        )
+        .await;
+    }
+    store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-expired",
+            20,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .claim_run(
+            "run-expired",
+            "runner-1",
+            "attempt-expired",
+            &"a".repeat(64),
+            21,
+            90,
+        )
+        .await
+        .unwrap();
+
+    let error = store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-replacement",
+            89,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("is active until unix timestamp 90"));
+
+    let expired = store
+        .runs()
+        .expire_attempt("attempt-expired", 90)
+        .await
+        .unwrap();
+    assert_eq!(expired.run.state, scope_domain::runs::run::RunState::Queued);
+
+    let replacement = store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-replacement",
+            91,
+        )
+        .await
+        .unwrap();
+    assert_eq!(replacement.canary_generation, 2);
+    assert_eq!(
+        store
+            .runs()
+            .run("run-expired")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        scope_domain::runs::run::RunState::Canceled
+    );
+}
+
+#[tokio::test]
+async fn running_canary_creation_retry_returns_the_existing_assignment() {
+    let store = runs_tests::postgres_store();
+    runs_tests::register_runner(&store, "runner-1", "linux-box").await;
+    set_fenced(&store).await;
+    enqueue_canary(
+        &store,
+        RunnerProtocolCanaryPhase::ColdWrite,
+        "run-active",
+        CANARY_IMAGE,
+        "linux-box",
+    )
+    .await;
+    store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-active",
+            20,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .claim_run(
+            "run-active",
+            "runner-1",
+            "attempt-active",
+            &"a".repeat(64),
+            21,
+            90,
+        )
+        .await
+        .unwrap();
+
+    let retried = store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-active",
+            22,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(retried.canary_generation, 1);
+    assert_eq!(retried.canaries.len(), 1);
+    assert_eq!(
+        retried.canaries[0].status(),
+        RunnerProtocolCanaryStatus::Running
+    );
+    assert_eq!(retried.canaries[0].run_id(), "run-active");
+}
+
+#[tokio::test]
+async fn concurrent_abandoned_canary_retries_converge_on_one_replacement() {
+    let store = runs_tests::postgres_store();
+    runs_tests::register_runner(&store, "runner-1", "linux-box").await;
+    set_fenced(&store).await;
+    for run_id in ["run-abandoned", "run-replacement"] {
+        enqueue_canary(
+            &store,
+            RunnerProtocolCanaryPhase::ColdWrite,
+            run_id,
+            CANARY_IMAGE,
+            "linux-box",
+        )
+        .await;
+    }
+    store
+        .admin()
+        .create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-abandoned",
+            20,
+        )
+        .await
+        .unwrap();
+    complete_canary_attempt(&store, "run-abandoned").await;
+
+    let first = store.clone();
+    let second = store.clone();
+    let first_admin = first.admin();
+    let second_admin = second.admin();
+    let (first, second) = tokio::join!(
+        first_admin.create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-replacement",
+            90,
+        ),
+        second_admin.create_runner_protocol_canary(
+            RunnerProtocolCanaryPhase::ColdWrite,
+            "runner-1",
+            "run-replacement",
+            90,
+        ),
+    );
+    assert_eq!(first.unwrap().canary_generation, 2);
+    assert_eq!(second.unwrap().canary_generation, 2);
+
+    let current = store.admin().runner_protocol_cutover().await.unwrap();
+    assert_eq!(current.canary_generation, 2);
+    assert_eq!(current.canaries.len(), 1);
+    assert_eq!(current.canaries[0].run_id(), "run-replacement");
+}
+
+#[tokio::test]
 async fn owned_v3_runner_upgrade_rotates_credentials_atomically() {
     let store = runs_tests::postgres_store();
     runs_tests::register_runner(&store, "runner-1", "linux-box").await;

@@ -17,6 +17,9 @@ use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, Statement, TransactionTrait,
 };
 
+mod recovery;
+use recovery::reconcile_abandoned_running_canary;
+
 const CUTOVER_KEY: &str = "current";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +96,19 @@ impl AdminStore {
             return Err(PostgresError::conflict(
                 "runner protocol canaries can only be assigned while V4 is fenced",
             ));
+        }
+
+        let retries_running_canary = snapshot.canaries.iter().any(|canary| {
+            canary.status() == RunnerProtocolCanaryStatus::Running
+                && canary.phase() == phase
+                && canary.runner_id() == runner_id
+                && canary.run_id() == run_id
+        });
+        reconcile_abandoned_running_canary(&tx, &mut snapshot, retries_running_canary, now_unix)
+            .await?;
+        if retries_running_canary {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(snapshot);
         }
 
         if let Some(index) = snapshot
