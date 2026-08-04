@@ -227,6 +227,18 @@ async fn reconcile_abandoned_running_canary(
         .iter()
         .position(|canary| canary.status() == RunnerProtocolCanaryStatus::Running)
     else {
+        if let Some(failed) = snapshot
+            .canaries
+            .iter()
+            .find(|canary| canary.status() == RunnerProtocolCanaryStatus::Failed)
+        {
+            let mut run = locked_run(tx, failed.run_id()).await?;
+            if !run.state.is_terminal() {
+                run.request_cancellation(now_unix)
+                    .map_err(PostgresError::from)?;
+                save_run(tx, &run).await?;
+            }
+        }
         return Ok(());
     };
     let current = &snapshot.canaries[index];
@@ -258,14 +270,8 @@ async fn reconcile_abandoned_running_canary(
             attempt
                 .expire(&mut locked_run, &mut steps, now_unix)
                 .map_err(PostgresError::from)?;
-            if locked_run.state == scope_domain::runs::run::RunState::Queued {
-                locked_run
-                    .request_cancellation(now_unix)
-                    .map_err(PostgresError::from)?;
-            }
             save_attempt(tx, &attempt).await?;
             save_attempt_steps(tx, &steps).await?;
-            save_run(tx, &locked_run).await?;
         }
         if attempt.state == AttemptState::Succeeded && now_unix < attempt.token_expires_at_unix {
             return Err(PostgresError::conflict(format!(
@@ -273,6 +279,12 @@ async fn reconcile_abandoned_running_canary(
                 attempt.token_expires_at_unix
             )));
         }
+        if locked_run.state == scope_domain::runs::run::RunState::Queued {
+            locked_run
+                .request_cancellation(now_unix)
+                .map_err(PostgresError::from)?;
+        }
+        save_run(tx, &locked_run).await?;
     } else if !run.state.is_terminal() {
         run.request_cancellation(now_unix)
             .map_err(PostgresError::from)?;

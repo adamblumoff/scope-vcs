@@ -416,13 +416,20 @@ async fn expired_active_canary_is_terminalized_with_its_replacement() {
         .unwrap_err();
     assert!(error.message.contains("is active until unix timestamp 90"));
 
+    let expired = store
+        .runs()
+        .expire_attempt("attempt-expired", 90)
+        .await
+        .unwrap();
+    assert_eq!(expired.run.state, scope_domain::runs::run::RunState::Queued);
+
     let replacement = store
         .admin()
         .create_runner_protocol_canary(
             RunnerProtocolCanaryPhase::ColdWrite,
             "runner-1",
             "run-replacement",
-            90,
+            91,
         )
         .await
         .unwrap();
