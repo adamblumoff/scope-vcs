@@ -1,6 +1,7 @@
 mod projection_identity;
 #[cfg(feature = "storage")]
 mod snapshot;
+mod tree_path;
 
 pub use projection_identity::{
     PROJECTION_IDENTITY_VERSION, ProjectionIdentityError, projection_head_oid,
@@ -10,6 +11,7 @@ pub use snapshot::{
     GitSnapshotMaterializationError, StoredGitSegment, materialize_compacted_git_segment,
     materialize_incremental_git_segment,
 };
+pub use tree_path::{GitTreePath, GitTreePathError};
 
 use scope_domain::content_ref::ContentRef;
 use scope_domain::store::{GitHead, GitSegment, SourceBlob};

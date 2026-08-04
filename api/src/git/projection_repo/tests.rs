@@ -47,6 +47,90 @@ fn generated_projection_matches_canonical_head_identity() {
 }
 
 #[test]
+fn generated_projection_preserves_a_leading_quote_in_a_file_name() {
+    let root = std::env::temp_dir().join(format!(
+        "scope-quoted-projection-path-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let projection = Projection {
+        repo_id: "repo".to_string(),
+        view_key: ProjectionViewKey::Public,
+        commits: vec![ProjectedCommit {
+            projected_id: "generated-base".to_string(),
+            logical_commit_id: "logical-base".to_string(),
+            parent_projected_id: None,
+            author: Some("owner".to_string()),
+            message: "base".to_string(),
+            changes: vec![projected_change("/\"quoted.txt", "quoted\n")],
+            materialization: ProjectionMaterialization::Generate,
+        }],
+    };
+
+    let repo = projection_bare_repo_with_loader(&root, &projection, None, |blob| {
+        Ok(blob.sha256.as_bytes().to_vec())
+    })
+    .unwrap();
+    let paths = git_command_output(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(&repo)
+            .arg("ls-tree")
+            .arg("-r")
+            .arg("--name-only")
+            .arg("-z")
+            .arg("refs/heads/main"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(paths, b"\"quoted.txt\0");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn projection_identity_and_materializer_reject_the_same_reserved_path() {
+    let root = std::env::temp_dir().join(format!(
+        "scope-invalid-projection-path-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let projection = Projection {
+        repo_id: "repo".to_string(),
+        view_key: ProjectionViewKey::Public,
+        commits: vec![ProjectedCommit {
+            projected_id: "generated-base".to_string(),
+            logical_commit_id: "logical-base".to_string(),
+            parent_projected_id: None,
+            author: Some("owner".to_string()),
+            message: "base".to_string(),
+            changes: vec![projected_change("/vendor/.GiT/config", "malicious\n")],
+            materialization: ProjectionMaterialization::Generate,
+        }],
+    };
+
+    let identity_error = scope_git::projection_head_oid(&projection)
+        .unwrap_err()
+        .to_string();
+    let materialization_error = projection_bare_repo_with_loader(&root, &projection, None, |_| {
+        panic!("invalid paths must fail before loading content")
+    })
+    .unwrap_err();
+
+    assert_eq!(materialization_error.message(), identity_error);
+    assert!(identity_error.contains("reserved .git component"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
     let root = std::env::temp_dir().join(format!(
         "scope-native-projection-{}-{}",
@@ -67,7 +151,7 @@ fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
 
     let source_index = root.join("source.index");
     let source_tree = BTreeMap::from([(
-        "/README.md".to_string(),
+        projection_tree_path("/README.md"),
         ProjectionTreeFile {
             bytes: b"base\n".to_vec(),
             git_file_mode: "100644".to_string(),
@@ -80,7 +164,7 @@ fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
         .to_string();
     let mut native_files = source_tree.clone();
     native_files.insert(
-        "/request.txt".to_string(),
+        projection_tree_path("/request.txt"),
         ProjectionTreeFile {
             bytes: b"contributor\n".to_vec(),
             git_file_mode: "100644".to_string(),
@@ -93,7 +177,7 @@ fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
         .to_string();
     let mut private_files = source_tree.clone();
     private_files.insert(
-        "/secret.txt".to_string(),
+        projection_tree_path("/secret.txt"),
         ProjectionTreeFile {
             bytes: b"private\n".to_vec(),
             git_file_mode: "100644".to_string(),
@@ -120,7 +204,7 @@ fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
     .to_string();
     let mut canonical_merge_files = private_files;
     canonical_merge_files.insert(
-        "/request.txt".to_string(),
+        projection_tree_path("/request.txt"),
         ProjectionTreeFile {
             bytes: b"contributor\n".to_vec(),
             git_file_mode: "100644".to_string(),
@@ -237,6 +321,10 @@ fn projected_change(path: &str, content: &str) -> ProjectedChange {
         }),
         visibility: Visibility::Public,
     }
+}
+
+fn projection_tree_path(path: &str) -> GitTreePath {
+    GitTreePath::from_scope_path(&ScopePath::parse(path).unwrap()).unwrap()
 }
 
 fn git_object_exists(repo: &FsPath, oid: &str) -> bool {

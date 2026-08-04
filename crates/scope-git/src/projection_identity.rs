@@ -1,3 +1,4 @@
+use crate::{GitTreePath, GitTreePathError};
 use scope_domain::{
     projection::{Projection, ProjectionMaterialization},
     store::is_supported_git_file_mode,
@@ -17,8 +18,8 @@ const GENERATED_COMMIT_TIME: &str = "946684800 +0000";
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ProjectionIdentityError {
-    #[error("projected Git path {path} cannot be represented")]
-    InvalidPath { path: String },
+    #[error(transparent)]
+    InvalidPath(#[from] GitTreePathError),
     #[error("projected Git path {path} conflicts with another file or directory")]
     PathConflict { path: String },
     #[error("projected Git path {path} has unsupported mode {mode}")]
@@ -61,9 +62,9 @@ pub fn projection_head_oid(
             )?;
         }
 
-        let mut delta = BTreeMap::<String, Option<TreeFile>>::new();
+        let mut delta = BTreeMap::<GitTreePath, Option<TreeFile>>::new();
         for change in &commit.changes {
-            let path = projection_path(change.path.as_str())?;
+            let path = GitTreePath::from_scope_path(&change.path)?;
             match &change.new_content {
                 Some(blob) => {
                     if !is_supported_git_file_mode(&blob.git_file_mode) {
@@ -87,12 +88,12 @@ pub fn projection_head_oid(
         }
         for (path, file) in &delta {
             if file.is_none() {
-                tree.remove(&path.split('/').collect::<Vec<_>>());
+                tree.remove(&path.as_str().split('/').collect::<Vec<_>>());
             }
         }
         for (path, file) in delta {
             if let Some(file) = file {
-                tree.insert(&path.split('/').collect::<Vec<_>>(), file)?;
+                tree.insert(&path.as_str().split('/').collect::<Vec<_>>(), file)?;
             }
         }
 
@@ -170,24 +171,6 @@ fn validate_native_range(
     } else {
         Err(ProjectionIdentityError::PreservedHistoryNotDescendant)
     }
-}
-
-fn projection_path(path: &str) -> Result<String, ProjectionIdentityError> {
-    let Some(relative) = path.strip_prefix('/') else {
-        return Err(ProjectionIdentityError::InvalidPath {
-            path: path.to_string(),
-        });
-    };
-    if relative.is_empty()
-        || relative.contains('\\')
-        || relative.as_bytes().contains(&0)
-        || relative.split('/').any(|part| part.is_empty())
-    {
-        return Err(ProjectionIdentityError::InvalidPath {
-            path: path.to_string(),
-        });
-    }
-    Ok(relative.to_string())
 }
 
 fn parse_oid(value: &str, field: &'static str) -> Result<[u8; 20], ProjectionIdentityError> {
