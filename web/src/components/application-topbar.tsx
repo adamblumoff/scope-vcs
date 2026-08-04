@@ -84,15 +84,24 @@ function RepositoryIdentity({
   repo: string
 }) {
   return (
-    <Link
-      className="group flex min-w-0 max-w-[calc(100vw-205px)] items-baseline gap-1.5 rounded-md py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:max-w-[360px]"
-      params={{ owner, repo }}
-      title={`${owner}/${repo}`}
-      to="/$owner/$repo"
-    >
-      <span className="max-w-[38%] truncate text-[12px] font-medium text-muted-foreground transition-colors group-hover:text-foreground/80 sm:max-w-[130px] sm:text-[13px]">{owner}</span>
+    <div className="flex min-w-0 max-w-[calc(100vw-205px)] items-baseline gap-1.5 text-sm sm:max-w-[360px]">
+      <Link
+        className="max-w-[38%] truncate rounded-md py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:max-w-[130px] sm:text-[13px]"
+        params={{ owner }}
+        title={owner}
+        to="/$owner"
+      >
+        {owner}
+      </Link>
       <span aria-hidden className="text-muted-foreground/45">/</span>
-      <span className="truncate text-[14px] font-semibold tracking-[-0.015em] text-foreground">{repo}</span>
-    </Link>
+      <Link
+        className="min-w-0 truncate rounded-md py-2 text-[14px] font-semibold tracking-[-0.015em] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        params={{ owner, repo }}
+        title={`${owner}/${repo}`}
+        to="/$owner/$repo"
+      >
+        {repo}
+      </Link>
+    </div>
   )
 }
