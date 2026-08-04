@@ -98,6 +98,16 @@ impl AdminStore {
             ));
         }
 
+        if snapshot.canaries.iter().any(|canary| {
+            canary.status() == RunnerProtocolCanaryStatus::Running
+                && canary.phase() == phase
+                && canary.runner_id() == runner_id
+                && canary.run_id() == run_id
+        }) {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(snapshot);
+        }
+
         reconcile_abandoned_running_canary(&tx, &mut snapshot, now_unix).await?;
 
         if let Some(index) = snapshot
