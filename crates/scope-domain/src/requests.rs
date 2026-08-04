@@ -19,8 +19,9 @@ pub use discussions::{
     ReopenRequestDiscussionInput, RequestDiscussion, RequestDiscussionMutation,
     RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
     RequestDiscussionSubject, ResolveRequestDiscussionInput, create_request_discussion,
-    create_request_discussion_reply, mark_request_discussion_read,
-    reopen_and_reply_to_request_discussion, reopen_request_discussion, resolve_request_discussion,
+    create_request_discussion_reply, ensure_request_discussion_transition_allowed,
+    mark_request_discussion_read, reopen_and_reply_to_request_discussion,
+    reopen_request_discussion, resolve_request_discussion,
 };
 mod lifecycle;
 pub use lifecycle::{

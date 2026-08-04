@@ -115,6 +115,7 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
             reply_id: "reply_1".to_string(),
             actor_user_id: "user_public".to_string(),
             actor_is_maintainer: false,
+            actor_can_transition: false,
             actor_can_participate: false,
             event_id: "event_discussion_reopened".to_string(),
             client_reply_id: "client_reply".to_string(),
@@ -136,6 +137,197 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
         .unwrap()
         .unwrap();
     assert_eq!(batch.0.unread_count, 0);
+}
+
+#[tokio::test]
+async fn completed_private_discussion_transitions_persist_nothing() {
+    let store = postgres_store();
+    let mut input = public_start_input();
+    input.author_user_id = "user_owner".to_string();
+    input.author_role = RequestActorRole::Owner;
+    input.audience = RequestAudience::Private;
+    store.requests().start_request(input).await.unwrap();
+    let mut upload = public_upload_input();
+    upload.actor_user_id = "user_owner".to_string();
+    store
+        .requests()
+        .record_working_request_upload(upload, &super::super::generated_ids::test_generated_id)
+        .await
+        .unwrap();
+    for id in [
+        "discussion_open",
+        "discussion_resolved",
+        "discussion_retried",
+    ] {
+        store
+            .requests()
+            .create_request_discussion(CreateRequestDiscussionInput {
+                request_id: "req_1".to_string(),
+                id: id.to_string(),
+                actor_user_id: "user_owner".to_string(),
+                actor_can_participate: false,
+                client_discussion_id: format!("client_{id}"),
+                body_markdown: "Review this invariant".to_string(),
+                now_unix: 4,
+            })
+            .await
+            .unwrap();
+    }
+    store
+        .requests()
+        .resolve_request_discussion(
+            "req_1".to_string(),
+            "discussion_resolved".to_string(),
+            "user_owner".to_string(),
+            "event_initial_resolve".to_string(),
+            5,
+        )
+        .await
+        .unwrap();
+    store
+        .requests()
+        .resolve_request_discussion(
+            "req_1".to_string(),
+            "discussion_retried".to_string(),
+            "user_owner".to_string(),
+            "event_retry_initial_resolve".to_string(),
+            5,
+        )
+        .await
+        .unwrap();
+    let retry_input = ReopenAndReplyToRequestDiscussionInput {
+        request_id: "req_1".to_string(),
+        discussion_id: "discussion_retried".to_string(),
+        reply_id: "reply_before_completion".to_string(),
+        actor_user_id: "user_owner".to_string(),
+        actor_is_maintainer: false,
+        actor_can_transition: false,
+        actor_can_participate: false,
+        event_id: "event_retry_reopened".to_string(),
+        client_reply_id: "client_retry_reopened".to_string(),
+        body_markdown: "Reopen before completion".to_string(),
+        reply_to_reply_id: None,
+        now_unix: 6,
+    };
+    store
+        .requests()
+        .reopen_and_reply_to_request_discussion(retry_input.clone())
+        .await
+        .unwrap();
+    store
+        .requests()
+        .mutate_request_for_tests("req_1", |request| {
+            request.submitted_at_unix = Some(7);
+            request.closed_at_unix = Some(8);
+            request.closed_by_user_id = Some("user_owner".to_string());
+            request.updated_at_unix = 8;
+        })
+        .await
+        .unwrap();
+    let expected_request = store
+        .requests()
+        .request_for_tests("req_1")
+        .await
+        .unwrap()
+        .unwrap();
+    let expected_open = store
+        .requests()
+        .request_discussion("req_1", "discussion_open", Some("user_owner"))
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let expected_resolved = store
+        .requests()
+        .request_discussion("req_1", "discussion_resolved", Some("user_owner"))
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let expected_events = store
+        .requests()
+        .request_events_by_request_id("req_1")
+        .await
+        .unwrap();
+
+    let resolve_error = store
+        .requests()
+        .resolve_request_discussion(
+            "req_1".to_string(),
+            "discussion_open".to_string(),
+            "user_owner".to_string(),
+            "event_rejected_resolve".to_string(),
+            8,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        resolve_error.kind,
+        crate::error::PostgresErrorKind::PermissionDenied
+    );
+    let reopen_error = store
+        .requests()
+        .reopen_request_discussion(
+            "req_1".to_string(),
+            "discussion_resolved".to_string(),
+            "user_owner".to_string(),
+            "event_rejected_reopen".to_string(),
+            9,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        reopen_error.kind,
+        crate::error::PostgresErrorKind::PermissionDenied
+    );
+    let retry_error = store
+        .requests()
+        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
+            now_unix: 10,
+            ..retry_input
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        retry_error.kind,
+        crate::error::PostgresErrorKind::PermissionDenied
+    );
+
+    assert_eq!(
+        store
+            .requests()
+            .request_for_tests("req_1")
+            .await
+            .unwrap()
+            .unwrap(),
+        expected_request
+    );
+    let actual_open = store
+        .requests()
+        .request_discussion("req_1", "discussion_open", Some("user_owner"))
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(actual_open.discussion, expected_open.discussion);
+    assert_eq!(actual_open.unread_count, expected_open.unread_count);
+    let actual_resolved = store
+        .requests()
+        .request_discussion("req_1", "discussion_resolved", Some("user_owner"))
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(actual_resolved.discussion, expected_resolved.discussion);
+    assert_eq!(actual_resolved.unread_count, expected_resolved.unread_count);
+    assert_eq!(
+        store
+            .requests()
+            .request_events_by_request_id("req_1")
+            .await
+            .unwrap(),
+        expected_events
+    );
 }
 
 #[tokio::test]

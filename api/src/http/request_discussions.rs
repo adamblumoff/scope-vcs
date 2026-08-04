@@ -301,6 +301,7 @@ pub(crate) async fn reopen_and_reply(
             reply_id: random_id("discussion_reply")?,
             actor_user_id: actor_user_id.clone(),
             actor_is_maintainer: false,
+            actor_can_transition: false,
             actor_can_participate: false,
             event_id: random_id("event_request_discussion_reopened")?,
             client_reply_id: input.client_reply_id,

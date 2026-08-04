@@ -22,7 +22,8 @@ use {
         MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
         ReopenRequestDiscussionInput, RequestChangeBlock, RequestDiscussion,
         RequestDiscussionReadState, RequestDiscussionSubject, ResolveRequestDiscussionInput,
-        create_request_discussion, create_request_discussion_reply, mark_request_discussion_read,
+        create_request_discussion, create_request_discussion_reply,
+        ensure_request_discussion_transition_allowed, mark_request_discussion_read,
         reopen_and_reply_to_request_discussion, reopen_request_discussion,
         resolve_request_discussion,
     },
@@ -402,10 +403,8 @@ impl RequestStore {
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
         let (repo, request) = lock_request_repository(&tx, &request_id).await?;
         ensure_user_exists(&tx, &actor_user_id).await?;
-        if !request_policy_for_user(&tx, &repo, &request, &actor_user_id)
-            .await?
-            .discussion_visible
-        {
+        let policy = request_policy_for_user(&tx, &repo, &request, &actor_user_id).await?;
+        if !policy.discussion_visible {
             return Err(PostgresError::not_found("request not found"));
         }
         let discussion = discussion_by_id(&tx, &discussion_id)
@@ -424,6 +423,7 @@ impl RequestStore {
                     discussion_id,
                     actor_user_id,
                     actor_is_maintainer,
+                    actor_can_transition: policy.permissions.can_transition_discussion,
                     event_id,
                     now_unix,
                 },
@@ -437,6 +437,7 @@ impl RequestStore {
                     discussion_id,
                     actor_user_id,
                     actor_is_maintainer,
+                    actor_can_transition: policy.permissions.can_transition_discussion,
                     event_id,
                     now_unix,
                 },
@@ -465,12 +466,11 @@ impl RequestStore {
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
         let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        input.actor_can_participate =
-            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
-                .await?
-                .permissions
-                .can_reply_to_discussion;
+        let policy = request_policy_for_user(&tx, &repo, &request, &input.actor_user_id).await?;
+        input.actor_can_participate = policy.permissions.can_reply_to_discussion;
+        input.actor_can_transition = policy.permissions.can_transition_discussion;
         input.actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
+        ensure_request_discussion_transition_allowed(&request, input.actor_can_transition)?;
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?
             .filter(|discussion| discussion.request_id == input.request_id)

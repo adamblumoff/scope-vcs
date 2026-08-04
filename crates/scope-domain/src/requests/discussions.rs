@@ -103,6 +103,7 @@ pub struct ResolveRequestDiscussionInput {
     pub discussion_id: String,
     pub actor_user_id: String,
     pub actor_is_maintainer: bool,
+    pub actor_can_transition: bool,
     pub event_id: String,
     pub now_unix: u64,
 }
@@ -113,6 +114,7 @@ pub struct ReopenRequestDiscussionInput {
     pub discussion_id: String,
     pub actor_user_id: String,
     pub actor_is_maintainer: bool,
+    pub actor_can_transition: bool,
     pub event_id: String,
     pub now_unix: u64,
 }
@@ -131,6 +133,7 @@ pub struct ReopenAndReplyToRequestDiscussionInput {
     pub reply_id: String,
     pub actor_user_id: String,
     pub actor_is_maintainer: bool,
+    pub actor_can_transition: bool,
     pub actor_can_participate: bool,
     pub event_id: String,
     pub client_reply_id: String,
@@ -152,6 +155,7 @@ struct DiscussionTransitionInput {
     discussion_id: String,
     actor_user_id: String,
     actor_is_maintainer: bool,
+    actor_can_transition: bool,
     event_id: String,
     target: RequestDiscussionStatus,
     now_unix: u64,
@@ -273,6 +277,7 @@ pub fn resolve_request_discussion(
             discussion_id: input.discussion_id,
             actor_user_id: input.actor_user_id,
             actor_is_maintainer: input.actor_is_maintainer,
+            actor_can_transition: input.actor_can_transition,
             event_id: input.event_id,
             target: RequestDiscussionStatus::Resolved,
             now_unix: input.now_unix,
@@ -293,6 +298,7 @@ pub fn reopen_request_discussion(
             discussion_id: input.discussion_id,
             actor_user_id: input.actor_user_id,
             actor_is_maintainer: input.actor_is_maintainer,
+            actor_can_transition: input.actor_can_transition,
             event_id: input.event_id,
             target: RequestDiscussionStatus::Open,
             now_unix: input.now_unix,
@@ -324,9 +330,9 @@ pub fn reopen_and_reply_to_request_discussion(
         &input.discussion_id,
         input.reply_to_reply_id.as_deref(),
     )?;
-    let request_author_user_id = request_mut(requests, &input.request_id)?
-        .author_user_id
-        .clone();
+    let request = request_mut(requests, &input.request_id)?;
+    ensure_request_discussion_transition_allowed(request, input.actor_can_transition)?;
+    let request_author_user_id = request.author_user_id.clone();
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
     ensure_can_transition(
         discussion,
@@ -413,9 +419,9 @@ fn transition_discussion(
     input: DiscussionTransitionInput,
 ) -> Result<RequestDiscussionMutation, DomainError> {
     validate_required_id("event id", &input.event_id)?;
-    let request_author_user_id = request_mut(requests, &input.request_id)?
-        .author_user_id
-        .clone();
+    let request = request_mut(requests, &input.request_id)?;
+    ensure_request_discussion_transition_allowed(request, input.actor_can_transition)?;
+    let request_author_user_id = request.author_user_id.clone();
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
     ensure_can_transition(
         discussion,
@@ -494,6 +500,23 @@ fn ensure_can_transition(
             "request discussion resolution access required",
         ))
     }
+}
+
+pub fn ensure_request_discussion_transition_allowed(
+    request: &Request,
+    actor_can_transition: bool,
+) -> Result<(), DomainError> {
+    if !actor_can_transition {
+        return Err(DomainError::forbidden(
+            "request discussion resolution access required",
+        ));
+    }
+    if request.audience == super::RequestAudience::Private && request.is_terminal() {
+        return Err(DomainError::conflict(
+            "completed private request discussions are read-only",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_common(
