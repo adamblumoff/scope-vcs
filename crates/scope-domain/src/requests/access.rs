@@ -23,6 +23,7 @@ impl<'a> RequestViewer<'a> {
 pub struct RequestPermissions {
     pub can_open_discussion: bool,
     pub can_reply_to_discussion: bool,
+    pub can_transition_discussion: bool,
     pub can_edit_identity: bool,
     pub can_pull_branch: bool,
     pub can_push_branch: bool,
@@ -119,6 +120,7 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     let permissions = RequestPermissions {
         can_open_discussion: can_discuss,
         can_reply_to_discussion: can_discuss,
+        can_transition_discussion: discussion_visible && authenticated && (public || !terminal),
         can_edit_identity: exact_visible && !terminal && (author || maintainer),
         can_pull_branch: request_ref_readable,
         can_push_branch: branch_mutable,

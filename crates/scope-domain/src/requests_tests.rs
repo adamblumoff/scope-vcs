@@ -184,12 +184,173 @@ fn discussion_moderation_does_not_change_request_lifecycle() {
             discussion_id: opened.discussion.id,
             actor_user_id: "maintainer".to_string(),
             actor_is_maintainer: true,
+            actor_can_transition: true,
             event_id: "event_discussion_resolved".to_string(),
             now_unix: 22,
         },
     )
     .unwrap();
     assert_eq!(requests["request_1"].state(), RequestState::Open);
+}
+
+#[test]
+fn completed_private_discussion_transitions_are_rejected_before_mutation() {
+    let mut request = open_request();
+    request.audience = RequestAudience::Private;
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut discussions = BTreeMap::new();
+    for id in ["discussion_open", "discussion_resolved"] {
+        create_request_discussion(
+            &mut requests,
+            &mut discussions,
+            CreateRequestDiscussionInput {
+                request_id: "request_1".to_string(),
+                id: id.to_string(),
+                actor_user_id: "author".to_string(),
+                actor_can_participate: true,
+                client_discussion_id: format!("client_{id}"),
+                body_markdown: "Review this invariant".to_string(),
+                now_unix: 21,
+            },
+        )
+        .unwrap();
+    }
+    resolve_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ResolveRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            discussion_id: "discussion_resolved".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            actor_is_maintainer: true,
+            actor_can_transition: true,
+            event_id: "event_initial_resolve".to_string(),
+            now_unix: 22,
+        },
+    )
+    .unwrap();
+    let request = requests.get_mut("request_1").unwrap();
+    request.closed_at_unix = Some(30);
+    request.closed_by_user_id = Some("maintainer".to_string());
+    request.updated_at_unix = 30;
+    request.validate_facts().unwrap();
+    let expected_requests = requests.clone();
+    let expected_discussions = discussions.clone();
+
+    let resolve_error = resolve_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ResolveRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            discussion_id: "discussion_open".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            actor_is_maintainer: true,
+            actor_can_transition: true,
+            event_id: "event_rejected_resolve".to_string(),
+            now_unix: 31,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(resolve_error.kind, crate::error::DomainErrorKind::Conflict);
+    assert_eq!(requests, expected_requests);
+    assert_eq!(discussions, expected_discussions);
+
+    let reopen_error = reopen_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ReopenRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            discussion_id: "discussion_resolved".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            actor_is_maintainer: true,
+            actor_can_transition: true,
+            event_id: "event_rejected_reopen".to_string(),
+            now_unix: 32,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(reopen_error.kind, crate::error::DomainErrorKind::Conflict);
+    assert_eq!(requests, expected_requests);
+    assert_eq!(discussions, expected_discussions);
+}
+
+#[test]
+fn completed_public_discussion_transitions_remain_allowed() {
+    let request = open_request();
+    let mut requests = BTreeMap::from([(request.id.clone(), request)]);
+    let mut discussions = BTreeMap::new();
+    for id in ["discussion_open", "discussion_resolved"] {
+        create_request_discussion(
+            &mut requests,
+            &mut discussions,
+            CreateRequestDiscussionInput {
+                request_id: "request_1".to_string(),
+                id: id.to_string(),
+                actor_user_id: "author".to_string(),
+                actor_can_participate: true,
+                client_discussion_id: format!("client_{id}"),
+                body_markdown: "Review this invariant".to_string(),
+                now_unix: 21,
+            },
+        )
+        .unwrap();
+    }
+    resolve_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ResolveRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            discussion_id: "discussion_resolved".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            actor_is_maintainer: true,
+            actor_can_transition: true,
+            event_id: "event_initial_resolve".to_string(),
+            now_unix: 22,
+        },
+    )
+    .unwrap();
+    let request = requests.get_mut("request_1").unwrap();
+    request.closed_at_unix = Some(30);
+    request.closed_by_user_id = Some("maintainer".to_string());
+    request.updated_at_unix = 30;
+    request.validate_facts().unwrap();
+
+    let resolved = resolve_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ResolveRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            discussion_id: "discussion_open".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            actor_is_maintainer: true,
+            actor_can_transition: true,
+            event_id: "event_completed_resolve".to_string(),
+            now_unix: 31,
+        },
+    )
+    .unwrap();
+    assert_eq!(resolved.request.state(), RequestState::Closed);
+    assert_eq!(
+        resolved.discussion.status,
+        RequestDiscussionStatus::Resolved
+    );
+
+    let reopened = reopen_request_discussion(
+        &mut requests,
+        &mut discussions,
+        ReopenRequestDiscussionInput {
+            request_id: "request_1".to_string(),
+            discussion_id: "discussion_resolved".to_string(),
+            actor_user_id: "maintainer".to_string(),
+            actor_is_maintainer: true,
+            actor_can_transition: true,
+            event_id: "event_completed_reopen".to_string(),
+            now_unix: 32,
+        },
+    )
+    .unwrap();
+    assert_eq!(reopened.request.state(), RequestState::Closed);
+    assert_eq!(reopened.discussion.status, RequestDiscussionStatus::Open);
 }
 
 #[derive(Clone, Copy)]

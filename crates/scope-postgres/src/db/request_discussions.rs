@@ -402,10 +402,8 @@ impl RequestStore {
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
         let (repo, request) = lock_request_repository(&tx, &request_id).await?;
         ensure_user_exists(&tx, &actor_user_id).await?;
-        if !request_policy_for_user(&tx, &repo, &request, &actor_user_id)
-            .await?
-            .discussion_visible
-        {
+        let policy = request_policy_for_user(&tx, &repo, &request, &actor_user_id).await?;
+        if !policy.discussion_visible {
             return Err(PostgresError::not_found("request not found"));
         }
         let discussion = discussion_by_id(&tx, &discussion_id)
@@ -424,6 +422,7 @@ impl RequestStore {
                     discussion_id,
                     actor_user_id,
                     actor_is_maintainer,
+                    actor_can_transition: policy.permissions.can_transition_discussion,
                     event_id,
                     now_unix,
                 },
@@ -437,6 +436,7 @@ impl RequestStore {
                     discussion_id,
                     actor_user_id,
                     actor_is_maintainer,
+                    actor_can_transition: policy.permissions.can_transition_discussion,
                     event_id,
                     now_unix,
                 },
@@ -465,11 +465,9 @@ impl RequestStore {
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
         let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
-        input.actor_can_participate =
-            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
-                .await?
-                .permissions
-                .can_reply_to_discussion;
+        let policy = request_policy_for_user(&tx, &repo, &request, &input.actor_user_id).await?;
+        input.actor_can_participate = policy.permissions.can_reply_to_discussion;
+        input.actor_can_transition = policy.permissions.can_transition_discussion;
         input.actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?
