@@ -178,6 +178,26 @@ fn record_lookup_and_cleanup_candidates_are_runner_scoped() {
 }
 
 #[test]
+fn cold_discard_accepts_an_unmaterialized_runner_namespace() {
+    let parent = TestDir::new("runner-cache-new-registration-discard");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let record = record(CacheState::Ready);
+    let location = record_location(&root, &record);
+
+    assert!(!location.record_path.parent().unwrap().exists());
+    assert!(!location.backing_path.parent().unwrap().exists());
+    discard_cache_identity(
+        &root,
+        &record,
+        &location.backing_path,
+        None,
+        &record.runner_id,
+    )
+    .unwrap();
+}
+
+#[test]
 fn ordinary_same_filesystem_directory_is_a_valid_cache_store() {
     let parent = TestDir::new("runner-cache-store");
     let root = parent.path().join("scope/runner");

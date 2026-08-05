@@ -900,12 +900,30 @@ fn remove_cache(root: &Path, volume: &str, runner_id: &str) -> anyhow::Result<()
 }
 
 fn sync_cache_directories(root: &Path, runner_namespace: &str) -> anyhow::Result<()> {
-    File::open(root.join("data").join(runner_namespace))?.sync_all()?;
-    File::open(root.join("metadata").join(runner_namespace))?.sync_all()?;
+    sync_real_directory_if_present(
+        &root.join("data").join(runner_namespace),
+        "runner cache data namespace",
+    )?;
+    sync_real_directory_if_present(
+        &root.join("metadata").join(runner_namespace),
+        "runner cache metadata namespace",
+    )?;
     File::open(root.join("data"))?.sync_all()?;
     File::open(root.join("metadata"))?.sync_all()?;
     File::open(root)?.sync_all()?;
     Ok(())
+}
+
+fn sync_real_directory_if_present(path: &Path, label: &str) -> anyhow::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            File::open(path)?.sync_all()?;
+            Ok(())
+        }
+        Ok(_) => bail!("{label} must be a real directory: {}", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspect {label} {}", path.display())),
+    }
 }
 
 #[cfg(test)]
