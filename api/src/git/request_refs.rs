@@ -401,7 +401,7 @@ pub(crate) fn with_request_change_block_store_repo<T>(
             &["update-ref", "-d", &temporary_ref],
             "removing request change block ref",
         );
-        return Err(ApiError::service_unavailable(
+        return Err(ApiError::infrastructure_unavailable(
             "request change block snapshot does not contain its head",
         ));
     }
@@ -488,7 +488,7 @@ pub(crate) fn attach_visible_request_refs(
         }
         let attached_head = request_ref_head(target_repo, &request_ref)?;
         if attached_head.as_deref() != Some(request.head_oid.as_str()) {
-            return Err(ApiError::service_unavailable(
+            return Err(ApiError::infrastructure_unavailable(
                 "request snapshot does not match request metadata",
             ));
         }
@@ -527,7 +527,7 @@ fn refs_for_prefixes(
     args.extend(prefixes.iter().copied());
     let output = run_git_output(Some(repo), &args, action)?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "{action}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -692,7 +692,7 @@ fn ensure_request_ref_available_in_store_locked(
         {
             return Ok(());
         }
-        return Err(ApiError::service_unavailable(
+        return Err(ApiError::infrastructure_unavailable(
             "stored request branch snapshot does not match request metadata",
         ));
     }
@@ -825,7 +825,7 @@ fn rollback_request_ref(
             owner,
             repo = repo_name,
             request_ref,
-            error = error.message(),
+            error = error.operator_diagnostic(),
             "failed to roll back request ref after metadata rejection"
         );
     }

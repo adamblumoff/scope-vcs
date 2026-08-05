@@ -158,7 +158,7 @@ async fn receive_pack_rejects_git_push_without_push_intent() {
         .unwrap_err();
 
     assert_eq!(error.status(), StatusCode::FORBIDDEN);
-    assert_eq!(error.message(), "valid Scope push intent required");
+    assert_eq!(error.public_message(), "valid Scope push intent required");
 }
 
 #[tokio::test]

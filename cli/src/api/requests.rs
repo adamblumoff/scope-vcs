@@ -392,6 +392,31 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_errors_surface_only_the_safe_message_and_reference() {
+        let (api_url, server) = serve_once(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"code":"internal","message":"Scope hit an internal error.","error_reference":"err_0123456789abcdef0123456789abcdef\u001b[31m","retryable":false}"#,
+        );
+
+        let error = get_request(
+            &Client::new(),
+            &api_url,
+            "token",
+            "owner",
+            "repo",
+            "req_one",
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(
+            error,
+            "Scope hit an internal error.\nReference: err_0123456789abcdef0123456789abcdef [31m"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
     fn request_errors_surface_the_cli_upgrade_instruction() {
         let (api_url, server) = serve_once(
             StatusCode::UPGRADE_REQUIRED,

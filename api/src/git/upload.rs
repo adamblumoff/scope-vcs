@@ -365,7 +365,7 @@ pub(crate) fn git_command_output_with_timeout(
     }
 
     let stderr = truncated_git_stderr(&output.stderr);
-    Err(ApiError::service_unavailable(stderr.trim()))
+    Err(ApiError::infrastructure_unavailable(stderr.trim()))
 }
 
 pub(crate) fn git_process_output_with_timeout(
@@ -392,7 +392,7 @@ pub(crate) fn git_process_output_with_limits(
         if error.is_stdout_limit() {
             ApiError::payload_too_large(error.to_string())
         } else {
-            ApiError::service_unavailable(error.to_string())
+            ApiError::infrastructure_unavailable(error.to_string())
         }
     })
 }
@@ -403,7 +403,7 @@ fn git_process_output(
     limits: ProcessLimits,
 ) -> Result<Output, ApiError> {
     run_process(command, stdin, limits, "Git command")
-        .map_err(|error| ApiError::service_unavailable(error.to_string()))
+        .map_err(|error| ApiError::infrastructure_unavailable(error.to_string()))
 }
 
 pub(crate) fn truncated_git_stderr(stderr: &[u8]) -> String {
@@ -430,7 +430,7 @@ pub(crate) async fn git_upload_pack_response(
     .await
     .map_err(ApiError::internal)??;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "git upload-pack failed: {}",
             truncated_git_stderr(&output.stderr)
         )));
@@ -458,7 +458,7 @@ pub(crate) fn git_upload_pack_advertisement(repo_path: &FsPath, timeout: Duratio
             body.extend(advertisement);
             git_response("application/x-git-upload-pack-advertisement", body)
         }
-        Err(error) => git_advertisement_error(error.into_message()),
+        Err(error) => git_advertisement_error(error.into_public_message()),
     }
 }
 
@@ -521,7 +521,11 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        assert!(error.message().contains("stdout exceeded 4 bytes"));
+        assert!(
+            error
+                .operator_diagnostic()
+                .contains("stdout exceeded 4 bytes")
+        );
     }
 
     #[cfg(unix)]
@@ -535,7 +539,7 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert!(error.message().contains("timed out"));
+        assert!(error.operator_diagnostic().contains("timed out"));
         assert!(started_at.elapsed() < Duration::from_secs(2));
     }
 }

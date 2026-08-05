@@ -90,6 +90,11 @@ pub(crate) fn successful_response(response: Response, context: &str) -> anyhow::
         .json::<ErrorResponse>()
         .unwrap_or_else(|_| fallback_error_response(status, context));
     error.message = terminal_safe(&error.message);
+    error.error_reference = error
+        .error_reference
+        .as_deref()
+        .map(terminal_safe)
+        .filter(|reference| !reference.is_empty());
     error.instruction = error
         .instruction
         .as_deref()

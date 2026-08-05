@@ -35,9 +35,10 @@ impl AppState {
     pub async fn from_env() -> anyhow::Result<Self> {
         let repo_root = git_repo_root();
         let data_dir = data_dir(&repo_root);
-        ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.into_message()))?;
+        ensure_private_dir(&data_dir)
+            .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
         let push_intent_signing_key = push_intent_signing_key(&data_dir)
-            .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+            .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
         let metadata = MetadataStore::connect(database_url_from_env()?).await?;
         let repo_events = RepoChangeBus::default();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
@@ -55,7 +56,7 @@ impl AppState {
                 listener_bus.publish_notification_payload(&payload)
             })?;
         let raw_git_cache = RawGitCacheRegistry::new(data_dir.join("git-cache"))
-            .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+            .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
 
         let state = Self {
             metadata,

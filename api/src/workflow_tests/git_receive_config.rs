@@ -55,7 +55,10 @@ async fn rejected_config_push(
         .await
         .unwrap_err();
     assert_eq!(error.status(), StatusCode::FORBIDDEN);
-    assert_eq!(error.message(), "file visibility permission required");
+    assert_eq!(
+        error.public_message(),
+        "file visibility permission required"
+    );
     find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap()

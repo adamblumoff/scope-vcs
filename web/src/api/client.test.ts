@@ -25,9 +25,28 @@ test('loadJson surfaces structured and malformed API errors', async () => {
   await assert.rejects(loadJson('/v1/repos'), hasHttpError(502, 'request failed: 502'))
 })
 
+test('loadJson keeps the opaque server reference with a diagnostic error', async () => {
+  globalThis.fetch = async () => jsonResponse({
+    message: 'Scope hit an internal error.',
+    error_reference: 'err_0123456789abcdef0123456789abcdef',
+  }, 500)
+
+  await assert.rejects(
+    loadJson('/v1/repos'),
+    hasHttpError(
+      500,
+      'Scope hit an internal error. (reference: err_0123456789abcdef0123456789abcdef)',
+      'err_0123456789abcdef0123456789abcdef',
+    ),
+  )
+})
+
 const jsonResponse = (body: unknown, status: number) => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' }, status,
 })
 
-const hasHttpError = (status: number, message: string) => (error: unknown) =>
-  error instanceof HttpError && error.status === status && error.message === message
+const hasHttpError = (status: number, message: string, errorReference?: string) =>
+  (error: unknown) => error instanceof HttpError &&
+    error.status === status &&
+    error.message === message &&
+    error.errorReference === errorReference

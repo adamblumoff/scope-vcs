@@ -163,7 +163,7 @@ fn request_changes_from_repo(
     }
     let output = run_git_output(Some(raw_repo), &args, "reading request changes")?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "reading request changes: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -232,7 +232,7 @@ fn git_blob_content(repo: &FsPath, oid: &str) -> Result<ReviewFileContentRespons
         "reading request file size",
     )?;
     if !size_output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "reading request file size: {}",
             String::from_utf8_lossy(&size_output.stderr).trim()
         )));
@@ -254,7 +254,7 @@ fn git_blob_content(repo: &FsPath, oid: &str) -> Result<ReviewFileContentRespons
     if output.status.success() {
         Ok(review_content_response_for_bytes(oid, &output.stdout))
     } else {
-        Err(ApiError::service_unavailable(format!(
+        Err(ApiError::infrastructure_unavailable(format!(
             "reading request file: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )))

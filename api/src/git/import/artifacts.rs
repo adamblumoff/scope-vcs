@@ -238,7 +238,7 @@ fn prepare_push_trigger_input(
                 "reading push workflow definition",
             )?;
             if !output.status.success() || output.stdout.len() != entry.size_bytes {
-                return Err(ApiError::service_unavailable(format!(
+                return Err(ApiError::infrastructure_unavailable(format!(
                     "reading push workflow {path} failed"
                 )));
             }

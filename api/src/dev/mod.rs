@@ -28,16 +28,22 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let settings = env::validate_local_dev_environment()?;
     let repo_root = git_repo_root();
     let data_dir = data_dir(&repo_root);
-    ensure_private_dir(&data_dir).map_err(|error| anyhow::anyhow!(error.into_message()))?;
+    ensure_private_dir(&data_dir)
+        .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
     let push_intent_signing_key = push_intent_signing_key(&data_dir)
-        .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+        .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
 
     let raw_object_store = Arc::new(EncryptedObjectStore::new(
         Arc::new(file_from_env(&data_dir.join("objects"))),
         encryption_key_from_env()?,
     ));
-    let catalog = seed::catalog(raw_object_store.as_ref(), settings.seed_user)
-        .map_err(|error| anyhow::anyhow!("building local dev catalog: {}", error.into_message()))?;
+    let catalog =
+        seed::catalog(raw_object_store.as_ref(), settings.seed_user).map_err(|error| {
+            anyhow::anyhow!(
+                "building local dev catalog: {}",
+                error.into_operator_diagnostic()
+            )
+        })?;
     let metadata = MetadataStore::connect(settings.database_url.clone()).await?;
     metadata
         .admin()
@@ -49,7 +55,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         .map_err(|error| {
             anyhow::anyhow!(
                 "seeding local dev request discussions: {}",
-                error.into_message()
+                error.into_operator_diagnostic()
             )
         })?;
     let repo_events = RepoChangeBus::default();
@@ -66,7 +72,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     ));
 
     let raw_git_cache = RawGitCacheRegistry::new(data_dir.join("git-cache"))
-        .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+        .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
     let state = AppState {
         metadata,
         data_dir: Arc::new(data_dir),

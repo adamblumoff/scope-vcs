@@ -51,7 +51,7 @@ fn pushed_tree_rejects_case_insensitive_dot_git_from_a_raw_tree_object() {
     let error = validate_pushed_tree(&repo, commit.trim()).unwrap_err();
 
     assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-    assert!(error.message().contains("reserved .git component"));
+    assert!(error.public_message().contains("reserved .git component"));
 }
 
 #[test]
@@ -80,7 +80,11 @@ fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
     let error = validate_pushed_tree(&repo, "HEAD").unwrap_err();
 
     assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-    assert!(error.message().contains("unsupported Git tree entry"));
+    assert!(
+        error
+            .public_message()
+            .contains("unsupported Git tree entry")
+    );
 }
 
 #[test]
@@ -98,10 +102,10 @@ fn oversized_binary_push_names_path_and_limit() {
     let error = validate_pushed_tree(&repo, "HEAD").unwrap_err();
 
     assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-    assert!(error.message().contains("video.bin"));
+    assert!(error.public_message().contains("video.bin"));
     assert!(
         error
-            .message()
+            .public_message()
             .contains(&MAX_PENDING_IMPORT_BLOB_BYTES.to_string())
     );
 }
@@ -162,5 +166,9 @@ fn pushed_tree_requires_canonical_repo_rules() {
     let error = validate_pushed_tree(&repo, "HEAD").unwrap_err();
 
     assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-    assert!(error.message().contains("must contain .scope/RULES.md"));
+    assert!(
+        error
+            .public_message()
+            .contains("must contain .scope/RULES.md")
+    );
 }

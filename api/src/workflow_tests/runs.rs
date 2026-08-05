@@ -147,7 +147,10 @@ steps:
         .run_ready_outbox_jobs(
             "push-trigger-api-test",
             10,
-            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &|| {
+                crate::persistence::unix_now()
+                    .map_err(crate::error::ApiError::into_operator_diagnostic)
+            },
             &crate::persistence_ids::generate_persistence_id,
         )
         .await

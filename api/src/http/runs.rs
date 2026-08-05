@@ -444,11 +444,11 @@ async fn stream_run_events(
             match require_scope_user(&context.state, &context.headers).await {
                 Ok(user) if user.id == context.user_id => authenticated_at = Instant::now(),
                 Ok(_) => {
-                    send_stream_error(&sender, "run access changed".to_string()).await;
+                    send_stream_error(&sender, ApiError::forbidden("run access changed")).await;
                     return;
                 }
                 Err(error) => {
-                    send_stream_error(&sender, error.into_message()).await;
+                    send_stream_error(&sender, error).await;
                     return;
                 }
             }
@@ -461,7 +461,7 @@ async fn stream_run_events(
         )
         .await
         {
-            send_stream_error(&sender, error.into_message()).await;
+            send_stream_error(&sender, error).await;
             return;
         }
         let logs = match context
@@ -473,7 +473,7 @@ async fn stream_run_events(
         {
             Ok(logs) => logs,
             Err(error) => {
-                send_stream_error(&sender, error.message).await;
+                send_stream_error(&sender, error.into()).await;
                 return;
             }
         };
@@ -495,7 +495,7 @@ async fn stream_run_events(
             {
                 Ok(event) => event,
                 Err(error) => {
-                    send_stream_error(&sender, error.to_string()).await;
+                    send_stream_error(&sender, ApiError::internal(error)).await;
                     return;
                 }
             };
@@ -507,11 +507,11 @@ async fn stream_run_events(
         let run = match context.state.metadata.runs().run(&context.run_id).await {
             Ok(Some(run)) => run,
             Ok(None) => {
-                send_stream_error(&sender, "run no longer exists".to_string()).await;
+                send_stream_error(&sender, ApiError::not_found("run no longer exists")).await;
                 return;
             }
             Err(error) => {
-                send_stream_error(&sender, error.message).await;
+                send_stream_error(&sender, error.into()).await;
                 return;
             }
         };
@@ -535,7 +535,7 @@ async fn stream_run_events(
             {
                 Ok(logs_truncated) => logs_truncated,
                 Err(error) => {
-                    send_stream_error(&sender, error.message).await;
+                    send_stream_error(&sender, error.into()).await;
                     return;
                 }
             };
@@ -545,7 +545,7 @@ async fn stream_run_events(
             {
                 Ok(event) => event,
                 Err(error) => {
-                    send_stream_error(&sender, error.to_string()).await;
+                    send_stream_error(&sender, ApiError::internal(error)).await;
                     return;
                 }
             };
@@ -568,12 +568,16 @@ async fn stream_run_events(
 
 async fn send_stream_error(
     sender: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
-    message: String,
+    error: ApiError,
 ) {
-    let data = serde_json::json!({ "message": message });
+    let data = stream_error_data(error);
     if let Ok(event) = Event::default().event("error").json_data(data) {
         let _ = sender.send(Ok(event)).await;
     }
+}
+
+fn stream_error_data(error: ApiError) -> serde_json::Value {
+    serde_json::json!({ "message": error.into_public_message() })
 }
 
 async fn require_run_access(
@@ -857,5 +861,22 @@ impl RunTempDir {
 impl Drop for RunTempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_errors_redact_database_diagnostics() {
+        let diagnostic = "relation scope_runs_internal does not exist";
+        let error = scope_postgres::error::PostgresError::internal_message(diagnostic);
+
+        let data = stream_error_data(error.into());
+        let message = data["message"].as_str().unwrap();
+
+        assert!(message.starts_with("Scope hit an internal error. (reference: err_"));
+        assert!(!message.contains(diagnostic));
     }
 }

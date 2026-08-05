@@ -249,7 +249,7 @@ impl AppState {
             loop {
                 interval.tick().await;
                 if let Err(error) = raw_git_cache.prune() {
-                    tracing::warn!(error = %error.message(), "failed to prune local raw Git caches");
+                    tracing::warn!(error = %error.operator_diagnostic(), "failed to prune local raw Git caches");
                 }
             }
         });
@@ -266,7 +266,7 @@ pub(crate) fn sanitize_raw_git_cache_repo(
         "reading refs before raw Git cache promotion",
     )?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "reading refs before raw Git cache promotion: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -367,7 +367,7 @@ impl Drop for RawGitCacheLease {
         if let Err(error) = touch_if_materialized(&self.path).and_then(|()| self.registry.prune()) {
             tracing::warn!(
                 path = %self.path.display(),
-                error = %error.message(),
+                error = %error.operator_diagnostic(),
                 "failed to prune local raw Git caches"
             );
         }
@@ -606,7 +606,7 @@ mod tests {
                         builds.fetch_add(1, Ordering::SeqCst);
                         leader_started_tx.send(()).unwrap();
                         release_leader_rx.recv().unwrap();
-                        Err(ApiError::service_unavailable("shared build failure"))
+                        Err(ApiError::infrastructure_unavailable("shared build failure"))
                     },
                 )
             })
@@ -632,7 +632,7 @@ mod tests {
         for worker in [leader, follower] {
             let error = worker.join().unwrap().unwrap_err();
             assert_eq!(error.kind, crate::error::ErrorKind::ServiceUnavailable);
-            assert_eq!(error.message(), "shared build failure");
+            assert_eq!(error.operator_diagnostic(), "shared build failure");
         }
         assert_eq!(builds.load(Ordering::SeqCst), 1);
 
@@ -699,7 +699,7 @@ mod tests {
 
         assert_eq!(error.kind, crate::error::ErrorKind::TooManyRequests);
         assert_eq!(
-            error.message(),
+            error.operator_diagnostic(),
             "Git projection build capacity is exhausted; retry later"
         );
         release_leader_tx.send(()).unwrap();

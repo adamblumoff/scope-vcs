@@ -23,7 +23,7 @@ pub(crate) async fn apply_run_retention(state: &AppState, now_unix: u64) -> anyh
         .map_err(|error| anyhow::anyhow!(error.message))?;
     let report = drain_pending_source_blob_deletions_report(state)
         .await
-        .map_err(|error| anyhow::anyhow!(error.into_message()))?;
+        .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
     if !report.failed_object_deletes.is_empty() {
         anyhow::bail!(
             "{} retained run source object(s) could not be deleted",

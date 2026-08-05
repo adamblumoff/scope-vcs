@@ -185,7 +185,9 @@ impl ObjectStore for BudgetedObjectStore {
         let _permit = self
             .budgets
             .try_object_store("object store write")
-            .map_err(|error| ObjectStoreError::capacity_exhausted(error.into_message()))?;
+            .map_err(|error| {
+                ObjectStoreError::capacity_exhausted(error.into_operator_diagnostic())
+            })?;
         self.inner.put(key, bytes)
     }
 
@@ -193,7 +195,9 @@ impl ObjectStore for BudgetedObjectStore {
         let _permit = self
             .budgets
             .try_object_store("object store read")
-            .map_err(|error| ObjectStoreError::capacity_exhausted(error.into_message()))?;
+            .map_err(|error| {
+                ObjectStoreError::capacity_exhausted(error.into_operator_diagnostic())
+            })?;
         let bytes = self
             .inner
             .get_bounded(key, self.budgets.git_storage_limits.max_object_bytes())?;
@@ -204,7 +208,9 @@ impl ObjectStore for BudgetedObjectStore {
         let _permit = self
             .budgets
             .try_object_store("object store delete")
-            .map_err(|error| ObjectStoreError::capacity_exhausted(error.into_message()))?;
+            .map_err(|error| {
+                ObjectStoreError::capacity_exhausted(error.into_operator_diagnostic())
+            })?;
         self.inner.delete(key)
     }
 
