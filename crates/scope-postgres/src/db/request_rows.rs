@@ -9,9 +9,9 @@ use {
     crate::error::PostgresError,
     scope_domain::requests::{
         REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole, RequestAudience, RequestEvent,
-        RequestState,
+        RequestListPredicate, RequestState, request_list_predicate,
     },
-    scope_domain::store::{RepositoryAccess, RepositoryActor},
+    scope_domain::store::RepositoryAccess,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,45 +128,51 @@ fn request_list_select(
     if let Some(after_id) = input.after_id {
         query = query.filter(entities::request::Column::Id.gt(after_id));
     }
-    let viewer_draft_access = input.viewer_user_id.map(|viewer_user_id| {
-        let invitee = Query::select()
-            .expr(Expr::val(1))
-            .from(entities::request_invitee::Entity)
-            .and_where(
-                Expr::col((
-                    entities::request_invitee::Entity,
-                    entities::request_invitee::Column::RequestId,
-                ))
-                .equals((entities::request::Entity, entities::request::Column::Id)),
-            )
-            .and_where(entities::request_invitee::Column::UserId.eq(viewer_user_id))
-            .to_owned();
-        Condition::any()
-            .add(entities::request::Column::AuthorUserId.eq(viewer_user_id))
-            .add(Expr::exists(invitee))
-    });
-    let mut public_request_access =
-        Condition::any().add(entities::request::Column::SubmittedAtUnix.is_not_null());
-    if let Some(viewer_draft_access) = viewer_draft_access {
-        public_request_access = public_request_access.add(viewer_draft_access);
-    }
-    let visible_public = Condition::all()
-        .add(
-            entities::request::Column::Audience.eq(entities::encode_enum(RequestAudience::Public)?),
-        )
-        .add(public_request_access);
-    let mut visibility = Condition::any().add(visible_public);
-    if matches!(
-        input.access.actor,
-        RepositoryActor::Owner | RepositoryActor::Member
-    ) {
-        visibility = visibility.add(
-            entities::request::Column::Audience
-                .eq(entities::encode_enum(RequestAudience::Private)?),
-        );
-    }
-    query = query.filter(visibility);
+    query = query.filter(request_list_condition(&request_list_predicate(
+        input.access,
+        input.viewer_user_id,
+    ))?);
     Ok(query)
+}
+
+fn request_list_condition(
+    predicate: &RequestListPredicate<'_>,
+) -> Result<Condition, PostgresError> {
+    match predicate {
+        RequestListPredicate::All(predicates) => predicates
+            .iter()
+            .try_fold(Condition::all(), |condition, predicate| {
+                Ok(condition.add(request_list_condition(predicate)?))
+            }),
+        RequestListPredicate::Any(predicates) => predicates
+            .iter()
+            .try_fold(Condition::any(), |condition, predicate| {
+                Ok(condition.add(request_list_condition(predicate)?))
+            }),
+        RequestListPredicate::Audience(audience) => Ok(Condition::all()
+            .add(entities::request::Column::Audience.eq(entities::encode_enum(*audience)?))),
+        RequestListPredicate::Submitted => {
+            Ok(Condition::all().add(entities::request::Column::SubmittedAtUnix.is_not_null()))
+        }
+        RequestListPredicate::Author(viewer_user_id) => {
+            Ok(Condition::all().add(entities::request::Column::AuthorUserId.eq(*viewer_user_id)))
+        }
+        RequestListPredicate::Invitee(viewer_user_id) => {
+            let invitee = Query::select()
+                .expr(Expr::val(1))
+                .from(entities::request_invitee::Entity)
+                .and_where(
+                    Expr::col((
+                        entities::request_invitee::Entity,
+                        entities::request_invitee::Column::RequestId,
+                    ))
+                    .equals((entities::request::Entity, entities::request::Column::Id)),
+                )
+                .and_where(entities::request_invitee::Column::UserId.eq(*viewer_user_id))
+                .to_owned();
+            Ok(Condition::all().add(Expr::exists(invitee)))
+        }
+    }
 }
 
 pub(super) fn request_list_projection() -> sea_orm::Select<entities::request::Entity> {
