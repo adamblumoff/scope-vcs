@@ -102,7 +102,10 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         .run_ready_outbox_jobs(
             "content-push-test",
             10,
-            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &|| {
+                crate::persistence::unix_now()
+                    .map_err(crate::error::ApiError::into_operator_diagnostic)
+            },
             &crate::persistence_ids::generate_persistence_id,
         )
         .await
@@ -161,7 +164,10 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
             .run_ready_outbox_jobs(
                 "content-push-test",
                 10,
-                &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+                &|| {
+                    crate::persistence::unix_now()
+                        .map_err(crate::error::ApiError::into_operator_diagnostic)
+                },
                 &crate::persistence_ids::generate_persistence_id,
             )
             .await

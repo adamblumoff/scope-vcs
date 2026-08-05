@@ -48,7 +48,7 @@ pub(crate) fn git_refs(staging_repo: &FsPath) -> Result<Vec<(String, String)>, A
         "reading pushed refs",
     )?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "reading pushed refs: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -199,7 +199,7 @@ pub(super) fn git_changed_tree_entries(
         "reading pushed Git delta",
     )?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "reading pushed Git delta: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -260,7 +260,7 @@ pub(super) fn git_changed_tree_entries(
             RuntimeBudgets::default_git_command_timeout(),
         )?;
         if !output.status.success() {
-            return Err(ApiError::service_unavailable(format!(
+            return Err(ApiError::infrastructure_unavailable(format!(
                 "reading pushed blob sizes: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
@@ -348,7 +348,7 @@ pub(crate) async fn git_segment_manifest_from_repo(
         storage_limits.max_object_bytes(),
     )?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "creating incremental Git segment: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -390,7 +390,7 @@ pub(super) async fn queue_failed_segments(
         Err(queue_error) => {
             for segment in segments {
                 if let Err(delete_error) = state.object_store.delete(&object_key(&segment)) {
-                    return Err(ApiError::service_unavailable(format!(
+                    return Err(ApiError::infrastructure_unavailable(format!(
                         "failed to queue or delete incomplete Git segment: {}; {}",
                         queue_error.message, delete_error.message
                     )));
@@ -473,7 +473,7 @@ pub(crate) fn run_git(repo: Option<&FsPath>, args: &[&str], action: &str) -> Res
     if output.status.success() {
         Ok(())
     } else {
-        Err(ApiError::service_unavailable(format!(
+        Err(ApiError::infrastructure_unavailable(format!(
             "{action}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )))
@@ -487,7 +487,7 @@ pub(crate) fn git_stdout_text(
 ) -> Result<String, ApiError> {
     let output = run_git_output(Some(repo), args, action)?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "{action}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -510,7 +510,12 @@ pub(crate) fn run_git_output(
         None,
         RuntimeBudgets::default_git_command_timeout(),
     )
-    .map_err(|error| ApiError::service_unavailable(format!("failed {action}: {}", error.message())))
+    .map_err(|error| {
+        ApiError::infrastructure_unavailable(format!(
+            "failed {action}: {}",
+            error.operator_diagnostic()
+        ))
+    })
 }
 
 pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {

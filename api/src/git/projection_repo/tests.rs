@@ -125,7 +125,11 @@ fn projection_identity_and_materializer_reject_the_same_reserved_path() {
     })
     .unwrap_err();
 
-    assert_eq!(materialization_error.message(), identity_error);
+    assert_eq!(materialization_error.operator_diagnostic(), identity_error);
+    assert_eq!(
+        materialization_error.public_message(),
+        "Scope hit an internal error."
+    );
     assert!(identity_error.contains("reserved .git component"));
     let _ = fs::remove_dir_all(root);
 }
@@ -299,9 +303,10 @@ fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
     .unwrap_err();
     assert!(
         error
-            .message()
+            .operator_diagnostic()
             .contains("tree does not match persisted provenance")
     );
+    assert_eq!(error.public_message(), "Scope hit an internal error.");
 
     let _ = fs::remove_dir_all(root);
 }

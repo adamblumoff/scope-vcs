@@ -201,7 +201,7 @@ impl SourceBlobCleanupQueueResponse {
 
 fn ensure_operator(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     let expected = state.operator_token.as_deref().ok_or_else(|| {
-        ApiError::service_unavailable(format!(
+        ApiError::infrastructure_unavailable(format!(
             "{SCOPE_OPERATOR_TOKEN_ENV} is required for admin operations"
         ))
     })?;

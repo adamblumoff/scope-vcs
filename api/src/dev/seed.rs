@@ -665,7 +665,7 @@ fn store_seed_git_segment(
         .map_err(ApiError::internal)?;
     let output = child.wait_with_output().map_err(ApiError::internal)?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "creating seeded Git segment: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -788,9 +788,11 @@ fn seed_git_head(repo_path: &FsPath) -> Result<String, ApiError> {
         .arg(repo_path)
         .args(["rev-parse", "HEAD"])
         .output()
-        .map_err(|error| ApiError::service_unavailable(format!("reading seeded head: {error}")))?;
+        .map_err(|error| {
+            ApiError::infrastructure_unavailable(format!("reading seeded head: {error}"))
+        })?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "reading seeded head: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -828,12 +830,14 @@ fn seed_git(repo: Option<&FsPath>, args: &[&str], action: &str) -> Result<(), Ap
         .env("GIT_COMMITTER_EMAIL", "scope-dev@example.invalid")
         .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
         .output()
-        .map_err(|error| ApiError::service_unavailable(format!("failed {action}: {error}")))?;
+        .map_err(|error| {
+            ApiError::infrastructure_unavailable(format!("failed {action}: {error}"))
+        })?;
     if output.status.success() {
         return Ok(());
     }
 
-    Err(ApiError::service_unavailable(format!(
+    Err(ApiError::infrastructure_unavailable(format!(
         "{action}: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     )))

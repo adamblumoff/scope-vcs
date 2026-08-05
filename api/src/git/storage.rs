@@ -390,7 +390,7 @@ fn index_git_pack(
         state.runtime_budgets.git_command_timeout(),
     )?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "restoring Git segment: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -565,7 +565,9 @@ pub(crate) async fn git_http_backend_streaming(
             let next =
                 tokio::time::timeout(RuntimeBudgets::default_git_command_timeout(), stream.next())
                     .await
-                    .map_err(|_| ApiError::service_unavailable("git request upload stalled"))?;
+                    .map_err(|_| {
+                        ApiError::infrastructure_unavailable("git request upload stalled")
+                    })?;
             let Some(chunk) = next else {
                 break;
             };
@@ -603,11 +605,13 @@ pub(crate) async fn git_http_backend_streaming(
         Err(_) => {
             output_task.abort();
             let _ = output_task.await;
-            return Err(ApiError::service_unavailable("git http-backend timed out"));
+            return Err(ApiError::infrastructure_unavailable(
+                "git http-backend timed out",
+            ));
         }
     };
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "git http-backend failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -628,8 +632,9 @@ pub(crate) struct CgiResponse {
 
 impl CgiResponse {
     pub(crate) fn parse(output: Vec<u8>) -> Result<Self, ApiError> {
-        let header_end = find_header_end(&output)
-            .ok_or_else(|| ApiError::service_unavailable("git http-backend returned no headers"))?;
+        let header_end = find_header_end(&output).ok_or_else(|| {
+            ApiError::infrastructure_unavailable("git http-backend returned no headers")
+        })?;
         let (headers, body) = output.split_at(header_end.0);
         let headers = String::from_utf8_lossy(headers);
         let mut status = StatusCode::OK;
@@ -648,7 +653,9 @@ impl CgiResponse {
                     .split_whitespace()
                     .next()
                     .and_then(|code| code.parse::<u16>().ok())
-                    .ok_or_else(|| ApiError::service_unavailable("invalid git CGI status"))?;
+                    .ok_or_else(|| {
+                        ApiError::infrastructure_unavailable("invalid git CGI status")
+                    })?;
                 status = StatusCode::from_u16(code).map_err(ApiError::internal)?;
             } else {
                 parsed_headers.push((name.trim().to_string(), value.trim().to_string()));

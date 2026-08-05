@@ -121,7 +121,10 @@ async fn public_files_use_the_projected_blob() {
         .run_ready_outbox_jobs(
             "repo-visibility-test",
             10,
-            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &|| {
+                crate::persistence::unix_now()
+                    .map_err(crate::error::ApiError::into_operator_diagnostic)
+            },
             &crate::persistence_ids::generate_persistence_id,
         )
         .await
@@ -311,7 +314,10 @@ async fn canonical_rules_alone_do_not_publish_a_repository() {
         .run_ready_outbox_jobs(
             "rules-only-visibility-test",
             10,
-            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &|| {
+                crate::persistence::unix_now()
+                    .map_err(crate::error::ApiError::into_operator_diagnostic)
+            },
             &crate::persistence_ids::generate_persistence_id,
         )
         .await
@@ -370,7 +376,10 @@ async fn owner_profile_lists_only_repositories_visible_to_the_viewer() {
         .run_ready_outbox_jobs(
             "owner-profile-test",
             10,
-            &|| crate::persistence::unix_now().map_err(crate::error::ApiError::into_message),
+            &|| {
+                crate::persistence::unix_now()
+                    .map_err(crate::error::ApiError::into_operator_diagnostic)
+            },
             &crate::persistence_ids::generate_persistence_id,
         )
         .await

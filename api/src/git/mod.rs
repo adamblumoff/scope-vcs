@@ -190,7 +190,7 @@ pub(crate) async fn git_info_refs(
         Some(GIT_UPLOAD_PACK) => {
             let _permit = match state.runtime_budgets.try_upload_pack() {
                 Ok(permit) => permit,
-                Err(error) => return git_advertisement_error(error.into_message()),
+                Err(error) => return git_advertisement_error(error.into_public_message()),
             };
             match git_upload_pack_repo_for_request(&state, &headers, &org, &repo, mode).await {
                 Ok(repo_path) => git_upload_pack_advertisement(
@@ -200,7 +200,7 @@ pub(crate) async fn git_info_refs(
                 Err(error) if error.status() == StatusCode::UNAUTHORIZED => {
                     git_error_response(error)
                 }
-                Err(error) => git_advertisement_error(error.into_message()),
+                Err(error) => git_advertisement_error(error.into_public_message()),
             }
         }
         Some(service) => (
@@ -310,7 +310,7 @@ pub(crate) async fn git_receive_pack(
                 owner = org,
                 repo,
                 status = %error.status(),
-                message = error.message(),
+                message = error.operator_diagnostic(),
                 "git receive-pack failed"
             );
             git_error_response(error)
@@ -326,16 +326,16 @@ pub(crate) async fn git_upload_pack_rpc(
 ) -> Response {
     let mode = match GitRemoteMode::parse(&mode) {
         Ok(mode) => mode,
-        Err(error) => return git_upload_pack_error(error.into_message()),
+        Err(error) => return git_upload_pack_error(error.into_public_message()),
     };
     let permit = match state.runtime_budgets.try_upload_pack() {
         Ok(permit) => permit,
-        Err(error) => return git_upload_pack_error(error.into_message()),
+        Err(error) => return git_upload_pack_error(error.into_public_message()),
     };
     let repo_path =
         match git_upload_pack_repo_for_request(&state, &headers, &org, &repo_name, mode).await {
             Ok(repo_path) => repo_path,
-            Err(error) => return git_upload_pack_error(error.into_message()),
+            Err(error) => return git_upload_pack_error(error.into_public_message()),
         };
     let body = match to_bytes(request.into_body(), MAX_UPLOAD_PACK_BYTES).await {
         Ok(body) => body,
@@ -345,7 +345,7 @@ pub(crate) async fn git_upload_pack_rpc(
     };
     let body = match decode_git_request_body(&headers, body, MAX_UPLOAD_PACK_BYTES) {
         Ok(body) => body,
-        Err(error) => return git_upload_pack_error(error.into_message()),
+        Err(error) => return git_upload_pack_error(error.into_public_message()),
     };
 
     match git_upload_pack_response(
@@ -357,7 +357,7 @@ pub(crate) async fn git_upload_pack_rpc(
     .await
     {
         Ok(response) => response,
-        Err(error) => git_upload_pack_error(error.into_message()),
+        Err(error) => git_upload_pack_error(error.into_public_message()),
     }
 }
 
@@ -912,7 +912,7 @@ async fn handle_git_receive_pack_body(
                         Err(error) => tracing::warn!(
                             owner,
                             repo = repo_name,
-                            error = %error.message(),
+                            error = %error.operator_diagnostic(),
                             "push committed but raw Git cache promotion failed"
                         ),
                     }

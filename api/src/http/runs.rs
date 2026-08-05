@@ -448,7 +448,7 @@ async fn stream_run_events(
                     return;
                 }
                 Err(error) => {
-                    send_stream_error(&sender, error.into_message()).await;
+                    send_stream_error(&sender, error.into_public_message()).await;
                     return;
                 }
             }
@@ -461,7 +461,7 @@ async fn stream_run_events(
         )
         .await
         {
-            send_stream_error(&sender, error.into_message()).await;
+            send_stream_error(&sender, error.into_public_message()).await;
             return;
         }
         let logs = match context

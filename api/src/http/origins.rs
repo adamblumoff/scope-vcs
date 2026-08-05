@@ -22,5 +22,7 @@ fn public_origin(env_name: &str, debug_fallback: &str, action: &str) -> Result<S
     non_empty_env(env_name)
         .or_else(|| cfg!(debug_assertions).then(|| debug_fallback.to_string()))
         .map(|value| value.trim_end_matches('/').to_string())
-        .ok_or_else(|| ApiError::service_unavailable(format!("{env_name} is required to {action}")))
+        .ok_or_else(|| {
+            ApiError::infrastructure_unavailable(format!("{env_name} is required to {action}"))
+        })
 }

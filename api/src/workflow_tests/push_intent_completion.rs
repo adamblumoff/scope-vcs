@@ -301,12 +301,13 @@ fn segment_restore_rejects_manifest_chains_over_the_limit() {
             .unwrap_err();
 
     assert_eq!(
-        error.message(),
+        error.operator_diagnostic(),
         format!(
             "Git segment chain exceeds maximum depth of {}",
             max_chain_depth
         )
     );
+    assert_eq!(error.public_message(), "Scope hit an internal error.");
 }
 
 #[tokio::test]
@@ -345,8 +346,12 @@ async fn segment_creation_rejects_chain_at_limit_before_side_effects() {
 
     assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
-        error.message(),
+        error.operator_diagnostic(),
         "Git segment chain has reached maximum depth of 2; retry after compaction"
+    );
+    assert_eq!(
+        error.public_message(),
+        "Scope is temporarily unavailable; retry with bounded backoff."
     );
     assert_eq!(raw_store.object_count(), object_count);
 }
@@ -399,7 +404,7 @@ async fn content_push_rejects_stale_reviewed_config() {
 
     assert_eq!(error.status(), StatusCode::CONFLICT);
     assert_eq!(
-        error.message(),
+        error.public_message(),
         "repo config changed since review; rerun scope push"
     );
     assert_eq!(stored_config(&state).await, newer_config);

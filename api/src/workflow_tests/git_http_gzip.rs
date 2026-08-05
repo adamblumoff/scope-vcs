@@ -168,7 +168,7 @@ fn git_request_decoder_rejects_invalid_encoding_and_expansion() {
         headers.insert(CONTENT_ENCODING, encoding.parse().unwrap());
         let error = decode_git_request_body(&headers, Bytes::from(body), limit).unwrap_err();
         assert_eq!(error.status(), status);
-        assert!(error.message().contains(message));
+        assert!(error.public_message().contains(message));
     }
 }
 

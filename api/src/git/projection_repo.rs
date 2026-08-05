@@ -276,7 +276,7 @@ fn copy_and_verify_native_commit(
             git_is_ancestor(target_repo, parent_oid, range_base_oid).map_err(|error| {
                 ApiError::internal_message(format!(
                     "checking native parent {parent_oid} against public base {range_base_oid}: {}",
-                    error.message()
+                    error.operator_diagnostic()
                 ))
             })?;
         if parent_is_public {
@@ -304,7 +304,7 @@ fn copy_and_verify_native_commit(
         RuntimeBudgets::default_git_command_timeout(),
     )?;
     if !pack.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "packing native public commit {oid}: {}",
             truncated_git_stderr(&pack.stderr)
         )));
@@ -319,7 +319,7 @@ fn copy_and_verify_native_commit(
         RuntimeBudgets::default_git_command_timeout(),
     )?;
     if !indexed.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "indexing native public commit {oid}: {}",
             truncated_git_stderr(&indexed.stderr)
         )));
@@ -388,7 +388,7 @@ fn git_is_ancestor(
     if output.status.code() == Some(1) {
         return Ok(false);
     }
-    Err(ApiError::service_unavailable(truncated_git_stderr(
+    Err(ApiError::infrastructure_unavailable(truncated_git_stderr(
         &output.stderr,
     )))
 }

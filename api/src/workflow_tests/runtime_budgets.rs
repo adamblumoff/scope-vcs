@@ -196,7 +196,7 @@ fn git_command_timeout_covers_blocked_stdin_write() {
             .unwrap_err();
 
     assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(error.message().contains("timed out"));
+    assert!(error.operator_diagnostic().contains("timed out"));
     assert!(started_at.elapsed() < Duration::from_secs(2));
 }
 
@@ -212,7 +212,7 @@ fn git_command_broken_pipe_preserves_child_failure() {
         .unwrap_err();
 
     assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(error.message(), "real git failure");
+    assert_eq!(error.operator_diagnostic(), "real git failure");
 }
 
 #[test]

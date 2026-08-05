@@ -62,6 +62,8 @@ pub struct ErrorResponse {
     pub code: ErrorCode,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instruction: Option<String>,
     #[serde(default, skip_serializing_if = "ErrorFields::is_empty")]
     pub fields: ErrorFields,
@@ -74,6 +76,7 @@ impl ErrorResponse {
         Self {
             code,
             message: message.into(),
+            error_reference: None,
             instruction: None,
             fields: ErrorFields::default(),
             retryable: false,
@@ -93,5 +96,27 @@ impl ErrorResponse {
     pub fn retryable(mut self) -> Self {
         self.retryable = true;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_reference_is_optional_in_the_wire_contract() {
+        let public = ErrorResponse::new(ErrorCode::BadRequest, "invalid request");
+        let public_json = serde_json::to_value(&public).unwrap();
+        assert_eq!(public_json.get("error_reference"), None);
+
+        let mut internal = ErrorResponse::new(ErrorCode::Internal, "internal error");
+        internal.error_reference = Some("err_0123456789abcdef0123456789abcdef".to_string());
+        let internal_json = serde_json::to_value(&internal).unwrap();
+        assert_eq!(
+            internal_json
+                .get("error_reference")
+                .and_then(|value| value.as_str()),
+            internal.error_reference.as_deref()
+        );
     }
 }

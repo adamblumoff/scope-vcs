@@ -152,7 +152,7 @@ fn git_revision_is_ancestor(
     if output.status.code() == Some(1) {
         return Ok(false);
     }
-    Err(ApiError::service_unavailable(format!(
+    Err(ApiError::infrastructure_unavailable(format!(
         "checking public request parent ancestry: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     )))
@@ -234,7 +234,7 @@ fn commits_after(
         "reading public request branch commits",
     )?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "reading public request branch commits: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -306,7 +306,7 @@ fn git_commit_oid(staging_repo: &FsPath, revision: &str) -> Result<String, ApiEr
 fn git_text(staging_repo: &FsPath, args: &[&str], context: &str) -> Result<String, ApiError> {
     let output = run_git_output(Some(staging_repo), args, context)?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "{context}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -365,7 +365,7 @@ fn public_request_changed_paths(
         "reading public request commit paths",
     )?;
     if !output.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "reading public request commit paths: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -534,7 +534,11 @@ mod tests {
 
         let error =
             validated_public_parent_oids(&repo, &[request_commit, request_head]).unwrap_err();
-        assert!(error.message().contains("parent outside public history"));
+        assert!(
+            error
+                .public_message()
+                .contains("parent outside public history")
+        );
 
         let _ = fs::remove_dir_all(repo);
     }

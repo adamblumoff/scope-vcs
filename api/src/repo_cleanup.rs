@@ -67,7 +67,7 @@ impl SourceBlobCleanupFailure {
             sha256: blob.sha256.clone(),
             git_oid: blob.git_oid.clone(),
             size_bytes: blob.size_bytes,
-            error: error.into_message(),
+            error: error.into_operator_diagnostic(),
         }
     }
 }
@@ -178,7 +178,7 @@ pub(crate) async fn drain_pending_repo_storage_deletions_report(
                 report.failed.push(RepoStorageCleanupFailure {
                     owner_handle: cleanup.owner_handle.clone(),
                     repo_name: cleanup.repo_name.clone(),
-                    error: error.into_message(),
+                    error: error.into_operator_diagnostic(),
                 });
                 retained.push(cleanup.clone());
             }
@@ -199,7 +199,7 @@ pub(crate) async fn drain_pending_repo_storage_deletions_report(
 pub(crate) async fn drain_pending_repo_storage_deletions(state: &AppState) -> Result<(), ApiError> {
     let report = drain_pending_repo_storage_deletions_report(state).await?;
     match report.failed.first() {
-        Some(failure) => Err(ApiError::service_unavailable(format!(
+        Some(failure) => Err(ApiError::infrastructure_unavailable(format!(
             "failed to clean deleted repo storage {}/{}: {}",
             failure.owner_handle, failure.repo_name, failure.error
         ))),
@@ -288,7 +288,7 @@ pub(crate) async fn drain_pending_source_blob_deletions_report(
 pub(crate) async fn drain_pending_orphan_objects(state: &AppState) -> Result<(), ApiError> {
     let report = drain_pending_source_blob_deletions_report(state).await?;
     match report.failed_object_deletes.first().map(|failure| {
-        ApiError::service_unavailable(format!(
+        ApiError::infrastructure_unavailable(format!(
             "failed to clean source blob storage {}: {}",
             failure.object_key, failure.error
         ))

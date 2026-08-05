@@ -56,7 +56,7 @@ impl ClerkVerifier {
 
     pub async fn verify(&self, token: &str) -> Result<ClerkIdentity, ApiError> {
         let issuer = self.issuer.as_deref().ok_or_else(|| {
-            ApiError::service_unavailable(format!(
+            ApiError::infrastructure_unavailable(format!(
                 "Clerk auth requires {CLERK_ISSUER_ENV} to be configured"
             ))
         })?;
@@ -76,7 +76,7 @@ impl ClerkVerifier {
         }
 
         let jwks_url = self.jwks_url.as_deref().ok_or_else(|| {
-            ApiError::service_unavailable(format!(
+            ApiError::infrastructure_unavailable(format!(
                 "Clerk auth requires {CLERK_JWKS_URL_ENV} or {CLERK_ISSUER_ENV}"
             ))
         })?;
@@ -86,11 +86,11 @@ impl ClerkVerifier {
             .send()
             .await
             .map_err(|error| {
-                ApiError::service_unavailable(format!("failed to fetch Clerk JWKS: {error}"))
+                ApiError::infrastructure_unavailable(format!("failed to fetch Clerk JWKS: {error}"))
             })?
             .error_for_status()
             .map_err(|error| {
-                ApiError::service_unavailable(format!("failed to fetch Clerk JWKS: {error}"))
+                ApiError::infrastructure_unavailable(format!("failed to fetch Clerk JWKS: {error}"))
             })?
             .json::<JwkSet>()
             .await
@@ -131,7 +131,7 @@ impl ClerkTokenPolicy {
 
     fn validate(&self, claims: &ClerkClaims) -> Result<(), ApiError> {
         if self.authorized_parties.is_empty() && self.audiences.is_empty() {
-            return Err(ApiError::service_unavailable(format!(
+            return Err(ApiError::infrastructure_unavailable(format!(
                 "{CLERK_AUTHORIZED_PARTIES_ENV}, {SCOPE_APP_ORIGIN_ENV}, or {CLERK_AUDIENCE_ENV} is required to validate Clerk tokens"
             )));
         }

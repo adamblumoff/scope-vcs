@@ -238,7 +238,7 @@ fn merge_main_oid(
         "creating request merge commit",
     )?;
     if !commit.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "creating request merge commit: {}",
             String::from_utf8_lossy(&commit.stderr).trim()
         )));
@@ -262,7 +262,7 @@ fn synthetic_merge_commit(
     args.extend(["-m", message]);
     let commit = run_git_output(Some(repo), &args, "creating synthetic request merge commit")?;
     if !commit.status.success() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::infrastructure_unavailable(format!(
             "creating synthetic request merge commit: {}",
             String::from_utf8_lossy(&commit.stderr).trim()
         )));

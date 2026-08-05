@@ -6,7 +6,7 @@ export type ErrorCode = "bad_request" | "cli_upgrade_required" | "conflict" | "f
 
 export type ErrorFields = { paths?: Array<string>, installed_protocol?: number | null, supported_protocol?: number | null, };
 
-export type ErrorResponse = { code: ErrorCode, message: string, instruction?: string | null, fields?: ErrorFields, retryable: boolean, };
+export type ErrorResponse = { code: ErrorCode, message: string, error_reference?: string | null, instruction?: string | null, fields?: ErrorFields, retryable: boolean, };
 
 export type Visibility = "Public" | "Private";
 
