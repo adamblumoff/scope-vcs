@@ -18,18 +18,26 @@ fn client_discussion_ids_are_opaque_and_unique() {
 }
 
 #[test]
-fn public_request_preflight_names_protected_committed_paths() {
-    let dir = TestDir::git_repo("request-protected-path", "main");
+fn public_request_preflight_rejects_protected_add_edit_delete_and_rename() {
+    let dir = TestDir::git_repo("request-protected-path-operations", "main");
     dir.run_git(["config", "user.email", "scope@example.test"]);
     dir.run_git(["config", "user.name", "Scope Test"]);
     fs::write(dir.path().join("README.md"), "base\n").unwrap();
-    dir.run_git(["add", "README.md"]);
+    fs::create_dir_all(dir.path().join(".scope")).unwrap();
+    fs::write(dir.path().join(".scope/edited.md"), "before\n").unwrap();
+    fs::write(dir.path().join(".scope/deleted.md"), "delete me\n").unwrap();
+    fs::write(dir.path().join(".scope/renamed.md"), "rename me\n").unwrap();
+    dir.run_git(["add", "-A"]);
     dir.run_git(["commit", "-m", "base"]);
     let base_oid = git_oid(&dir);
-    fs::create_dir_all(dir.path().join(".scope")).unwrap();
-    fs::write(dir.path().join(".scope/RULES.md"), "protected\n").unwrap();
-    dir.run_git(["add", ".scope/RULES.md"]);
-    dir.run_git(["commit", "-m", "change rules"]);
+
+    fs::write(dir.path().join(".scope/added.md"), "added\n").unwrap();
+    fs::write(dir.path().join(".scope/edited.md"), "after\n").unwrap();
+    fs::remove_file(dir.path().join(".scope/deleted.md")).unwrap();
+    fs::create_dir_all(dir.path().join("docs")).unwrap();
+    dir.run_git(["mv", ".scope/renamed.md", "docs/renamed.md"]);
+    dir.run_git(["add", "-A"]);
+    dir.run_git(["commit", "-m", "change protected paths"]);
     let head_oid = git_oid(&dir);
     let detail = request_detail(&base_oid, &head_oid);
     let repo = GitRepo {
@@ -44,13 +52,21 @@ fn public_request_preflight_names_protected_committed_paths() {
         structured.response().code,
         scope_api_contract::ErrorCode::ProtectedPath
     );
-    assert_eq!(structured.response().fields.paths, [".scope/RULES.md"]);
-    assert!(error.to_string().contains(".scope/RULES.md"));
+    assert_eq!(
+        structured.response().fields.paths,
+        [
+            ".scope/added.md",
+            ".scope/deleted.md",
+            ".scope/edited.md",
+            ".scope/renamed.md",
+        ]
+    );
+    assert!(error.to_string().contains(".scope/renamed.md"));
     assert_eq!(crate::error::exit_code(&error), 4);
 }
 
 #[test]
-fn public_request_preflight_excludes_protected_paths_in_current_main() {
+fn public_request_preflight_excludes_main_only_protected_paths_after_true_divergence() {
     let dir = TestDir::git_repo("request-current-public-main", "main");
     dir.run_git(["config", "user.email", "scope@example.test"]);
     dir.run_git(["config", "user.name", "Scope Test"]);
@@ -58,11 +74,15 @@ fn public_request_preflight_excludes_protected_paths_in_current_main() {
     dir.run_git(["add", "README.md"]);
     dir.run_git(["commit", "-m", "base"]);
     let original_base_oid = git_oid(&dir);
+    dir.run_git(["branch", "request"]);
+
     fs::create_dir_all(dir.path().join(".scope")).unwrap();
     fs::write(dir.path().join(".scope/RULES.md"), "maintainer change\n").unwrap();
     dir.run_git(["add", ".scope/RULES.md"]);
     dir.run_git(["commit", "-m", "advance public main"]);
     let current_main_oid = git_oid(&dir);
+
+    dir.run_git(["checkout", "request"]);
     fs::write(dir.path().join("README.md"), "request change\n").unwrap();
     dir.run_git(["add", "README.md"]);
     dir.run_git(["commit", "-m", "request change"]);

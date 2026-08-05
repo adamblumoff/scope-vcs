@@ -7,8 +7,8 @@ use crate::{
         submit_request as api_submit_request,
     },
     git_repo::{
-        GitRepo, changed_file_paths_between, current_branch, ensure_clean_working_tree,
-        ensure_git_repo_ready, head_oid, run_git_in_repo, scope_remote_head_oid,
+        GitRepo, current_branch, ensure_clean_working_tree, ensure_git_repo_ready, head_oid,
+        request_side_changed_file_paths, run_git_in_repo, scope_remote_head_oid,
         try_run_git_in_repo, warn_if_dirty_working_tree,
     },
     push::DEFAULT_SCOPE_BRANCH,
@@ -398,7 +398,12 @@ fn ensure_public_request_paths_allowed(
     if detail.request.audience != RequestAudience::Public {
         return Ok(());
     }
-    let changed_paths = changed_file_paths_between(git_repo, current_main_oid, request_head_oid)?;
+    let changed_paths = request_side_changed_file_paths(
+        git_repo,
+        detail.request.base_main_oid.as_str(),
+        current_main_oid,
+        request_head_oid,
+    )?;
     let protected_paths = changed_paths
         .into_iter()
         .filter_map(|path| {
