@@ -207,12 +207,12 @@ fn request_side_paths_follow_main_side_renames() {
             &request_head_oid,
         )
         .unwrap(),
-        [".scope/rules"]
+        [".scope/rules", "docs/rules"]
     );
 }
 
 #[test]
-fn request_side_paths_reject_conflicted_protected_path_changes() {
+fn request_side_paths_keep_conflicted_protected_path_changes() {
     let dir = request_repo("request-side-protected-conflict");
     fs::create_dir_all(dir.path().join(".scope")).unwrap();
     fs::write(dir.path().join(".scope/rules"), "base\n").unwrap();
@@ -229,14 +229,45 @@ fn request_side_paths_reject_conflicted_protected_path_changes() {
     commit_all(&dir, "delete protected rules in request");
     let request_head_oid = oid(&dir);
 
-    let error = request_side_changed_file_paths(
-        &repo(&dir),
-        &recorded_base_oid,
-        &current_main_oid,
-        &request_head_oid,
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("does not merge cleanly"));
+    assert_eq!(
+        request_side_changed_file_paths(
+            &repo(&dir),
+            &recorded_base_oid,
+            &current_main_oid,
+            &request_head_oid,
+        )
+        .unwrap(),
+        [".scope/rules"]
+    );
+}
+
+#[test]
+fn request_side_paths_allow_conflicted_ordinary_path_changes() {
+    let dir = request_repo("request-side-ordinary-conflict");
+    fs::write(dir.path().join("README.md"), "base\n").unwrap();
+    commit_all(&dir, "base");
+    let recorded_base_oid = oid(&dir);
+    dir.run_git(["branch", "request"]);
+
+    fs::write(dir.path().join("README.md"), "main edit\n").unwrap();
+    commit_all(&dir, "edit readme on main");
+    let current_main_oid = oid(&dir);
+
+    dir.run_git(["checkout", "request"]);
+    fs::write(dir.path().join("README.md"), "request edit\n").unwrap();
+    commit_all(&dir, "edit readme in request");
+    let request_head_oid = oid(&dir);
+
+    assert_eq!(
+        request_side_changed_file_paths(
+            &repo(&dir),
+            &recorded_base_oid,
+            &current_main_oid,
+            &request_head_oid,
+        )
+        .unwrap(),
+        ["README.md"]
+    );
 }
 
 #[test]

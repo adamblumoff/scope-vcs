@@ -156,31 +156,49 @@ pub fn request_side_changed_file_paths(
     };
     ensure_recorded_base_ancestor_of_merge_base(repo, recorded_base_oid, merge_base_oid)?;
 
+    let request_output = git_output_in_repo(
+        repo,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            merge_base_oid,
+            request_head_oid,
+        ],
+    )?;
+    if !request_output.status.success() {
+        bail!("inspect request-side committed paths failed");
+    }
+
     let merge_output = git_output_in_repo(
         repo,
         &[
             "merge-tree",
             "--write-tree",
             "--no-messages",
+            "--name-only",
+            "-z",
             current_main_oid,
             request_head_oid,
         ],
     )?;
-    if merge_output.status.code() == Some(1) {
-        bail!("request head does not merge cleanly into current main");
-    }
-    if !merge_output.status.success() {
+    if !merge_output.status.success() && merge_output.status.code() != Some(1) {
         bail!("compute the request merge result failed");
     }
-    let merge_tree_oid = String::from_utf8_lossy(&merge_output.stdout)
-        .lines()
-        .next()
-        .map(str::trim)
-        .filter(|oid| !oid.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Git did not return a request merge result tree"))?
-        .to_string();
+    let merge_tree_separator = merge_output
+        .stdout
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| anyhow::anyhow!("Git did not return a request merge result tree"))?;
+    let merge_tree_oid =
+        String::from_utf8_lossy(&merge_output.stdout[..merge_tree_separator]).to_string();
+    if merge_tree_oid.is_empty() {
+        bail!("Git did not return a request merge result tree");
+    }
+    let conflict_paths = parse_nul_paths(&merge_output.stdout[merge_tree_separator + 1..]);
 
-    let output = git_output_in_repo(
+    let merge_result_output = git_output_in_repo(
         repo,
         &[
             "diff",
@@ -191,10 +209,15 @@ pub fn request_side_changed_file_paths(
             &merge_tree_oid,
         ],
     )?;
-    if !output.status.success() {
+    if !merge_result_output.status.success() {
         bail!("inspect request merge result paths failed");
     }
-    Ok(parse_nul_paths(&output.stdout))
+    let mut paths = parse_nul_paths(&request_output.stdout)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    paths.extend(parse_nul_paths(&merge_result_output.stdout));
+    paths.extend(conflict_paths);
+    Ok(paths.into_iter().collect())
 }
 
 fn ensure_recorded_base_ancestor_of_merge_base(
