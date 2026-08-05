@@ -13,8 +13,14 @@ use jsonwebtoken::{
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
+use tokio::sync::Mutex as AsyncMutex;
+
+const JWKS_FRESH_FOR: Duration = Duration::from_secs(5 * 60);
+const JWKS_STALE_IF_ERROR_FOR: Duration = Duration::from_secs(5 * 60);
+const JWKS_REFRESH_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
+const JWKS_UNKNOWN_KEY_REFRESH_COOLDOWN: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct ClerkVerifier {
@@ -22,7 +28,66 @@ pub struct ClerkVerifier {
     pub issuer: Option<String>,
     pub jwks_url: Option<String>,
     pub token_policy: ClerkTokenPolicy,
-    pub jwks_cache: Arc<Mutex<Option<JwkSet>>>,
+    jwks_cache: Arc<JwksCache>,
+}
+
+struct JwksCache {
+    state: Mutex<JwksCacheState>,
+    refresh: AsyncMutex<()>,
+    fresh_for: Duration,
+    stale_if_error_for: Duration,
+    unknown_key_refresh_cooldown: Duration,
+}
+
+#[derive(Default)]
+struct JwksCacheState {
+    current: Option<CachedJwks>,
+    generation: u64,
+    last_failure: Option<RefreshFailure>,
+}
+
+impl JwksCacheState {
+    fn access(&self, source: JwksSource) -> JwksAccess {
+        JwksAccess {
+            keys: self
+                .current
+                .as_ref()
+                .expect("cached JWKS access requires keys")
+                .keys
+                .clone(),
+            generation: self.generation,
+            source,
+        }
+    }
+}
+
+struct CachedJwks {
+    keys: Arc<JwkSet>,
+    fetched_at: Instant,
+}
+
+struct RefreshFailure {
+    at: Instant,
+    diagnostic: String,
+}
+
+struct JwksAccess {
+    keys: Arc<JwkSet>,
+    generation: u64,
+    source: JwksSource,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JwksSource {
+    CachedFresh,
+    Current,
+    LastKnownGood,
+}
+
+#[derive(Clone, Copy)]
+enum RefreshReason {
+    Expired,
+    UnknownKey,
 }
 
 impl ClerkVerifier {
@@ -42,6 +107,24 @@ impl ClerkVerifier {
         jwks_url: Option<String>,
         token_policy: ClerkTokenPolicy,
     ) -> Self {
+        Self::new_with_cache_timing(
+            issuer,
+            jwks_url,
+            token_policy,
+            JWKS_FRESH_FOR,
+            JWKS_STALE_IF_ERROR_FOR,
+            JWKS_UNKNOWN_KEY_REFRESH_COOLDOWN,
+        )
+    }
+
+    pub(crate) fn new_with_cache_timing(
+        issuer: Option<String>,
+        jwks_url: Option<String>,
+        token_policy: ClerkTokenPolicy,
+        fresh_for: Duration,
+        stale_if_error_for: Duration,
+        unknown_key_refresh_cooldown: Duration,
+    ) -> Self {
         Self {
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
@@ -50,7 +133,13 @@ impl ClerkVerifier {
             issuer,
             jwks_url,
             token_policy,
-            jwks_cache: Arc::new(Mutex::new(None)),
+            jwks_cache: Arc::new(JwksCache {
+                state: Mutex::new(JwksCacheState::default()),
+                refresh: AsyncMutex::new(()),
+                fresh_for,
+                stale_if_error_for,
+                unknown_key_refresh_cooldown,
+            }),
         }
     }
 
@@ -60,28 +149,115 @@ impl ClerkVerifier {
                 "Clerk auth requires {CLERK_ISSUER_ENV} to be configured"
             ))
         })?;
-        let jwks = self.jwks().await?;
+        let header = validated_clerk_header(token)?;
+        let kid = header
+            .kid
+            .as_deref()
+            .expect("validated Clerk header must have a kid");
+        let mut jwks = self.jwks().await?;
 
-        verify_clerk_token(token, &jwks, issuer, &self.token_policy)
-    }
-
-    pub async fn jwks(&self) -> Result<JwkSet, ApiError> {
-        if let Some(jwks) = self
-            .jwks_cache
-            .lock()
-            .expect("Clerk JWKS cache lock must not be poisoned")
-            .clone()
-        {
-            return Ok(jwks);
+        if signing_key(kid, &jwks.keys).is_none() {
+            jwks = match jwks.source {
+                JwksSource::CachedFresh => {
+                    self.refresh_jwks(jwks.generation, RefreshReason::UnknownKey)
+                        .await?
+                }
+                JwksSource::Current => {
+                    return Err(ApiError::unauthorized("Clerk signing key not found"));
+                }
+                JwksSource::LastKnownGood => {
+                    return Err(ApiError::infrastructure_unavailable(
+                        "Clerk JWKS refresh failed while resolving an unknown signing key",
+                    ));
+                }
+            };
         }
 
+        let jwk = signing_key(kid, &jwks.keys)
+            .ok_or_else(|| ApiError::unauthorized("Clerk signing key not found"))?;
+
+        verify_clerk_token_with_header(token, &header, jwk, issuer, &self.token_policy)
+    }
+
+    async fn jwks(&self) -> Result<JwksAccess, ApiError> {
+        let now = Instant::now();
+        let generation = {
+            let state = self.cache_state();
+            if let Some(current) = state.current.as_ref()
+                && now.duration_since(current.fetched_at) < self.jwks_cache.fresh_for
+            {
+                return Ok(state.access(JwksSource::CachedFresh));
+            }
+            state.generation
+        };
+
+        self.refresh_jwks(generation, RefreshReason::Expired).await
+    }
+
+    async fn refresh_jwks(
+        &self,
+        observed_generation: u64,
+        reason: RefreshReason,
+    ) -> Result<JwksAccess, ApiError> {
+        let _refresh = self.jwks_cache.refresh.lock().await;
+        let now = Instant::now();
+
+        {
+            let state = self.cache_state();
+            if state.generation > observed_generation {
+                return Ok(state.access(JwksSource::Current));
+            }
+            if matches!(reason, RefreshReason::Expired)
+                && let Some(current) = state.current.as_ref()
+                && now.duration_since(current.fetched_at) < self.jwks_cache.fresh_for
+            {
+                return Ok(state.access(JwksSource::CachedFresh));
+            }
+            if matches!(reason, RefreshReason::UnknownKey)
+                && let Some(current) = state.current.as_ref()
+                && now.duration_since(current.fetched_at)
+                    < self.jwks_cache.unknown_key_refresh_cooldown
+            {
+                return Ok(state.access(JwksSource::Current));
+            }
+            if let Some(failure) = state.last_failure.as_ref()
+                && now.duration_since(failure.at) < JWKS_REFRESH_FAILURE_BACKOFF
+            {
+                return self.last_known_good_or_error(&state, now, reason, &failure.diagnostic);
+            }
+        }
+
+        let fetched = self.fetch_jwks().await;
+        let now = Instant::now();
+        let mut state = self.cache_state();
+        match fetched {
+            Ok(keys) => {
+                state.generation = state.generation.saturating_add(1);
+                state.current = Some(CachedJwks {
+                    keys: Arc::new(keys),
+                    fetched_at: now,
+                });
+                state.last_failure = None;
+                Ok(state.access(JwksSource::Current))
+            }
+            Err(error) => {
+                let diagnostic = error.into_operator_diagnostic();
+                state.last_failure = Some(RefreshFailure {
+                    at: now,
+                    diagnostic: diagnostic.clone(),
+                });
+                self.last_known_good_or_error(&state, now, reason, &diagnostic)
+            }
+        }
+    }
+
+    async fn fetch_jwks(&self) -> Result<JwkSet, ApiError> {
         let jwks_url = self.jwks_url.as_deref().ok_or_else(|| {
             ApiError::infrastructure_unavailable(format!(
                 "Clerk auth requires {CLERK_JWKS_URL_ENV} or {CLERK_ISSUER_ENV}"
             ))
         })?;
-        let jwks = self
-            .client
+        self.client
             .get(jwks_url)
             .send()
             .await
@@ -94,13 +270,50 @@ impl ClerkVerifier {
             })?
             .json::<JwkSet>()
             .await
-            .map_err(ApiError::internal)?;
+            .map_err(|error| {
+                ApiError::infrastructure_unavailable(format!(
+                    "failed to decode Clerk JWKS: {error}"
+                ))
+            })
+    }
 
-        *self
-            .jwks_cache
+    fn last_known_good_or_error(
+        &self,
+        state: &JwksCacheState,
+        now: Instant,
+        reason: RefreshReason,
+        diagnostic: &str,
+    ) -> Result<JwksAccess, ApiError> {
+        if matches!(reason, RefreshReason::Expired)
+            && let Some(current) = state.current.as_ref()
+            && now.duration_since(current.fetched_at)
+                < self
+                    .jwks_cache
+                    .fresh_for
+                    .saturating_add(self.jwks_cache.stale_if_error_for)
+        {
+            return Ok(state.access(JwksSource::LastKnownGood));
+        }
+
+        Err(ApiError::infrastructure_unavailable(diagnostic))
+    }
+
+    fn cache_state(&self) -> std::sync::MutexGuard<'_, JwksCacheState> {
+        self.jwks_cache
+            .state
             .lock()
-            .expect("Clerk JWKS cache lock must not be poisoned") = Some(jwks.clone());
-        Ok(jwks)
+            .expect("Clerk JWKS cache lock must not be poisoned")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cache_jwks_for_tests(&self, keys: JwkSet) {
+        let mut state = self.cache_state();
+        state.generation = state.generation.saturating_add(1);
+        state.current = Some(CachedJwks {
+            keys: Arc::new(keys),
+            fetched_at: Instant::now(),
+        });
+        state.last_failure = None;
     }
 }
 
@@ -200,6 +413,7 @@ impl AudienceClaim {
     }
 }
 
+#[cfg(test)]
 pub fn verify_clerk_token(
     token: &str,
     jwks: &JwkSet,
@@ -207,7 +421,22 @@ pub fn verify_clerk_token(
     token_policy: &ClerkTokenPolicy,
 ) -> Result<ClerkIdentity, ApiError> {
     let header = validated_clerk_header(token)?;
-    let jwk = signing_key(&header.kid, jwks)?;
+    let kid = header
+        .kid
+        .as_deref()
+        .expect("validated Clerk header must have a kid");
+    let jwk = signing_key(kid, jwks)
+        .ok_or_else(|| ApiError::unauthorized("Clerk signing key not found"))?;
+    verify_clerk_token_with_header(token, &header, jwk, issuer, token_policy)
+}
+
+fn verify_clerk_token_with_header(
+    token: &str,
+    header: &jsonwebtoken::Header,
+    jwk: &Jwk,
+    issuer: &str,
+    token_policy: &ClerkTokenPolicy,
+) -> Result<ClerkIdentity, ApiError> {
     let key = DecodingKey::from_jwk(jwk).map_err(ApiError::internal)?;
     let mut validation = Validation::new(header.alg);
     validation.validate_aud = false;
@@ -245,15 +474,10 @@ fn validated_clerk_header(token: &str) -> Result<jsonwebtoken::Header, ApiError>
     Ok(header)
 }
 
-fn signing_key<'a>(kid: &Option<String>, jwks: &'a JwkSet) -> Result<&'a Jwk, ApiError> {
-    let Some(kid) = kid.as_deref() else {
-        return Err(ApiError::unauthorized("Clerk token is missing kid"));
-    };
-
+fn signing_key<'a>(kid: &str, jwks: &'a JwkSet) -> Option<&'a Jwk> {
     jwks.keys
         .iter()
         .find(|jwk| jwk.common.key_id.as_deref() == Some(kid))
-        .ok_or_else(|| ApiError::unauthorized("Clerk signing key not found"))
 }
 
 fn configured_authorized_parties() -> Vec<String> {

@@ -98,8 +98,12 @@ fn test_jwks() -> JwkSet {
 }
 
 fn sign_claims(claims: serde_json::Value) -> String {
+    sign_claims_with_kid(claims, "test-key")
+}
+
+fn sign_claims_with_kid(claims: serde_json::Value, kid: &str) -> String {
     let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some("test-key".into());
+    header.kid = Some(kid.into());
     encode(
         &header,
         &claims,
@@ -253,11 +257,7 @@ fn test_state_with_jwks() -> AppState {
 }
 
 fn cache_test_jwks(state: &AppState) {
-    *state
-        .clerk
-        .jwks_cache
-        .lock()
-        .expect("test JWKS lock must not be poisoned") = Some(test_jwks());
+    state.clerk.cache_jwks_for_tests(test_jwks());
 }
 
 fn bearer_header() -> String {
