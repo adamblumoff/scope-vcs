@@ -14,6 +14,25 @@ fn new_request_is_an_unsubmitted_draft() {
 }
 
 #[test]
+fn started_event_identity_is_bounded_at_maximum_request_sizes() {
+    let title = "t".repeat(REQUEST_TITLE_MAX_BYTES);
+    let description = "d".repeat(REQUEST_DESCRIPTION_MAX_BYTES);
+    let identity = request_identity_audit_fact(&title, &description).unwrap();
+    let payload = RequestEventPayload::Started {
+        identity: identity.clone(),
+    };
+
+    assert_eq!(identity.title_byte_count, REQUEST_TITLE_MAX_BYTES as u64);
+    assert_eq!(
+        identity.description_byte_count,
+        REQUEST_DESCRIPTION_MAX_BYTES as u64
+    );
+    assert_eq!(identity.title_sha256.len(), 64);
+    assert_eq!(identity.description_sha256.len(), 64);
+    assert!(serde_json::to_vec(&payload).unwrap().len() < 512);
+}
+
+#[test]
 fn request_name_rules_and_repository_uniqueness_remain_domain_owned() {
     for invalid in [
         "main",

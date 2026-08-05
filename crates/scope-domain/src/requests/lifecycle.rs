@@ -2,7 +2,8 @@ use super::{
     PUBLIC_WORKING_REQUEST_LIMIT, REQUEST_TITLE_MAX_BYTES, Request, RequestActorRole,
     RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
     RequestEvent, RequestEventKind, RequestEventPayload, RequestState, advance_request_activity,
-    ensure_event_id_available, validate_body_size, validate_required_id,
+    ensure_event_id_available, request_identity_audit_fact, validate_body_size,
+    validate_required_id,
 };
 use crate::{error::DomainError, store::SourceBlob};
 use std::collections::BTreeMap;
@@ -148,8 +149,7 @@ pub fn start_request(
         kind: RequestEventKind::Started,
         position: 1,
         payload: RequestEventPayload::Started {
-            title: request.title.clone(),
-            description_markdown: request.description_markdown.clone(),
+            identity: request_identity_audit_fact(&request.title, &request.description_markdown)?,
         },
         created_at_unix: input.now_unix,
     };

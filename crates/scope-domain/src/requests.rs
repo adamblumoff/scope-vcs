@@ -3,14 +3,14 @@ use std::collections::BTreeMap;
 
 mod access;
 pub use access::{
-    RequestMergeability, RequestMergeabilityStatus, RequestPermissions, RequestPolicyDecision,
-    RequestViewer, request_actor_role, request_list_mergeability, request_mergeability,
-    request_policy,
+    RequestListPredicate, RequestMergeability, RequestMergeabilityStatus, RequestPermissions,
+    RequestPolicyDecision, RequestViewer, request_actor_role, request_list_mergeability,
+    request_list_predicate, request_mergeability, request_policy,
 };
 mod change_blocks;
 pub use change_blocks::RequestChangeBlock;
 mod identity;
-pub use identity::{EditRequestIdentityInput, edit_request_identity};
+pub use identity::{EditRequestIdentityInput, edit_request_identity, request_identity_audit_fact};
 mod discussions;
 pub use discussions::{
     CreateRequestDiscussionInput, CreateRequestDiscussionMutation,

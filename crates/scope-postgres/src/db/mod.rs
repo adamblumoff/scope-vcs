@@ -32,6 +32,8 @@ mod migration_harness_tests;
 #[cfg(test)]
 mod migration_tests;
 #[cfg(test)]
+mod request_activity_migration_tests;
+#[cfg(test)]
 mod request_submission_migration_tests;
 #[cfg(test)]
 mod runner_protocol_cutover_migration_tests;
@@ -67,7 +69,7 @@ mod request_queue;
 pub use request_queue::{RequestQueueCursor, RequestQueuePageQuery, RequestQueueRow};
 mod request_ratings;
 mod request_rows;
-pub use request_rows::RequestListRow;
+pub use request_rows::{RequestListPageQuery, RequestListRow};
 mod request_merge;
 mod request_submission_transactions;
 mod requests;

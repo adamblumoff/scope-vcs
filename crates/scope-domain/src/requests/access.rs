@@ -63,6 +63,55 @@ pub struct RequestMergeability {
     pub reason: Option<&'static str>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequestListPredicate<'a> {
+    All(Vec<RequestListPredicate<'a>>),
+    Any(Vec<RequestListPredicate<'a>>),
+    Audience(RequestAudience),
+    Submitted,
+    Author(&'a str),
+    Invitee(&'a str),
+}
+
+pub fn request_list_predicate<'a>(
+    access: RepositoryAccess,
+    viewer_user_id: Option<&'a str>,
+) -> RequestListPredicate<'a> {
+    let mut public_access = vec![RequestListPredicate::Submitted];
+    if let Some(viewer_user_id) = viewer_user_id {
+        public_access.push(RequestListPredicate::Author(viewer_user_id));
+        public_access.push(RequestListPredicate::Invitee(viewer_user_id));
+    }
+    let mut visible = vec![RequestListPredicate::All(vec![
+        RequestListPredicate::Audience(RequestAudience::Public),
+        RequestListPredicate::Any(public_access),
+    ])];
+    if matches!(
+        access.actor,
+        RepositoryActor::Owner | RepositoryActor::Member
+    ) {
+        visible.push(RequestListPredicate::Audience(RequestAudience::Private));
+    }
+    RequestListPredicate::Any(visible)
+}
+
+impl RequestListPredicate<'_> {
+    fn matches(&self, request: &Request, viewer_is_invitee: bool) -> bool {
+        match self {
+            Self::All(predicates) => predicates
+                .iter()
+                .all(|predicate| predicate.matches(request, viewer_is_invitee)),
+            Self::Any(predicates) => predicates
+                .iter()
+                .any(|predicate| predicate.matches(request, viewer_is_invitee)),
+            Self::Audience(audience) => request.audience == *audience,
+            Self::Submitted => request.is_submitted(),
+            Self::Author(viewer_user_id) => request.author_user_id == *viewer_user_id,
+            Self::Invitee(_) => viewer_is_invitee,
+        }
+    }
+}
+
 pub fn request_actor_role(access: RepositoryAccess) -> RequestActorRole {
     match access.actor {
         RepositoryActor::Owner => RequestActorRole::Owner,
@@ -92,13 +141,8 @@ pub fn request_policy(request: &Request, viewer: RequestViewer<'_>) -> RequestPo
     } else {
         author || invitee
     };
-    let listable = if private {
-        maintainer
-    } else if submitted {
-        true
-    } else {
-        author || invitee
-    };
+    let listable =
+        request_list_predicate(viewer.access, viewer.user_id).matches(request, viewer.is_invitee);
     let git_advertised = if private {
         maintainer
     } else if submitted {

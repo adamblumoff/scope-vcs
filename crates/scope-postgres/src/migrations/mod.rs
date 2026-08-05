@@ -8,6 +8,7 @@ mod m0007_drop_review_ceremony;
 mod m0008_one_way_request_submission;
 mod m0009_request_ratings;
 mod m0010_file_visibility_source_of_truth;
+mod m0011_compact_request_started_events;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0008_one_way_request_submission::Migration),
             Box::new(m0009_request_ratings::Migration),
             Box::new(m0010_file_visibility_source_of_truth::Migration),
+            Box::new(m0011_compact_request_started_events::Migration),
         ]
     }
 }
