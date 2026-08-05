@@ -123,26 +123,133 @@ pub fn changed_paths_since_scope_base_at_commit(
     }
 }
 
-pub fn changed_file_paths_between(
+pub fn request_side_changed_file_paths(
     repo: &GitRepo,
-    base_oid: &str,
-    commit_oid: &str,
+    recorded_base_oid: &str,
+    current_main_oid: &str,
+    request_head_oid: &str,
 ) -> anyhow::Result<Vec<String>> {
-    let output = git_output_in_repo(
+    ensure_commit_exists(repo, recorded_base_oid, "recorded request base")?;
+    ensure_commit_exists(repo, current_main_oid, "current main")?;
+    ensure_commit_exists(repo, request_head_oid, "request head")?;
+
+    let merge_base_output = git_output_in_repo(
+        repo,
+        &["merge-base", "--all", current_main_oid, request_head_oid],
+    )?;
+    if !merge_base_output.status.success() {
+        if merge_base_output.status.code() == Some(1) {
+            bail!("current main and request head have unrelated Git histories");
+        }
+        bail!("find the request branch merge base failed");
+    }
+    let merge_base_oids = String::from_utf8_lossy(&merge_base_output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|oid| !oid.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let merge_base_oid = match merge_base_oids.as_slice() {
+        [] => bail!("Git did not return a request branch merge base"),
+        [merge_base_oid] => merge_base_oid,
+        _ => bail!("current main and request head have multiple Git merge bases"),
+    };
+    ensure_recorded_base_ancestor_of_merge_base(repo, recorded_base_oid, merge_base_oid)?;
+
+    let request_output = git_output_in_repo(
         repo,
         &[
             "diff",
             "--name-only",
             "-z",
             "--no-renames",
-            base_oid,
-            commit_oid,
+            merge_base_oid,
+            request_head_oid,
         ],
     )?;
-    if !output.status.success() {
-        bail!("inspect committed request paths failed");
+    if !request_output.status.success() {
+        bail!("inspect request-side committed paths failed");
     }
-    Ok(parse_nul_paths(&output.stdout))
+
+    let merge_output = git_output_in_repo(
+        repo,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--no-messages",
+            "--name-only",
+            "-z",
+            current_main_oid,
+            request_head_oid,
+        ],
+    )?;
+    if !merge_output.status.success() && merge_output.status.code() != Some(1) {
+        bail!("compute the request merge result failed");
+    }
+    let merge_tree_separator = merge_output
+        .stdout
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| anyhow::anyhow!("Git did not return a request merge result tree"))?;
+    let merge_tree_oid =
+        String::from_utf8_lossy(&merge_output.stdout[..merge_tree_separator]).to_string();
+    if merge_tree_oid.is_empty() {
+        bail!("Git did not return a request merge result tree");
+    }
+    let conflict_paths = parse_nul_paths(&merge_output.stdout[merge_tree_separator + 1..]);
+
+    let merge_result_output = git_output_in_repo(
+        repo,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            current_main_oid,
+            &merge_tree_oid,
+        ],
+    )?;
+    if !merge_result_output.status.success() {
+        bail!("inspect request merge result paths failed");
+    }
+    let mut paths = parse_nul_paths(&request_output.stdout)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    paths.extend(parse_nul_paths(&merge_result_output.stdout));
+    paths.extend(conflict_paths);
+    Ok(paths.into_iter().collect())
+}
+
+fn ensure_recorded_base_ancestor_of_merge_base(
+    repo: &GitRepo,
+    recorded_base_oid: &str,
+    merge_base_oid: &str,
+) -> anyhow::Result<()> {
+    let output = git_output_in_repo(
+        repo,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            recorded_base_oid,
+            merge_base_oid,
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(());
+    }
+    if output.status.code() == Some(1) {
+        bail!("request branch merge base does not descend from the recorded request base");
+    }
+    bail!("validate request branch ancestry failed")
+}
+
+fn ensure_commit_exists(repo: &GitRepo, revision: &str, label: &str) -> anyhow::Result<()> {
+    let commit = format!("{revision}^{{commit}}");
+    let output = git_output_in_repo(repo, &["rev-parse", "--verify", "--quiet", &commit])?;
+    if !output.status.success() {
+        bail!("{label} commit is missing from the local Git repository");
+    }
+    Ok(())
 }
 
 pub fn worktree_file_paths(repo: &GitRepo) -> anyhow::Result<Vec<String>> {
