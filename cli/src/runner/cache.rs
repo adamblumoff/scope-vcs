@@ -369,10 +369,7 @@ pub(super) fn admit(config: &RunnerConfig) -> anyhow::Result<()> {
 pub(super) fn initialize(root: &Path) -> anyhow::Result<()> {
     validate_store(root, true)?;
     let _lock = lifecycle_lock(root)?;
-    fs::create_dir_all(root.join("metadata"))?;
-    fs::create_dir_all(root.join("data"))?;
-    File::open(root)?.sync_all()?;
-    Ok(())
+    ensure_store_directories(root)
 }
 
 pub(super) fn evict_orphaned_tainted(
@@ -408,13 +405,25 @@ fn usable_root(config: &RunnerConfig) -> anyhow::Result<PathBuf> {
 
 fn ensure_usable_root(root: &Path, disposable: bool) -> anyhow::Result<()> {
     match validate_store(root, false) {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            let _lock = lifecycle_lock(root)?;
+            ensure_store_directories(root)
+        }
         Err(_) if disposable && store_is_absent_or_empty(root)? => {
             initialize(root)?;
             Ok(())
         }
         Err(error) => Err(error),
     }
+}
+
+fn ensure_store_directories(root: &Path) -> anyhow::Result<()> {
+    // store.json is synchronized before these directories, so a restart must
+    // safely finish initialization without accepting symlinks or other file types.
+    require_real_directory(&root.join("metadata"), true, "cache metadata directory")?;
+    require_real_directory(&root.join("data"), true, "cache data directory")?;
+    File::open(root)?.sync_all()?;
+    Ok(())
 }
 
 fn store_is_absent_or_empty(root: &Path) -> anyhow::Result<bool> {

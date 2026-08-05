@@ -196,6 +196,24 @@ fn ordinary_same_filesystem_directory_is_a_valid_cache_store() {
 }
 
 #[test]
+fn interrupted_store_initialization_is_repaired_on_restart() {
+    let parent = TestDir::new("runner-cache-interrupted-initialize");
+    let root = parent.path().join("scope/runner");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("store.json"), br#"{"format":3}"#).unwrap();
+
+    ensure_usable_root(&root, false).unwrap();
+
+    assert!(root.join(".lifecycle.lock").is_file());
+    assert!(root.join("metadata").is_dir());
+    assert!(root.join("data").is_dir());
+    let record = record(CacheState::Ready);
+    let location = record_location(&root, &record);
+    write_record(&root, &record).unwrap();
+    create_backing_directory(&root, &location.backing_path).unwrap();
+}
+
+#[test]
 fn cache_store_rejects_symlinks_and_noncanonical_paths() {
     let parent = TestDir::new("runner-cache-path-safety");
     let real = parent.path().join("real");
