@@ -1,6 +1,9 @@
-use super::{RequestListRow, RequestStore, entities};
+use super::{
+    RequestListRow, RequestStore, entities,
+    request_rows::{request_list_projection, request_list_rows},
+};
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ColumnTrait, Condition, QueryFilter, QueryOrder, QuerySelect,
     sea_query::{Expr, Query, extension::postgres::PgExpr},
 };
 use {
@@ -54,8 +57,8 @@ impl RequestStore {
             ));
         }
         ensure_cursor_section(&input)?;
-        let mut query = entities::request::Entity::find()
-            .filter(entities::request::Column::RepoId.eq(input.repo_id));
+        let mut query =
+            request_list_projection().filter(entities::request::Column::RepoId.eq(input.repo_id));
 
         query = match input.section {
             RequestQueueSection::YourWork => {
@@ -123,19 +126,15 @@ impl RequestStore {
                 .order_by_asc(entities::request::Column::Id),
         };
 
-        query
-            .limit(input.limit.min((REQUEST_LIST_MAX_PAGE_SIZE + 1) as u64))
-            .all(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(|row| {
-                let request = row.try_into_domain()?;
+        let rows = request_list_rows(
+            self.db.as_ref(),
+            query.limit(input.limit.min((REQUEST_LIST_MAX_PAGE_SIZE + 1) as u64)),
+        )
+        .await?;
+        rows.into_iter()
+            .map(|request| {
                 let cursor = cursor_for_request(input.section, &request)?;
-                Ok(RequestQueueRow {
-                    request: RequestListRow::from(request),
-                    cursor,
-                })
+                Ok(RequestQueueRow { request, cursor })
             })
             .collect()
     }
@@ -239,7 +238,7 @@ fn ascending_time_cursor(
 
 fn cursor_for_request(
     section: RequestQueueSection,
-    request: &scope_domain::requests::Request,
+    request: &RequestListRow,
 ) -> Result<RequestQueueCursor, PostgresError> {
     match section {
         RequestQueueSection::YourWork => Ok(RequestQueueCursor::YourWork {

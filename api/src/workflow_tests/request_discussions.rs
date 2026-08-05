@@ -256,6 +256,14 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
             "DiscussionReopened",
         ]
     );
+    let started = &activity["events"][0]["payload"]["Started"];
+    assert!(started.get("title").is_none());
+    assert!(started.get("description_markdown").is_none());
+    assert_eq!(
+        started["identity"]["title_sha256"].as_str().unwrap().len(),
+        64
+    );
+    assert_eq!(started["identity"]["description_byte_count"], 0);
 
     let latest_activity = api_request(
         app,

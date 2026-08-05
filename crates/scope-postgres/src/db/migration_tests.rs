@@ -178,6 +178,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0008_one_way_request_submission",
             "m0009_request_ratings",
             "m0010_file_visibility_source_of_truth",
+            "m0011_compact_request_started_events",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);

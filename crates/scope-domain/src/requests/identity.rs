@@ -57,8 +57,8 @@ pub fn edit_request_identity(
             "request title and description are unchanged",
         ));
     }
-    let before = identity_audit_fact(&request.title, &request.description_markdown)?;
-    let after = identity_audit_fact(&title, &description_markdown)?;
+    let before = request_identity_audit_fact(&request.title, &request.description_markdown)?;
+    let after = request_identity_audit_fact(&title, &description_markdown)?;
     request.title = title;
     request.description_markdown = description_markdown;
     request.updated_at_unix = input.now_unix;
@@ -77,7 +77,7 @@ pub fn edit_request_identity(
     Ok(RequestTimelineMutation { request, event })
 }
 
-fn identity_audit_fact(
+pub fn request_identity_audit_fact(
     title: &str,
     description_markdown: &str,
 ) -> Result<RequestIdentityAuditFact, DomainError> {

@@ -97,7 +97,7 @@ export function requestEventBody(event: RequestEvent) {
   if (!value) return null
   switch (event.kind) {
     case 'Started':
-      return stringValue(value.title)
+      return 'Initial request identity recorded.'
     case 'Submitted':
       return oidText(value.head_oid)
     case 'RevisionPushed':

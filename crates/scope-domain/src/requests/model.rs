@@ -104,8 +104,7 @@ pub struct RequestIdentityAuditFact {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RequestEventPayload {
     Started {
-        title: String,
-        description_markdown: String,
+        identity: RequestIdentityAuditFact,
     },
     Submitted {
         head_oid: String,

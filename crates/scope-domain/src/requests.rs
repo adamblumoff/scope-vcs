@@ -10,7 +10,7 @@ pub use access::{
 mod change_blocks;
 pub use change_blocks::RequestChangeBlock;
 mod identity;
-pub use identity::{EditRequestIdentityInput, edit_request_identity};
+pub use identity::{EditRequestIdentityInput, edit_request_identity, request_identity_audit_fact};
 mod discussions;
 pub use discussions::{
     CreateRequestDiscussionInput, CreateRequestDiscussionMutation,

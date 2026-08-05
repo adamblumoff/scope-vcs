@@ -12,8 +12,8 @@ use super::{
     request_rows::{
         delete_request_rows, insert_request_event_row, insert_request_row, latest_request_events,
         request_by_id, request_by_name, request_event_by_id, request_events_after_position,
-        request_events_by_request_id, requests_by_repo_author, requests_by_repo_id,
-        save_request_row,
+        request_events_by_request_id, request_list_page, requests_by_repo_author,
+        requests_by_repo_id, save_request_row,
     },
 };
 use sea_orm::TransactionTrait;
@@ -30,6 +30,13 @@ use {
 };
 
 impl RequestStore {
+    pub async fn request_list_page(
+        &self,
+        input: super::RequestListPageQuery<'_>,
+    ) -> Result<Vec<super::RequestListRow>, PostgresError> {
+        request_list_page(self.db.as_ref(), input).await
+    }
+
     pub async fn request_by_id(&self, request_id: &str) -> Result<Option<Request>, PostgresError> {
         let request_id = request_id.to_string();
         let db = Arc::clone(&self.db);

@@ -176,8 +176,7 @@ impl From<DomainRequestIdentityAuditFact> for RequestIdentityAuditFact {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum RequestEventPayload {
     Started {
-        title: String,
-        description_markdown: String,
+        identity: RequestIdentityAuditFact,
     },
     Submitted {
         head_oid: String,
@@ -209,12 +208,8 @@ pub enum RequestEventPayload {
 impl From<DomainRequestEventPayload> for RequestEventPayload {
     fn from(value: DomainRequestEventPayload) -> Self {
         match value {
-            DomainRequestEventPayload::Started {
-                title,
-                description_markdown,
-            } => Self::Started {
-                title,
-                description_markdown,
+            DomainRequestEventPayload::Started { identity } => Self::Started {
+                identity: identity.into(),
             },
             DomainRequestEventPayload::Submitted { head_oid } => Self::Submitted { head_oid },
             DomainRequestEventPayload::RevisionPushed {

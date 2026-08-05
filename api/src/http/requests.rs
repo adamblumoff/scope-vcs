@@ -55,41 +55,17 @@ pub(crate) async fn list_requests(
         .limit
         .unwrap_or(REQUEST_LIST_DEFAULT_PAGE_SIZE)
         .clamp(1, REQUEST_LIST_MAX_PAGE_SIZE);
-    let mut requests = Vec::with_capacity(limit + 1);
-    for request in state
+    let mut requests = state
         .metadata
         .requests()
-        .requests_by_repo_id(&repo.record.id)
-        .await?
-    {
-        if after_id
-            .as_ref()
-            .is_some_and(|after_id| request.id <= *after_id)
-        {
-            continue;
-        }
-        let is_invitee = match viewer_user_id.as_deref() {
-            Some(user_id) => {
-                state
-                    .metadata
-                    .requests()
-                    .request_is_invitee(&request.id, user_id)
-                    .await?
-            }
-            None => false,
-        };
-        if request_policy(
-            &request,
-            RequestViewer::new(access, viewer_user_id.as_deref(), is_invitee),
-        )
-        .listable
-        {
-            requests.push(scope_postgres::db::RequestListRow::from(request));
-            if requests.len() > limit {
-                break;
-            }
-        }
-    }
+        .request_list_page(scope_postgres::db::RequestListPageQuery {
+            repo_id: &repo.record.id,
+            viewer_user_id: viewer_user_id.as_deref(),
+            access,
+            after_id: after_id.as_deref(),
+            limit: (limit + 1) as u64,
+        })
+        .await?;
     let has_more = requests.len() > limit;
     requests.truncate(limit);
     let next_cursor = if has_more {

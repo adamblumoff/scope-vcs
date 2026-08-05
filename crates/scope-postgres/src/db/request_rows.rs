@@ -1,14 +1,17 @@
 use super::entities;
 use super::object_references::{delete_object_reference, replace_object_reference};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, QuerySelect, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult,
+    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect,
+    sea_query::{Expr, Query},
 };
 use {
     crate::error::PostgresError,
     scope_domain::requests::{
-        Request, RequestActorRole, RequestAudience, RequestEvent, RequestState,
+        REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole, RequestAudience, RequestEvent,
+        RequestState,
     },
+    scope_domain::store::{RepositoryAccess, RepositoryActor},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,28 +24,168 @@ pub struct RequestListRow {
     pub head_oid: String,
     pub state: RequestState,
     pub submitted_at_unix: Option<u64>,
-    pub is_merged: bool,
+    pub closed_at_unix: Option<u64>,
+    pub merged_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub has_git_snapshot: bool,
 }
 
-impl From<Request> for RequestListRow {
-    fn from(request: Request) -> Self {
-        let state = request.state();
-        Self {
-            id: request.id,
-            name: request.name,
-            title: request.title,
-            author_role: request.author_role,
-            audience: request.audience,
-            head_oid: request.head_oid,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestListPageQuery<'a> {
+    pub repo_id: &'a str,
+    pub viewer_user_id: Option<&'a str>,
+    pub access: RepositoryAccess,
+    pub after_id: Option<&'a str>,
+    pub limit: u64,
+}
+
+#[derive(Clone, Debug, FromQueryResult)]
+struct RequestListModel {
+    id: String,
+    name: String,
+    title: String,
+    author_role: String,
+    audience: String,
+    head_oid: String,
+    submitted_at_unix: Option<i64>,
+    closed_at_unix: Option<i64>,
+    merged_at_unix: Option<i64>,
+    updated_at_unix: i64,
+    has_git_snapshot: bool,
+}
+
+impl RequestListModel {
+    fn try_into_read_model(self) -> Result<RequestListRow, PostgresError> {
+        let state = if self.merged_at_unix.is_some() {
+            RequestState::Merged
+        } else if self.closed_at_unix.is_some() {
+            RequestState::Closed
+        } else if self.submitted_at_unix.is_some() {
+            RequestState::Open
+        } else {
+            RequestState::Draft
+        };
+        Ok(RequestListRow {
+            id: self.id,
+            name: self.name,
+            title: self.title,
+            author_role: entities::decode_enum(self.author_role)?,
+            audience: entities::decode_enum(self.audience)?,
+            head_oid: self.head_oid,
             state,
-            submitted_at_unix: request.submitted_at_unix,
-            is_merged: request.merged_at_unix.is_some(),
-            updated_at_unix: request.updated_at_unix,
-            has_git_snapshot: request.git_snapshot.is_some(),
-        }
+            submitted_at_unix: self
+                .submitted_at_unix
+                .map(|value| entities::i64_to_u64(value, "request submission time"))
+                .transpose()?,
+            closed_at_unix: self
+                .closed_at_unix
+                .map(|value| entities::i64_to_u64(value, "request close time"))
+                .transpose()?,
+            merged_at_unix: self
+                .merged_at_unix
+                .map(|value| entities::i64_to_u64(value, "request merge time"))
+                .transpose()?,
+            updated_at_unix: entities::i64_to_u64(self.updated_at_unix, "request update time")?,
+            has_git_snapshot: self.has_git_snapshot,
+        })
     }
+}
+
+pub async fn request_list_page<C>(
+    conn: &C,
+    input: RequestListPageQuery<'_>,
+) -> Result<Vec<RequestListRow>, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    request_list_rows(conn, request_list_select(&input)?).await
+}
+
+pub(super) async fn request_list_rows<C>(
+    conn: &C,
+    query: sea_orm::Select<entities::request::Entity>,
+) -> Result<Vec<RequestListRow>, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    query
+        .into_model::<RequestListModel>()
+        .all(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(RequestListModel::try_into_read_model)
+        .collect()
+}
+
+fn request_list_select(
+    input: &RequestListPageQuery<'_>,
+) -> Result<sea_orm::Select<entities::request::Entity>, PostgresError> {
+    let mut query = request_list_projection()
+        .filter(entities::request::Column::RepoId.eq(input.repo_id))
+        .order_by_asc(entities::request::Column::Id)
+        .limit(input.limit.min((REQUEST_LIST_MAX_PAGE_SIZE + 1) as u64));
+    if let Some(after_id) = input.after_id {
+        query = query.filter(entities::request::Column::Id.gt(after_id));
+    }
+    let viewer_draft_access = input.viewer_user_id.map(|viewer_user_id| {
+        let invitee = Query::select()
+            .expr(Expr::val(1))
+            .from(entities::request_invitee::Entity)
+            .and_where(
+                Expr::col((
+                    entities::request_invitee::Entity,
+                    entities::request_invitee::Column::RequestId,
+                ))
+                .equals((entities::request::Entity, entities::request::Column::Id)),
+            )
+            .and_where(entities::request_invitee::Column::UserId.eq(viewer_user_id))
+            .to_owned();
+        Condition::any()
+            .add(entities::request::Column::AuthorUserId.eq(viewer_user_id))
+            .add(Expr::exists(invitee))
+    });
+    let mut public_request_access =
+        Condition::any().add(entities::request::Column::SubmittedAtUnix.is_not_null());
+    if let Some(viewer_draft_access) = viewer_draft_access {
+        public_request_access = public_request_access.add(viewer_draft_access);
+    }
+    let visible_public = Condition::all()
+        .add(
+            entities::request::Column::Audience.eq(entities::encode_enum(RequestAudience::Public)?),
+        )
+        .add(public_request_access);
+    let mut visibility = Condition::any().add(visible_public);
+    if matches!(
+        input.access.actor,
+        RepositoryActor::Owner | RepositoryActor::Member
+    ) {
+        visibility = visibility.add(
+            entities::request::Column::Audience
+                .eq(entities::encode_enum(RequestAudience::Private)?),
+        );
+    }
+    query = query.filter(visibility);
+    Ok(query)
+}
+
+pub(super) fn request_list_projection() -> sea_orm::Select<entities::request::Entity> {
+    entities::request::Entity::find()
+        .select_only()
+        .column(entities::request::Column::Id)
+        .column(entities::request::Column::Name)
+        .column(entities::request::Column::Title)
+        .column(entities::request::Column::AuthorRole)
+        .column(entities::request::Column::Audience)
+        .column(entities::request::Column::HeadOid)
+        .column(entities::request::Column::SubmittedAtUnix)
+        .column(entities::request::Column::ClosedAtUnix)
+        .column(entities::request::Column::MergedAtUnix)
+        .column(entities::request::Column::UpdatedAtUnix)
+        .expr_as(
+            Expr::col(entities::request::Column::GitSnapshot).is_not_null(),
+            "has_git_snapshot",
+        )
 }
 
 pub async fn request_by_id<C>(conn: &C, request_id: &str) -> Result<Option<Request>, PostgresError>
@@ -319,4 +462,34 @@ where
         .await
         .map_err(PostgresError::internal)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod request_list_tests {
+    use super::*;
+    use sea_orm::{DatabaseBackend, QueryTrait};
+
+    #[test]
+    fn request_list_query_projects_only_bounded_list_facts() {
+        let query = request_list_select(&RequestListPageQuery {
+            repo_id: "repo-1",
+            viewer_user_id: Some("viewer-1"),
+            access: RepositoryAccess::public(),
+            after_id: Some("request-10"),
+            limit: u64::MAX,
+        })
+        .unwrap();
+        let sql = query.build(DatabaseBackend::Postgres).to_string();
+        let projection = sql.split(" FROM ").next().unwrap();
+
+        assert!(!projection.contains("description_markdown"));
+        assert_eq!(projection.matches("\"git_snapshot\"").count(), 1);
+        assert!(projection.contains("git_snapshot\" IS NOT NULL"));
+        assert!(projection.contains("AS \"has_git_snapshot\""));
+        assert!(sql.contains("EXISTS"));
+        assert!(sql.contains("author_user_id"));
+        assert!(sql.contains("submitted_at_unix"));
+        assert!(sql.contains("ORDER BY \"scope_requests\".\"id\" ASC"));
+        assert!(sql.ends_with("LIMIT 101"));
+    }
 }
