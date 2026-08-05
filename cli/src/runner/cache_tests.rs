@@ -3,10 +3,17 @@ use crate::test_support::TestDir;
 use std::os::unix::fs::MetadataExt;
 
 fn record(state: CacheState) -> CacheRecord {
+    record_for("runner-1", state)
+}
+
+fn record_for(runner_id: &str, state: CacheState) -> CacheRecord {
     let identity_digest = "a".repeat(64);
+    let runner_namespace = runner_namespace(runner_id);
     CacheRecord {
         format: CACHE_FORMAT,
-        volume_name: volume_name(&identity_digest),
+        runner_id: runner_id.to_string(),
+        volume_name: volume_name(&runner_namespace, &identity_digest),
+        runner_namespace,
         identity_digest,
         repository_id: "repo-1".to_string(),
         cache_name: "build".to_string(),
@@ -26,13 +33,13 @@ fn volume(record: &CacheRecord, backing: &Path) -> VolumeInspection {
         volume_type: Some("none".to_string()),
         options: Some("bind".to_string()),
         labels: [
-            ("scope.cache-format", "2"),
+            ("scope.cache-format", "3"),
             ("scope.cache-key", record.identity_digest.as_str()),
             ("scope.repository-id", record.repository_id.as_str()),
             ("scope.cache-name", record.cache_name.as_str()),
             ("scope.image", record.image.as_str()),
             ("scope.platform", record.platform.as_str()),
-            ("scope.runner-id", "runner-1"),
+            ("scope.runner-id", record.runner_id.as_str()),
         ]
         .into_iter()
         .map(|(key, value)| (key.to_string(), value.to_string()))
@@ -41,11 +48,21 @@ fn volume(record: &CacheRecord, backing: &Path) -> VolumeInspection {
 }
 
 #[test]
-fn physical_names_are_bounded_and_versioned() {
+fn physical_locations_are_stable_bounded_and_runner_namespaced() {
+    let root = Path::new("/cache/root");
     let digest = "a".repeat(64);
-    let name = volume_name(&digest);
-    assert_eq!(name, format!("scope-cache-v2-{}", "a".repeat(40)));
-    assert!(name.len() < 64);
+    let first = CacheLocation::for_runner(root, "runner-1", &digest);
+    let restarted = CacheLocation::for_runner(root, "runner-1", &digest);
+    let colocated = CacheLocation::for_runner(root, "runner-2", &digest);
+
+    assert_eq!(first, restarted);
+    assert_ne!(first.volume_name, colocated.volume_name);
+    assert_ne!(first.record_path, colocated.record_path);
+    assert_ne!(first.backing_path, colocated.backing_path);
+    assert!(first.volume_name.starts_with("scope-cache-v3-"));
+    assert!(first.volume_name.len() < 64);
+    assert_eq!(first.identity_digest, digest);
+    assert_eq!(colocated.identity_digest, digest);
 }
 
 #[test]
@@ -91,6 +108,9 @@ fn only_ready_semantically_identical_metadata_is_warm() {
     let ready = record(CacheState::Ready);
     assert!(metadata_allows_warm(&ready, &desired));
 
+    let foreign_runner = record_for("runner-2", CacheState::Ready);
+    assert!(!metadata_allows_warm(&foreign_runner, &desired));
+
     let tainted = record(CacheState::Tainted {
         attempt_id: "old-attempt".to_string(),
     });
@@ -106,7 +126,7 @@ fn physical_volume_must_match_backing_and_all_identity_labels() {
     let record = record(CacheState::Ready);
     let backing = Path::new("/cache/data/identity");
     let exact = volume(&record, backing);
-    assert!(volume_matches(&exact, &record, backing, "runner-1"));
+    assert!(volume_matches(&exact, &record, backing, &record.runner_id));
 
     let mut wrong_backing = exact.clone();
     wrong_backing.device = Some("/cache/data/other".to_string());
@@ -114,15 +134,47 @@ fn physical_volume_must_match_backing_and_all_identity_labels() {
         &wrong_backing,
         &record,
         backing,
-        "runner-1"
+        &record.runner_id
     ));
-    assert!(volume_is_owned(&wrong_backing, &record, "runner-1"));
+    assert!(volume_is_owned(&wrong_backing, &record, &record.runner_id));
 
     let mut foreign = exact;
     foreign
         .labels
         .insert("scope.runner-id".to_string(), "runner-2".to_string());
     assert!(!volume_is_owned(&foreign, &record, "runner-1"));
+}
+
+#[test]
+fn record_lookup_and_cleanup_candidates_are_runner_scoped() {
+    let parent = TestDir::new("runner-cache-registration-isolation");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let first = record_for("runner-1", CacheState::Ready);
+    let second = record_for("runner-2", CacheState::Ready);
+    write_record(&root, &first).unwrap();
+    write_record(&root, &second).unwrap();
+
+    assert_eq!(
+        load_runner_records(&root, "runner-1").unwrap(),
+        vec![first.clone()]
+    );
+    assert_eq!(
+        load_runner_records(&root, "runner-2").unwrap(),
+        vec![second.clone()]
+    );
+    assert!(read_record_for_volume(&root, &second.volume_name, "runner-1").is_err());
+    assert_eq!(
+        read_record_for_volume(&root, &first.volume_name, "runner-1").unwrap(),
+        first.clone()
+    );
+
+    fs::write(
+        record_location(&root, &second).record_path,
+        b"foreign metadata is corrupt",
+    )
+    .unwrap();
+    assert_eq!(load_runner_records(&root, "runner-1").unwrap(), vec![first]);
 }
 
 #[test]
@@ -157,6 +209,34 @@ fn cache_store_rejects_symlinks_and_noncanonical_paths() {
 }
 
 #[test]
+fn runner_cache_namespaces_reject_symlinks() {
+    let parent = TestDir::new("runner-cache-namespace-symlinks");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let record = record(CacheState::Ready);
+    let location = record_location(&root, &record);
+
+    let foreign_metadata = parent.path().join("foreign-metadata");
+    fs::create_dir(&foreign_metadata).unwrap();
+    std::os::unix::fs::symlink(
+        &foreign_metadata,
+        root.join("metadata").join(&record.runner_namespace),
+    )
+    .unwrap();
+    assert!(write_record(&root, &record).is_err());
+    fs::remove_file(root.join("metadata").join(&record.runner_namespace)).unwrap();
+
+    let foreign_data = parent.path().join("foreign-data");
+    fs::create_dir(&foreign_data).unwrap();
+    std::os::unix::fs::symlink(
+        &foreign_data,
+        root.join("data").join(&record.runner_namespace),
+    )
+    .unwrap();
+    assert!(create_backing_directory(&root, &location.backing_path).is_err());
+}
+
+#[test]
 fn moving_an_initialized_cache_directory_does_not_brick_it() {
     let parent = TestDir::new("runner-cache-move");
     let original = parent.path().join("original");
@@ -173,11 +253,7 @@ fn obsolete_cache_store_format_is_rejected() {
     let parent = TestDir::new("runner-cache-old-format");
     let root = parent.path().join("scope/runner");
     fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join("store.json"),
-        br#"{"format":1,"device":1,"source":"/old","filesystem":"xfs"}"#,
-    )
-    .unwrap();
+    fs::write(root.join("store.json"), br#"{"format":2}"#).unwrap();
 
     let error = validate_store(&root, false).unwrap_err();
     assert!(error.to_string().contains("schema is unsupported"));
