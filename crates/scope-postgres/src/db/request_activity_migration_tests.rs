@@ -46,6 +46,24 @@ async fn started_event_payloads_migrate_to_bounded_identity_facts() {
                     'user_started_migration', 'Submitted', 2,
                     '{"Submitted":{"head_oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}', 2
                 );
+            INSERT INTO scope_request_events (
+                id, request_id, actor_user_id, kind, position, payload, created_at_unix
+            )
+            SELECT
+                'event_started_batch_' || lpad(sequence::text, 3, '0'),
+                'request_started_migration',
+                'user_started_migration',
+                'Started',
+                sequence + 2,
+                jsonb_build_object(
+                    'Started',
+                    jsonb_build_object(
+                        'title', 'Batch title ' || sequence,
+                        'description_markdown', 'Batch description ' || sequence
+                    )
+                ),
+                sequence + 2
+            FROM generate_series(1, 101) AS sequence;
         "#,
     )
     .await
@@ -79,4 +97,15 @@ async fn started_event_payloads_migrate_to_bounded_identity_facts() {
             }
         })
     );
+    let compact_started_count = rows
+        .iter()
+        .filter(|row| row.try_get::<String>("", "kind").unwrap() == "Started")
+        .filter(|row| {
+            row.try_get::<serde_json::Value>("", "payload")
+                .unwrap()
+                .pointer("/Started/identity")
+                .is_some()
+        })
+        .count();
+    assert_eq!(compact_started_count, 102);
 }
