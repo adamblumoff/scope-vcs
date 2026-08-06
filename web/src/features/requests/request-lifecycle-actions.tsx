@@ -22,6 +22,7 @@ export function RequestLifecycleActions({
   const busy = actions.pending !== null
   const permissions = request.permissions
   const canMerge = permissions.can_merge && request.mergeability.status === 'Ready'
+  const submitLabel = request.author_role === 'Public' ? 'Request review' : 'Mark ready'
   const hasActions = permissions.can_submit ||
     canMerge ||
     permissions.can_close
@@ -34,7 +35,7 @@ export function RequestLifecycleActions({
         {permissions.can_submit ? (
           <Button disabled={busy} onClick={() => setDialog('submit')} size="sm" type="button">
             <CheckCircle2 />
-            Submit
+            {submitLabel}
           </Button>
         ) : null}
         {canMerge ? (
@@ -55,6 +56,7 @@ export function RequestLifecycleActions({
         onOpenChange={(open) => setDialog(open ? 'submit' : null)}
         open={dialog === 'submit'}
         pending={actions.pending === 'submit'}
+        request={request}
       />
       <RequestConfirmDialog
         confirmLabel="Merge request"
@@ -64,7 +66,10 @@ export function RequestLifecycleActions({
         pending={actions.pending === 'merge'}
         title="Merge this request?"
       >
-        <p>This completes the request and merges it into main.</p>
+        <p>This completes “{request.title}” and merges its current head into main.</p>
+        <p className="font-mono text-xs">
+          {request.head_oid.slice(0, 12)} → main
+        </p>
       </RequestConfirmDialog>
       <RequestConfirmDialog
         confirmLabel="Close request"
