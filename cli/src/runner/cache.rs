@@ -18,7 +18,9 @@ use std::{
     process::Command,
 };
 
-const CACHE_FORMAT: u8 = 2;
+#[path = "cache_location.rs"]
+mod location;
+use location::{CACHE_FORMAT, CacheLocation, runner_namespace, volume_name};
 
 #[path = "cache_store.rs"]
 mod store;
@@ -30,9 +32,11 @@ pub(super) struct CacheMount {
     pub(super) target: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct CacheRecord {
     format: u8,
+    runner_id: String,
+    runner_namespace: String,
     identity_digest: String,
     repository_id: String,
     cache_name: String,
@@ -42,6 +46,14 @@ struct CacheRecord {
     volume_name: String,
     state: CacheState,
     last_used_at_unix: u64,
+}
+
+fn record_location(root: &Path, record: &CacheRecord) -> CacheLocation {
+    CacheLocation::from_namespace(
+        root,
+        record.runner_namespace.clone(),
+        &record.identity_digest,
+    )
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -101,51 +113,55 @@ impl PreparedCaches {
                 CachePlatform::LinuxAmd64,
             )?;
             let digest = identity.digest();
-            let volume_name = volume_name(&digest);
-            let backing = root.join("data").join(&digest);
+            let location = CacheLocation::for_runner(&root, &config.runner_id, &digest);
             let record = CacheRecord {
                 format: CACHE_FORMAT,
+                runner_id: config.runner_id.clone(),
+                runner_namespace: location.runner_namespace.clone(),
                 identity_digest: digest,
                 repository_id: identity.repository_id().to_string(),
                 cache_name: identity.cache().as_str().to_string(),
                 image: identity.image_digest().to_string(),
                 container_image: pinned_image.as_str().to_string(),
                 platform: identity.platform().as_str().to_string(),
-                volume_name: volume_name.clone(),
+                volume_name: location.volume_name.clone(),
                 state: CacheState::Tainted {
                     attempt_id: claim.attempt_id.clone(),
                 },
                 last_used_at_unix: unix_now(),
             };
-            let existing_record = read_record_candidate(&root, &record.identity_digest);
-            let existing_volume = inspect_volume(&volume_name)?;
+            let existing_record = read_record_candidate(&location, &config.runner_id);
+            let existing_volume = inspect_volume(&location.volume_name)?;
             let warm = existing_record
                 .as_ref()
                 .is_some_and(|existing| metadata_allows_warm(existing, &record))
                 && existing_volume.as_ref().is_some_and(|volume| {
-                    volume_matches(volume, &record, &backing, &config.runner_id)
+                    volume_matches(volume, &record, &location.backing_path, &config.runner_id)
                 })
-                && backing_is_real_directory(&backing)?;
+                && backing_is_real_directory(&location.backing_path)?;
             if warm {
-                if volume_is_referenced(&volume_name)? {
-                    bail!("cache volume {volume_name} is still referenced by a container");
+                if volume_is_referenced(&location.volume_name)? {
+                    bail!(
+                        "cache volume {} is still referenced by a container",
+                        location.volume_name
+                    );
                 }
             } else {
                 cold_recreate(
                     &root,
                     &record,
-                    &backing,
+                    &location.backing_path,
                     existing_volume.as_ref(),
                     &config.runner_id,
                 )?;
             }
             if let Err(error) = write_record(&root, &record) {
                 if !warm {
-                    let recreated = inspect_volume(&volume_name)?;
+                    let recreated = inspect_volume(&location.volume_name)?;
                     discard_cache_identity(
                         &root,
                         &record,
-                        &backing,
+                        &location.backing_path,
                         recreated.as_ref(),
                         &config.runner_id,
                     )?;
@@ -153,7 +169,7 @@ impl PreparedCaches {
                 return Err(error.context("persist write-ahead cache taint"));
             }
             prepared.mounts.push(CacheMount {
-                volume_name: volume_name.clone(),
+                volume_name: location.volume_name,
                 target: cache.mount_path().to_string(),
             });
         }
@@ -216,8 +232,8 @@ pub(super) fn finalize_volume_names(
             bail!("cache volume {volume} is still referenced by a container");
         }
         if success {
-            let mut record = read_record_for_volume(&root, volume)?;
-            let backing = root.join("data").join(&record.identity_digest);
+            let mut record = read_record_for_volume(&root, volume, &config.runner_id)?;
+            let backing = record_location(&root, &record).backing_path;
             super::command_success(
                 Command::new("sync").args(["-f"]).arg(&backing),
                 "flush successful cache contents",
@@ -278,7 +294,7 @@ pub(super) fn finish_canary_ack(
 
 pub(super) fn list(config: &RunnerConfig) -> anyhow::Result<()> {
     let root = usable_root(config)?;
-    let mut records = load_records(&root)?;
+    let mut records = load_runner_records(&root, &config.runner_id)?;
     records.sort_by(|left, right| {
         left.repository_id
             .cmp(&right.repository_id)
@@ -304,7 +320,7 @@ pub(super) fn list(config: &RunnerConfig) -> anyhow::Result<()> {
 pub(super) fn prune(config: &RunnerConfig, all: bool) -> anyhow::Result<()> {
     let root = usable_root(config)?;
     let _lock = lifecycle_lock(&root)?;
-    let mut records = load_records(&root)?;
+    let mut records = load_runner_records(&root, &config.runner_id)?;
     records.sort_by_key(|record| record.last_used_at_unix);
     let mut removed = 0_u64;
     for record in records {
@@ -353,10 +369,7 @@ pub(super) fn admit(config: &RunnerConfig) -> anyhow::Result<()> {
 pub(super) fn initialize(root: &Path) -> anyhow::Result<()> {
     validate_store(root, true)?;
     let _lock = lifecycle_lock(root)?;
-    fs::create_dir_all(root.join("metadata"))?;
-    fs::create_dir_all(root.join("data"))?;
-    File::open(root)?.sync_all()?;
-    Ok(())
+    ensure_store_directories(root)
 }
 
 pub(super) fn evict_orphaned_tainted(
@@ -365,7 +378,7 @@ pub(super) fn evict_orphaned_tainted(
 ) -> anyhow::Result<()> {
     let root = usable_root(config)?;
     let _lock = lifecycle_lock(&root)?;
-    for record in load_records(&root)? {
+    for record in load_runner_records(&root, &config.runner_id)? {
         let CacheState::Tainted { attempt_id } = &record.state else {
             continue;
         };
@@ -392,13 +405,25 @@ fn usable_root(config: &RunnerConfig) -> anyhow::Result<PathBuf> {
 
 fn ensure_usable_root(root: &Path, disposable: bool) -> anyhow::Result<()> {
     match validate_store(root, false) {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            let _lock = lifecycle_lock(root)?;
+            ensure_store_directories(root)
+        }
         Err(_) if disposable && store_is_absent_or_empty(root)? => {
             initialize(root)?;
             Ok(())
         }
         Err(error) => Err(error),
     }
+}
+
+fn ensure_store_directories(root: &Path) -> anyhow::Result<()> {
+    // store.json is synchronized before these directories, so a restart must
+    // safely finish initialization without accepting symlinks or other file types.
+    require_real_directory(&root.join("metadata"), true, "cache metadata directory")?;
+    require_real_directory(&root.join("data"), true, "cache data directory")?;
+    File::open(root)?.sync_all()?;
+    Ok(())
 }
 
 fn store_is_absent_or_empty(root: &Path) -> anyhow::Result<bool> {
@@ -431,7 +456,11 @@ fn lifecycle_lock(root: &Path) -> anyhow::Result<File> {
 
 fn create_backing_directory(root: &Path, backing: &Path) -> anyhow::Result<()> {
     let data = root.join("data");
-    fs::create_dir_all(&data).context("create cache data directory")?;
+    require_real_directory(&data, false, "cache data directory")?;
+    let namespace = backing
+        .parent()
+        .context("cache backing path has no runner namespace")?;
+    require_real_directory(namespace, true, "runner cache data namespace")?;
     if backing.exists() {
         let metadata = fs::symlink_metadata(backing)?;
         if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
@@ -448,6 +477,7 @@ fn create_backing_directory(root: &Path, backing: &Path) -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(backing, fs::Permissions::from_mode(0o777))?;
     }
+    File::open(namespace)?.sync_all()?;
     File::open(&data)?.sync_all()?;
     Ok(())
 }
@@ -566,7 +596,9 @@ fn volume_option(value: &serde_json::Value, name: &str) -> Option<String> {
 }
 
 fn volume_is_owned(volume: &VolumeInspection, record: &CacheRecord, runner_id: &str) -> bool {
-    volume.name == record.volume_name
+    record.runner_id == runner_id
+        && record.runner_namespace == runner_namespace(runner_id)
+        && volume.name == record.volume_name
         && volume
             .labels
             .get("scope.cache-format")
@@ -622,11 +654,12 @@ fn discard_cache_identity(
         )?;
     }
     remove_backing_if_present(backing, &record.container_image)?;
-    let metadata = record_path(root, &record.identity_digest);
+    let location = record_location(root, record);
+    let metadata = location.record_path;
     if metadata.exists() {
         fs::remove_file(metadata)?;
     }
-    sync_cache_directories(root)
+    sync_cache_directories(root, &record.runner_namespace)
 }
 
 fn remove_backing_if_present(backing: &Path, container_image: &str) -> anyhow::Result<()> {
@@ -709,41 +742,43 @@ fn verify_container_mounts(container: &str, expected: &[CacheMount]) -> anyhow::
     Ok(())
 }
 
-fn volume_name(digest: &str) -> String {
-    format!(
-        "scope-cache-v{CACHE_FORMAT}-{}",
-        &digest[..digest.len().min(40)]
-    )
-}
-
-fn record_path(root: &Path, digest: &str) -> PathBuf {
-    root.join("metadata").join(format!("{digest}.json"))
-}
-
 fn write_record(root: &Path, record: &CacheRecord) -> anyhow::Result<()> {
-    let directory = root.join("metadata");
-    fs::create_dir_all(&directory)?;
-    let path = record_path(root, &record.identity_digest);
-    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    let location = record_location(root, record);
+    let metadata = root.join("metadata");
+    require_real_directory(&metadata, false, "cache metadata directory")?;
+    let directory = location
+        .record_path
+        .parent()
+        .context("cache record path has no runner namespace")?;
+    require_real_directory(directory, true, "runner cache metadata namespace")?;
+    let temporary = location
+        .record_path
+        .with_extension(format!("tmp.{}", std::process::id()));
     let bytes = serde_json::to_vec(record)?;
     let mut file = File::create(&temporary)?;
     file.write_all(&bytes)?;
     file.write_all(b"\n")?;
     file.sync_all()?;
-    fs::rename(&temporary, &path)?;
+    fs::rename(&temporary, &location.record_path)?;
     File::open(directory)?.sync_all()?;
+    File::open(metadata)?.sync_all()?;
     Ok(())
 }
 
-fn read_record_candidate(root: &Path, digest: &str) -> Option<CacheRecord> {
+fn read_record_candidate(location: &CacheLocation, runner_id: &str) -> Option<CacheRecord> {
     let record: CacheRecord =
-        serde_json::from_slice(&fs::read(record_path(root, digest)).ok()?).ok()?;
-    valid_record(&record, digest).then_some(record)
+        serde_json::from_slice(&fs::read(&location.record_path).ok()?).ok()?;
+    (record.runner_id == runner_id
+        && record.runner_namespace == location.runner_namespace
+        && valid_record(&record, &location.identity_digest))
+    .then_some(record)
 }
 
 fn metadata_allows_warm(existing: &CacheRecord, desired: &CacheRecord) -> bool {
     matches!(&existing.state, CacheState::Ready)
         && existing.format == desired.format
+        && existing.runner_id == desired.runner_id
+        && existing.runner_namespace == desired.runner_namespace
         && existing.identity_digest == desired.identity_digest
         && existing.repository_id == desired.repository_id
         && existing.cache_name == desired.cache_name
@@ -755,6 +790,8 @@ fn metadata_allows_warm(existing: &CacheRecord, desired: &CacheRecord) -> bool {
 
 fn valid_record(record: &CacheRecord, expected_digest: &str) -> bool {
     record.format == CACHE_FORMAT
+        && !record.runner_id.is_empty()
+        && record.runner_namespace == runner_namespace(&record.runner_id)
         && record.identity_digest == expected_digest
         && record.identity_digest.len() == 64
         && record
@@ -763,14 +800,18 @@ fn valid_record(record: &CacheRecord, expected_digest: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit())
         && PinnedContainerImage::parse(record.container_image.clone())
             .is_ok_and(|image| image.digest() == record.image)
-        && record.volume_name == volume_name(&record.identity_digest)
+        && record.volume_name == volume_name(&record.runner_namespace, &record.identity_digest)
 }
 
-fn load_records(root: &Path) -> anyhow::Result<Vec<CacheRecord>> {
-    let directory = root.join("metadata");
+fn load_runner_records(root: &Path, runner_id: &str) -> anyhow::Result<Vec<CacheRecord>> {
+    let namespace = runner_namespace(runner_id);
+    let metadata = root.join("metadata");
+    require_real_directory(&metadata, false, "cache metadata directory")?;
+    let directory = metadata.join(&namespace);
     if !directory.exists() {
         return Ok(Vec::new());
     }
+    require_real_directory(&directory, false, "runner cache metadata namespace")?;
     let mut records = Vec::new();
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
@@ -778,7 +819,9 @@ fn load_records(root: &Path) -> anyhow::Result<Vec<CacheRecord>> {
             && entry.path().extension().and_then(|value| value.to_str()) == Some("json")
         {
             let record: CacheRecord = serde_json::from_slice(&fs::read(entry.path())?)?;
-            if !valid_record(&record, &record.identity_digest)
+            if record.runner_id != runner_id
+                || record.runner_namespace != namespace
+                || !valid_record(&record, &record.identity_digest)
                 || entry.path().file_stem().and_then(|value| value.to_str())
                     != Some(&record.identity_digest)
             {
@@ -790,8 +833,25 @@ fn load_records(root: &Path) -> anyhow::Result<Vec<CacheRecord>> {
     Ok(records)
 }
 
-fn read_record_for_volume(root: &Path, volume: &str) -> anyhow::Result<CacheRecord> {
-    load_records(root)?
+fn require_real_directory(path: &Path, create: bool, label: &str) -> anyhow::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            Ok(())
+        }
+        Ok(_) => bail!("{label} must be a real directory: {}", path.display()),
+        Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(path).with_context(|| format!("create {label} {}", path.display()))
+        }
+        Err(error) => Err(error).with_context(|| format!("inspect {label} {}", path.display())),
+    }
+}
+
+fn read_record_for_volume(
+    root: &Path,
+    volume: &str,
+    runner_id: &str,
+) -> anyhow::Result<CacheRecord> {
+    load_runner_records(root, runner_id)?
         .into_iter()
         .find(|record| record.volume_name == volume)
         .with_context(|| format!("cache metadata for {volume} is missing"))
@@ -815,7 +875,7 @@ fn remove_cache(root: &Path, volume: &str, runner_id: &str) -> anyhow::Result<()
     if volume_is_referenced(volume)? {
         bail!("cache volume {volume} is attached to a container");
     }
-    let Some(record) = load_records(root)?
+    let Some(record) = load_runner_records(root, runner_id)?
         .into_iter()
         .find(|record| record.volume_name == volume)
     else {
@@ -833,17 +893,37 @@ fn remove_cache(root: &Path, volume: &str, runner_id: &str) -> anyhow::Result<()
             "remove Scope cache volume",
         )?;
     }
-    let backing = root.join("data").join(&record.identity_digest);
-    remove_backing_if_present(&backing, &record.container_image)?;
-    fs::remove_file(record_path(root, &record.identity_digest))?;
-    sync_cache_directories(root)
+    let location = record_location(root, &record);
+    remove_backing_if_present(&location.backing_path, &record.container_image)?;
+    fs::remove_file(location.record_path)?;
+    sync_cache_directories(root, &record.runner_namespace)
 }
 
-fn sync_cache_directories(root: &Path) -> anyhow::Result<()> {
+fn sync_cache_directories(root: &Path, runner_namespace: &str) -> anyhow::Result<()> {
+    sync_real_directory_if_present(
+        &root.join("data").join(runner_namespace),
+        "runner cache data namespace",
+    )?;
+    sync_real_directory_if_present(
+        &root.join("metadata").join(runner_namespace),
+        "runner cache metadata namespace",
+    )?;
     File::open(root.join("data"))?.sync_all()?;
     File::open(root.join("metadata"))?.sync_all()?;
     File::open(root)?.sync_all()?;
     Ok(())
+}
+
+fn sync_real_directory_if_present(path: &Path, label: &str) -> anyhow::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            File::open(path)?.sync_all()?;
+            Ok(())
+        }
+        Ok(_) => bail!("{label} must be a real directory: {}", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspect {label} {}", path.display())),
+    }
 }
 
 #[cfg(test)]

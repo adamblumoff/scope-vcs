@@ -1,4 +1,4 @@
-use super::{CACHE_FORMAT, load_records, remove_cache, volume_is_referenced};
+use super::{CACHE_FORMAT, load_runner_records, remove_cache, volume_is_referenced};
 use crate::runner::command_stdout;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
@@ -126,7 +126,9 @@ pub(super) fn ensure_capacity(
 }
 
 fn prune_root(root: &Path, runner_id: &str) -> anyhow::Result<()> {
-    let mut records = load_records(root)?;
+    // The root may be shared by live registrations, so capacity cleanup can
+    // evict only the caller's namespace and must fail closed if that is insufficient.
+    let mut records = load_runner_records(root, runner_id)?;
     records.sort_by_key(|record| record.last_used_at_unix);
     for record in records {
         if volume_is_referenced(&record.volume_name)? {
