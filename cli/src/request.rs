@@ -1,9 +1,11 @@
 use crate::{
     api::{
-        CreateRequestDiscussionParams, RequestActivityParams, RequestTarget, StartRequestParams,
-        add_request_invitee, close_request as api_close_request, create_request_discussion,
-        edit_request_identity, get_request, get_request_activity, leave_request, list_requests,
-        merge_request, rate_request, remove_request_invitee, start_request as api_start_request,
+        CreateRequestDiscussionParams, CreateRequestDiscussionReplyParams, RequestActivityParams,
+        RequestTarget, StartRequestParams, add_request_invitee, close_request as api_close_request,
+        create_request_discussion, create_request_discussion_reply, edit_request_identity,
+        get_request, get_request_activity, leave_request, list_requests, merge_request,
+        rate_request, remove_request_invitee, reopen_and_reply_to_request_discussion,
+        resolve_request_discussion, start_request as api_start_request,
         submit_request as api_submit_request,
     },
     git_repo::{
@@ -15,7 +17,7 @@ use crate::{
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
-use scope_api_contract::{ErrorCode, ErrorResponse, RequestAudience};
+use scope_api_contract::{ErrorCode, ErrorResponse, RequestAudience, RequestDiscussionAnchor};
 use scope_domain::{policy::ScopePath, repo_control::is_public_request_protected_path};
 use std::{
     fs,
@@ -35,7 +37,11 @@ mod tests;
 mod text;
 use actions::*;
 pub use args::RequestArgs;
-use args::{RequestAudienceArg, RequestCommand, RequestStartArgs, RequestTargetArgs};
+use args::{
+    RequestAudienceArg, RequestCommand, RequestDiscussionArgs, RequestDiscussionCommand,
+    RequestDiscussionReopenArgs, RequestDiscussionReplyArgs, RequestDiscussionResolveArgs,
+    RequestDiscussionStartArgs, RequestStartArgs, RequestTargetArgs,
+};
 use confirm::require_confirmation;
 use local::{
     fetch_main_projection, load_context, load_context_and_request_id, maybe_request_id_for_context,
@@ -44,17 +50,28 @@ use local::{
 };
 use outcome::*;
 use render::{
-    close_receipt, discussion_receipt_lines, invitee_added_receipt, invitee_removed_receipt,
-    leave_receipt, repo_access_lines, request_activity_lines_for_response,
+    close_receipt, discussion_reopened_receipt, discussion_replied_receipt,
+    discussion_resolved_receipt, discussion_started_receipt, invitee_added_receipt,
+    invitee_removed_receipt, leave_receipt, repo_access_lines, request_activity_lines_for_response,
     request_detail_lines_for_response, request_list_line, request_mutation_receipt_lines,
 };
-use text::short_oid;
+use text::{discussion_body, short_oid};
 
 static CLIENT_DISCUSSION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static CLIENT_REPLY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub struct PreparedRequestCommand {
     args: RequestArgs,
     git_repo: GitRepo,
+}
+
+fn discussion_command_name(command: &RequestDiscussionCommand) -> &'static str {
+    match command {
+        RequestDiscussionCommand::Start(_) => "scope request discussion start",
+        RequestDiscussionCommand::Reply(_) => "scope request discussion reply",
+        RequestDiscussionCommand::Resolve(_) => "scope request discussion resolve",
+        RequestDiscussionCommand::Reopen(_) => "scope request discussion reopen",
+    }
 }
 
 pub fn prepare_request_command(args: RequestArgs) -> anyhow::Result<PreparedRequestCommand> {
@@ -69,7 +86,7 @@ pub fn prepare_request_command(args: RequestArgs) -> anyhow::Result<PreparedRequ
         RequestCommand::Leave(_) => ("scope request leave", false),
         RequestCommand::Merge(_) => ("scope request merge", false),
         RequestCommand::Rate(_) => ("scope request rate", false),
-        RequestCommand::Discuss(_) => ("scope request discuss", false),
+        RequestCommand::Discussion(args) => (discussion_command_name(&args.command), false),
         RequestCommand::Show(_) => ("scope request show", false),
         RequestCommand::List(_) => ("scope request list", false),
         RequestCommand::Status(_) => ("scope request status", false),
@@ -168,15 +185,9 @@ pub fn run_request_command(
             args.score,
             args.reason,
         ),
-        RequestCommand::Discuss(args) => start_request_discussion(
-            &git_repo,
-            client,
-            api_url,
-            session_token,
-            args.target.remote,
-            args.target.request,
-            args.body,
-        ),
+        RequestCommand::Discussion(args) => {
+            run_request_discussion_command(&git_repo, client, api_url, session_token, args)
+        }
         RequestCommand::Show(args) => {
             show_one_request(&git_repo, client, api_url, session_token, args.target)
         }
@@ -477,52 +488,221 @@ fn show_request_status(
     ))
 }
 
+fn run_request_discussion_command(
+    git_repo: &GitRepo,
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    args: RequestDiscussionArgs,
+) -> anyhow::Result<RequestCommandOutcome> {
+    match args.command {
+        RequestDiscussionCommand::Start(args) => {
+            start_request_discussion(git_repo, client, api_url, session_token, args)
+        }
+        RequestDiscussionCommand::Reply(args) => {
+            reply_to_request_discussion(git_repo, client, api_url, session_token, args)
+        }
+        RequestDiscussionCommand::Resolve(args) => {
+            resolve_one_request_discussion(git_repo, client, api_url, session_token, args)
+        }
+        RequestDiscussionCommand::Reopen(args) => {
+            reopen_request_discussion(git_repo, client, api_url, session_token, args)
+        }
+    }
+}
+
 fn start_request_discussion(
     git_repo: &GitRepo,
     client: &Client,
     api_url: &str,
     session_token: &str,
-    remote: Option<String>,
-    request_id: Option<String>,
-    body: String,
+    args: RequestDiscussionStartArgs,
 ) -> anyhow::Result<RequestCommandOutcome> {
-    let (context, request_id) =
-        load_context_and_request_id(git_repo, client, api_url, session_token, remote, request_id)?;
+    let body = discussion_body(args.content.body, args.content.body_file)?;
+    let (context, request_id) = load_context_and_request_id(
+        git_repo,
+        client,
+        api_url,
+        session_token,
+        args.target.remote,
+        args.target.request,
+    )?;
+    let anchor = args.revision.map(|revision_id| RequestDiscussionAnchor {
+        revision_id,
+        commit_oid: args.commit,
+        path: args.path,
+    });
     let response = create_request_discussion(
         client,
         api_url,
         session_token,
         CreateRequestDiscussionParams {
+            target: RequestTarget {
+                owner: &context.target.owner,
+                repo: &context.target.repo,
+                request_id: &request_id,
+            },
+            body_markdown: body,
+            client_discussion_id: new_client_discussion_id()?,
+            anchor,
+        },
+    )?;
+    let human_lines = discussion_started_receipt(&request_id, &response);
+    Ok(RequestCommandOutcome::new(
+        "request.discussion.start",
+        RequestCommandResult::Discussion(DiscussionResult {
+            repo: context.repo,
+            request_id,
+            discussion: response.discussion,
+        }),
+        human_lines,
+    ))
+}
+
+fn reply_to_request_discussion(
+    git_repo: &GitRepo,
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    args: RequestDiscussionReplyArgs,
+) -> anyhow::Result<RequestCommandOutcome> {
+    let body = discussion_body(args.content.body, args.content.body_file)?;
+    let (context, request_id) = load_context_and_request_id(
+        git_repo,
+        client,
+        api_url,
+        session_token,
+        args.target.remote,
+        args.target.request,
+    )?;
+    let response = create_request_discussion_reply(
+        client,
+        api_url,
+        session_token,
+        CreateRequestDiscussionReplyParams {
+            target: RequestTarget {
+                owner: &context.target.owner,
+                repo: &context.target.repo,
+                request_id: &request_id,
+            },
+            discussion_id: &args.discussion_id,
+            body_markdown: body,
+            client_reply_id: new_client_reply_id()?,
+        },
+    )?;
+    let human_lines = vec![discussion_replied_receipt(&response)];
+    Ok(RequestCommandOutcome::new(
+        "request.discussion.reply",
+        RequestCommandResult::DiscussionReply(DiscussionReplyResult {
+            repo: context.repo,
+            request_id,
+            discussion: response.discussion,
+            reply: response.reply,
+        }),
+        human_lines,
+    ))
+}
+
+fn resolve_one_request_discussion(
+    git_repo: &GitRepo,
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    args: RequestDiscussionResolveArgs,
+) -> anyhow::Result<RequestCommandOutcome> {
+    let (context, request_id) = load_context_and_request_id(
+        git_repo,
+        client,
+        api_url,
+        session_token,
+        args.target.remote,
+        args.target.request,
+    )?;
+    let response = resolve_request_discussion(
+        client,
+        api_url,
+        session_token,
+        RequestTarget {
             owner: &context.target.owner,
             repo: &context.target.repo,
             request_id: &request_id,
-            body_markdown: body,
-            client_discussion_id: new_client_discussion_id()?,
         },
+        &args.discussion_id,
     )?;
-    let mut human_lines = repo_access_lines(&context.repo);
-    human_lines.extend(discussion_receipt_lines(&response));
+    let human_lines = vec![discussion_resolved_receipt(&response)];
     Ok(RequestCommandOutcome::new(
-        "request.discuss",
-        RequestCommandResult::Discussion(TargetResponse {
+        "request.discussion.resolve",
+        RequestCommandResult::Discussion(DiscussionResult {
             repo: context.repo,
             request_id,
-            response,
+            discussion: response.discussion,
+        }),
+        human_lines,
+    ))
+}
+
+fn reopen_request_discussion(
+    git_repo: &GitRepo,
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    args: RequestDiscussionReopenArgs,
+) -> anyhow::Result<RequestCommandOutcome> {
+    let body = discussion_body(args.content.body, args.content.body_file)?;
+    let (context, request_id) = load_context_and_request_id(
+        git_repo,
+        client,
+        api_url,
+        session_token,
+        args.target.remote,
+        args.target.request,
+    )?;
+    let response = reopen_and_reply_to_request_discussion(
+        client,
+        api_url,
+        session_token,
+        CreateRequestDiscussionReplyParams {
+            target: RequestTarget {
+                owner: &context.target.owner,
+                repo: &context.target.repo,
+                request_id: &request_id,
+            },
+            discussion_id: &args.discussion_id,
+            body_markdown: body,
+            client_reply_id: new_client_reply_id()?,
+        },
+    )?;
+    let human_lines = vec![discussion_reopened_receipt(&response)];
+    Ok(RequestCommandOutcome::new(
+        "request.discussion.reopen",
+        RequestCommandResult::DiscussionReply(DiscussionReplyResult {
+            repo: context.repo,
+            request_id,
+            discussion: response.discussion,
+            reply: response.reply,
         }),
         human_lines,
     ))
 }
 
 fn new_client_discussion_id() -> anyhow::Result<String> {
+    new_client_mutation_id("discussion", &CLIENT_DISCUSSION_SEQUENCE)
+}
+
+fn new_client_reply_id() -> anyhow::Result<String> {
+    new_client_mutation_id("reply", &CLIENT_REPLY_SEQUENCE)
+}
+
+fn new_client_mutation_id(kind: &str, sequence: &AtomicU64) -> anyhow::Result<String> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock is before Unix epoch")?
         .as_nanos();
     Ok(format!(
-        "client_discussion_{}_{}_{}",
+        "client_{kind}_{}_{}_{}",
         std::process::id(),
         nanos,
-        CLIENT_DISCUSSION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        sequence.fetch_add(1, Ordering::Relaxed)
     ))
 }
 

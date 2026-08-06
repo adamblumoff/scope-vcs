@@ -1,7 +1,8 @@
 use crate::api::{
     LeaveRequestResponse, RepoSummaryResponse, RequestActivityPageResponse, RequestCloseResponse,
-    RequestDiscussionMutationResponse, RequestInviteeMutationResponse, RequestListItemResponse,
-    RequestMutationResponse, RequestRatingResponse, RequestSummaryResponse,
+    RequestDiscussionReplyResponse, RequestDiscussionSummaryResponse,
+    RequestInviteeMutationResponse, RequestListItemResponse, RequestMutationResponse,
+    RequestRatingResponse, RequestSummaryResponse,
 };
 use anyhow::Context;
 use scope_api_contract::CliSuccessEnvelope;
@@ -50,7 +51,8 @@ pub(super) enum RequestCommandResult {
     Invitee(RepoResponse<RequestInviteeMutationResponse>),
     Leave(TargetResponse<LeaveRequestResponse>),
     Close(TargetResponse<RequestCloseResponse>),
-    Discussion(TargetResponse<RequestDiscussionMutationResponse>),
+    Discussion(DiscussionResult),
+    DiscussionReply(DiscussionReplyResult),
     Rating(TargetResponse<RequestRatingResponse>),
 }
 
@@ -94,4 +96,19 @@ pub(super) struct TargetResponse<T> {
     pub(super) repo: RepoSummaryResponse,
     pub(super) request_id: String,
     pub(super) response: T,
+}
+
+#[derive(Serialize)]
+pub(super) struct DiscussionResult {
+    pub(super) repo: RepoSummaryResponse,
+    pub(super) request_id: String,
+    pub(super) discussion: RequestDiscussionSummaryResponse,
+}
+
+#[derive(Serialize)]
+pub(super) struct DiscussionReplyResult {
+    pub(super) repo: RepoSummaryResponse,
+    pub(super) request_id: String,
+    pub(super) discussion: RequestDiscussionSummaryResponse,
+    pub(super) reply: RequestDiscussionReplyResponse,
 }

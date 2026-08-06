@@ -66,6 +66,65 @@ fn two_actor_contribution_flow_agrees_across_cli_api_and_git() {
     let maintainer_open = maintainer.json(["request", "list"]);
     assert_request_state(&maintainer_open, &request_id, "Open");
 
+    let discussion = contributor.json([
+        "request",
+        "discussion",
+        "start",
+        "--request",
+        request_id.as_str(),
+        "--body",
+        r"Please verify the literal \n stays literal.",
+    ]);
+    assert_command(&discussion, "request.discussion.start");
+    let discussion_id = string_at(&discussion, "/result/discussion/id");
+    assert_eq!(
+        string_at(&discussion, "/result/discussion/body_markdown"),
+        r"Please verify the literal \n stays literal.",
+    );
+
+    let reply = maintainer.json([
+        "request",
+        "discussion",
+        "reply",
+        discussion_id.as_str(),
+        "--request",
+        request_id.as_str(),
+        "--body",
+        "Verified.",
+    ]);
+    assert_command(&reply, "request.discussion.reply");
+    assert_eq!(
+        string_at(&reply, "/result/discussion/id"),
+        discussion_id,
+    );
+
+    let resolved = contributor.json([
+        "request",
+        "discussion",
+        "resolve",
+        discussion_id.as_str(),
+        "--request",
+        request_id.as_str(),
+    ]);
+    assert_command(&resolved, "request.discussion.resolve");
+    assert_eq!(
+        string_at(&resolved, "/result/discussion/status"),
+        "Resolved",
+    );
+
+    let reopened = contributor.json([
+        "request",
+        "discussion",
+        "reopen",
+        discussion_id.as_str(),
+        "--request",
+        request_id.as_str(),
+        "--body",
+        "One final note.",
+    ]);
+    assert_command(&reopened, "request.discussion.reopen");
+    assert_eq!(string_at(&reopened, "/result/discussion/status"), "Open");
+
     let edited = contributor.json(["request", "edit", "--title", "End-to-end contribution flow"]);
     assert_command(&edited, "request.edit");
     assert_eq!(
@@ -74,11 +133,41 @@ fn two_actor_contribution_flow_agrees_across_cli_api_and_git() {
     );
     let discussed = contributor.json([
         "request",
-        "discuss",
+        "discussion",
+        "start",
         "--body",
         "Please review the second revision.",
     ]);
-    assert_command(&discussed, "request.discuss");
+    assert_command(&discussed, "request.discussion.start");
+    let discussion_id = string_at(&discussed, "/result/discussion/id");
+    let replied = contributor.json([
+        "request",
+        "discussion",
+        "reply",
+        discussion_id.as_str(),
+        "--body",
+        "I can add more context here.",
+    ]);
+    assert_command(&replied, "request.discussion.reply");
+    assert_eq!(string_at(&replied, "/result/discussion/id"), discussion_id);
+    assert!(!string_at(&replied, "/result/reply/id").is_empty());
+    let resolved = contributor.json(["request", "discussion", "resolve", discussion_id.as_str()]);
+    assert_command(&resolved, "request.discussion.resolve");
+    assert_eq!(
+        string_at(&resolved, "/result/discussion/status"),
+        "Resolved"
+    );
+    let reopened = contributor.json([
+        "request",
+        "discussion",
+        "reopen",
+        discussion_id.as_str(),
+        "--body",
+        "New evidence requires another look.",
+    ]);
+    assert_command(&reopened, "request.discussion.reopen");
+    assert_eq!(string_at(&reopened, "/result/discussion/status"), "Open");
+    assert!(!string_at(&reopened, "/result/reply/id").is_empty());
 
     fs::write(
         contributor.repo.join("contribution.txt"),

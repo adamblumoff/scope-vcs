@@ -1,6 +1,9 @@
-use super::{ensure_public_request_paths_allowed, new_client_discussion_id, text::terminal_text};
+use super::{
+    ensure_public_request_paths_allowed, new_client_discussion_id, new_client_reply_id,
+    text::{discussion_body_with_stdin, terminal_text},
+};
 use crate::{error::CliError, git_repo::GitRepo, test_support::TestDir};
-use std::fs;
+use std::{fs, io::Cursor, path::PathBuf};
 
 #[test]
 fn terminal_text_replaces_control_characters() {
@@ -15,6 +18,45 @@ fn client_discussion_ids_are_opaque_and_unique() {
     assert!(first.starts_with("client_discussion_"));
     assert!(second.starts_with("client_discussion_"));
     assert_ne!(first, second);
+}
+
+#[test]
+fn client_reply_ids_are_opaque_and_unique() {
+    let first = new_client_reply_id().unwrap();
+    let second = new_client_reply_id().unwrap();
+
+    assert!(first.starts_with("client_reply_"));
+    assert!(second.starts_with("client_reply_"));
+    assert_ne!(first, second);
+}
+
+#[test]
+fn literal_discussion_body_is_not_unescaped() {
+    let mut stdin = Cursor::new(Vec::<u8>::new());
+    let body =
+        discussion_body_with_stdin(Some(r"First\n\nSecond".to_string()), None, &mut stdin).unwrap();
+
+    assert_eq!(body, r"First\n\nSecond");
+}
+
+#[test]
+fn discussion_body_reads_multiline_stdin_for_dash() {
+    let mut stdin = Cursor::new(b"First\n\nSecond\n".to_vec());
+    let body = discussion_body_with_stdin(None, Some(PathBuf::from("-")), &mut stdin).unwrap();
+
+    assert_eq!(body, "First\n\nSecond\n");
+}
+
+#[test]
+fn discussion_body_reads_files_without_rewriting_content() {
+    let dir = TestDir::new("discussion-body");
+    let path = dir.path().join("body.md");
+    fs::write(&path, "# Question\n\nKeep `\\n` literal.\n").unwrap();
+    let mut stdin = Cursor::new(Vec::<u8>::new());
+
+    let body = discussion_body_with_stdin(None, Some(path), &mut stdin).unwrap();
+
+    assert_eq!(body, "# Question\n\nKeep `\\n` literal.\n");
 }
 
 #[test]

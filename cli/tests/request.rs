@@ -36,6 +36,7 @@ fn obsolete_request_lifecycle_commands_and_aliases_are_removed() {
 
     for command in [
         "comment",
+        "discuss",
         "needs-response",
         "ready",
         "respond",
@@ -51,14 +52,70 @@ fn obsolete_request_lifecycle_commands_and_aliases_are_removed() {
 }
 
 #[test]
-fn request_discuss_requires_a_body_before_login() {
-    let dir = TempDir::new("discuss-body");
+fn request_discussion_body_rules_are_validated_before_login() {
+    let dir = TempDir::new("discussion-body");
     create_repo_with_head(dir.path());
 
     scope_failure(
         dir.path(),
-        ["request", "discuss"],
+        ["request", "discussion", "start"],
         "the following required arguments were not provided",
+    );
+    scope_failure(
+        dir.path(),
+        ["request", "discussion", "reply", "dsc_one"],
+        "the following required arguments were not provided",
+    );
+    scope_failure(
+        dir.path(),
+        ["request", "discussion", "reopen", "dsc_one"],
+        "the following required arguments were not provided",
+    );
+    scope_failure(
+        dir.path(),
+        [
+            "request",
+            "discussion",
+            "start",
+            "--body",
+            "Question",
+            "--body-file",
+            "question.md",
+        ],
+        "cannot be used with",
+    );
+}
+
+#[test]
+fn request_discussion_anchor_dependencies_are_validated_before_login() {
+    let dir = TempDir::new("discussion-anchor");
+    create_repo_with_head(dir.path());
+
+    scope_failure(
+        dir.path(),
+        [
+            "request",
+            "discussion",
+            "start",
+            "--body",
+            "Question",
+            "--commit",
+            "0123456789abcdef",
+        ],
+        "--revision <REVISION>",
+    );
+    scope_failure(
+        dir.path(),
+        [
+            "request",
+            "discussion",
+            "start",
+            "--body",
+            "Question",
+            "--path",
+            "src/lib.rs",
+        ],
+        "--commit <OID>",
     );
 }
 
@@ -173,7 +230,33 @@ fn every_request_command_accepts_the_global_json_mode_and_returns_json_failures(
         vec![
             "--json", "request", "rate", "--score", "5", "--reason", "Clear",
         ],
-        vec!["request", "discuss", "--body", "Question", "--json"],
+        vec![
+            "request",
+            "discussion",
+            "start",
+            "--body",
+            "Question",
+            "--json",
+        ],
+        vec![
+            "request",
+            "discussion",
+            "reply",
+            "dsc_one",
+            "--body",
+            "Answer",
+            "--json",
+        ],
+        vec!["request", "discussion", "resolve", "dsc_one", "--json"],
+        vec![
+            "request",
+            "discussion",
+            "reopen",
+            "dsc_one",
+            "--body",
+            "New evidence",
+            "--json",
+        ],
         vec!["--json", "request", "show"],
         vec!["request", "list", "--json"],
         vec!["--json", "request", "status"],
@@ -224,8 +307,19 @@ fn request_help_exposes_the_complete_approved_vocabulary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     for command in [
-        "close", "discuss", "edit", "invite", "leave", "list", "merge", "push", "show", "start",
-        "status", "submit", "uninvite",
+        "close",
+        "discussion",
+        "edit",
+        "invite",
+        "leave",
+        "list",
+        "merge",
+        "push",
+        "show",
+        "start",
+        "status",
+        "submit",
+        "uninvite",
     ] {
         assert!(
             stdout.lines().any(|line| {
@@ -244,14 +338,30 @@ fn request_command_help_uses_the_shared_target_flags() {
     create_repo_with_head(dir.path());
 
     for command in [
-        "close", "discuss", "edit", "invite", "leave", "merge", "push", "show", "status", "submit",
-        "uninvite",
+        "close", "edit", "invite", "leave", "merge", "push", "show", "status", "submit", "uninvite",
     ] {
         let output = scope_command(dir.path())
             .args(["request", command, "--help"])
             .output()
             .unwrap();
         assert_success(&output, &format!("scope request {command} --help"));
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("--remote <REMOTE>"), "{command}:\n{stdout}");
+        assert!(
+            stdout.contains("--request <REQUEST>"),
+            "{command}:\n{stdout}"
+        );
+    }
+
+    for command in ["start", "reply", "resolve", "reopen"] {
+        let output = scope_command(dir.path())
+            .args(["request", "discussion", command, "--help"])
+            .output()
+            .unwrap();
+        assert_success(
+            &output,
+            &format!("scope request discussion {command} --help"),
+        );
         let stdout = String::from_utf8(output.stdout).unwrap();
         assert!(stdout.contains("--remote <REMOTE>"), "{command}:\n{stdout}");
         assert!(
