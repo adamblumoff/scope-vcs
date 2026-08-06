@@ -72,6 +72,7 @@ steps:
         cd web
         # React Doctor uses `git grep` for project-wide accessibility checks,
         # while Scope checks out a source snapshot without repository metadata.
+        git config --global --add safe.directory "$PWD"
         git init --quiet .
         git add --all -- src
         export CARGO_HOME=/scope/cache/cargo
