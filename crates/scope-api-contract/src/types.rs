@@ -498,8 +498,8 @@ pub struct RequestDiscussionSummaryResponse {
     pub opened_position: u64,
     pub last_activity_position: u64,
     pub author: RequestActorSummaryResponse,
-    pub body_markdown: Option<String>,
-    pub change_block: Option<RequestChangeBlockResponse>,
+    pub body_markdown: String,
+    pub anchor: Option<RequestDiscussionAnchor>,
     pub status: RequestDiscussionStatus,
     pub reply_count: u64,
     pub unread_count: u64,
@@ -511,12 +511,41 @@ pub struct RequestDiscussionSummaryResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct RequestChangeBlockResponse {
+pub struct RequestDiscussionAnchor {
+    pub revision_id: String,
+    pub commit_oid: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestRevisionCommitResponse {
+    pub oid: String,
+    pub parent_oids: Vec<String>,
+    pub author: Option<String>,
+    pub authored_at_unix: u64,
+    pub message: String,
+    pub change_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestRevisionResponse {
     pub id: String,
     pub position: u64,
+    pub actor: RequestActorSummaryResponse,
     pub old_head_oid: String,
     pub new_head_oid: String,
+    pub commits: Vec<RequestRevisionCommitResponse>,
+    pub commits_truncated: bool,
     pub created_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestRevisionListResponse {
+    pub revisions: Vec<RequestRevisionResponse>,
+    pub has_earlier_revisions: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -592,6 +621,7 @@ pub struct EditRequestIdentityRequest {
 pub struct CreateRequestDiscussionRequest {
     pub body_markdown: String,
     pub client_discussion_id: String,
+    pub anchor: Option<RequestDiscussionAnchor>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

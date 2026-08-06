@@ -7,8 +7,8 @@ pub use access::{
     RequestPolicyDecision, RequestViewer, request_actor_role, request_list_mergeability,
     request_list_predicate, request_mergeability, request_policy,
 };
-mod change_blocks;
-pub use change_blocks::RequestChangeBlock;
+mod revisions;
+pub use revisions::RequestRevision;
 mod identity;
 pub use identity::{EditRequestIdentityInput, edit_request_identity, request_identity_audit_fact};
 mod discussions;
@@ -16,9 +16,9 @@ pub use discussions::{
     CreateRequestDiscussionInput, CreateRequestDiscussionMutation,
     CreateRequestDiscussionReplyInput, CreateRequestDiscussionReplyMutation,
     MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
-    ReopenRequestDiscussionInput, RequestDiscussion, RequestDiscussionMutation,
-    RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
-    RequestDiscussionSubject, ResolveRequestDiscussionInput, create_request_discussion,
+    ReopenRequestDiscussionInput, RequestDiscussion, RequestDiscussionAnchor,
+    RequestDiscussionMutation, RequestDiscussionReadState, RequestDiscussionReply,
+    RequestDiscussionStatus, ResolveRequestDiscussionInput, create_request_discussion,
     create_request_discussion_reply, ensure_request_discussion_transition_allowed,
     mark_request_discussion_read, reopen_and_reply_to_request_discussion,
     reopen_request_discussion, resolve_request_discussion,

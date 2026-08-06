@@ -1,23 +1,26 @@
 import type {
   AccountSession,
-  RequestChangeBlockFiles,
   RequestDetail,
   RepoLiveState,
   RepoParams,
   RequestMutation,
   RequestRating,
   RequestRatings,
+  RequestRevisionCommitFiles,
+  RequestRevisions,
+  ReviewFileDiff,
 } from '@/api/types'
-import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
-import type { RateRequestInput } from '@/api/requests'
+import type {
+  LoadRequestRevisionCommitInput,
+  RateRequestInput,
+} from '@/api/requests'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
-import { History, ShieldQuestion } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { GitCommit, History, MessageSquare, ShieldQuestion } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { RequestActivityDrawer } from './request-activity-drawer'
 import type {
@@ -25,6 +28,11 @@ import type {
   RequestActionResult,
 } from './request-actions-api'
 import { RequestContextRail } from './request-context-rail'
+import {
+  RequestChangesWorkbench,
+  type RequestChangesSearch,
+} from './request-changes-workbench'
+import { RequestDescription } from './request-description'
 import type {
   CreateDiscussionInput,
   CreateReplyInput,
@@ -82,13 +90,19 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
 
 type RequestDetailPageProps = {
   account: AccountSession | null
+  activeView: 'changes' | 'discussion'
   createDiscussion: (input: CreateDiscussionInput) => Promise<RequestDiscussionMutation>
   createReply: (input: CreateReplyInput) => Promise<RequestDiscussionReplyMutation>
   detail: RequestDetail
   discussionPage: RequestDiscussionPage
   live: RepoLiveState
   loadActivity: () => Promise<RequestActivityPage>
-  loadChangeBlockFiles: (input: LoadRequestChangeBlockFilesInput) => Promise<RequestChangeBlockFiles>
+  loadRevisionCommit: (
+    input: LoadRequestRevisionCommitInput,
+  ) => Promise<RequestRevisionCommitFiles>
+  loadRevisionDiff: (
+    input: LoadRequestRevisionCommitInput & { path: string },
+  ) => Promise<ReviewFileDiff>
   loadDiscussions: (input: LoadDiscussionsInput) => Promise<RequestDiscussionPage>
   loadDiscussionChanges: (input: {
     after: number
@@ -98,38 +112,44 @@ type RequestDetailPageProps = {
   }) => Promise<RequestDiscussionChanges>
   loadReplies: (input: LoadRepliesInput) => Promise<RequestDiscussionRepliesPage>
   markDiscussionRead: (input: MarkDiscussionReadInput) => Promise<unknown>
+  onChangesSearchChange: (search: RequestChangesSearch) => void
   params: RepoParams
   performAction: (command: RequestActionCommand) => Promise<RequestActionResult>
   reopenAndReply: (input: CreateReplyInput) => Promise<RequestDiscussionReplyMutation>
-  reopenDiscussion: (input: RequestDiscussionActionInput) => Promise<RequestDiscussionMutation>
+  revisions: RequestRevisions | null
   ratings: RequestRatings
   rateRequest: (input: RateRequestInput) => Promise<RequestRating>
   resolveDiscussion: (input: RequestDiscussionActionInput) => Promise<RequestDiscussionMutation>
   updateDescription: (input: UpdateDescriptionInput) => Promise<RequestMutation>
+  search: RequestChangesSearch & { discussion?: string }
 }
 
 export function RequestDetailPage(props: RequestDetailPageProps) {
   const {
     account,
+    activeView,
     createDiscussion,
     createReply,
     detail,
     discussionPage,
     live,
     loadActivity,
-    loadChangeBlockFiles,
+    loadRevisionCommit,
+    loadRevisionDiff,
     loadDiscussions,
     loadDiscussionChanges,
     loadReplies,
     markDiscussionRead,
+    onChangesSearchChange,
     params,
     performAction,
     reopenAndReply,
-    reopenDiscussion,
+    revisions,
     ratings,
     rateRequest,
     resolveDiscussion,
     updateDescription,
+    search,
   } = props
   const { request } = detail
   const serverDescription = request.description_markdown
@@ -156,14 +176,12 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     load: loadDiscussions,
     loadChanges: loadDiscussionChanges,
     markRead: markDiscussionRead,
-    reopen: reopenDiscussion,
     resolve: resolveDiscussion,
   }), [
     createDiscussion,
     loadDiscussionChanges,
     loadDiscussions,
     markDiscussionRead,
-    reopenDiscussion,
     resolveDiscussion,
   ])
   const threadActions = useMemo(
@@ -197,12 +215,11 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
     }
   }
 
-  function requestHeader(discussionControls?: ReactNode) {
+  function requestHeader() {
     return (
       <WorkbenchHeader
         actions={(
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {discussionControls}
             <RequestLifecycleActions
               actions={requestActions}
               className="hidden xl:flex"
@@ -251,34 +268,64 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
 
   return (
     <div className={hasLifecycleActions ? 'pb-20 xl:pb-0' : undefined}>
-      <RequestDiscussionWorkbench
-        actions={discussionActions}
-        actor={actor}
-        canResolve={canResolveDiscussion}
-        contextRail={(
-          <RequestContextRail
-            actions={requestActions}
-            onRate={rateRequest}
-            params={discussionParams}
-            ratings={ratings}
-            request={request}
+      {requestHeader()}
+      <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="order-2 min-w-0 xl:order-1">
+          <RequestDescription
+            canEdit={request.permissions.can_edit_identity}
+            description={description}
+            onSave={saveDescription}
           />
-        )}
-        description={description}
-        header={requestHeader}
-        initialPage={discussionPage}
-        loadChangeBlockFiles={loadChangeBlockFiles}
-        onDescriptionSave={saveDescription}
-        params={discussionParams}
-        permissions={{
-          canEditDescription: request.permissions.can_edit_identity,
-          canOpenDiscussion: request.permissions.can_open_discussion,
-          canReply: request.permissions.can_reply_to_discussion,
-        }}
-        repoId={live.repo.id}
-        request={request}
-        threadActions={threadActions}
-      />
+          <RequestViewTabs
+            activeView={activeView}
+            params={{ ...params, requestId: request.id }}
+          />
+          {activeView === 'discussion' ? (
+            <RequestDiscussionWorkbench
+              actions={discussionActions}
+              actor={actor}
+              canResolve={canResolveDiscussion}
+              focusedDiscussionId={search.discussion}
+              initialPage={discussionPage}
+              params={discussionParams}
+              permissions={{
+                canOpenDiscussion: request.permissions.can_open_discussion,
+                canReply: request.permissions.can_reply_to_discussion,
+              }}
+              repoId={live.repo.id}
+              request={request}
+              threadActions={threadActions}
+            />
+          ) : revisions ? (
+            <RequestChangesWorkbench
+              audience={live.repo.access.can_read_private_files ? 'private' : 'public'}
+              loadCommit={loadRevisionCommit}
+              loadDiff={loadRevisionDiff}
+              loadDiscussions={loadDiscussions}
+              onSearchChange={onChangesSearchChange}
+              params={discussionParams}
+              repoId={live.repo.id}
+              revisions={revisions}
+              search={search}
+            />
+          ) : (
+            <section className="border-b border-border px-5 py-14 text-center lg:px-7">
+              <GitCommit className="mx-auto size-5 text-muted-foreground" />
+              <h2 className="mt-3 text-sm font-semibold">Changes are unavailable</h2>
+              <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
+                The request conversation is still available. Refresh to try loading its revision history again.
+              </p>
+            </section>
+          )}
+        </div>
+        <RequestContextRail
+          actions={requestActions}
+          onRate={rateRequest}
+          params={discussionParams}
+          ratings={ratings}
+          request={request}
+        />
+      </div>
 
       {hasLifecycleActions ? (
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--border-strong)] bg-background/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur xl:hidden">
@@ -299,5 +346,39 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
         open={history.open}
       />
     </div>
+  )
+}
+
+function RequestViewTabs({
+  activeView,
+  params,
+}: {
+  activeView: 'changes' | 'discussion'
+  params: RepoParams & { requestId: string }
+}) {
+  const tabClass = 'inline-flex h-11 items-center gap-2 border-b-2 px-1 text-sm font-medium transition-colors'
+  return (
+    <nav aria-label="Request views" className="flex gap-6 border-b border-border px-5 lg:px-7">
+      <Link
+        aria-current={activeView === 'discussion' ? 'page' : undefined}
+        className={`${tabClass} ${activeView === 'discussion' ? 'border-brand text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+        params={params}
+        search={{}}
+        to="/$owner/$repo/requests/$requestId"
+      >
+        <MessageSquare className="size-3.5" />
+        Discussion
+      </Link>
+      <Link
+        aria-current={activeView === 'changes' ? 'page' : undefined}
+        className={`${tabClass} ${activeView === 'changes' ? 'border-brand text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+        params={params}
+        search={{}}
+        to="/$owner/$repo/requests/$requestId/changes"
+      >
+        <GitCommit className="size-3.5" />
+        Changes
+      </Link>
+    </nav>
   )
 }

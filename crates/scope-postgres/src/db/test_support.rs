@@ -3,8 +3,8 @@ use super::{
     cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
     entities,
     repository_rows::insert_repository,
-    request_change_block_rows::insert_change_block,
     request_discussion_rows::{insert_discussion, insert_reply, save_read_state},
+    request_revision_rows::insert_revision,
     request_rows::{insert_request_event_row, insert_request_row},
 };
 #[cfg(any(test, feature = "test-support"))]
@@ -504,8 +504,8 @@ async fn seed_catalog_rows(
     for request in catalog.requests.values() {
         insert_request_row(tx, request).await?;
     }
-    for change_block in catalog.request_change_blocks.values() {
-        insert_change_block(tx, change_block).await?;
+    for revision in catalog.request_revisions.values() {
+        insert_revision(tx, revision).await?;
     }
     for discussion in catalog.request_discussions.values() {
         insert_discussion(tx, discussion).await?;

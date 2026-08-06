@@ -12,8 +12,7 @@ use scope_domain::{
     projection::{FileChange, LogicalCommit},
     requests::{
         EditRequestIdentityInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
-        RequestActorRole, RequestAudience, RequestChangeBlock, RequestDiscussion,
-        RequestDiscussionReadState, StartRequestInput, canonical_request_ref,
+        RequestActorRole, RequestAudience, StartRequestInput, canonical_request_ref,
         edit_request_identity, record_request_revision, record_working_request_upload,
         start_request,
     },
@@ -337,12 +336,9 @@ fn seed_owner_request(
         )?;
         current_head_oid = revision.head_oid;
         lifecycle_at_unix = now_unix + 4 + index as u64;
-        register_seed_change_block(
-            catalog,
-            mutation.change_block,
-            mutation.discussion,
-            mutation.read_state,
-        );
+        catalog
+            .request_revisions
+            .insert(mutation.revision.id.clone(), mutation.revision);
     }
 
     let request = catalog.requests.get_mut(id).expect("seed request exists");
@@ -368,24 +364,6 @@ fn seed_owner_request(
     };
     request.validate_facts()?;
     Ok(())
-}
-
-fn register_seed_change_block(
-    catalog: &mut scope_postgres::db::CatalogFixture,
-    change_block: RequestChangeBlock,
-    discussion: RequestDiscussion,
-    read_state: RequestDiscussionReadState,
-) {
-    catalog
-        .request_change_blocks
-        .insert(change_block.id.clone(), change_block);
-    catalog
-        .request_discussions
-        .insert(discussion.id.clone(), discussion);
-    catalog.request_discussion_read_states.insert(
-        format!("{}:{}", read_state.discussion_id, read_state.user_id),
-        read_state,
-    );
 }
 
 fn repo(

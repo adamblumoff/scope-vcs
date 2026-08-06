@@ -1,14 +1,14 @@
 use super::{
     RequestStore,
     request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
-    request_change_block_rows::{change_block_by_id, change_blocks_by_ids},
     request_discussion_rows::{
-        RequestDiscussionReplyReadModel, changed_discussions_for_request, discussion_by_client_id,
-        discussion_by_id, discussions_page_for_request, insert_discussion, insert_reply,
-        read_state, read_states_for_user, replies_for_discussion, reply_by_client_id, reply_by_id,
-        reply_child_count, reply_previews_for_discussions, save_discussion, save_read_state,
-        unread_content_counts, users_by_ids as load_users_by_ids,
+        DiscussionPageFilter, RequestDiscussionReplyReadModel, changed_discussions_for_request,
+        discussion_by_client_id, discussion_by_id, discussions_page_for_request, insert_discussion,
+        insert_reply, read_state, read_states_for_user, replies_for_discussion, reply_by_client_id,
+        reply_by_id, reply_child_count, reply_previews_for_discussions, save_discussion,
+        save_read_state, unread_content_counts, users_by_ids as load_users_by_ids,
     },
+    request_revision_rows::{RequestRevisionWindow, revision_by_id, revision_window_for_request},
     request_rows::insert_request_event_row,
     request_rows::save_request_row,
 };
@@ -20,12 +20,11 @@ use {
         CreateRequestDiscussionInput, CreateRequestDiscussionMutation,
         CreateRequestDiscussionReplyInput, CreateRequestDiscussionReplyMutation,
         MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput,
-        ReopenRequestDiscussionInput, RequestChangeBlock, RequestDiscussion,
-        RequestDiscussionReadState, RequestDiscussionSubject, ResolveRequestDiscussionInput,
-        create_request_discussion, create_request_discussion_reply,
-        ensure_request_discussion_transition_allowed, mark_request_discussion_read,
-        reopen_and_reply_to_request_discussion, reopen_request_discussion,
-        resolve_request_discussion,
+        ReopenRequestDiscussionInput, RequestDiscussion, RequestDiscussionReadState,
+        RequestRevision, ResolveRequestDiscussionInput, create_request_discussion,
+        create_request_discussion_reply, ensure_request_discussion_transition_allowed,
+        mark_request_discussion_read, reopen_and_reply_to_request_discussion,
+        reopen_request_discussion, resolve_request_discussion,
     },
     scope_domain::store::UserAccount,
 };
@@ -33,7 +32,6 @@ use {
 #[derive(Clone, Debug)]
 pub struct RequestDiscussionReadModel {
     pub discussion: RequestDiscussion,
-    pub change_block: Option<RequestChangeBlock>,
     pub reply_count: u64,
     pub latest_replies: Vec<RequestDiscussionReplyReadModel>,
     pub unread_count: u64,
@@ -51,10 +49,23 @@ pub struct RequestDiscussionsPageQuery<'a> {
     pub viewer_user_id: Option<&'a str>,
     pub snapshot_version: u64,
     pub cursor: Option<(u64, String)>,
+    pub discussion_id: Option<&'a str>,
+    pub anchor_revision_id: Option<&'a str>,
+    pub anchor_commit_oid: Option<&'a str>,
+    pub include_revision_anchor: bool,
     pub limit: u64,
 }
 
 impl RequestStore {
+    pub async fn request_revision_window(
+        &self,
+        request_id: &str,
+        selected_revision_id: Option<&str>,
+        limit: u64,
+    ) -> Result<RequestRevisionWindow, PostgresError> {
+        revision_window_for_request(self.db.as_ref(), request_id, selected_revision_id, limit).await
+    }
+
     pub async fn request_discussions_page(
         &self,
         query: RequestDiscussionsPageQuery<'_>,
@@ -64,6 +75,12 @@ impl RequestStore {
             query.request_id,
             query.snapshot_version,
             query.cursor,
+            DiscussionPageFilter {
+                discussion_id: query.discussion_id,
+                revision_id: query.anchor_revision_id,
+                commit_oid: query.anchor_commit_oid,
+                include_revision_anchor: query.include_revision_anchor,
+            },
             query.limit,
         )
         .await?;
@@ -118,16 +135,6 @@ impl RequestStore {
             None => BTreeMap::new(),
         };
         let previews = reply_previews_for_discussions(self.db.as_ref(), &ids).await?;
-        let change_block_ids = discussions
-            .iter()
-            .filter_map(|discussion| match &discussion.subject {
-                RequestDiscussionSubject::Comment => None,
-                RequestDiscussionSubject::ChangeBlock { change_block_id } => {
-                    Some(change_block_id.clone())
-                }
-            })
-            .collect::<Vec<_>>();
-        let change_blocks = change_blocks_by_ids(self.db.as_ref(), &change_block_ids).await?;
         let unread_counts = match viewer_user_id {
             Some(_) => unread_content_counts(self.db.as_ref(), &discussions, &read_states).await?,
             None => BTreeMap::new(),
@@ -153,16 +160,6 @@ impl RequestStore {
             );
             let unread_count = unread_counts.get(&discussion.id).copied().unwrap_or(0);
             models.push(RequestDiscussionReadModel {
-                change_block: match &discussion.subject {
-                    RequestDiscussionSubject::Comment => None,
-                    RequestDiscussionSubject::ChangeBlock { change_block_id } => {
-                        Some(change_blocks.get(change_block_id).cloned().ok_or_else(|| {
-                            PostgresError::internal_message(
-                                "request change block subject is missing",
-                            )
-                        })?)
-                    }
-                },
                 discussion,
                 reply_count,
                 latest_replies,
@@ -221,14 +218,14 @@ impl RequestStore {
         reply_child_count(self.db.as_ref(), reply_id).await
     }
 
-    pub async fn request_change_block(
+    pub async fn request_revision(
         &self,
         request_id: &str,
-        block_id: &str,
-    ) -> Result<Option<RequestChangeBlock>, PostgresError> {
-        Ok(change_block_by_id(self.db.as_ref(), block_id)
+        revision_id: &str,
+    ) -> Result<Option<RequestRevision>, PostgresError> {
+        Ok(revision_by_id(self.db.as_ref(), revision_id)
             .await?
-            .filter(|block| block.request_id == request_id))
+            .filter(|revision| revision.request_id == request_id))
     }
 
     pub async fn create_request_discussion(

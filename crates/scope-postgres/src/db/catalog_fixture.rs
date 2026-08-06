@@ -3,8 +3,8 @@
 use scope_domain::{
     policy::Visibility,
     requests::{
-        Request, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
-        RequestDiscussionReply, RequestEvent,
+        Request, RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply,
+        RequestEvent, RequestRevision,
     },
     store::{CatalogError, RepoStorageCleanup, SourceBlob, StoredRepository, UserAccount, repo_id},
 };
@@ -15,7 +15,7 @@ pub struct CatalogFixture {
     pub users: BTreeMap<String, UserAccount>,
     pub repositories: BTreeMap<String, StoredRepository>,
     pub requests: BTreeMap<String, Request>,
-    pub request_change_blocks: BTreeMap<String, RequestChangeBlock>,
+    pub request_revisions: BTreeMap<String, RequestRevision>,
     pub request_discussions: BTreeMap<String, RequestDiscussion>,
     pub request_discussion_replies: BTreeMap<String, RequestDiscussionReply>,
     pub request_discussion_read_states: BTreeMap<String, RequestDiscussionReadState>,

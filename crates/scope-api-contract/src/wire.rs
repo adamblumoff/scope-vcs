@@ -150,7 +150,7 @@ wire_enum!(
     #[cfg_attr(feature = "ts", ts(rename_all = "snake_case"))]
     RequestQueueSection => DomainRequestQueueSection { YourWork, Open, Closed }
 );
-wire_enum!(RequestDiscussionStatus => DomainRequestDiscussionStatus { Dormant, Open, Resolved });
+wire_enum!(RequestDiscussionStatus => DomainRequestDiscussionStatus { Open, Resolved });
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

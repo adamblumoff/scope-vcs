@@ -144,7 +144,7 @@ export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null
 
 export type RequestFileDiffRequest = { path: string, };
 
-export type RequestChangeBlockFilesResponse = { change_block: RequestChangeBlockResponse, files: Array<CommitFileResponse>, };
+export type RequestRevisionCommitFilesResponse = { revision_id: string, commit: RequestRevisionCommitResponse, files: Array<CommitFileResponse>, };
 
 export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
 
@@ -214,13 +214,19 @@ export type RequestIdentityAuditFact = { title_sha256: string, title_byte_count:
 
 export type RequestActorSummaryResponse = { id: string, handle: string, };
 
-export type RequestDiscussionStatus = "Dormant" | "Open" | "Resolved";
+export type RequestDiscussionStatus = "Open" | "Resolved";
 
 export type RequestDiscussionReplyResponse = { id: string, discussion_id: string, position: number, author: RequestActorSummaryResponse, body_markdown: string, reply_to_reply_id: string | null, child_reply_count: number, can_reply: boolean, created_at_unix: number, };
 
-export type RequestDiscussionSummaryResponse = { id: string, request_id: string, client_discussion_id: string, opened_position: number, last_activity_position: number, author: RequestActorSummaryResponse, body_markdown: string | null, change_block: RequestChangeBlockResponse | null, status: RequestDiscussionStatus, reply_count: number, unread_count: number, latest_replies: Array<RequestDiscussionReplyResponse>, created_at_unix: number, resolved_at_unix: number | null, resolved_by: RequestActorSummaryResponse | null, };
+export type RequestDiscussionSummaryResponse = { id: string, request_id: string, client_discussion_id: string, opened_position: number, last_activity_position: number, author: RequestActorSummaryResponse, body_markdown: string, anchor: RequestDiscussionAnchor | null, status: RequestDiscussionStatus, reply_count: number, unread_count: number, latest_replies: Array<RequestDiscussionReplyResponse>, created_at_unix: number, resolved_at_unix: number | null, resolved_by: RequestActorSummaryResponse | null, };
 
-export type RequestChangeBlockResponse = { id: string, position: number, old_head_oid: string, new_head_oid: string, created_at_unix: number, };
+export type RequestDiscussionAnchor = { revision_id: string, commit_oid: string | null, path: string | null, };
+
+export type RequestRevisionCommitResponse = { oid: string, parent_oids: Array<string>, author: string | null, authored_at_unix: number, message: string, change_count: number, };
+
+export type RequestRevisionResponse = { id: string, position: number, actor: RequestActorSummaryResponse, old_head_oid: string, new_head_oid: string, commits: Array<RequestRevisionCommitResponse>, commits_truncated: boolean, created_at_unix: number, };
+
+export type RequestRevisionListResponse = { revisions: Array<RequestRevisionResponse>, has_earlier_revisions: boolean, };
 
 export type RequestDiscussionPageResponse = { discussions: Array<RequestDiscussionSummaryResponse>, next_cursor: string | null, snapshot_version: number, };
 
@@ -244,7 +250,7 @@ export type SubmitRequestRequest = Record<symbol, never>;
 
 export type EditRequestIdentityRequest = { title: string | null, description_markdown: string | null, };
 
-export type CreateRequestDiscussionRequest = { body_markdown: string, client_discussion_id: string, };
+export type CreateRequestDiscussionRequest = { body_markdown: string, client_discussion_id: string, anchor: RequestDiscussionAnchor | null, };
 
 export type CreateRequestDiscussionReplyRequest = { body_markdown: string, client_reply_id: string, reply_to_reply_id: string | null, };
 
@@ -308,8 +314,9 @@ export const ApiRouteTemplates = {
   repoSession: "/v1/repos/{owner}/{repo}/session",
   repoFiles: "/v1/repos/{owner}/{repo}/files",
   repoFileContent: "/v1/repos/{owner}/{repo}/files/content",
-  repoRequestChangeBlockFiles: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}",
-  repoRequestChangeBlockFileDiff: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}/file-diff",
+  repoRequestRevisions: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes",
+  repoRequestRevisionCommit: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{revision_id}/commits/{commit_oid}",
+  repoRequestRevisionCommitFileDiff: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{revision_id}/commits/{commit_oid}/file-diff",
   repoRequestDiscussions: "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline",
   repoRequestDiscussionChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline/changes",
   repoRequestDiscussionReplies: "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/replies",

@@ -1,9 +1,8 @@
 use super::{
     PUBLIC_WORKING_REQUEST_LIMIT, REQUEST_TITLE_MAX_BYTES, Request, RequestActorRole,
-    RequestAudience, RequestChangeBlock, RequestDiscussion, RequestDiscussionReadState,
-    RequestEvent, RequestEventKind, RequestEventPayload, RequestState, advance_request_activity,
-    ensure_event_id_available, request_identity_audit_fact, validate_body_size,
-    validate_required_id,
+    RequestAudience, RequestEvent, RequestEventKind, RequestEventPayload, RequestRevision,
+    RequestState, advance_request_activity, ensure_event_id_available, request_identity_audit_fact,
+    validate_body_size, validate_required_id,
 };
 use crate::{error::DomainError, store::SourceBlob};
 use std::collections::BTreeMap;
@@ -62,9 +61,7 @@ pub struct RecordRequestRevisionInput {
 pub struct RequestRevisionMutation {
     pub request: Request,
     pub event: RequestEvent,
-    pub change_block: RequestChangeBlock,
-    pub discussion: RequestDiscussion,
-    pub read_state: RequestDiscussionReadState,
+    pub revision: RequestRevision,
     pub orphan_objects: Vec<SourceBlob>,
 }
 
@@ -83,7 +80,7 @@ pub enum CloseRequestMutation {
     DeletedDraft {
         request: Request,
         events: Vec<RequestEvent>,
-        change_blocks: Vec<RequestChangeBlock>,
+        revisions: Vec<RequestRevision>,
         orphan_objects: Vec<SourceBlob>,
     },
     Closed {
@@ -232,19 +229,12 @@ pub fn record_request_revision(
         },
         created_at_unix: input.now_unix,
     };
-    let (change_block, discussion, read_state) = super::change_blocks::revision_change_block(
-        &request,
-        &event,
-        old_head_oid,
-        input.new_head_oid,
-    )?;
+    let revision = super::revisions::revision(&request, &event, old_head_oid, input.new_head_oid)?;
     events.insert(event.id.clone(), event.clone());
     Ok(RequestRevisionMutation {
         request,
         event,
-        change_block,
-        discussion,
-        read_state,
+        revision,
         orphan_objects: old_git_snapshot.into_iter().collect(),
     })
 }
@@ -252,7 +242,7 @@ pub fn record_request_revision(
 pub fn close_request(
     requests: &mut BTreeMap<String, Request>,
     events: &mut BTreeMap<String, RequestEvent>,
-    change_blocks: &mut BTreeMap<String, RequestChangeBlock>,
+    revisions: &mut BTreeMap<String, RequestRevision>,
     input: CloseRequestInput,
 ) -> Result<CloseRequestMutation, DomainError> {
     validate_required_id("request id", &input.request_id)?;
@@ -292,23 +282,23 @@ pub fn close_request(
             .into_iter()
             .filter_map(|event_id| events.remove(&event_id))
             .collect::<Vec<_>>();
-        let change_block_ids = change_blocks
+        let revision_ids = revisions
             .values()
-            .filter(|change_block| change_block.request_id == request.id)
-            .map(|change_block| change_block.id.clone())
+            .filter(|revision| revision.request_id == request.id)
+            .map(|revision| revision.id.clone())
             .collect::<Vec<_>>();
-        let removed_change_blocks = change_block_ids
+        let removed_revisions = revision_ids
             .into_iter()
-            .filter_map(|change_block_id| change_blocks.remove(&change_block_id))
+            .filter_map(|revision_id| revisions.remove(&revision_id))
             .collect::<Vec<_>>();
         let mut orphan_objects = request
             .git_snapshot
             .clone()
             .into_iter()
             .chain(
-                removed_change_blocks
+                removed_revisions
                     .iter()
-                    .map(|change_block| change_block.git_snapshot.clone()),
+                    .map(|revision| revision.git_snapshot.clone()),
             )
             .collect::<Vec<_>>();
         orphan_objects.sort_by(|left, right| left.content_ref.cmp(&right.content_ref));
@@ -316,7 +306,7 @@ pub fn close_request(
         return Ok(CloseRequestMutation::DeletedDraft {
             request,
             events: removed_events,
-            change_blocks: removed_change_blocks,
+            revisions: removed_revisions,
             orphan_objects,
         });
     }

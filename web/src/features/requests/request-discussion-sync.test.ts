@@ -353,6 +353,7 @@ function discussion(
   requestId: string,
 ): RequestDiscussion {
   return {
+    anchor: null,
     author: { handle: 'maya', id: 'user-maya' },
     body_markdown: `Discussion ${id}`,
     client_discussion_id: id,

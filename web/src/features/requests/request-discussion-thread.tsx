@@ -1,24 +1,16 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 import {
   Check,
   ChevronDown,
   ChevronRight,
   CircleAlert,
-  GitCommitHorizontal,
+  GitCommit,
   Link2,
   MessageSquare,
   RotateCcw,
 } from 'lucide-react'
-import {
-  memo,
-  type ReactNode,
-  useEffect,
-  useEffectEvent,
-  useRef,
-  useState,
-} from 'react'
+import { memo, useEffect, useEffectEvent, useRef, useState } from 'react'
 import {
   RequestReplyComposer,
 } from './request-discussion-composer'
@@ -43,30 +35,31 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   actor,
   canReply,
   canResolve,
+  composerOpen,
   discussion,
   onExpandedChange,
   onMarkRead,
+  onOpenComposer,
+  onCloseComposer,
   onPatch,
   onRetryRoot,
-  onSetResolved,
+  onResolve,
   params,
-  rootContent,
 }: {
   actions: RequestDiscussionThreadActions
   actor: { handle: string; id: string }
   canReply: boolean
   canResolve: boolean
+  composerOpen: boolean
   discussion: RequestDiscussionView
   onExpandedChange: (discussionId: string, expanded: boolean) => void
   onMarkRead: (discussion: RequestDiscussion) => Promise<void>
+  onOpenComposer: () => void
+  onCloseComposer: () => void
   onPatch: (discussion: RequestDiscussion) => void
   onRetryRoot: (discussion: RequestDiscussionView) => Promise<boolean>
-  onSetResolved: (
-    discussion: RequestDiscussion,
-    resolved: boolean,
-  ) => Promise<void>
+  onResolve: (discussion: RequestDiscussion) => Promise<void>
   params: { owner: string; repo: string; request_id: string }
-  rootContent?: ReactNode
 }) {
   const [readMarkerVisible, setReadMarkerVisible] = useState(false)
   const readMarkerRef = useRef<HTMLSpanElement>(null)
@@ -143,37 +136,27 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     previewContentExposed,
   ])
 
+  useEffect(() => {
+    if (!composerOpen) setQuoteId(null)
+  }, [composerOpen, setQuoteId])
+
+  function openComposer() {
+    onExpandedChange(discussion.id, true)
+    onOpenComposer()
+  }
+
   return (
     <article
-      className={cn(
-        'request-discussion-thread scroll-mt-32 border-t px-5 first:border-t-0 lg:px-7',
-        discussion.change_block
-          ? 'border-brand/25 bg-brand-muted/45 py-4 shadow-[inset_3px_0_0_0_var(--brand)]'
-          : 'border-border py-5',
-      )}
+      className="request-discussion-thread scroll-mt-32 border-t border-border px-5 py-5 first:border-t-0 lg:px-7"
       id={`discussion-${discussion.id}`}
     >
       <div className="flex min-w-0 items-start gap-3">
-        {discussion.change_block ? (
-          <ChangeEventMarker />
-        ) : (
-          <RequestDiscussionActorAvatar handle={discussion.author.handle} />
-        )}
+        <RequestDiscussionActorAvatar handle={discussion.author.handle} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-sm font-semibold">
               {discussion.author.handle}
             </span>
-            {discussion.change_block ? (
-              <>
-                <span className="text-sm text-muted-foreground">
-                  updated the request
-                </span>
-                <span className="font-mono text-xs font-medium tabular-nums text-foreground">
-                  {discussion.change_block.new_head_oid.slice(0, 8)}
-                </span>
-              </>
-            ) : null}
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
               {formatUnixDate(discussion.created_at_unix)}
             </span>
@@ -199,7 +182,14 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
             ) : null}
           </div>
 
-          {rootContent ?? (collapsed ? (
+          {discussion.anchor ? (
+            <RequestDiscussionAnchor
+              anchor={discussion.anchor}
+              params={params}
+            />
+          ) : null}
+
+          {collapsed ? (
             <button
               className="mt-2 flex w-full min-w-0 items-start gap-2 text-left"
               onClick={() => {
@@ -213,16 +203,14 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
               </span>
             </button>
           ) : (
-            discussion.body_markdown ? (
-              <RequestDiscussionMarkdown
-                className="mt-2"
-                source={discussion.body_markdown}
-              />
-            ) : null
-          ))}
+            <RequestDiscussionMarkdown
+              className="mt-2"
+              source={discussion.body_markdown}
+            />
+          )}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {canPostReply || discussion.reply_count > 0 ? (
+            {discussion.reply_count > 0 ? (
               <Button
                 onClick={() => void expandReplies()}
                 size="sm"
@@ -230,32 +218,34 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
                 variant="ghost"
               >
                 <MessageSquare className="size-3.5" />
-                {discussion.reply_count === 0
-                  ? 'Reply'
-                  : `${discussion.reply_count} ${discussion.reply_count === 1 ? 'reply' : 'replies'}`}
-                {discussion.reply_count > 0 ? (
-                  <ChevronDown className="size-3.5" />
-                ) : null}
+                {`${discussion.reply_count} ${discussion.reply_count === 1 ? 'reply' : 'replies'}`}
+                <ChevronDown className="size-3.5" />
               </Button>
             ) : null}
-            {canResolve && discussion.status !== 'Dormant' && !discussion.pending ? (
+            {canPostReply ? (
               <Button
-                onClick={() =>
-                  void onSetResolved(
-                    discussion,
-                    discussion.status === 'Open',
-                  )
-                }
+                onClick={openComposer}
                 size="sm"
                 type="button"
                 variant="ghost"
               >
-                {discussion.status === 'Open' ? (
-                  <Check className="size-3.5" />
-                ) : (
+                {discussion.status === 'Resolved' ? (
                   <RotateCcw className="size-3.5" />
+                ) : (
+                  <MessageSquare className="size-3.5" />
                 )}
-                {discussion.status === 'Open' ? 'Resolve' : 'Reopen'}
+                {discussion.status === 'Resolved' ? 'Reopen and reply' : 'Reply'}
+              </Button>
+            ) : null}
+            {canResolve && discussion.status === 'Open' && !discussion.pending ? (
+              <Button
+                onClick={() => void onResolve(discussion)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <Check className="size-3.5" />
+                Resolve
               </Button>
             ) : null}
             {discussion.pending === 'failed' ? (
@@ -298,7 +288,10 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
                 onLoadChildren={(replyId, before) =>
                   void loadReplyChildren(replyId, before)
                 }
-                onQuote={(quoted) => setQuoteId(quoted.id)}
+                onQuote={(quoted) => {
+                  setQuoteId(quoted.id)
+                  openComposer()
+                }}
                 onRetry={(failedReply) =>
                   void postReply(
                     failedReply.body_markdown,
@@ -336,11 +329,19 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
             ref={readMarkerRef}
           />
 
-          {!collapsed && canPostReply ? (
+          {!collapsed && canPostReply && composerOpen ? (
             <div className="mt-4">
               <RequestReplyComposer
+                onCancel={() => {
+                  setQuoteId(null)
+                  onCloseComposer()
+                }}
                 onCancelQuote={() => setQuoteId(null)}
-                onSubmit={postReply}
+                onSubmit={async (body) => {
+                  const posted = await postReply(body)
+                  if (posted) onCloseComposer()
+                  return posted
+                }}
                 quote={
                   quotedReply
                     ? {
@@ -361,13 +362,29 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   )
 })
 
-function ChangeEventMarker() {
+function RequestDiscussionAnchor({
+  anchor,
+  params,
+}: {
+  anchor: NonNullable<RequestDiscussion['anchor']>
+  params: { owner: string; repo: string; request_id: string }
+}) {
+  if (!anchor) return null
+  const search = new URLSearchParams({ revision: anchor.revision_id })
+  if (anchor.commit_oid) search.set('commit', anchor.commit_oid)
+  if (anchor.path) search.set('path', anchor.path)
+  const href = `/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/requests/${encodeURIComponent(params.request_id)}/changes?${search}`
   return (
-    <div
-      aria-hidden="true"
-      className="grid size-8 shrink-0 place-items-center rounded-md bg-brand text-brand-foreground shadow-sm"
+    <a
+      className="mt-2 inline-flex max-w-full items-center gap-2 font-mono text-xs text-muted-foreground hover:text-brand"
+      href={href}
     >
-      <GitCommitHorizontal className="size-4" />
-    </div>
+      <GitCommit className="size-3.5 shrink-0" />
+      <span className="truncate">
+        Revision {anchor.revision_id.slice(0, 10)}
+        {anchor.commit_oid ? ` · ${anchor.commit_oid.slice(0, 10)}` : ''}
+        {anchor.path ? ` · ${anchor.path.replace(/^\/+/, '')}` : ''}
+      </span>
+    </a>
   )
 }

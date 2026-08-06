@@ -3,21 +3,21 @@ use super::{
     REQUEST_DISCUSSION_REPLY_MAX_DEPTH, Request, RequestEvent, RequestEventKind,
     RequestEventPayload, validate_body_size, validate_required_body, validate_required_id,
 };
-use crate::error::DomainError;
+use crate::{error::DomainError, policy::ScopePath};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RequestDiscussionStatus {
-    Dormant,
     Open,
     Resolved,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RequestDiscussionSubject {
-    Comment,
-    ChangeBlock { change_block_id: String },
+pub struct RequestDiscussionAnchor {
+    pub revision_id: String,
+    pub commit_oid: Option<String>,
+    pub path: Option<ScopePath>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,8 +27,8 @@ pub struct RequestDiscussion {
     pub opened_position: u64,
     pub last_activity_position: u64,
     pub author_user_id: String,
-    pub subject: RequestDiscussionSubject,
-    pub body_markdown: Option<String>,
+    pub body_markdown: String,
+    pub anchor: Option<RequestDiscussionAnchor>,
     pub status: RequestDiscussionStatus,
     pub client_discussion_id: String,
     pub created_at_unix: u64,
@@ -65,6 +65,7 @@ pub struct CreateRequestDiscussionInput {
     pub actor_can_participate: bool,
     pub client_discussion_id: String,
     pub body_markdown: String,
+    pub anchor: Option<RequestDiscussionAnchor>,
     pub now_unix: u64,
 }
 
@@ -173,6 +174,7 @@ pub fn create_request_discussion(
         &input.client_discussion_id,
         &input.body_markdown,
     )?;
+    validate_anchor(input.anchor.as_ref())?;
     if !input.actor_can_participate {
         return Err(DomainError::forbidden("request discussion access required"));
     }
@@ -187,8 +189,8 @@ pub fn create_request_discussion(
         opened_position: position,
         last_activity_position: position,
         author_user_id: input.actor_user_id.clone(),
-        subject: RequestDiscussionSubject::Comment,
-        body_markdown: Some(input.body_markdown),
+        body_markdown: input.body_markdown,
+        anchor: input.anchor,
         status: RequestDiscussionStatus::Open,
         client_discussion_id: input.client_discussion_id,
         created_at_unix: input.now_unix,
@@ -238,9 +240,6 @@ pub fn create_request_discussion_reply(
         return Err(DomainError::conflict("request discussion is resolved"));
     }
     let position = advance_activity(request)?;
-    if discussion.status == RequestDiscussionStatus::Dormant {
-        discussion.status = RequestDiscussionStatus::Open;
-    }
     discussion.last_activity_position = position;
     let reply = RequestDiscussionReply {
         id: input.id,
@@ -431,13 +430,9 @@ fn transition_discussion(
     )?;
     if discussion.status == input.target {
         return Err(DomainError::conflict(match input.target {
-            RequestDiscussionStatus::Dormant => "request discussion is already dormant",
             RequestDiscussionStatus::Open => "request discussion is already open",
             RequestDiscussionStatus::Resolved => "request discussion is already resolved",
         }));
-    }
-    if discussion.status == RequestDiscussionStatus::Dormant {
-        return Err(DomainError::conflict("request discussion has no comments"));
     }
     let request = requests
         .get_mut(&input.request_id)
@@ -446,7 +441,6 @@ fn transition_discussion(
     discussion.status = input.target;
     discussion.last_activity_position = position;
     let (kind, payload) = match input.target {
-        RequestDiscussionStatus::Dormant => unreachable!("dormant is not a transition target"),
         RequestDiscussionStatus::Open => {
             discussion.resolved_at_unix = None;
             discussion.resolved_by_user_id = None;
@@ -537,6 +531,22 @@ fn validate_common(
     )?;
     validate_required_body("discussion body", body)?;
     validate_body_size("discussion body", body, REQUEST_DISCUSSION_BODY_MAX_BYTES)
+}
+
+fn validate_anchor(anchor: Option<&RequestDiscussionAnchor>) -> Result<(), DomainError> {
+    let Some(anchor) = anchor else {
+        return Ok(());
+    };
+    validate_required_id("revision id", &anchor.revision_id)?;
+    if let Some(commit_oid) = anchor.commit_oid.as_deref() {
+        validate_required_id("commit oid", commit_oid)?;
+    }
+    if anchor.path.is_some() && anchor.commit_oid.is_none() {
+        return Err(DomainError::invalid_input(
+            "discussion path anchor requires a commit",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_reply_input(
@@ -638,6 +648,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn path_anchor_requires_a_commit() {
+        let error = validate_anchor(Some(&RequestDiscussionAnchor {
+            revision_id: "revision".to_string(),
+            commit_oid: None,
+            path: Some(ScopePath::parse("/src/lib.rs").unwrap()),
+        }))
+        .unwrap_err();
+        assert_eq!(error.kind, crate::error::DomainErrorKind::InvalidInput);
+    }
+
+    #[test]
     fn reply_nesting_is_bounded() {
         let discussion = RequestDiscussion {
             id: "discussion".to_string(),
@@ -645,8 +666,8 @@ mod tests {
             opened_position: 1,
             last_activity_position: 1,
             author_user_id: "author".to_string(),
-            subject: RequestDiscussionSubject::Comment,
-            body_markdown: Some("Thread".to_string()),
+            body_markdown: "Thread".to_string(),
+            anchor: None,
             status: RequestDiscussionStatus::Open,
             client_discussion_id: "client".to_string(),
             created_at_unix: 1,

@@ -5,7 +5,7 @@ use super::{
 use std::collections::BTreeMap;
 
 #[test]
-fn revision_creates_a_dormant_change_block_thread_that_opens_on_first_reply() {
+fn revision_records_snapshot_without_manufacturing_a_discussion() {
     let mut requests = BTreeMap::new();
     start_request(
         &mut requests,
@@ -54,30 +54,9 @@ fn revision_creates_a_dormant_change_block_thread_that_opens_on_first_reply() {
     .unwrap();
 
     assert_eq!(mutation.orphan_objects, vec![source_blob("head-1")]);
-    assert_eq!(mutation.change_block.old_head_oid, "head-1");
-    assert_eq!(mutation.change_block.new_head_oid, "head-2");
-    assert_eq!(mutation.discussion.status, RequestDiscussionStatus::Dormant);
-    assert_eq!(mutation.read_state.user_id, "author");
-    let discussion_id = mutation.discussion.id.clone();
-    let mut discussions = BTreeMap::from([(discussion_id.clone(), mutation.discussion)]);
-    let reply = create_request_discussion_reply(
-        &mut requests,
-        &mut discussions,
-        &mut BTreeMap::new(),
-        CreateRequestDiscussionReplyInput {
-            request_id: "request_change".to_string(),
-            discussion_id,
-            id: "reply_change_block".to_string(),
-            actor_user_id: "maintainer".to_string(),
-            actor_can_participate: true,
-            client_reply_id: "client_change_block".to_string(),
-            body_markdown: "Can we cover the retry path?".to_string(),
-            reply_to_reply_id: None,
-            now_unix: 13,
-        },
-    )
-    .unwrap();
-    assert_eq!(reply.discussion.status, RequestDiscussionStatus::Open);
+    assert_eq!(mutation.revision.old_head_oid, "head-1");
+    assert_eq!(mutation.revision.new_head_oid, "head-2");
+    assert_eq!(mutation.revision.id, mutation.event.id);
 }
 
 fn source_blob(git_oid: &str) -> SourceBlob {

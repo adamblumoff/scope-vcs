@@ -70,7 +70,7 @@ pub async fn delete_repository_object_references<C>(
     conn: &C,
     repo_id: &str,
     request_ids: &[String],
-    change_block_ids: &[String],
+    revision_ids: &[String],
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
@@ -103,10 +103,10 @@ where
             .await
             .map_err(PostgresError::internal)?;
     }
-    if !change_block_ids.is_empty() {
+    if !revision_ids.is_empty() {
         entities::object_reference::Entity::delete_many()
-            .filter(entities::object_reference::Column::RefKind.eq("request_change_block_snapshot"))
-            .filter(entities::object_reference::Column::RefId.is_in(change_block_ids.to_vec()))
+            .filter(entities::object_reference::Column::RefKind.eq("request_revision_snapshot"))
+            .filter(entities::object_reference::Column::RefId.is_in(revision_ids.to_vec()))
             .exec(conn)
             .await
             .map_err(PostgresError::internal)?;

@@ -41,6 +41,7 @@ function collection(ids: string[]) {
 
 function discussion(id: string): RequestDiscussion {
   return {
+    anchor: null,
     author: { handle: 'maya', id: 'user-maya' },
     body_markdown: id,
     client_discussion_id: id,

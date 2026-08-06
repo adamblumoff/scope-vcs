@@ -3,7 +3,6 @@ import type {
   CreateRequestDiscussionRequest,
   RequestActivityPageResponse,
   RequestActorSummaryResponse,
-  RequestChangeBlockFilesResponse,
   RequestDiscussionChangesResponse,
   RequestDiscussionMutationResponse,
   RequestDiscussionPageResponse,
@@ -18,9 +17,7 @@ export type RequestActorSummary = RequestActorSummaryResponse
 export type { RequestDiscussionStatus }
 
 export type RequestDiscussionReply = RequestDiscussionReplyResponse
-export type RequestDiscussion = Omit<RequestDiscussionSummaryResponse, 'change_block'> & {
-  change_block?: RequestDiscussionSummaryResponse['change_block']
-}
+export type RequestDiscussion = RequestDiscussionSummaryResponse
 export type RequestDiscussionPage = Omit<RequestDiscussionPageResponse, 'discussions'> & {
   discussions: RequestDiscussion[]
 }
@@ -36,7 +33,6 @@ export type RequestDiscussionReplyMutation =
     discussion: RequestDiscussion
   }
 export type RequestActivityPage = RequestActivityPageResponse
-export type { RequestChangeBlockFilesResponse }
 
 export type DiscussionPendingState = 'failed' | 'sending'
 

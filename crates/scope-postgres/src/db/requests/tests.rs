@@ -4,11 +4,58 @@ use scope_domain::{
     policy::Visibility,
     requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
-        ReopenAndReplyToRequestDiscussionInput, RequestActorRole, RequestAudience,
-        RequestDiscussionStatus, RequestState,
+        RecordRequestRevisionInput, ReopenAndReplyToRequestDiscussionInput, RequestActorRole,
+        RequestAudience, RequestDiscussionAnchor, RequestDiscussionStatus, RequestState,
     },
     store::{DEFAULT_GIT_FILE_MODE, RepoLifecycleState, SourceBlob, StoredRepository, UserAccount},
 };
+
+#[tokio::test]
+async fn revision_window_bounds_recent_rows_and_keeps_an_explicit_older_revision() {
+    let store = postgres_store();
+    start_public_request(&store).await;
+
+    let mut old_head = "head".to_string();
+    let mut revision_ids = Vec::new();
+    for number in 1..=3 {
+        let new_head = format!("head_{number}");
+        let mutation = store
+            .requests()
+            .record_request_revision(
+                RecordRequestRevisionInput {
+                    request_id: "req_1".to_string(),
+                    actor_user_id: "user_public".to_string(),
+                    actor_can_edit: true,
+                    expected_old_head_oid: Some(old_head),
+                    new_head_oid: new_head.clone(),
+                    git_snapshot: source_blob(&new_head),
+                    event_id: format!("revision_event_{number}"),
+                    body: None,
+                    now_unix: 3 + number,
+                },
+                &super::super::generated_ids::test_generated_id,
+            )
+            .await
+            .unwrap();
+        old_head = new_head;
+        revision_ids.push(mutation.revision.id);
+    }
+
+    let window = store
+        .requests()
+        .request_revision_window("req_1", Some(&revision_ids[0]), 1)
+        .await
+        .unwrap();
+    assert!(window.has_earlier_revisions);
+    assert_eq!(
+        window
+            .revisions
+            .iter()
+            .map(|revision| revision.id.as_str())
+            .collect::<Vec<_>>(),
+        [revision_ids[0].as_str(), revision_ids[2].as_str()]
+    );
+}
 
 #[tokio::test]
 async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
@@ -24,6 +71,7 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
             actor_can_participate: false,
             client_discussion_id: "client_root".to_string(),
             body_markdown: "Parser ownership".to_string(),
+            anchor: None,
             now_unix: 10,
         })
         .await
@@ -61,6 +109,7 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
             actor_can_participate: false,
             client_discussion_id: "client_root".to_string(),
             body_markdown: "Parser ownership".to_string(),
+            anchor: None,
             now_unix: 12,
         })
         .await
@@ -168,6 +217,7 @@ async fn completed_private_discussion_transitions_persist_nothing() {
                 actor_can_participate: false,
                 client_discussion_id: format!("client_{id}"),
                 body_markdown: "Review this invariant".to_string(),
+                anchor: None,
                 now_unix: 4,
             })
             .await
@@ -343,6 +393,7 @@ async fn discussion_replies_are_read_as_paginated_tree_levels() {
             actor_can_participate: false,
             client_discussion_id: "client_tree".to_string(),
             body_markdown: "Tree shape".to_string(),
+            anchor: None,
             now_unix: 10,
         })
         .await
@@ -466,6 +517,24 @@ async fn close_draft_request_deletes_request_and_events() {
         )
         .await
         .unwrap();
+    store
+        .requests()
+        .create_request_discussion(CreateRequestDiscussionInput {
+            request_id: "req_1".to_string(),
+            id: "discussion_revision".to_string(),
+            actor_user_id: "user_public".to_string(),
+            actor_can_participate: false,
+            client_discussion_id: "client_revision".to_string(),
+            body_markdown: "Review this revision".to_string(),
+            anchor: Some(RequestDiscussionAnchor {
+                revision_id: "event_revision".to_string(),
+                commit_oid: None,
+                path: None,
+            }),
+            now_unix: 5,
+        })
+        .await
+        .unwrap();
 
     let mutation = store
         .requests()
@@ -476,7 +545,7 @@ async fn close_draft_request_deletes_request_and_events() {
                 actor_is_author: false,
                 actor_is_maintainer: false,
                 event_id: "event_closed".to_string(),
-                now_unix: 5,
+                now_unix: 6,
             },
             &super::super::generated_ids::test_generated_id,
         )

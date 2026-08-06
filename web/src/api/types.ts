@@ -26,7 +26,8 @@ import type {
   RequestMergeabilityResponse,
   RequestMergeabilityStatus,
   RequestMutationResponse,
-  RequestChangeBlockFilesResponse,
+  RequestRevisionCommitFilesResponse,
+  RequestRevisionListResponse,
   RequestPermissionsResponse,
   RequestRatingResponse,
   RequestRatingsResponse,
@@ -109,7 +110,8 @@ export type RequestList = RequestListResponse
 export type RequestListItem = RequestListItemResponse
 export type RequestDetail = RequestDetailResponse
 export type RequestMutation = RequestMutationResponse
-export type RequestChangeBlockFiles = RequestChangeBlockFilesResponse
+export type RequestRevisionCommitFiles = RequestRevisionCommitFilesResponse
+export type RequestRevisions = RequestRevisionListResponse
 export type RequestSummary = RequestSummaryResponse
 export type RequestPermissions = RequestPermissionsResponse
 export type RequestRating = RequestRatingResponse

@@ -1,7 +1,7 @@
 use crate::{
     auth::scope::require_scope_user,
     error::ApiError,
-    http::{requests::*, responses::*},
+    http::{request_review::validate_request_discussion_anchor, requests::*, responses::*},
     persistence::unix_now,
     state::AppState,
 };
@@ -11,13 +11,12 @@ use axum::{
     http::HeaderMap,
 };
 use scope_api_contract::{
-    CreateRequestDiscussionReplyRequest, CreateRequestDiscussionRequest,
+    CreateRequestDiscussionReplyRequest, CreateRequestDiscussionRequest, GitOid,
     MarkRequestDiscussionReadRequest, ReopenAndReplyRequest, RequestActivityPageResponse,
-    RequestActorSummaryResponse, RequestChangeBlockResponse, RequestDiscussionChangesResponse,
-    RequestDiscussionMutationResponse, RequestDiscussionPageResponse,
-    RequestDiscussionReadResponse, RequestDiscussionRepliesPageResponse,
-    RequestDiscussionReplyMutationResponse, RequestDiscussionReplyResponse,
-    RequestDiscussionSummaryResponse,
+    RequestDiscussionAnchor, RequestDiscussionChangesResponse, RequestDiscussionMutationResponse,
+    RequestDiscussionPageResponse, RequestDiscussionReadResponse,
+    RequestDiscussionRepliesPageResponse, RequestDiscussionReplyMutationResponse,
+    RequestDiscussionReplyResponse, RequestDiscussionSummaryResponse,
 };
 use scope_domain::requests::{
     CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
@@ -35,7 +34,11 @@ const MAX_REPLY_LIMIT: u64 = 100;
 #[derive(Debug, Deserialize)]
 pub(crate) struct DiscussionListQuery {
     cursor: Option<String>,
+    discussion: Option<String>,
     limit: Option<usize>,
+    revision: Option<String>,
+    commit: Option<String>,
+    include_revision_anchor: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +86,17 @@ pub(crate) async fn list_discussions(
         .as_deref()
         .map(parse_discussion_cursor)
         .transpose()?;
+    if query.commit.is_some() && query.revision.is_none() {
+        return Err(ApiError::bad_request(
+            "filtering discussions by commit requires a revision",
+        ));
+    }
+    let commit_oid = query
+        .commit
+        .map(GitOid::try_from)
+        .transpose()
+        .map_err(ApiError::bad_request)?
+        .map(String::from);
     let snapshot_version = cursor
         .as_ref()
         .map(|cursor| cursor.snapshot_version)
@@ -97,6 +111,10 @@ pub(crate) async fn list_discussions(
             cursor: cursor
                 .as_ref()
                 .map(|cursor| (cursor.position, cursor.id.clone())),
+            discussion_id: query.discussion.as_deref(),
+            anchor_revision_id: query.revision.as_deref(),
+            anchor_commit_oid: commit_oid.as_deref(),
+            include_revision_anchor: query.include_revision_anchor.unwrap_or(false),
             limit: (limit + 1) as u64,
         })
         .await?;
@@ -116,7 +134,7 @@ pub(crate) async fn list_discussions(
         .flatten();
     let discussions = discussions
         .into_iter()
-        .map(|model| discussion_summary(model, &batch.users))
+        .map(|model| discussion_summary(model, &batch.users, &repo, access))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(RequestDiscussionPageResponse {
         discussions,
@@ -135,6 +153,15 @@ pub(crate) async fn create_discussion(
     let actor_user_id = user.id.clone();
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
+    let anchor = match input.anchor {
+        Some(anchor) => Some(
+            validate_request_discussion_anchor(
+                &state, &owner, &repo_name, &repo, access, &request, anchor,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let mutation = state
         .metadata
         .requests()
@@ -145,13 +172,21 @@ pub(crate) async fn create_discussion(
             actor_can_participate: false,
             client_discussion_id: input.client_discussion_id,
             body_markdown: input.body_markdown,
+            anchor,
             now_unix: unix_now()?,
         })
         .await?;
     let through_position = mutation.discussion.last_activity_position;
     let discussion_id = mutation.discussion.id.clone();
-    let discussion =
-        load_one_summary(&state, &request.id, &discussion_id, Some(&actor_user_id)).await?;
+    let discussion = load_one_summary(
+        &state,
+        &repo,
+        access,
+        &request.id,
+        &discussion_id,
+        Some(&actor_user_id),
+    )
+    .await?;
     state
         .publish_request_timeline_change(
             &repo.record.id,
@@ -240,6 +275,7 @@ pub(crate) async fn create_reply(
     reply_mutation_response(
         &state,
         &repo,
+        access,
         &request,
         mutation.discussion.id,
         mutation.reply,
@@ -313,6 +349,7 @@ pub(crate) async fn reopen_and_reply(
     reply_mutation_response(
         &state,
         &repo,
+        access,
         &request,
         mutation.discussion.id,
         mutation.reply,
@@ -383,7 +420,7 @@ pub(crate) async fn changed_discussions(
     let discussions = batch
         .discussions
         .into_iter()
-        .map(|model| discussion_summary(model, &batch.users))
+        .map(|model| discussion_summary(model, &batch.users, &repo, access))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(RequestDiscussionChangesResponse {
         discussions,
@@ -460,7 +497,7 @@ pub(crate) async fn activity(
     let events = events
         .into_iter()
         .map(|event| {
-            let actor = actor_response(&event.actor_user_id, &users)?;
+            let actor = request_actor_summary_response(&event.actor_user_id, &users)?;
             Ok(request_event_response(event, actor))
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
@@ -509,8 +546,15 @@ async fn transition_discussion(
             .await?
     };
     let through_position = discussion.last_activity_position;
-    let discussion =
-        load_one_summary(&state, &request.id, &discussion_id, Some(&actor_user_id)).await?;
+    let discussion = load_one_summary(
+        &state,
+        &repo,
+        access,
+        &request.id,
+        &discussion_id,
+        Some(&actor_user_id),
+    )
+    .await?;
     state
         .publish_request_timeline_change(
             &repo.record.id,
@@ -526,13 +570,21 @@ async fn transition_discussion(
 async fn reply_mutation_response(
     state: &AppState,
     repo: &scope_domain::store::StoredRepository,
+    access: scope_domain::store::RepositoryAccess,
     request: &scope_domain::requests::Request,
     discussion_id: String,
     reply: scope_domain::requests::RequestDiscussionReply,
     actor_user_id: &str,
 ) -> Result<Json<RequestDiscussionReplyMutationResponse>, ApiError> {
-    let discussion =
-        load_one_summary(state, &request.id, &discussion_id, Some(actor_user_id)).await?;
+    let discussion = load_one_summary(
+        state,
+        repo,
+        access,
+        &request.id,
+        &discussion_id,
+        Some(actor_user_id),
+    )
+    .await?;
     let users = state
         .metadata
         .requests()
@@ -561,6 +613,8 @@ async fn reply_mutation_response(
 
 async fn load_one_summary(
     state: &AppState,
+    repo: &scope_domain::store::StoredRepository,
+    access: scope_domain::store::RepositoryAccess,
     request_id: &str,
     discussion_id: &str,
     viewer_user_id: Option<&str>,
@@ -571,7 +625,7 @@ async fn load_one_summary(
         .request_discussion(request_id, discussion_id, viewer_user_id)
         .await?
         .ok_or_else(|| ApiError::not_found("request discussion not found"))?;
-    discussion_summary(model, &users)
+    discussion_summary(model, &users, repo, access)
 }
 
 async fn ensure_discussion_in_request(
@@ -579,14 +633,20 @@ async fn ensure_discussion_in_request(
     request_id: &str,
     discussion_id: &str,
 ) -> Result<(), ApiError> {
-    load_one_summary(state, request_id, discussion_id, None)
-        .await
-        .map(|_| ())
+    state
+        .metadata
+        .requests()
+        .request_discussion(request_id, discussion_id, None)
+        .await?
+        .ok_or_else(|| ApiError::not_found("request discussion not found"))?;
+    Ok(())
 }
 
 fn discussion_summary(
     model: scope_postgres::db::RequestDiscussionReadModel,
     users: &BTreeMap<String, scope_domain::store::UserAccount>,
+    repo: &scope_domain::store::StoredRepository,
+    access: scope_domain::store::RepositoryAccess,
 ) -> Result<RequestDiscussionSummaryResponse, ApiError> {
     Ok(RequestDiscussionSummaryResponse {
         id: model.discussion.id,
@@ -594,15 +654,12 @@ fn discussion_summary(
         client_discussion_id: model.discussion.client_discussion_id,
         opened_position: model.discussion.opened_position,
         last_activity_position: model.discussion.last_activity_position,
-        author: actor_response(&model.discussion.author_user_id, users)?,
+        author: request_actor_summary_response(&model.discussion.author_user_id, users)?,
         body_markdown: model.discussion.body_markdown,
-        change_block: model.change_block.map(|block| RequestChangeBlockResponse {
-            id: block.id,
-            position: block.position,
-            old_head_oid: block.old_head_oid,
-            new_head_oid: block.new_head_oid,
-            created_at_unix: block.created_at_unix,
-        }),
+        anchor: model
+            .discussion
+            .anchor
+            .map(|anchor| discussion_anchor_response(anchor, repo, access)),
         status: model.discussion.status.into(),
         reply_count: model.reply_count,
         unread_count: model.unread_count,
@@ -617,9 +674,27 @@ fn discussion_summary(
             .discussion
             .resolved_by_user_id
             .as_deref()
-            .map(|id| actor_response(id, users))
+            .map(|id| request_actor_summary_response(id, users))
             .transpose()?,
     })
+}
+
+fn discussion_anchor_response(
+    anchor: scope_domain::requests::RequestDiscussionAnchor,
+    _repo: &scope_domain::store::StoredRepository,
+    access: scope_domain::store::RepositoryAccess,
+) -> RequestDiscussionAnchor {
+    let commit_context_is_visible = access.can_read_private_files;
+    RequestDiscussionAnchor {
+        revision_id: anchor.revision_id,
+        commit_oid: commit_context_is_visible
+            .then_some(anchor.commit_oid)
+            .flatten(),
+        path: commit_context_is_visible
+            .then_some(anchor.path)
+            .flatten()
+            .map(|path| path.as_str().to_string()),
+    }
 }
 
 fn reply_response(
@@ -631,7 +706,7 @@ fn reply_response(
         id: reply.id,
         discussion_id: reply.discussion_id,
         position: reply.position,
-        author: actor_response(&reply.author_user_id, users)?,
+        author: request_actor_summary_response(&reply.author_user_id, users)?,
         body_markdown: reply.body_markdown,
         reply_to_reply_id: reply.reply_to_reply_id,
         child_reply_count,
@@ -645,19 +720,6 @@ fn reply_read_response(
     users: &BTreeMap<String, scope_domain::store::UserAccount>,
 ) -> Result<RequestDiscussionReplyResponse, ApiError> {
     reply_response(model.reply, model.child_reply_count, users)
-}
-
-fn actor_response(
-    user_id: &str,
-    users: &BTreeMap<String, scope_domain::store::UserAccount>,
-) -> Result<RequestActorSummaryResponse, ApiError> {
-    let user = users
-        .get(user_id)
-        .ok_or_else(|| ApiError::internal_message("request actor was not persisted"))?;
-    Ok(RequestActorSummaryResponse {
-        id: user.id.clone(),
-        handle: user.handle.clone(),
-    })
 }
 
 #[derive(Debug)]
@@ -691,4 +753,63 @@ fn parse_discussion_cursor(value: &str) -> Result<DiscussionCursor, ApiError> {
 
 fn encode_discussion_cursor(snapshot_version: u64, position: u64, id: &str) -> String {
     format!("{snapshot_version}:{position}:{id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scope_domain::{
+        policy::{ScopePath, Visibility, VisibilityRule},
+        requests::RequestDiscussionAnchor as DomainDiscussionAnchor,
+        store::{RepositoryAccess, StoredRepository, UserAccount},
+    };
+
+    #[test]
+    fn discussion_anchor_hides_private_commit_context_from_public_readers() {
+        let owner = UserAccount {
+            id: "owner".to_string(),
+            handle: "owner".to_string(),
+            email: "owner@example.test".to_string(),
+            email_verified: true,
+        };
+        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        let private_path = ScopePath::parse("/internal/plan.md").unwrap();
+        repo.policy
+            .add_rule(VisibilityRule::private(private_path.clone()))
+            .unwrap();
+        let anchor = DomainDiscussionAnchor {
+            revision_id: "revision".to_string(),
+            commit_oid: Some("commit".to_string()),
+            path: Some(private_path),
+        };
+
+        let public = discussion_anchor_response(anchor.clone(), &repo, RepositoryAccess::public());
+        let private = discussion_anchor_response(anchor, &repo, repo.access_for_user_id(&owner.id));
+
+        assert_eq!(public.path, None);
+        assert_eq!(public.commit_oid, None);
+        assert_eq!(private.path.as_deref(), Some("/internal/plan.md"));
+        assert_eq!(private.commit_oid.as_deref(), Some("commit"));
+    }
+
+    #[test]
+    fn discussion_anchor_hides_commit_only_context_from_public_readers() {
+        let owner = UserAccount {
+            id: "owner".to_string(),
+            handle: "owner".to_string(),
+            email: "owner@example.test".to_string(),
+            email_verified: true,
+        };
+        let repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        let anchor = DomainDiscussionAnchor {
+            revision_id: "revision".to_string(),
+            commit_oid: Some("commit".to_string()),
+            path: None,
+        };
+
+        let public = discussion_anchor_response(anchor, &repo, RepositoryAccess::public());
+
+        assert_eq!(public.commit_oid, None);
+        assert_eq!(public.path, None);
+    }
 }

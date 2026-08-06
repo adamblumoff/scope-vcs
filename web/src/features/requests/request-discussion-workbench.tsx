@@ -1,5 +1,4 @@
-import type { RequestChangeBlockFiles, RequestParams, RequestSummary } from '@/api/types'
-import type { LoadRequestChangeBlockFilesInput } from '@/api/requests'
+import type { RequestParams, RequestSummary } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -8,13 +7,11 @@ import {
   MessageSquare,
   RefreshCw,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import {
   readRequestDiscussionScroll,
   writeRequestDiscussionScroll,
 } from './request-discussion-cache'
-import { RequestDescription } from './request-description'
 import {
   RequestDiscussionComposer,
 } from './request-discussion-composer'
@@ -29,18 +26,13 @@ import type {
   RequestDiscussion,
   RequestDiscussionPage,
 } from './request-discussion-types'
-import { RequestChangeBlock } from './request-change-block'
 
 export function RequestDiscussionWorkbench({
   actions,
   actor,
   canResolve,
-  contextRail,
-  description,
-  header,
+  focusedDiscussionId,
   initialPage,
-  loadChangeBlockFiles,
-  onDescriptionSave,
   params,
   permissions,
   repoId,
@@ -50,17 +42,10 @@ export function RequestDiscussionWorkbench({
   actions: RequestDiscussionActions
   actor: RequestActorSummary
   canResolve: (discussion: RequestDiscussion) => boolean
-  contextRail: ReactNode
-  description: string
-  header: (controls: ReactNode) => ReactNode
+  focusedDiscussionId?: string
   initialPage: RequestDiscussionPage
-  loadChangeBlockFiles: (
-    input: LoadRequestChangeBlockFilesInput,
-  ) => Promise<RequestChangeBlockFiles>
-  onDescriptionSave: (description: string) => Promise<boolean>
   params: RequestParams
   permissions: {
-    canEditDescription: boolean
     canOpenDiscussion: boolean
     canReply: boolean
   }
@@ -75,6 +60,7 @@ export function RequestDiscussionWorkbench({
     params,
     repoId,
   })
+  const [activeComposer, setActiveComposer] = useState<string | 'new' | null>(null)
 
   useEffect(() => {
     const scrollContainer = document.querySelector<HTMLElement>('#main-content')
@@ -85,9 +71,19 @@ export function RequestDiscussionWorkbench({
     }
   }, [store.cacheKey])
 
+  useEffect(() => {
+    if (!focusedDiscussionId) return
+    const frame = requestAnimationFrame(() => {
+      document
+        .querySelector(`#discussion-${CSS.escape(focusedDiscussionId)}`)
+        ?.scrollIntoView({ block: 'start' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusedDiscussionId, store.cacheKey])
+
   return (
-    <>
-      {header(
+    <section aria-label="Request discussion">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3 lg:px-7">
         <div className="flex flex-wrap items-center gap-2">
           {store.newActivity ? (
             <Badge variant="info">New activity · order held</Badge>
@@ -108,17 +104,31 @@ export function RequestDiscussionWorkbench({
             />
             Refresh
           </Button>
-        </div>,
-      )}
-      <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="order-2 min-w-0 xl:order-1">
-          <RequestDescription
-            canEdit={permissions.canEditDescription}
-            description={description}
-            onSave={onDescriptionSave}
+        </div>
+        {permissions.canOpenDiscussion && !['Closed', 'Merged'].includes(request.state) ? (
+          <Button
+            onClick={() => setActiveComposer('new')}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            Start discussion
+          </Button>
+        ) : null}
+      </div>
+      {activeComposer === 'new' ? (
+        <div className="border-b border-border px-5 py-5 lg:px-7">
+          <RequestDiscussionComposer
+            onCancel={() => setActiveComposer(null)}
+            onSubmit={async (body) => {
+              const posted = await store.create(body)
+              if (posted) setActiveComposer(null)
+              return posted
+            }}
           />
+        </div>
+      ) : null}
 
-          <section aria-label="Request timeline">
             {store.error ? (
               <div
                 className="flex items-center gap-2 border-b border-border px-5 py-3 text-sm text-destructive lg:px-7"
@@ -137,21 +147,17 @@ export function RequestDiscussionWorkbench({
                     actor={actor}
                     canReply={permissions.canReply}
                     canResolve={canResolve(discussion)}
+                    composerOpen={activeComposer === discussion.id}
                     discussion={discussion}
                     key={discussion.id}
                     onExpandedChange={store.setExpanded}
                     onMarkRead={store.markRead}
+                    onCloseComposer={() => setActiveComposer(null)}
+                    onOpenComposer={() => setActiveComposer(discussion.id)}
                     onPatch={store.patch}
                     onRetryRoot={store.retry}
-                    onSetResolved={store.setResolved}
+                    onResolve={store.resolve}
                     params={params}
-                    rootContent={discussion.change_block ? (
-                      <RequestChangeBlock
-                        block={discussion.change_block}
-                        loadFiles={loadChangeBlockFiles}
-                        params={params}
-                      />
-                    ) : undefined}
                   />
                 ))}
               </div>
@@ -181,15 +187,6 @@ export function RequestDiscussionWorkbench({
               </div>
             ) : null}
 
-            {permissions.canOpenDiscussion && !['Closed', 'Merged'].includes(request.state) ? (
-              <div className="border-t border-border px-5 py-5 lg:px-7">
-                <RequestDiscussionComposer onSubmit={store.create} />
-              </div>
-            ) : null}
-          </section>
-        </div>
-        {contextRail}
-      </div>
-    </>
+    </section>
   )
 }

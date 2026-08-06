@@ -11,7 +11,8 @@ pub(crate) use self::repo_io::{
     git_refs, git_segment_manifest_from_repo, git_stdout_text, validate_pushed_file_path,
 };
 pub(crate) use self::repo_io::{
-    git_snapshot_from_ref, run_git, run_git_output, safe_repo_key, validate_pushed_tree,
+    git_snapshot_from_ref, run_git, run_git_output, run_git_output_bounded, safe_repo_key,
+    validate_pushed_tree,
 };
 #[cfg(test)]
 pub(crate) use self::staging::ReceivePackFileChange;
