@@ -1,6 +1,7 @@
 import type { RepoFile, RepoFileContent, RepoParams } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
-import { ReadmeRenderer } from '@/components/readme-renderer'
+import { isRepositoryMarkdownPath } from '@/components/repository-markdown'
+import { RepositoryMarkdownRenderer } from '@/components/repository-markdown-renderer'
 import { Button } from '@/components/ui/button'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import { VisibilityBadge } from '@/components/visibility-badge'
@@ -273,10 +274,10 @@ function SourceFileContent({
     )
   }
 
-  if (isReadme(file.path)) {
+  if (isRepositoryMarkdownPath(file.path)) {
     return (
-      <ReadmeRenderer
-        repository={{ ...params, readmePath: file.path }}
+      <RepositoryMarkdownRenderer
+        repository={{ ...params, markdownPath: file.path }}
         source={file.content.text}
       />
     )
@@ -311,10 +312,6 @@ function displayPath(path: string) {
 
 function fileName(path: string) {
   return displayPath(path).split('/').at(-1) ?? displayPath(path)
-}
-
-function isReadme(path: string) {
-  return /(^|\/)readme(?:\.[^/]+)?$/i.test(path)
 }
 
 function formatBytes(bytes: number) {

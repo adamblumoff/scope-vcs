@@ -1,17 +1,19 @@
 import { cn } from '@/lib/utils'
 import type { ComponentProps } from 'react'
 import rehypeSlug from 'rehype-slug'
-import Markdown from 'react-markdown'
 import { SafeMarkdown } from './safe-markdown'
-import { resolveReadmeUrl } from './readme-url'
+import {
+  REPOSITORY_MARKDOWN_HEADING_PREFIX,
+  resolveRepositoryMarkdownUrl,
+} from './repository-markdown'
 
-export function ReadmeRenderer({
+export function RepositoryMarkdownRenderer({
   className,
   repository,
   source,
 }: {
   className?: string
-  repository: { owner: string; readmePath: string; repo: string }
+  repository: { markdownPath: string; owner: string; repo: string }
   source: string
 }) {
   return (
@@ -23,8 +25,8 @@ export function ReadmeRenderer({
     >
       <SafeMarkdown
         components={markdownComponents}
-        rehypePlugins={[[rehypeSlug, { prefix: 'readme-' }]]}
-        urlTransform={(url) => resolveReadmeUrl(url, repository)}
+        rehypePlugins={[[rehypeSlug, { prefix: REPOSITORY_MARKDOWN_HEADING_PREFIX }]]}
+        urlTransform={(url) => resolveRepositoryMarkdownUrl(url, repository)}
       >
         {source}
       </SafeMarkdown>
