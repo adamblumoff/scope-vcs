@@ -127,7 +127,11 @@ steps:
         exit "$status"
       }
       trap cleanup EXIT
-      SCOPE_DEV_HEADLESS_E2E=1 ./dev/scope-dev up
+      CARGO_HOME=/scope/cache/cargo \
+        CARGO_TARGET_DIR=/scope/cache/cargo-target \
+        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
+        SCOPE_DEV_HEADLESS_E2E=1 \
+        ./dev/scope-dev up
       CARGO_HOME=/scope/cache/cargo \
         CARGO_TARGET_DIR=/scope/cache/cargo-target \
         RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
