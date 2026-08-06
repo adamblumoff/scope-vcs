@@ -7,12 +7,22 @@ on:
 runs-on: remote-linux
 container:
   image: rust:1.94.0-bookworm
-timeout: 20m
+timeout: 45m
 caches:
   - cargo
   - cargo-target
   - pnpm-store
 steps:
+  - name: Install system dependencies
+    run: |
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install --yes --no-install-recommends \
+        curl \
+        iproute2 \
+        postgresql \
+        postgresql-client \
+        xz-utils
   - name: Install Node
     run: |
       curl --fail --silent --show-error \
@@ -35,8 +45,25 @@ steps:
         fi
         sleep 5
       done
+  - name: Install Rust tooling
+    run: |
+      for attempt in 1 2 3; do
+        if rustup component add \
+          --toolchain 1.94.0-x86_64-unknown-linux-gnu \
+          rustfmt \
+          clippy
+        then
+          break
+        fi
+        if [ "$attempt" -eq 3 ]; then
+          exit 1
+        fi
+        sleep 5
+      done
   - name: Install dependencies
     run: (cd web && pnpm install --frozen-lockfile --store-dir /scope/cache/pnpm-store)
+  - name: Install Chromium
+    run: (cd web && pnpm exec playwright install --with-deps chromium)
   - name: Test
     run: (cd web && pnpm test)
   - name: Check
@@ -45,10 +72,49 @@ steps:
         cd web
         export CARGO_HOME=/scope/cache/cargo
         export CARGO_TARGET_DIR=/scope/cache/cargo-target
-        pnpm typecheck
-        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu pnpm check:api-contract
-        pnpm check:line-limit
-        pnpm check:konsistent
+        export RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu
+        pnpm check
       )
   - name: Build
     run: (cd web && pnpm build)
+  - name: Browser smoke against seeded local stack
+    run: |
+      service postgresql start
+      su postgres -c "psql --set=ON_ERROR_STOP=1 --command=\"CREATE ROLE scope LOGIN PASSWORD 'scope'\""
+      su postgres -c "createdb --owner=scope scope_dev"
+
+      clerk_host='scope-e2e.clerk.accounts.dev$'
+      clerk_payload="$(printf '%s' "$clerk_host" | base64 | tr '/+' '_-' | tr -d '=\n')"
+      printf '%s\n' \
+        'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
+        'SCOPE_DEV_USER_EMAIL=smoke@example.test' \
+        'SCOPE_DEV_USER_HANDLE=dev' > .env.local
+      printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\nCLERK_SECRET_KEY=sk_test_scope_e2e\n' \
+        "$clerk_payload" > web/.env.local
+
+      CARGO_HOME=/scope/cache/cargo \
+        CARGO_TARGET_DIR=/scope/cache/cargo-target \
+        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
+        cargo build -p api --features local-dev --locked
+      CARGO_HOME=/scope/cache/cargo \
+        CARGO_TARGET_DIR=/scope/cache/cargo-target \
+        RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
+        cargo build -p worker --locked
+
+      cleanup() {
+        status="$?"
+        if [ "$status" -ne 0 ]; then
+          for log in .tmp/local-dev/*.log; do
+            [ -f "$log" ] || continue
+            printf '\n==> %s <==\n' "$log"
+            tail -n 300 "$log"
+          done
+        fi
+        ./dev/scope-dev down
+        exit "$status"
+      }
+      trap cleanup EXIT
+      ./dev/scope-dev up
+      SCOPE_SMOKE_REPO=dev/public-demo \
+        SCOPE_WEB_BASE_URL=http://localhost:3000 \
+        sh -c 'cd web && pnpm test:smoke'
