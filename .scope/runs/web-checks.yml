@@ -70,6 +70,9 @@ steps:
     run: |
       (
         cd web
+        # React Doctor uses `git grep` for project-wide accessibility checks,
+        # while Scope checks out a source snapshot without repository metadata.
+        git init --quiet .
         export CARGO_HOME=/scope/cache/cargo
         export CARGO_TARGET_DIR=/scope/cache/cargo-target
         export RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu
