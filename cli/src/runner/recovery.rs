@@ -17,7 +17,7 @@ const RECOVERY_CLAIM_FILE: &str = "claim.json";
 const RECOVERY_CLAIM_TEMP_FILE: &str = ".claim.json.tmp";
 const RECOVERY_PROGRESS_FILE: &str = "progress.json";
 const RECOVERY_PROGRESS_TEMP_FILE: &str = ".progress.json.tmp";
-const RECOVERY_SCHEMA_VERSION: u8 = 5;
+const RECOVERY_SCHEMA_VERSION: u8 = 6;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RecoveryEnvelope {
@@ -601,7 +601,7 @@ fn retire_incompatible_recovery_state_with(
     }
     fs::remove_dir_all(work_dir).context("retire incompatible runner recovery state")?;
     eprintln!(
-        "Retired incompatible Scope runner recovery schema {} for attempt {attempt_id}; local state and tainted caches from the pre-V5 attempt will not be resumed. Retry the run from Scope if it is still needed.",
+        "Retired incompatible Scope runner recovery schema {} for attempt {attempt_id}; local state and tainted caches will not be resumed. Retry the run from Scope if it is still needed.",
         schema_version.map_or_else(
             || "missing or invalid".to_string(),
             |version| version.to_string()
@@ -789,14 +789,14 @@ mod tests {
     }
 
     #[test]
-    fn pre_v5_recovery_is_retired_before_current_schema_decoding() {
-        let root = TestDir::new("runner-v4-recovery");
-        let work_dir = root.path().join("attempt-v4");
+    fn older_recovery_is_retired_before_current_schema_decoding() {
+        let root = TestDir::new("runner-v5-recovery");
+        let work_dir = root.path().join("attempt-v5");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
         fs::write(
             &claim_path,
-            br#"{"schema_version":4,"claim":{"attempt_id":"attempt-v4","attempt_token":"secret"}}"#,
+            br#"{"schema_version":5,"claim":{"attempt_id":"attempt-v5","attempt_token":"secret"}}"#,
         )
         .unwrap();
         fs::write(work_dir.join(RECOVERY_PROGRESS_FILE), b"{}").unwrap();
@@ -804,9 +804,9 @@ mod tests {
         let StoredRecoveryEnvelope::Legacy { schema_version } =
             load_recovery_envelope(&claim_path).unwrap()
         else {
-            panic!("pre-V5 claim unexpectedly decoded as current recovery state");
+            panic!("older claim unexpectedly decoded as current recovery state");
         };
-        assert_eq!(schema_version, Some(4));
+        assert_eq!(schema_version, Some(5));
 
         let mut terminated = None;
         retire_incompatible_recovery_state_with(&work_dir, schema_version, |name| {
@@ -814,7 +814,7 @@ mod tests {
             true
         })
         .unwrap();
-        assert_eq!(terminated.as_deref(), Some("scope-attempt-v4"));
+        assert_eq!(terminated.as_deref(), Some("scope-attempt-v5"));
         assert!(!work_dir.exists());
     }
 
@@ -824,7 +824,7 @@ mod tests {
         let work_dir = root.path().join("attempt-newer");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
-        fs::write(&claim_path, br#"{"schema_version":6}"#).unwrap();
+        fs::write(&claim_path, br#"{"schema_version":7}"#).unwrap();
 
         let StoredRecoveryEnvelope::Newer { schema_version } =
             load_recovery_envelope(&claim_path).unwrap()
@@ -832,7 +832,7 @@ mod tests {
             panic!("newer recovery schema was not preserved");
         };
 
-        assert_eq!(schema_version, 6);
+        assert_eq!(schema_version, 7);
         assert!(claim_path.exists());
     }
 }

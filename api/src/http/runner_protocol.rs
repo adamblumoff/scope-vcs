@@ -94,6 +94,7 @@ pub(crate) async fn claim(
             run_id: claim.run.id,
             job_key: claim.job.key.as_str().to_string(),
             repository_id: claim.run.workflow.repository_id().to_string(),
+            workflow_path: claim.run.workflow.path().as_str().to_string(),
             git_oid: claim.run.source.git_oid().to_string(),
             source_digest: claim.run.source.digest().to_string(),
             pinned_container_image: claim

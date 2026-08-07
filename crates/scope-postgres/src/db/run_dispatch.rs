@@ -10,7 +10,7 @@ use super::{
     runs::{DispatchOffer, unique_conflict, workflow_revision_for_run},
 };
 use crate::error::PostgresError;
-use scope_domain::runs::{job::reconcile_run, run::RunJobState};
+use scope_domain::runs::{job::reconcile_run, run::RunJobState, runner::Runner};
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, IntoActiveModel,
     QuerySelect, Statement, TransactionTrait,
@@ -19,6 +19,26 @@ use sea_orm::{
 struct DispatchCandidate {
     run_id: String,
     job_key: String,
+}
+
+async fn runner_has_capacity(
+    tx: &DatabaseTransaction,
+    runner: &Runner,
+) -> Result<bool, PostgresError> {
+    let active_attempts = tx
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count
+             FROM scope_run_attempts
+             WHERE runner_id = $1 AND state IN ('leased', 'running')",
+            [runner.id.clone().into()],
+        ))
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::internal_message("runner capacity count is missing"))?
+        .try_get::<i64>("", "count")
+        .map_err(PostgresError::internal)?;
+    Ok(active_attempts < i64::from(runner.max_concurrent_jobs.get()))
 }
 
 async fn dispatch_candidate(
@@ -87,8 +107,21 @@ impl RunStore {
         runner_id: &str,
     ) -> Result<Option<DispatchOffer>, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let runner = runner_by_id(&tx, runner_id).await?;
+        // Polling is advisory. Do not lock the runner row here: claims and attempt
+        // transitions lock jobs before runners, and reversing that order in poll
+        // would allow a poll and claim to deadlock. The claim path below performs
+        // the authoritative capacity check while holding the runner lock.
+        let runner = entities::runner::Entity::find_by_id(runner_id.to_string())
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .ok_or_else(|| PostgresError::not_found("runner not found"))?
+            .try_into_domain()?;
         if !runner.supports_dispatch() {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(None);
+        }
+        if !runner_has_capacity(&tx, &runner).await? {
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(None);
         }
@@ -150,6 +183,12 @@ impl RunStore {
             .try_into_domain()?;
         let mut job = locked_job(&tx, run_id, job_key).await?;
         let mut runner = runner_by_id(&tx, runner_id).await?;
+        if !runner_has_capacity(&tx, &runner).await? {
+            return Err(PostgresError::resource_exhausted(format!(
+                "runner has reached its capacity of {} concurrent job(s)",
+                runner.max_concurrent_jobs.get()
+            )));
+        }
         let grant = grant_by_ids(&tx, run_snapshot.workflow.repository_id(), runner_id).await?;
         let workflow_revision = workflow_revision_for_run(&tx, &run_snapshot).await?;
         let definition = workflow_revision

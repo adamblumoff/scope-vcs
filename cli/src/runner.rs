@@ -13,7 +13,6 @@ use scope_domain::runs::{
     run::StepState, step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES, workflow::WorkflowJob,
 };
 use std::{
-    path::Path,
     process::Command,
     thread,
     time::{Duration, Instant},
@@ -31,6 +30,7 @@ mod step_logs;
 mod steps;
 mod supervisor;
 mod systemd;
+mod worker_pool;
 mod workspace;
 use checkout::checkout_exact_commit;
 use config::{RunnerConfig, load_runner_config, load_runner_config_from, scope_config_home};
@@ -47,6 +47,9 @@ use management::parse_repository;
 pub use management::{
     add_repository, doctor, install, list_caches, prune_caches, remove_repository, status,
 };
+pub use worker_pool::daemon;
+#[cfg(test)]
+use worker_pool::run_after_recovery;
 mod recovery;
 use recovery::{
     RecoveryAttempt, RecoveryProgress, mark_recovery_abandon_pending,
@@ -89,50 +92,6 @@ impl ExecutionOutcome {
     }
 }
 
-pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
-    let config = match config_path {
-        Some(path) => load_runner_config_from(path)?,
-        None => load_runner_config()?,
-    };
-    let capabilities = doctor_local(false)?;
-    let client = runner_client()?;
-    eprintln!("Scope runner {} is polling {}", config.name, config.api_url);
-    loop {
-        resume_interrupted_attempts(&config)?;
-        if let Err(error) = cache::admit(&config) {
-            eprintln!("Runner admission paused: {error:#}");
-            thread::sleep(Duration::from_secs(5));
-            continue;
-        }
-        if let Err(error) = ResourceLimits::detect() {
-            eprintln!("Runner admission paused: {error:#}");
-            thread::sleep(Duration::from_secs(5));
-            continue;
-        }
-        match runner_poll(&client, &config.api_url, &config.secret) {
-            Ok(response) => {
-                let Some(offer) = response.run else {
-                    continue;
-                };
-                match runner_claim(
-                    &client,
-                    &config.api_url,
-                    &config.secret,
-                    &offer.run_id,
-                    &offer.job_key,
-                ) {
-                    Ok(claim) => run_claim(&config, capabilities, claim),
-                    Err(error) => eprintln!("Could not claim {}: {error}", offer.run_id),
-                }
-            }
-            Err(error) => {
-                eprintln!("Runner poll failed: {error}");
-                thread::sleep(Duration::from_secs(5));
-            }
-        }
-    }
-}
-
 fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
     for recovery in recover_runner_state(config)? {
         let attempt_id = recovery.recovery.claim.attempt_id.clone();
@@ -150,8 +109,13 @@ fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_claim(config: &RunnerConfig, capabilities: DockerCapabilities, claim: ClaimRunResponse) {
-    if let Err(error) = execute_claim(config, capabilities, &claim) {
+fn run_claim(
+    config: &RunnerConfig,
+    capabilities: DockerCapabilities,
+    limits: &ResourceLimits,
+    claim: ClaimRunResponse,
+) {
+    if let Err(error) = execute_claim(config, capabilities, limits, &claim) {
         eprintln!(
             "Run {} failed before completion: {error:#}",
             claim.job.run_id
@@ -217,6 +181,7 @@ fn bounded_setup_failure_message(error: &anyhow::Error) -> String {
 fn execute_claim(
     config: &RunnerConfig,
     capabilities: DockerCapabilities,
+    limits: &ResourceLimits,
     claim: &ClaimRunResponse,
 ) -> anyhow::Result<()> {
     let job = dispatch_job(claim)?;
@@ -262,11 +227,10 @@ fn execute_claim(
         return Ok(());
     }
     let phase = Instant::now();
-    let limits = ResourceLimits::detect()?;
     let capabilities = if capabilities.storage_quota_supported {
         capabilities
     } else {
-        probe_storage_quota_support(&container_image, &limits)?
+        probe_storage_quota_support(&container_image, limits)?
     };
     let mut caches = cache::PreparedCaches::prepare(config, claim, &container_image)?;
     mark_recovery_caches_attached(&work.path, claim, &caches.volume_names())?;
@@ -282,7 +246,7 @@ fn execute_claim(
             name: &container_name,
             image: &container_image,
             step_programs: &step_programs,
-            limits: &limits,
+            limits,
             capabilities,
             caches: caches.mounts(),
         },

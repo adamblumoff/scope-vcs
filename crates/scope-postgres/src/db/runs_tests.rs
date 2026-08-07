@@ -7,7 +7,10 @@ use scope_domain::{
             AttemptConclusion, AttemptState, PinnedContainerImage, Run, RunLogChunk, RunSource,
             RunState, RunTrigger, StepState,
         },
-        runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
+        runner::{
+            RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant,
+            RunnerMaxConcurrentJobs, RunnerName,
+        },
         workflow::{
             CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowJob,
             WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
@@ -333,6 +336,7 @@ async fn removing_repository_member_revokes_that_members_runner_grants_atomicall
         "1.0.0",
         RUNNER_PROTOCOL_VERSION,
         RunnerCapabilities::v1(),
+        RunnerMaxConcurrentJobs::new(1).unwrap(),
         10,
     )
     .unwrap();
@@ -727,7 +731,16 @@ fn catalog_with_repo() -> CatalogFixture {
 }
 
 pub(super) async fn register_runner(store: &MetadataStore, id: &str, name: &str) {
-    let runner = runner(id);
+    register_runner_with_capacity(store, id, name, 1).await;
+}
+
+pub(super) async fn register_runner_with_capacity(
+    store: &MetadataStore,
+    id: &str,
+    name: &str,
+    max_concurrent_jobs: u8,
+) {
+    let runner = runner_with_capacity(id, max_concurrent_jobs);
     store.runs().register_runner(runner.clone()).await.unwrap();
     store
         .runs()
@@ -746,6 +759,10 @@ pub(super) async fn register_runner(store: &MetadataStore, id: &str, name: &str)
 }
 
 fn runner(id: &str) -> Runner {
+    runner_with_capacity(id, 1)
+}
+
+pub(super) fn runner_with_capacity(id: &str, max_concurrent_jobs: u8) -> Runner {
     let hash_byte = if id.ends_with('1') { '1' } else { '2' };
     Runner::new(
         id,
@@ -754,6 +771,7 @@ fn runner(id: &str) -> Runner {
         "1.0.0",
         RUNNER_PROTOCOL_VERSION,
         RunnerCapabilities::v1(),
+        RunnerMaxConcurrentJobs::new(max_concurrent_jobs).unwrap(),
         10,
     )
     .unwrap()

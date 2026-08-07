@@ -1,9 +1,38 @@
 use crate::error::DomainError;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 pub const MAX_RUNNER_NAME_BYTES: usize = 64;
 pub const MAX_RUNNER_VERSION_BYTES: usize = 100;
+pub const MAX_RUNNER_CONCURRENT_JOBS: u8 = 16;
 pub const RUNNER_PROTOCOL_VERSION: u32 = 5;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct RunnerMaxConcurrentJobs(u8);
+
+impl RunnerMaxConcurrentJobs {
+    pub fn new(value: u8) -> Result<Self, DomainError> {
+        if !(1..=MAX_RUNNER_CONCURRENT_JOBS).contains(&value) {
+            return Err(DomainError::invalid_input(format!(
+                "runner max concurrent jobs must be between 1 and {MAX_RUNNER_CONCURRENT_JOBS}"
+            )));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for RunnerMaxConcurrentJobs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(u8::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -78,6 +107,7 @@ pub struct Runner {
     pub version: String,
     pub protocol_version: u32,
     pub capabilities: RunnerCapabilities,
+    pub max_concurrent_jobs: RunnerMaxConcurrentJobs,
     pub enabled: bool,
     pub created_at_unix: u64,
     pub last_seen_at_unix: Option<u64>,
@@ -92,6 +122,7 @@ impl Runner {
         version: impl Into<String>,
         protocol_version: u32,
         capabilities: RunnerCapabilities,
+        max_concurrent_jobs: RunnerMaxConcurrentJobs,
         created_at_unix: u64,
     ) -> Result<Self, DomainError> {
         let id = required("runner id", id.into())?;
@@ -111,6 +142,7 @@ impl Runner {
             version,
             protocol_version,
             capabilities,
+            max_concurrent_jobs,
             enabled: true,
             created_at_unix,
             last_seen_at_unix: None,
@@ -131,6 +163,7 @@ impl Runner {
         version: impl Into<String>,
         protocol_version: u32,
         capabilities: RunnerCapabilities,
+        max_concurrent_jobs: RunnerMaxConcurrentJobs,
         enabled: bool,
         created_at_unix: u64,
         last_seen_at_unix: Option<u64>,
@@ -142,6 +175,7 @@ impl Runner {
             version,
             protocol_version,
             capabilities,
+            max_concurrent_jobs,
             created_at_unix,
         )?;
         runner.enabled = enabled;
@@ -274,6 +308,7 @@ mod tests {
             "1.0.0",
             RUNNER_PROTOCOL_VERSION,
             RunnerCapabilities::v1(),
+            RunnerMaxConcurrentJobs::new(1).unwrap(),
             10,
         )
         .unwrap();
@@ -285,6 +320,7 @@ mod tests {
             "0.1.0",
             RUNNER_PROTOCOL_VERSION - 1,
             RunnerCapabilities::v1(),
+            RunnerMaxConcurrentJobs::new(1).unwrap(),
             10,
         )
         .unwrap();
@@ -296,6 +332,7 @@ mod tests {
             "2.0.0",
             RUNNER_PROTOCOL_VERSION + 1,
             RunnerCapabilities::v1(),
+            RunnerMaxConcurrentJobs::new(1).unwrap(),
             10,
         )
         .unwrap();
@@ -306,5 +343,20 @@ mod tests {
         reordered.record_seen(19).unwrap();
         assert_eq!(reordered.last_seen_at_unix, Some(20));
         assert!(reordered.record_seen(9).is_err());
+    }
+
+    #[test]
+    fn runner_capacity_is_strict_in_construction_and_deserialization() {
+        assert_eq!(RunnerMaxConcurrentJobs::new(1).unwrap().get(), 1);
+        assert_eq!(RunnerMaxConcurrentJobs::new(16).unwrap().get(), 16);
+        assert!(RunnerMaxConcurrentJobs::new(0).is_err());
+        assert!(RunnerMaxConcurrentJobs::new(17).is_err());
+        assert!(serde_json::from_str::<RunnerMaxConcurrentJobs>("0").is_err());
+        assert_eq!(
+            serde_json::from_str::<RunnerMaxConcurrentJobs>("4")
+                .unwrap()
+                .get(),
+            4
+        );
     }
 }

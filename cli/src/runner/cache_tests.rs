@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_support::TestDir;
+use scope_domain::runs::cache::WorkflowCache;
 use scope_domain::runs::cutover::RunnerProtocolCanaryPhase;
 use std::os::unix::fs::MetadataExt;
 
@@ -8,7 +9,21 @@ fn record(state: CacheState) -> CacheRecord {
 }
 
 fn record_for(runner_id: &str, state: CacheState) -> CacheRecord {
-    let identity_digest = "a".repeat(64);
+    let namespace = CacheNamespace::workflow(
+        &WorkflowPath::parse("/.scope/runs/test.yml").unwrap(),
+        &scope_domain::runs::workflow::WorkflowJobId::parse("checks").unwrap(),
+    );
+    let container_image = format!("example.test/build@sha256:{}", "a".repeat(64));
+    let image = PinnedContainerImage::parse(container_image.clone()).unwrap();
+    let identity_digest = CacheIdentity::new(
+        "repo-1",
+        namespace.clone(),
+        WorkflowCache::parse("build").unwrap(),
+        &image,
+        CachePlatform::LinuxAmd64,
+    )
+    .unwrap()
+    .digest();
     let runner_namespace = runner_namespace(runner_id);
     CacheRecord {
         format: CACHE_FORMAT,
@@ -17,9 +32,10 @@ fn record_for(runner_id: &str, state: CacheState) -> CacheRecord {
         runner_namespace,
         identity_digest,
         repository_id: "repo-1".to_string(),
+        namespace,
         cache_name: "build".to_string(),
         image: "a".repeat(64),
-        container_image: format!("example.test/build@sha256:{}", "a".repeat(64)),
+        container_image,
         platform: "linux/amd64".to_string(),
         state,
         last_used_at_unix: 1,
@@ -34,9 +50,10 @@ fn volume(record: &CacheRecord, backing: &Path) -> VolumeInspection {
         volume_type: Some("none".to_string()),
         options: Some("bind".to_string()),
         labels: [
-            ("scope.cache-format", "3"),
+            ("scope.cache-format", "4"),
             ("scope.cache-key", record.identity_digest.as_str()),
             ("scope.repository-id", record.repository_id.as_str()),
+            ("scope.cache-namespace", record.namespace.kind()),
             ("scope.cache-name", record.cache_name.as_str()),
             ("scope.image", record.image.as_str()),
             ("scope.platform", record.platform.as_str()),
@@ -60,7 +77,7 @@ fn physical_locations_are_stable_bounded_and_runner_namespaced() {
     assert_ne!(first.volume_name, colocated.volume_name);
     assert_ne!(first.record_path, colocated.record_path);
     assert_ne!(first.backing_path, colocated.backing_path);
-    assert!(first.volume_name.starts_with("scope-cache-v3-"));
+    assert!(first.volume_name.starts_with("scope-cache-v4-"));
     assert!(first.volume_name.len() < 64);
     assert_eq!(first.identity_digest, digest);
     assert_eq!(colocated.identity_digest, digest);
@@ -243,7 +260,7 @@ fn interrupted_store_initialization_is_repaired_on_restart() {
     let parent = TestDir::new("runner-cache-interrupted-initialize");
     let root = parent.path().join("scope/runner");
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("store.json"), br#"{"format":3}"#).unwrap();
+    fs::write(root.join("store.json"), br#"{"format":4}"#).unwrap();
 
     ensure_usable_root(&root, false).unwrap();
 
@@ -314,7 +331,7 @@ fn obsolete_cache_store_format_is_rejected() {
     let parent = TestDir::new("runner-cache-old-format");
     let root = parent.path().join("scope/runner");
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("store.json"), br#"{"format":2}"#).unwrap();
+    fs::write(root.join("store.json"), br#"{"format":3}"#).unwrap();
 
     let error = validate_store(&root, false).unwrap_err();
     assert!(error.to_string().contains("schema is unsupported"));

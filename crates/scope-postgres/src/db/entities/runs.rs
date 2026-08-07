@@ -14,6 +14,7 @@ pub mod runner {
         pub version: String,
         pub protocol_version: i32,
         pub capabilities: Json,
+        pub max_concurrent_jobs: i32,
         pub enabled: bool,
         pub created_at_unix: i64,
         pub last_seen_at_unix: Option<i64>,
@@ -33,6 +34,7 @@ pub mod runner {
                 version: runner.version.clone(),
                 protocol_version: u32_to_i32(runner.protocol_version, "runner protocol version")?,
                 capabilities: encode_json(&runner.capabilities)?,
+                max_concurrent_jobs: i32::from(runner.max_concurrent_jobs.get()),
                 enabled: runner.enabled,
                 created_at_unix: u64_to_i64(runner.created_at_unix, "runner creation time")?,
                 last_seen_at_unix: runner
@@ -50,6 +52,12 @@ pub mod runner {
                 self.version,
                 i32_to_u32(self.protocol_version, "runner protocol version")?,
                 decode_json::<RunnerCapabilities>(self.capabilities)?,
+                scope_domain::runs::runner::RunnerMaxConcurrentJobs::new(
+                    u8::try_from(self.max_concurrent_jobs).map_err(|_| {
+                        PostgresError::invalid_input("persisted runner capacity is invalid")
+                    })?,
+                )
+                .map_err(PostgresError::invalid_input)?,
                 self.enabled,
                 i64_to_u64(self.created_at_unix, "runner creation time")?,
                 self.last_seen_at_unix

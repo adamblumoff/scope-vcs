@@ -5,10 +5,71 @@ use super::recovery::{
 use super::*;
 use scope_api_contract::StepConclusionRequest;
 use scope_domain::runs::cache::WorkflowCache;
+use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use scope_domain::runs::workflow::{
     ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
 };
-use std::{env, fs};
+use std::{env, fs, path::Path};
+
+#[test]
+fn recovery_runs_exactly_once_before_slot_workers_start() {
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let start_barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let error = run_after_recovery(
+        RunnerMaxConcurrentJobs::new(3).unwrap(),
+        {
+            let events = std::sync::Arc::clone(&events);
+            move || {
+                events.lock().unwrap().push("recovery".to_string());
+                Ok(())
+            }
+        },
+        {
+            let events = std::sync::Arc::clone(&events);
+            let start_barrier = std::sync::Arc::clone(&start_barrier);
+            move |slot| {
+                let mut events = events.lock().unwrap();
+                assert_eq!(events.first().map(String::as_str), Some("recovery"));
+                events.push(format!("slot-{slot}"));
+                drop(events);
+                start_barrier.wait();
+                Ok(())
+            }
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("stopped unexpectedly"));
+
+    let events = events.lock().unwrap();
+    assert_eq!(
+        events.iter().filter(|event| *event == "recovery").count(),
+        1
+    );
+    for slot in 1..=3 {
+        assert!(events.contains(&format!("slot-{slot}")));
+    }
+}
+
+#[test]
+fn a_later_slot_failure_is_reported_without_waiting_for_an_earlier_slot() {
+    let start_barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let started_at = Instant::now();
+    let error = run_after_recovery(
+        RunnerMaxConcurrentJobs::new(2).unwrap(),
+        || Ok(()),
+        move |slot| {
+            start_barrier.wait();
+            if slot == 1 {
+                thread::sleep(Duration::from_millis(500));
+            }
+            anyhow::bail!("slot {slot} test failure")
+        },
+    )
+    .unwrap_err();
+
+    assert!(started_at.elapsed() < Duration::from_millis(250));
+    assert!(error.to_string().contains("runner slot 2 failed"));
+}
 
 #[test]
 fn runner_client_sends_cli_compatibility_identity() {
@@ -117,6 +178,7 @@ fn job_container_receives_only_copied_source_and_step_programs() {
         runner_id: "runner-1".to_string(),
         name: "linux-box".to_string(),
         secret: "runner-secret".to_string(),
+        max_concurrent_jobs: RunnerMaxConcurrentJobs::new(1).unwrap(),
         cache_root: None,
     };
     let claim = ClaimRunResponse {
@@ -128,6 +190,7 @@ fn job_container_receives_only_copied_source_and_step_programs() {
             run_id: "run-1".to_string(),
             job_key: "checks".to_string(),
             repository_id: "owner/repo".to_string(),
+            workflow_path: "/.scope/runs/test.yml".to_string(),
             git_oid: "a".repeat(40),
             source_digest: "b".repeat(64),
             pinned_container_image: None,
@@ -275,6 +338,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
             run_id: "run-1".to_string(),
             job_key: "checks".to_string(),
             repository_id: "owner/repo".to_string(),
+            workflow_path: "/.scope/runs/test.yml".to_string(),
             git_oid: "a".repeat(40),
             source_digest: "b".repeat(64),
             pinned_container_image: None,
@@ -330,7 +394,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         .unwrap();
     mark_recovery_execution_started(&root, &claim, 90).unwrap();
     let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    assert_eq!(stored["schema_version"], 5);
+    assert_eq!(stored["schema_version"], 6);
     let stored: ClaimRunResponse = serde_json::from_value(stored["claim"].clone()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);

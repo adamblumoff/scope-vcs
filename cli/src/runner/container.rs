@@ -9,12 +9,15 @@ pub(super) struct DockerCapabilities {
     pub(super) storage_quota_supported: bool,
 }
 
-pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabilities> {
+pub(super) fn doctor_local(
+    run_container: bool,
+    max_concurrent_jobs: scope_domain::runs::runner::RunnerMaxConcurrentJobs,
+) -> anyhow::Result<(DockerCapabilities, ResourceLimits)> {
     if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
         bail!("V5 runners require Linux on amd64");
     }
     command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
-    let limits = ResourceLimits::detect()?;
+    let limits = ResourceLimits::detect(max_concurrent_jobs)?;
     let capabilities = if run_container {
         let mut command = Command::new("docker");
         command.args(["run", "--rm"]);
@@ -55,7 +58,7 @@ pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabili
         Command::new("systemctl").args(["--user", "--version"]),
         "find systemd user service support",
     )?;
-    Ok(capabilities)
+    Ok((capabilities, limits))
 }
 
 pub(super) fn probe_storage_quota_support(

@@ -15,7 +15,7 @@ use crate::error::PostgresError;
 use scope_domain::runs::{
     job::{RunJob, create_run_jobs, reconcile_run, request_run_cancellation, retry_run},
     run::{AttemptConclusion, PinnedContainerImage, Run, RunAttempt, RunAttemptStep, RunLogChunk},
-    runner::{Runner, RunnerGrant},
+    runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerMaxConcurrentJobs},
     workflow::WorkflowRevision,
 };
 use sea_orm::{
@@ -47,6 +47,15 @@ pub struct StoredRunLog {
     pub position: u64,
     pub run_id: String,
     pub chunk: RunLogChunk,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeRunnerRegistrationCommand {
+    pub secret_hash: String,
+    pub version: String,
+    pub protocol_version: u32,
+    pub capabilities: RunnerCapabilities,
+    pub max_concurrent_jobs: RunnerMaxConcurrentJobs,
 }
 
 impl RunStore {
@@ -115,10 +124,7 @@ impl RunStore {
         &self,
         runner_id: &str,
         owner_user_id: &str,
-        secret_hash: String,
-        version: String,
-        protocol_version: u32,
-        capabilities: scope_domain::runs::runner::RunnerCapabilities,
+        command: UpgradeRunnerRegistrationCommand,
     ) -> Result<Runner, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let current = runner_by_id(&tx, runner_id).await?;
@@ -128,10 +134,11 @@ impl RunStore {
         let upgraded = Runner::restore(
             current.id,
             current.owner_user_id,
-            secret_hash,
-            version,
-            protocol_version,
-            capabilities,
+            command.secret_hash,
+            command.version,
+            command.protocol_version,
+            command.capabilities,
+            command.max_concurrent_jobs,
             true,
             current.created_at_unix,
             current.last_seen_at_unix,

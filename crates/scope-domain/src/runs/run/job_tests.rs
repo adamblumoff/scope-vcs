@@ -6,7 +6,10 @@ use crate::{
             RunRunnerSummary, create_run_jobs, reconcile_run, request_run_cancellation, retry_run,
             summarize_run_runners,
         },
-        runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
+        runner::{
+            RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant,
+            RunnerMaxConcurrentJobs, RunnerName,
+        },
         workflow::{
             CompiledWorkflow, ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowPath,
             WorkflowStep, WorkflowTriggers,
@@ -76,6 +79,7 @@ fn runner() -> Runner {
         "1.0.0",
         RUNNER_PROTOCOL_VERSION,
         RunnerCapabilities::v1(),
+        RunnerMaxConcurrentJobs::new(1).unwrap(),
         1,
     )
     .unwrap()

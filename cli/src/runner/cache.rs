@@ -10,54 +10,38 @@ use scope_api_contract::{
     AttemptCacheFinalizationOutcome, AttemptCacheFinalizationRequest, ClaimRunResponse,
 };
 use scope_domain::runs::{
-    cache::{CacheIdentity, CachePlatform},
+    cache::{CacheIdentity, CacheNamespace, CachePlatform},
     cutover::RunnerProtocolCanaryPhase,
     run::PinnedContainerImage,
+    workflow::WorkflowPath,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
-    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
 
 #[path = "cache_location.rs"]
 mod location;
-use location::{CACHE_FORMAT, CacheLocation, runner_namespace, volume_name};
+#[cfg(test)]
+use location::volume_name;
+use location::{CACHE_FORMAT, CacheLocation, runner_namespace};
 
 #[path = "cache_store.rs"]
 mod store;
 use store::{ensure_capacity, has_capacity, validate_store};
 
+#[path = "cache_record.rs"]
+mod record;
+use record::{
+    CacheRecord, CacheState, load_runner_records, metadata_allows_warm, read_record_candidate,
+    read_record_for_volume, record_location, write_record,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CacheMount {
     pub(super) volume_name: String,
     pub(super) target: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct CacheRecord {
-    format: u8,
-    runner_id: String,
-    runner_namespace: String,
-    identity_digest: String,
-    repository_id: String,
-    cache_name: String,
-    image: String,
-    container_image: String,
-    platform: String,
-    volume_name: String,
-    state: CacheState,
-    last_used_at_unix: u64,
-}
-
-fn record_location(root: &Path, record: &CacheRecord) -> CacheLocation {
-    CacheLocation::from_namespace(
-        root,
-        record.runner_namespace.clone(),
-        &record.identity_digest,
-    )
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -68,13 +52,6 @@ struct VolumeInspection {
     volume_type: Option<String>,
     options: Option<String>,
     labels: std::collections::BTreeMap<String, String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
-enum CacheState {
-    Ready,
-    Tainted { attempt_id: String },
 }
 
 pub(super) struct PreparedCaches {
@@ -104,6 +81,13 @@ impl PreparedCaches {
         validate_store(&root, false)?;
         ensure_capacity(&root, &lock, &config.runner_id)?;
         let pinned_image = PinnedContainerImage::parse(pinned_image.to_string())?;
+        let namespace = match claim.canary_phase {
+            Some(_) => CacheNamespace::RunnerProtocolCanary,
+            None => CacheNamespace::workflow(
+                &WorkflowPath::parse(claim.job.workflow_path.clone())?,
+                job.id(),
+            ),
+        };
         let mut prepared = Self {
             config: config.clone(),
             mounts: Vec::with_capacity(job.caches().len()),
@@ -113,6 +97,7 @@ impl PreparedCaches {
         for cache in job.caches() {
             let identity = CacheIdentity::new(
                 claim.job.repository_id.clone(),
+                namespace.clone(),
                 cache.clone(),
                 &pinned_image,
                 CachePlatform::LinuxAmd64,
@@ -125,6 +110,7 @@ impl PreparedCaches {
                 runner_namespace: location.runner_namespace.clone(),
                 identity_digest: digest,
                 repository_id: identity.repository_id().to_string(),
+                namespace: identity.namespace().clone(),
                 cache_name: identity.cache().as_str().to_string(),
                 image: identity.image_digest().to_string(),
                 container_image: pinned_image.as_str().to_string(),
@@ -537,6 +523,8 @@ fn create_volume(record: &CacheRecord, backing: &Path, runner_id: &str) -> anyho
         "--label",
         &format!("scope.repository-id={}", record.repository_id),
         "--label",
+        &format!("scope.cache-namespace={}", record.namespace.kind()),
+        "--label",
         &format!("scope.cache-name={}", record.cache_name),
         "--label",
         &format!("scope.image={}", record.image),
@@ -631,6 +619,11 @@ fn volume_matches(
         && volume.options.as_deref() == Some("bind")
         && volume.labels.get("scope.repository-id").map(String::as_str)
             == Some(record.repository_id.as_str())
+        && volume
+            .labels
+            .get("scope.cache-namespace")
+            .map(String::as_str)
+            == Some(record.namespace.kind())
         && volume.labels.get("scope.cache-name").map(String::as_str)
             == Some(record.cache_name.as_str())
         && volume.labels.get("scope.image").map(String::as_str) == Some(record.image.as_str())
@@ -751,97 +744,6 @@ fn verify_container_mounts(container: &str, expected: &[CacheMount]) -> anyhow::
     Ok(())
 }
 
-fn write_record(root: &Path, record: &CacheRecord) -> anyhow::Result<()> {
-    let location = record_location(root, record);
-    let metadata = root.join("metadata");
-    require_real_directory(&metadata, false, "cache metadata directory")?;
-    let directory = location
-        .record_path
-        .parent()
-        .context("cache record path has no runner namespace")?;
-    require_real_directory(directory, true, "runner cache metadata namespace")?;
-    let temporary = location
-        .record_path
-        .with_extension(format!("tmp.{}", std::process::id()));
-    let bytes = serde_json::to_vec(record)?;
-    let mut file = File::create(&temporary)?;
-    file.write_all(&bytes)?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    fs::rename(&temporary, &location.record_path)?;
-    File::open(directory)?.sync_all()?;
-    File::open(metadata)?.sync_all()?;
-    Ok(())
-}
-
-fn read_record_candidate(location: &CacheLocation, runner_id: &str) -> Option<CacheRecord> {
-    let record: CacheRecord =
-        serde_json::from_slice(&fs::read(&location.record_path).ok()?).ok()?;
-    (record.runner_id == runner_id
-        && record.runner_namespace == location.runner_namespace
-        && valid_record(&record, &location.identity_digest))
-    .then_some(record)
-}
-
-fn metadata_allows_warm(existing: &CacheRecord, desired: &CacheRecord) -> bool {
-    matches!(&existing.state, CacheState::Ready)
-        && existing.format == desired.format
-        && existing.runner_id == desired.runner_id
-        && existing.runner_namespace == desired.runner_namespace
-        && existing.identity_digest == desired.identity_digest
-        && existing.repository_id == desired.repository_id
-        && existing.cache_name == desired.cache_name
-        && existing.image == desired.image
-        && existing.container_image == desired.container_image
-        && existing.platform == desired.platform
-        && existing.volume_name == desired.volume_name
-}
-
-fn valid_record(record: &CacheRecord, expected_digest: &str) -> bool {
-    record.format == CACHE_FORMAT
-        && !record.runner_id.is_empty()
-        && record.runner_namespace == runner_namespace(&record.runner_id)
-        && record.identity_digest == expected_digest
-        && record.identity_digest.len() == 64
-        && record
-            .identity_digest
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-        && PinnedContainerImage::parse(record.container_image.clone())
-            .is_ok_and(|image| image.digest() == record.image)
-        && record.volume_name == volume_name(&record.runner_namespace, &record.identity_digest)
-}
-
-fn load_runner_records(root: &Path, runner_id: &str) -> anyhow::Result<Vec<CacheRecord>> {
-    let namespace = runner_namespace(runner_id);
-    let metadata = root.join("metadata");
-    require_real_directory(&metadata, false, "cache metadata directory")?;
-    let directory = metadata.join(&namespace);
-    if !directory.exists() {
-        return Ok(Vec::new());
-    }
-    require_real_directory(&directory, false, "runner cache metadata namespace")?;
-    let mut records = Vec::new();
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file()
-            && entry.path().extension().and_then(|value| value.to_str()) == Some("json")
-        {
-            let record: CacheRecord = serde_json::from_slice(&fs::read(entry.path())?)?;
-            if record.runner_id != runner_id
-                || record.runner_namespace != namespace
-                || !valid_record(&record, &record.identity_digest)
-                || entry.path().file_stem().and_then(|value| value.to_str())
-                    != Some(&record.identity_digest)
-            {
-                bail!("runner cache metadata identity is invalid");
-            }
-            records.push(record);
-        }
-    }
-    Ok(records)
-}
-
 fn require_real_directory(path: &Path, create: bool, label: &str) -> anyhow::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
@@ -853,17 +755,6 @@ fn require_real_directory(path: &Path, create: bool, label: &str) -> anyhow::Res
         }
         Err(error) => Err(error).with_context(|| format!("inspect {label} {}", path.display())),
     }
-}
-
-fn read_record_for_volume(
-    root: &Path,
-    volume: &str,
-    runner_id: &str,
-) -> anyhow::Result<CacheRecord> {
-    load_runner_records(root, runner_id)?
-        .into_iter()
-        .find(|record| record.volume_name == volume)
-        .with_context(|| format!("cache metadata for {volume} is missing"))
 }
 
 fn volume_is_referenced(volume: &str) -> anyhow::Result<bool> {

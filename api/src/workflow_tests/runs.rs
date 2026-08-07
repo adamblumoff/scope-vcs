@@ -5,7 +5,9 @@ use scope_api_contract::{
     CompleteAttemptStepRequest, PinAttemptContainerImageRequest, RegisterRunnerRequest,
     StepConclusionRequest, UpgradeRunnerRegistrationRequest,
 };
-use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
+use scope_domain::runs::runner::{
+    RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerMaxConcurrentJobs,
+};
 use std::time::Duration;
 
 const WORKFLOW: &str = r#"
@@ -42,11 +44,13 @@ async fn owned_runner_upgrade_rotates_machine_credentials_over_http() {
                 version: "1.0.0".to_string(),
                 protocol_version: RUNNER_PROTOCOL_VERSION,
                 capabilities: RunnerCapabilities::v1(),
+                max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
             },
         ))
         .await
         .unwrap();
     let registered = response_json(registered).await;
+    assert_eq!(registered["runner"]["max_concurrent_jobs"], 2);
     let runner_id = registered["runner"]["id"].as_str().unwrap();
     let old_secret = registered["secret"].as_str().unwrap();
 
@@ -60,6 +64,7 @@ async fn owned_runner_upgrade_rotates_machine_credentials_over_http() {
                 version: "2.0.0".to_string(),
                 protocol_version: RUNNER_PROTOCOL_VERSION,
                 capabilities: RunnerCapabilities::v1(),
+                max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
             },
         ))
         .await
@@ -89,6 +94,7 @@ async fn owned_runner_upgrade_rotates_machine_credentials_over_http() {
                 version: "2.0.0".to_string(),
                 protocol_version: RUNNER_PROTOCOL_VERSION,
                 capabilities: RunnerCapabilities::v1(),
+                max_concurrent_jobs: RunnerMaxConcurrentJobs::new(3).unwrap(),
             },
         ))
         .await
@@ -98,6 +104,7 @@ async fn owned_runner_upgrade_rotates_machine_credentials_over_http() {
     let new_secret = upgraded["secret"].as_str().unwrap();
     assert_ne!(new_secret, old_secret);
     assert_eq!(upgraded["runner"]["version"], "2.0.0");
+    assert_eq!(upgraded["runner"]["max_concurrent_jobs"], 3);
     assert!(
         state
             .metadata
@@ -210,6 +217,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
                 version: "0.1.0".to_string(),
                 protocol_version: RUNNER_PROTOCOL_VERSION,
                 capabilities: RunnerCapabilities::v1(),
+                max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
             },
         ))
         .await
@@ -285,6 +293,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     let attempt_token = claimed["attempt_token"].as_str().unwrap().to_string();
     assert_eq!(claimed["job"]["git_oid"], git_oid);
     assert_eq!(claimed["job"]["job_key"], "checks");
+    assert_eq!(claimed["job"]["workflow_path"], "/.scope/runs/test.yml");
     assert_eq!(claimed["job"]["definition"]["id"], "checks");
 
     let source_response = app
@@ -739,6 +748,7 @@ async fn unused_runner_registration_can_be_rolled_back() {
                 version: "0.1.0".to_string(),
                 protocol_version: RUNNER_PROTOCOL_VERSION,
                 capabilities: RunnerCapabilities::v1(),
+                max_concurrent_jobs: RunnerMaxConcurrentJobs::new(1).unwrap(),
             },
         ))
         .await

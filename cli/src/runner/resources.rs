@@ -1,4 +1,5 @@
 use anyhow::{Context, bail};
+use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use std::{
     fs,
     num::NonZeroUsize,
@@ -34,20 +35,28 @@ pub(super) struct ResourceLimits {
 }
 
 impl ResourceLimits {
-    pub(super) fn detect() -> anyhow::Result<Self> {
+    pub(super) fn detect(max_concurrent_jobs: RunnerMaxConcurrentJobs) -> anyhow::Result<Self> {
+        let slots = u64::from(max_concurrent_jobs.get());
         let host_memory = mem_available_bytes(&fs::read_to_string("/proc/meminfo")?)?;
         let cgroup_path = unified_cgroup_path(&fs::read_to_string("/proc/self/cgroup")?)?;
         let cgroup = read_cgroup_capacity(Path::new("/sys/fs/cgroup"), &cgroup_path)?;
         let memory_headroom = cgroup
             .memory_headroom
             .map_or(host_memory, |value| value.min(host_memory));
-        if memory_headroom < DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY {
+        let required_memory = DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY.saturating_mul(slots);
+        if memory_headroom < required_memory {
             bail!(
-                "runner has {} MiB memory headroom; at least {} MiB is required",
+                "runner has {} MiB memory headroom; at least {} MiB is required for {slots} job slot(s)",
                 memory_headroom / MIB,
-                (DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY) / MIB
+                required_memory / MIB
             );
         }
+        let memory_bytes = per_slot_budget(
+            memory_headroom - DAEMON_MEMORY_RESERVE,
+            MIN_JOB_MEMORY,
+            slots,
+        )
+        .expect("validated memory budget fits every slot");
 
         let host_cpus = std::thread::available_parallelism()
             .unwrap_or(NonZeroUsize::new(1).expect("one is non-zero"))
@@ -62,22 +71,26 @@ impl ResourceLimits {
         .flatten()
         .min()
         .unwrap_or(1000);
-        let cpu_millis = job_cpu_millis(cpu_capacity)?;
+        let cpu_millis = job_cpu_millis(cpu_capacity, slots)?;
 
         let pids = cgroup
             .pid_headroom
             .map(|headroom| headroom.saturating_sub(PID_RESERVE))
             .unwrap_or(MAX_JOB_PIDS)
             .min(MAX_JOB_PIDS);
-        if pids < MIN_JOB_PIDS {
-            bail!("runner has {pids} available PIDs; at least {MIN_JOB_PIDS} are required");
+        let required_pids = MIN_JOB_PIDS.saturating_mul(slots);
+        if pids < required_pids {
+            bail!(
+                "runner has {pids} available PIDs; at least {required_pids} are required for {slots} job slot(s)"
+            );
         }
-        let storage_bytes = transient_storage_bytes()?;
+        let storage_bytes = transient_storage_bytes(slots)?;
 
         Ok(Self {
-            memory_bytes: memory_headroom - DAEMON_MEMORY_RESERVE,
+            memory_bytes,
             cpu_millis,
-            pids,
+            pids: per_slot_budget(pids, MIN_JOB_PIDS, slots)
+                .expect("validated PID budget fits every slot"),
             storage_bytes,
         })
     }
@@ -225,20 +238,30 @@ fn minimum(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     }
 }
 
-fn job_cpu_millis(capacity: u64) -> anyhow::Result<u64> {
-    let required = DAEMON_CPU_RESERVE_MILLIS + MIN_JOB_CPU_MILLIS;
+fn per_slot_budget(budget: u64, minimum: u64, slots: u64) -> Option<u64> {
+    let per_slot = budget / slots;
+    (per_slot >= minimum).then_some(per_slot)
+}
+
+fn job_cpu_millis(capacity: u64, slots: u64) -> anyhow::Result<u64> {
+    let required = DAEMON_CPU_RESERVE_MILLIS + MIN_JOB_CPU_MILLIS.saturating_mul(slots);
     if capacity < required {
         bail!(
-            "runner has {:.3} CPU capacity; at least {:.3} CPU is required to preserve the daemon reserve",
+            "runner has {:.3} CPU capacity; at least {:.3} CPU is required for {slots} job slot(s) and the daemon reserve",
             capacity as f64 / 1000.0,
             required as f64 / 1000.0
         );
     }
-    Ok(capacity - DAEMON_CPU_RESERVE_MILLIS)
+    Ok(per_slot_budget(
+        capacity - DAEMON_CPU_RESERVE_MILLIS,
+        MIN_JOB_CPU_MILLIS,
+        slots,
+    )
+    .expect("validated CPU budget fits every slot"))
 }
 
-fn transient_storage_bytes() -> anyhow::Result<u64> {
-    safe_transient_storage_bytes(transient_storage_capacity()?)
+fn transient_storage_bytes(slots: u64) -> anyhow::Result<u64> {
+    safe_transient_storage_bytes(transient_storage_capacity()?, slots)
 }
 
 fn has_emergency_capacity(capacity: TransientCapacity) -> bool {
@@ -308,7 +331,7 @@ fn parse_transient_capacity(output: &str) -> anyhow::Result<TransientCapacity> {
     })
 }
 
-fn safe_transient_storage_bytes(capacity: TransientCapacity) -> anyhow::Result<u64> {
+fn safe_transient_storage_bytes(capacity: TransientCapacity, slots: u64) -> anyhow::Result<u64> {
     if let Some(available_inodes) = capacity.available_inodes
         && available_inodes < EMERGENCY_INODE_FLOOR
     {
@@ -321,14 +344,16 @@ fn safe_transient_storage_bytes(capacity: TransientCapacity) -> anyhow::Result<u
     let job = capacity
         .available_bytes
         .saturating_sub(TRANSIENT_DISK_RESERVE);
-    if job < MIN_JOB_STORAGE {
+    let required = MIN_JOB_STORAGE.saturating_mul(slots);
+    if job < required {
         bail!(
-            "Docker data root has {} MiB safe headroom; at least {} MiB is required",
+            "Docker data root has {} MiB safe headroom; at least {} MiB is required for {slots} job slot(s)",
             job / MIB,
-            MIN_JOB_STORAGE / MIB
+            required / MIB
         );
     }
-    Ok(job)
+    Ok(per_slot_budget(job, MIN_JOB_STORAGE, slots)
+        .expect("validated storage budget fits every slot"))
 }
 
 fn mem_available_bytes(meminfo: &str) -> anyhow::Result<u64> {
@@ -470,11 +495,20 @@ mod tests {
 
     #[test]
     fn cpu_admission_never_oversubscribes_or_consumes_the_daemon_reserve() {
-        assert!(job_cpu_millis(500).is_err());
-        assert!(job_cpu_millis(999).is_err());
-        assert_eq!(job_cpu_millis(1000).unwrap(), 500);
-        assert_eq!(job_cpu_millis(1500).unwrap(), 1000);
-        assert_eq!(job_cpu_millis(4000).unwrap(), 3500);
+        assert!(job_cpu_millis(500, 1).is_err());
+        assert!(job_cpu_millis(999, 1).is_err());
+        assert_eq!(job_cpu_millis(1000, 1).unwrap(), 500);
+        assert_eq!(job_cpu_millis(1500, 1).unwrap(), 1000);
+        assert_eq!(job_cpu_millis(4000, 1).unwrap(), 3500);
+        assert_eq!(job_cpu_millis(2500, 4).unwrap(), 500);
+        assert!(job_cpu_millis(2499, 4).is_err());
+    }
+
+    #[test]
+    fn per_slot_budget_never_dips_below_the_resource_minimum() {
+        assert_eq!(per_slot_budget(2048, 512, 4), Some(512));
+        assert_eq!(per_slot_budget(2051, 512, 4), Some(512));
+        assert_eq!(per_slot_budget(2047, 512, 4), None);
     }
 
     #[test]
@@ -511,27 +545,49 @@ mod tests {
     fn transient_storage_preserves_the_host_reserve_on_any_filesystem() {
         let available = TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE + 123;
         assert_eq!(
-            safe_transient_storage_bytes(TransientCapacity {
-                available_bytes: available,
-                available_inodes: Some(EMERGENCY_INODE_FLOOR),
-            })
+            safe_transient_storage_bytes(
+                TransientCapacity {
+                    available_bytes: available,
+                    available_inodes: Some(EMERGENCY_INODE_FLOOR),
+                },
+                1,
+            )
             .unwrap(),
             MIN_JOB_STORAGE + 123
         );
         assert!(
-            safe_transient_storage_bytes(TransientCapacity {
-                available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE - 1,
-                available_inodes: Some(EMERGENCY_INODE_FLOOR),
-            })
+            safe_transient_storage_bytes(
+                TransientCapacity {
+                    available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE - 1,
+                    available_inodes: Some(EMERGENCY_INODE_FLOOR),
+                },
+                1,
+            )
             .is_err()
         );
         assert!(
-            safe_transient_storage_bytes(TransientCapacity {
-                available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE,
-                available_inodes: Some(EMERGENCY_INODE_FLOOR - 1),
-            })
+            safe_transient_storage_bytes(
+                TransientCapacity {
+                    available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE,
+                    available_inodes: Some(EMERGENCY_INODE_FLOOR - 1),
+                },
+                1,
+            )
             .is_err()
         );
+    }
+
+    #[test]
+    fn storage_budget_is_divided_per_slot_and_rejects_undersized_slots() {
+        let capacity = |job_bytes| TransientCapacity {
+            available_bytes: TRANSIENT_DISK_RESERVE + job_bytes,
+            available_inodes: Some(EMERGENCY_INODE_FLOOR),
+        };
+        assert_eq!(
+            safe_transient_storage_bytes(capacity(4 * MIN_JOB_STORAGE), 4).unwrap(),
+            MIN_JOB_STORAGE
+        );
+        assert!(safe_transient_storage_bytes(capacity(4 * MIN_JOB_STORAGE - 1), 4).is_err());
     }
 
     #[test]

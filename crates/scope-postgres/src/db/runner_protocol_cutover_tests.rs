@@ -6,7 +6,7 @@ use scope_domain::runs::{
         RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus, RunnerProtocolCutoverState,
     },
     run::{PinnedContainerImage, RunTrigger, StepConclusion},
-    runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities},
+    runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerMaxConcurrentJobs},
     workflow::{
         CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowJob,
         WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
@@ -650,10 +650,13 @@ async fn owned_v4_runner_cannot_claim_v5_jobs_and_upgrades_atomically() {
             .upgrade_runner_registration(
                 "runner-1",
                 "user_other",
-                new_hash.clone(),
-                "2.0.0".to_string(),
-                RUNNER_PROTOCOL_VERSION,
-                RunnerCapabilities::v1(),
+                super::UpgradeRunnerRegistrationCommand {
+                    secret_hash: new_hash.clone(),
+                    version: "2.0.0".to_string(),
+                    protocol_version: RUNNER_PROTOCOL_VERSION,
+                    capabilities: RunnerCapabilities::v1(),
+                    max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
+                },
             )
             .await
             .is_err()
@@ -663,10 +666,13 @@ async fn owned_v4_runner_cannot_claim_v5_jobs_and_upgrades_atomically() {
         .upgrade_runner_registration(
             "runner-1",
             "user_owner",
-            new_hash.clone(),
-            "2.0.0".to_string(),
-            RUNNER_PROTOCOL_VERSION,
-            RunnerCapabilities::v1(),
+            super::UpgradeRunnerRegistrationCommand {
+                secret_hash: new_hash.clone(),
+                version: "2.0.0".to_string(),
+                protocol_version: RUNNER_PROTOCOL_VERSION,
+                capabilities: RunnerCapabilities::v1(),
+                max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
+            },
         )
         .await
         .unwrap();
