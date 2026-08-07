@@ -273,9 +273,78 @@ async fn workflow_jobs_rewrite_refuses_to_start_until_attempts_are_drained() {
     let definition = row.try_get::<serde_json::Value>("", "definition").unwrap();
     assert_eq!(definition["jobs"][0]["id"], "checks");
     assert!(definition.get("steps").is_none());
-    assert_ne!(
+    assert_eq!(
         row.try_get::<String>("", "workflow_revision_digest")
             .unwrap(),
-        "b".repeat(64)
+        "c1a831feffae11e2325937e5121f70cee2f0fb826d23cc800960031c2aab3bc0"
+    );
+}
+
+#[tokio::test]
+async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
+    let (_target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(12))
+        .await
+        .unwrap();
+    db.execute_unprepared(
+        r#"
+            INSERT INTO scope_users (id, handle, email, email_verified)
+            VALUES ('user_push_jobs', 'push-jobs', 'push-jobs@scope.test', TRUE);
+            INSERT INTO scope_repositories (
+                id, owner_handle, name, owner_user_id, publication_state,
+                change_version, repo_config, policy
+            ) VALUES (
+                'repo_push_jobs', 'push-jobs', 'repo', 'user_push_jobs', 'Ready',
+                1, '{}'::jsonb, '{}'::jsonb
+            );
+            INSERT INTO scope_outbox_jobs (
+                id, idempotency_key, kind, repo_id, repo_version, payload, state,
+                attempts, next_run_at_unix, lease_owner, lease_expires_at_unix,
+                last_error, created_at_unix, updated_at_unix, completed_at_unix
+            ) VALUES (
+                'outbox_push_jobs', 'push_main_trigger_evaluation:repo_push_jobs:1',
+                'push_main_trigger_evaluation', 'repo_push_jobs', 1,
+                jsonb_build_object(
+                    'input', jsonb_build_object(
+                        'workflows', jsonb_build_array(jsonb_build_object(
+                            'path', '/.scope/runs/test.yml',
+                            'legacy_flat_yaml', E'name: Legacy\nruns-on: any\nsteps:\n  - run: cargo test\n'
+                        ))
+                    )
+                ),
+                'ready', 0, 1, NULL, NULL, NULL, 1, 1, NULL
+            );
+        "#,
+    )
+    .await
+    .unwrap();
+
+    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    assert!(error.to_string().contains(
+        "workflow jobs migration requires all pending push trigger evaluations to finish"
+    ));
+    assert_eq!(
+        applied_versions(db.as_ref())
+            .await
+            .last()
+            .map(String::as_str),
+        Some("m0012_request_revisions")
+    );
+
+    db.execute_unprepared(
+        "UPDATE scope_outbox_jobs
+         SET state = 'succeeded', updated_at_unix = 2, completed_at_unix = 2
+         WHERE id = 'outbox_push_jobs'",
+    )
+    .await
+    .unwrap();
+    migrations::apply(db.as_ref()).await.unwrap();
+
+    assert_eq!(
+        applied_versions(db.as_ref())
+            .await
+            .last()
+            .map(String::as_str),
+        Some("m0013_workflow_jobs")
     );
 }
