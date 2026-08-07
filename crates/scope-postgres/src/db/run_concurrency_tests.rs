@@ -151,6 +151,82 @@ async fn active_step_cannot_erase_cancellation_committed_after_its_initial_read(
     assert_eq!(detail.attempts[0].steps[0].state, StepState::Pending);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claim_reloads_parent_before_aggregate_save_and_cannot_regress_concurrent_state() {
+    let store = Arc::new(postgres_store());
+    register_runner(&store, "runner-1", "linux-box").await;
+    enqueue(
+        &store,
+        run("run-claim-race", "manual:claim-race"),
+        revision(),
+    )
+    .await;
+
+    let parent_update = store.db.begin().await.unwrap();
+    parent_update
+        .execute_unprepared(
+            "UPDATE scope_runs
+             SET cancellation_requested = TRUE, updated_at_unix = 30
+             WHERE id = 'run-claim-race'",
+        )
+        .await
+        .unwrap();
+
+    let claiming_store = Arc::clone(&store);
+    let claim = tokio::spawn(async move {
+        claiming_store
+            .runs()
+            .claim_job(
+                "run-claim-race",
+                "checks",
+                "runner-1",
+                "attempt-claim-race",
+                &"a".repeat(64),
+                20,
+                80,
+            )
+            .await
+    });
+
+    let mut claim_holds_job_lock = false;
+    for _ in 0..100 {
+        let probe = store.db.begin().await.unwrap();
+        let result = probe
+            .execute_unprepared(
+                "SELECT 1 FROM scope_run_jobs
+                 WHERE run_id = 'run-claim-race' AND job_key = 'checks'
+                 FOR UPDATE NOWAIT",
+            )
+            .await;
+        let _ = probe.rollback().await;
+        if result.is_err() {
+            claim_holds_job_lock = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(claim_holds_job_lock, "claim never reached its job lock");
+
+    parent_update.commit().await.unwrap();
+    let error = timeout(Duration::from_secs(5), claim)
+        .await
+        .expect("claim did not resume after parent update committed")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind, PostgresErrorKind::InvalidInput);
+
+    let detail = store
+        .runs()
+        .run_detail("run-claim-race")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(detail.run.cancellation_requested);
+    assert_eq!(detail.run.updated_at_unix, 30);
+    assert_eq!(detail.jobs[0].state, RunJobState::Queued);
+    assert!(detail.attempts.is_empty());
+}
+
 #[tokio::test]
 async fn attempt_details_are_newest_first_by_internal_ordinal_with_isolated_steps() {
     let store = postgres_store();

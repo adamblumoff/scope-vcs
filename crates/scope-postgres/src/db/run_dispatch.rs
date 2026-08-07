@@ -1,7 +1,8 @@
 use super::{
     DispatchClaim, RunStore, entities,
     run_attempt_persistence::{
-        grant_by_ids, jobs_for_run, locked_job, runner_by_id, save_job, save_run, save_runner,
+        grant_by_ids, jobs_for_run, locked_job, locked_run, runner_by_id, save_job, save_run,
+        save_runner,
     },
     runner_protocol_cutover::{
         DispatchCutover, dispatch_cutover, guard_claim, mark_canary_claimed,
@@ -9,10 +10,76 @@ use super::{
     runs::{DispatchOffer, unique_conflict, workflow_revision_for_run},
 };
 use crate::error::PostgresError;
-use scope_domain::runs::job::reconcile_run;
+use scope_domain::runs::{job::reconcile_run, run::RunJobState};
 use sea_orm::{
-    ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, TransactionTrait,
+    ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, IntoActiveModel,
+    QuerySelect, Statement, TransactionTrait,
 };
+
+struct DispatchCandidate {
+    run_id: String,
+    job_key: String,
+}
+
+async fn dispatch_candidate(
+    tx: &DatabaseTransaction,
+    runner_id: &str,
+    canary_run_id: Option<&str>,
+) -> Result<Option<DispatchCandidate>, PostgresError> {
+    const ELIGIBLE_JOB: &str = "
+        SELECT job.run_id, job.job_key
+        FROM scope_run_jobs job
+        JOIN scope_runs run ON run.id = job.run_id
+        JOIN scope_runner_grants runner_grant
+          ON runner_grant.repo_id = run.repo_id
+         AND runner_grant.runner_id = $1
+         AND runner_grant.revoked_at_unix IS NULL
+        WHERE job.state = 'queued'
+          AND run.state IN ('queued', 'leased', 'running')
+          AND run.cancellation_requested = FALSE
+          AND (job.desired_runner_name IS NULL OR job.desired_runner_name = runner_grant.name)
+        ORDER BY job.created_at_unix, job.run_id, job.job_key
+        LIMIT 1";
+    const ELIGIBLE_CANARY_JOB: &str = "
+        SELECT job.run_id, job.job_key
+        FROM scope_run_jobs job
+        JOIN scope_runs run ON run.id = job.run_id
+        JOIN scope_runner_grants runner_grant
+          ON runner_grant.repo_id = run.repo_id
+         AND runner_grant.runner_id = $1
+         AND runner_grant.revoked_at_unix IS NULL
+        WHERE job.state = 'queued'
+          AND run.state IN ('queued', 'leased', 'running')
+          AND run.cancellation_requested = FALSE
+          AND (job.desired_runner_name IS NULL OR job.desired_runner_name = runner_grant.name)
+          AND job.run_id = $2
+        ORDER BY job.created_at_unix, job.run_id, job.job_key
+        LIMIT 1";
+    let statement = match canary_run_id {
+        Some(run_id) => Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            ELIGIBLE_CANARY_JOB,
+            [runner_id.into(), run_id.into()],
+        ),
+        None => Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            ELIGIBLE_JOB,
+            [runner_id.into()],
+        ),
+    };
+    tx.query_one(statement)
+        .await
+        .map_err(PostgresError::internal)?
+        .map(|row| {
+            Ok(DispatchCandidate {
+                run_id: row.try_get("", "run_id").map_err(PostgresError::internal)?,
+                job_key: row
+                    .try_get("", "job_key")
+                    .map_err(PostgresError::internal)?,
+            })
+        })
+        .transpose()
+}
 
 impl RunStore {
     pub async fn next_dispatchable_job(
@@ -20,13 +87,9 @@ impl RunStore {
         runner_id: &str,
     ) -> Result<Option<DispatchOffer>, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let runner = entities::runner::Entity::find_by_id(runner_id.to_string())
-            .one(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .ok_or_else(|| PostgresError::not_found("runner not found"))?
-            .try_into_domain()?;
+        let runner = runner_by_id(&tx, runner_id).await?;
         if !runner.supports_dispatch() {
+            tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(None);
         }
         let dispatch = dispatch_cutover(&tx, runner_id, runner.protocol_version).await?;
@@ -35,53 +98,35 @@ impl RunStore {
             return Ok(None);
         }
 
-        let grants = entities::runner_grant::Entity::find()
-            .filter(entities::runner_grant::Column::RunnerId.eq(runner_id))
-            .filter(entities::runner_grant::Column::RevokedAtUnix.is_null())
-            .all(&tx)
-            .await
-            .map_err(PostgresError::internal)?;
-        let grants = grants
-            .into_iter()
-            .map(|grant| (grant.repo_id, grant.name))
-            .collect::<Vec<_>>();
-        if grants.is_empty() {
+        let canary_run_id = match &dispatch {
+            DispatchCutover::Canary(run_id) => Some(run_id.as_str()),
+            DispatchCutover::General => None,
+            DispatchCutover::None => unreachable!("none dispatch returned above"),
+        };
+        let Some(candidate) = dispatch_candidate(&tx, runner_id, canary_run_id).await? else {
+            tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(None);
-        }
-        let jobs = entities::run_job::Entity::find()
-            .filter(entities::run_job::Column::State.eq("queued"))
-            .order_by_asc(entities::run_job::Column::CreatedAtUnix)
-            .order_by_asc(entities::run_job::Column::RunId)
-            .order_by_asc(entities::run_job::Column::JobKey)
-            .all(&tx)
-            .await
-            .map_err(PostgresError::internal)?;
-        for job_model in jobs {
-            if let DispatchCutover::Canary(ref run_id) = dispatch
-                && &job_model.run_id != run_id
-            {
-                continue;
-            }
-            let job = job_model.try_into_domain()?;
-            let run = entities::run::Entity::find_by_id(job.run_id.clone())
-                .one(&tx)
-                .await
-                .map_err(PostgresError::internal)?
-                .ok_or_else(|| PostgresError::internal_message("run job parent is missing"))?
-                .try_into_domain()?;
-            if !run.cancellation_requested
-                && !run.state.is_terminal()
-                && grants.iter().any(|(repo_id, name)| {
-                    repo_id == run.workflow.repository_id()
-                        && job.desired_runner.matches_name(name.as_str())
-                })
-            {
-                tx.commit().await.map_err(PostgresError::internal)?;
-                return Ok(Some(DispatchOffer { run, job }));
-            }
-        }
+        };
+        let job = locked_job(&tx, &candidate.run_id, &candidate.job_key).await?;
+        let run = locked_run(&tx, &candidate.run_id).await?;
+        let grant = entities::runner_grant::Entity::find_by_id((
+            run.workflow.repository_id().to_string(),
+            runner_id.to_string(),
+        ))
+        .lock_exclusive()
+        .one(&tx)
+        .await
+        .map_err(PostgresError::internal)?;
+        let still_eligible = job.state == RunJobState::Queued
+            && !run.cancellation_requested
+            && !run.state.is_terminal()
+            && grant.is_some_and(|grant| {
+                grant.revoked_at_unix.is_none()
+                    && job.desired_runner.matches_name(grant.name.as_str())
+            })
+            && canary_run_id.is_none_or(|run_id| run.id == run_id);
         tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(None)
+        Ok(still_eligible.then_some(DispatchOffer { run, job }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -97,7 +142,7 @@ impl RunStore {
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         guard_claim(&tx, runner_id, run_id).await?;
-        let mut run = entities::run::Entity::find_by_id(run_id.to_string())
+        let run_snapshot = entities::run::Entity::find_by_id(run_id.to_string())
             .one(&tx)
             .await
             .map_err(PostgresError::internal)?
@@ -105,15 +150,15 @@ impl RunStore {
             .try_into_domain()?;
         let mut job = locked_job(&tx, run_id, job_key).await?;
         let mut runner = runner_by_id(&tx, runner_id).await?;
-        let grant = grant_by_ids(&tx, run.workflow.repository_id(), runner_id).await?;
-        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
+        let grant = grant_by_ids(&tx, run_snapshot.workflow.repository_id(), runner_id).await?;
+        let workflow_revision = workflow_revision_for_run(&tx, &run_snapshot).await?;
         let definition = workflow_revision
             .definition()
             .job(&job.key)
             .ok_or_else(|| PostgresError::internal_message("run job definition is missing"))?;
         let (attempt, steps) = job
             .claim(
-                &run,
+                &run_snapshot,
                 definition,
                 &runner,
                 &grant,
@@ -145,6 +190,7 @@ impl RunStore {
         .await
         .map_err(PostgresError::internal)?;
         save_job(&tx, &job).await?;
+        let mut run = locked_run(&tx, run_id).await?;
         let mut jobs = jobs_for_run(&tx, run_id).await?;
         if let Some(stored) = jobs.iter_mut().find(|stored| stored.key == job.key) {
             *stored = job.clone();

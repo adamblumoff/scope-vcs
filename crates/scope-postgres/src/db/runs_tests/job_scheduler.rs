@@ -4,12 +4,77 @@ use super::{
 };
 use crate::error::PostgresErrorKind;
 use scope_domain::runs::{
-    run::{AttemptConclusion, AttemptState, RunState, RunTrigger},
+    run::{AttemptConclusion, AttemptState, PinnedContainerImage, RunState, RunTrigger},
     workflow::{
         CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId,
         WorkflowRevision, WorkflowStep, WorkflowTriggers,
     },
 };
+use sea_orm::ConnectionTrait;
+
+#[tokio::test]
+async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_jobs() {
+    let store = postgres_store();
+    register_runner(&store, "runner-1", "linux-one").await;
+    register_runner(&store, "runner-2", "linux-two").await;
+    enqueue(&store, run("run-00-invalid", "manual:invalid"), revision()).await;
+    store
+        .db
+        .execute_unprepared(
+            "UPDATE scope_run_jobs
+             SET desired_runner_name = 'invalid runner name'
+             WHERE run_id = 'run-00-invalid' AND job_key = 'checks'",
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        store
+            .runs()
+            .next_dispatchable_job("runner-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-01-named",
+            "manual:named",
+            &revision(),
+            RunnerSelector::named("linux-two").unwrap(),
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision(),
+    )
+    .await;
+    enqueue(&store, run("run-02-any", "manual:any"), revision()).await;
+
+    assert_eq!(
+        store
+            .runs()
+            .next_dispatchable_job("runner-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .run
+            .id,
+        "run-02-any"
+    );
+    assert_eq!(
+        store
+            .runs()
+            .next_dispatchable_job("runner-2")
+            .await
+            .unwrap()
+            .unwrap()
+            .run
+            .id,
+        "run-01-named"
+    );
+}
 
 #[tokio::test]
 async fn independent_jobs_claim_concurrently_with_job_scoped_attempt_ordinals() {
@@ -136,6 +201,64 @@ async fn active_cancellation_is_intent_until_runner_acknowledges() {
             .kind,
         PostgresErrorKind::Conflict
     );
+}
+
+#[tokio::test]
+async fn retry_persists_the_jobs_pinned_container_image() {
+    let store = postgres_store();
+    register_runner(&store, "runner-1", "linux-box").await;
+    enqueue(&store, run("run-retry-pin", "manual:retry-pin"), revision()).await;
+    store
+        .runs()
+        .claim_job(
+            "run-retry-pin",
+            "checks",
+            "runner-1",
+            "attempt-retry-pin",
+            &"a".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+    let image =
+        PinnedContainerImage::parse(format!("registry.example/job@sha256:{}", "b".repeat(64)))
+            .unwrap();
+    store
+        .runs()
+        .pin_attempt_container_image(
+            "attempt-retry-pin",
+            "runner-1",
+            &"a".repeat(64),
+            image.clone(),
+            21,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .complete_attempt(
+            "attempt-retry-pin",
+            "runner-1",
+            &"a".repeat(64),
+            AttemptConclusion::SetupFailed {
+                exit_code: 1,
+                message: "setup failed".into(),
+            },
+            22,
+        )
+        .await
+        .unwrap();
+
+    store.runs().retry_run("run-retry-pin", 23).await.unwrap();
+
+    let detail = store
+        .runs()
+        .run_detail("run-retry-pin")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.jobs[0].pinned_container_image, Some(image));
 }
 
 fn parallel_revision() -> WorkflowRevision {

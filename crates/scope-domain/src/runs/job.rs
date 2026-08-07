@@ -392,7 +392,6 @@ pub fn retry_run(
         } else {
             RunJobState::Blocked
         };
-        job.pinned_container_image = None;
         job.current_attempt_id = None;
         job.updated_at_unix = now_unix;
         job.completed_at_unix = None;
@@ -421,7 +420,7 @@ fn derive_run_state(run: &mut Run, jobs: &[RunJob], now_unix: u64) -> Result<(),
     }
     let all_terminal = jobs.iter().all(|job| job.state.is_terminal());
     let next = if all_terminal {
-        if run.cancellation_requested {
+        if run.cancellation_requested || jobs.iter().any(|job| job.state == RunJobState::Canceled) {
             RunState::Canceled
         } else if jobs.iter().any(|job| job.state == RunJobState::Failed) {
             RunState::Failed

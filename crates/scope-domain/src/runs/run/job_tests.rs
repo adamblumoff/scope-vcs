@@ -134,6 +134,27 @@ fn failure_skips_every_downstream_level_in_one_reconciliation() {
 }
 
 #[test]
+fn canceled_upstream_cancels_run_and_skips_every_downstream_job() {
+    let revision = workflow(&[
+        ("build", &[]),
+        ("package", &["build"]),
+        ("publish", &["package"]),
+    ]);
+    let mut run = run(&revision);
+    let mut jobs = create_run_jobs(&run, &revision).unwrap();
+    jobs[0].state = RunJobState::Canceled;
+    jobs[0].updated_at_unix = 20;
+    jobs[0].completed_at_unix = Some(20);
+
+    reconcile_run(&mut run, &mut jobs, &revision, 20).unwrap();
+
+    assert!(!run.cancellation_requested);
+    assert_eq!(jobs[1].state, RunJobState::Skipped);
+    assert_eq!(jobs[2].state, RunJobState::Skipped);
+    assert_eq!(run.state, RunState::Canceled);
+}
+
+#[test]
 fn identical_terminal_completion_is_idempotent_after_current_attempt_is_cleared() {
     let revision = workflow(&[("checks", &[])]);
     let run = run(&revision);
@@ -198,4 +219,36 @@ fn retry_rejects_revision_job_set_mismatch_and_backward_time() {
 
     jobs[0].key = WorkflowJobId::parse("missing").unwrap();
     assert!(retry_run(&mut run, &mut jobs, &revision, 31).is_err());
+}
+
+#[test]
+fn retry_retains_each_jobs_pinned_container_image() {
+    let revision = workflow(&[("build", &[]), ("package", &["build"])]);
+    let mut run = run(&revision);
+    let mut jobs = create_run_jobs(&run, &revision).unwrap();
+    let build_image =
+        PinnedContainerImage::parse(format!("registry.example/build@sha256:{}", "a".repeat(64)))
+            .unwrap();
+    let package_image = PinnedContainerImage::parse(format!(
+        "registry.example/package@sha256:{}",
+        "b".repeat(64)
+    ))
+    .unwrap();
+    jobs[0].pinned_container_image = Some(build_image.clone());
+    jobs[1].pinned_container_image = Some(package_image.clone());
+    for job in &mut jobs {
+        job.state = RunJobState::Failed;
+        job.updated_at_unix = 20;
+        job.completed_at_unix = Some(20);
+    }
+    run.state = RunState::Failed;
+    run.updated_at_unix = 20;
+    run.completed_at_unix = Some(20);
+
+    retry_run(&mut run, &mut jobs, &revision, 30).unwrap();
+
+    assert_eq!(jobs[0].pinned_container_image, Some(build_image));
+    assert_eq!(jobs[1].pinned_container_image, Some(package_image));
+    assert_eq!(jobs[0].state, RunJobState::Queued);
+    assert_eq!(jobs[1].state, RunJobState::Blocked);
 }
