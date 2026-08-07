@@ -119,9 +119,12 @@ steps:
         exit "$status"
       }
       trap cleanup EXIT
+      # This public-only smoke test never grants an identity, so it does not
+      # need a real Clerk instance or repository secrets.
       CARGO_HOME=/scope/cache/cargo \
         CARGO_TARGET_DIR=/scope/cache/cargo-target \
         RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu \
+        VITE_SCOPE_WEB_FORCE_SIGNED_OUT=1 \
         ./dev/scope-dev up
       SCOPE_SMOKE_REPO=dev/public-demo \
         SCOPE_WEB_BASE_URL=http://localhost:3000 \
