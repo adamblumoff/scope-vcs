@@ -307,22 +307,19 @@ mod tests {
             "lease_expires_at_unix": 10,
             "job": {
                 "run_id": "run-1",
+                "job_key": "checks",
                 "repository_id": "repo-1",
                 "git_oid": "a",
                 "source_digest": "b",
                 "pinned_container_image": null,
-                "workflow": {
-                    "name": "Test",
-                    "triggers": { "manual": true, "push_main": false },
-                    "jobs": [{
-                        "id": "checks",
-                        "needs": [],
-                        "runner": { "kind": "any" },
-                        "container": { "image": "image" },
-                        "timeout_seconds": 60,
-                        "caches": [],
-                        "steps": [{ "name": "Test", "run": "true" }]
-                    }]
+                "definition": {
+                    "id": "checks",
+                    "needs": [],
+                    "runner": { "kind": "any" },
+                    "container": { "image": "image" },
+                    "timeout_seconds": 60,
+                    "caches": [],
+                    "steps": [{ "name": "Test", "run": "true" }]
                 }
             }
         });

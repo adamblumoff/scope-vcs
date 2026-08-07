@@ -272,7 +272,7 @@ export type RepositoryRunTerminalReason = { "kind": "step-failed", step_index: n
 
 export type RepositoryRunStepResponse = { index: number, name: string, command: string, state: RepositoryRunStepState, started_at_unix: number | null, completed_at_unix: number | null, exit_code: number | null, };
 
-export type RepositoryRunAttemptResponse = { id: string, runner_id: string, runner_name: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, steps: Array<RepositoryRunStepResponse>, };
+export type RepositoryRunAttemptResponse = { id: string, job_key: string, runner_id: string, runner_name: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, steps: Array<RepositoryRunStepResponse>, };
 
 export type RepositoryRunnerState = "online" | "offline" | "disabled";
 
