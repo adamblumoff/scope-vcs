@@ -210,6 +210,17 @@ impl Run {
                 "push runs cannot override workflow job runners",
             ));
         }
+        if self.runner_override == Some(RunnerSelector::Any)
+            && revision
+                .definition()
+                .jobs()
+                .iter()
+                .any(|job| matches!(job.runner(), RunnerSelector::Named(_)))
+        {
+            return Err(DomainError::invalid_input(
+                "run runner selection is not allowed by the workflow revision",
+            ));
+        }
         Ok(())
     }
 

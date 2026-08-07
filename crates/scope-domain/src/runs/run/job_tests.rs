@@ -116,6 +116,48 @@ fn roots_queue_and_dependents_promote_in_deterministic_topological_order() {
 }
 
 #[test]
+fn manual_any_override_cannot_widen_a_named_job_runner() {
+    let identity = WorkflowIdentity::new(
+        "repo-1",
+        WorkflowPath::parse("/.scope/runs/named.yml").unwrap(),
+    )
+    .unwrap();
+    let definition = CompiledWorkflow::new(
+        "Named",
+        WorkflowTriggers::new(true, false).unwrap(),
+        vec![
+            WorkflowJob::new(
+                WorkflowJobId::parse("checks").unwrap(),
+                vec![],
+                RunnerSelector::named("linux-one").unwrap(),
+                ContainerSpec::new("rust:latest").unwrap(),
+                600,
+                vec![],
+                vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let revision = WorkflowRevision::new(identity, definition).unwrap();
+    let template = run(&revision);
+    let widened = Run::new(
+        "run-widened",
+        "manual:widened",
+        revision.workflow().clone(),
+        revision.digest(),
+        RunTrigger::Manual,
+        Some("user-1".into()),
+        template.source,
+        Some(RunnerSelector::Any),
+        10,
+    )
+    .unwrap();
+
+    assert!(widened.validate_workflow_revision(&revision).is_err());
+}
+
+#[test]
 fn failure_skips_every_downstream_level_in_one_reconciliation() {
     let revision = workflow(&[
         ("build", &[]),
