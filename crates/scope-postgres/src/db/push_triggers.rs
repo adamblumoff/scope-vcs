@@ -135,7 +135,22 @@ where
             .iter()
             .map(|workflow| (workflow.path.as_str(), workflow.bytes.as_slice()));
         match scope_run_config::parse_workflow_set(&job.repo_id, files) {
-            Ok(revisions) => revisions,
+            Ok(revisions)
+                if revisions
+                    .iter()
+                    .all(|revision| revision.definition().only_job().is_some()) =>
+            {
+                revisions
+            }
+            Ok(_) => {
+                evaluation
+                    .configuration_error(
+                        "multi-job workflows require job-level dispatch".to_string(),
+                        now_unix,
+                    )
+                    .map_err(PostgresError::from)?;
+                Vec::new()
+            }
             Err(error) => {
                 evaluation
                     .configuration_error(error.to_string(), now_unix)
@@ -173,7 +188,12 @@ where
                 RunTrigger::PushMain,
                 None,
                 source,
-                revision.definition().runner().clone(),
+                revision
+                    .definition()
+                    .only_job()
+                    .expect("push workflow dispatchability was validated")
+                    .runner()
+                    .clone(),
                 now_unix,
             )
             .map_err(PostgresError::from)?;

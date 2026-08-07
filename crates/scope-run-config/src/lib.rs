@@ -2,11 +2,11 @@ use scope_domain::runs::{
     cache::WorkflowCache,
     workflow::{
         CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowError, WorkflowIdentity,
-        WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
+        WorkflowJob, WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
     },
 };
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 pub const MAX_WORKFLOW_DEFINITION_BYTES: usize = 64 * 1024;
@@ -81,20 +81,54 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
         .into_iter()
         .map(|name| WorkflowCache::parse(name).map_err(WorkflowError::from))
         .collect::<Result<Vec<_>, _>>()?;
-    let steps = raw
-        .steps
+    let jobs = raw
+        .jobs
         .into_iter()
-        .map(|step| WorkflowStep::new(step.name, step.run))
+        .map(|(id, job)| {
+            let id = WorkflowJobId::parse(id)?;
+            let needs = job
+                .needs
+                .into_iter()
+                .map(WorkflowJobId::parse)
+                .collect::<Result<Vec<_>, _>>()?;
+            let job_runner = match job.runs_on {
+                Some(name) if name == "any" => RunnerSelector::Any,
+                Some(name) => RunnerSelector::named(name)?,
+                None => runner.clone(),
+            };
+            let job_container = match job.container {
+                Some(container) => ContainerSpec::new(container.image)?,
+                None => container.clone(),
+            };
+            let job_timeout_seconds = match job.timeout {
+                Some(timeout) => parse_timeout_seconds(&timeout)?,
+                None => timeout_seconds,
+            };
+            let job_caches = match job.caches {
+                Some(names) => names
+                    .into_iter()
+                    .map(|name| WorkflowCache::parse(name).map_err(WorkflowError::from))
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => caches.clone(),
+            };
+            let steps = job
+                .steps
+                .into_iter()
+                .map(|step| WorkflowStep::new(step.name, step.run))
+                .collect::<Result<Vec<_>, _>>()?;
+            WorkflowJob::new(
+                id,
+                needs,
+                job_runner,
+                job_container,
+                job_timeout_seconds,
+                job_caches,
+                steps,
+            )
+            .map_err(RunConfigError::from)
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    let definition = CompiledWorkflow::new(
-        raw.name,
-        triggers,
-        runner,
-        container,
-        timeout_seconds,
-        caches,
-        steps,
-    )?;
+    let definition = CompiledWorkflow::new(raw.name, triggers, jobs)?;
     Ok(ParsedWorkflow { path, definition })
 }
 
@@ -146,8 +180,9 @@ struct RawWorkflow {
     runs_on: String,
     container: RawContainer,
     timeout: String,
+    #[serde(default)]
     caches: Vec<String>,
-    steps: Vec<RawStep>,
+    jobs: BTreeMap<String, RawJob>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,6 +215,22 @@ struct RawContainer {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawJob {
+    #[serde(default)]
+    needs: Vec<String>,
+    #[serde(default, rename = "runs-on")]
+    runs_on: Option<String>,
+    #[serde(default)]
+    container: Option<RawContainer>,
+    #[serde(default)]
+    timeout: Option<String>,
+    #[serde(default)]
+    caches: Option<Vec<String>>,
+    steps: Vec<RawStep>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawStep {
     name: String,
     run: String,
@@ -203,11 +254,13 @@ timeout: 20m
 caches:
   - cargo-target
   - cargo
-steps:
-  - name: Format
-    run: cargo fmt --check
-  - name: Test
-    run: cargo test --workspace
+jobs:
+  checks:
+    steps:
+      - name: Format
+        run: cargo fmt --check
+      - name: Test
+        run: cargo test --workspace
 "#;
 
     #[test]
@@ -219,17 +272,18 @@ steps:
         assert_eq!(definition.name(), "Test");
         assert!(definition.triggers().manual());
         assert!(definition.triggers().push_main());
-        assert_eq!(definition.timeout_seconds(), 20 * 60);
-        assert_eq!(definition.container().image(), "rust:1.90");
+        let job = definition.only_job().unwrap();
+        assert_eq!(job.id().as_str(), "checks");
+        assert_eq!(job.timeout_seconds(), 20 * 60);
+        assert_eq!(job.container().image(), "rust:1.90");
         assert_eq!(
-            definition
-                .caches()
+            job.caches()
                 .iter()
                 .map(WorkflowCache::as_str)
                 .collect::<Vec<_>>(),
             ["cargo", "cargo-target"]
         );
-        assert_eq!(definition.steps()[1].run(), "cargo test --workspace");
+        assert_eq!(job.steps()[1].run(), "cargo test --workspace");
     }
 
     #[test]
@@ -241,9 +295,11 @@ runs-on: any
 container: { image: "rust:1.90" }
 timeout: 1200s
 caches: [cargo, cargo-target]
-steps:
-  - { name: Format, run: "cargo fmt --check" }
-  - { name: Test, run: "cargo test --workspace" }
+jobs:
+  checks:
+    steps:
+      - { name: Format, run: "cargo fmt --check" }
+      - { name: Test, run: "cargo test --workspace" }
 "#;
         let first = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes())
             .unwrap()
@@ -376,12 +432,17 @@ steps:
     }
 
     #[test]
-    fn rejects_v3_missing_caches_and_invalid_or_duplicate_cache_names() {
+    fn caches_default_to_empty_and_reject_invalid_or_duplicate_names() {
         let missing = WORKFLOW.replace("caches:\n  - cargo-target\n  - cargo\n", "");
-        assert!(matches!(
-            parse_workflow("/.scope/runs/test.yml", missing.as_bytes()),
-            Err(RunConfigError::InvalidYaml(_))
-        ));
+        assert!(
+            parse_workflow("/.scope/runs/test.yml", missing.as_bytes())
+                .unwrap()
+                .definition()
+                .only_job()
+                .unwrap()
+                .caches()
+                .is_empty()
+        );
 
         let invalid = WORKFLOW.replace("cargo-target", "Cargo_Target");
         assert!(matches!(
@@ -397,6 +458,72 @@ steps:
             Err(RunConfigError::InvalidWorkflow(
                 WorkflowError::DuplicateCacheName(name)
             )) if name == "cargo-target"
+        ));
+    }
+
+    #[test]
+    fn jobs_inherit_and_can_override_workflow_runtime_defaults() {
+        let workflow = r#"
+name: Graph
+on: { manual: true }
+runs-on: remote-linux
+container: { image: rust:1.90 }
+timeout: 20m
+caches: [cargo]
+jobs:
+  backend:
+    steps:
+      - { name: Backend, run: cargo test }
+  web:
+    needs: [backend]
+    runs-on: browser-runner
+    container: { image: node:24 }
+    timeout: 5m
+    caches: []
+    steps:
+      - { name: Web, run: pnpm test }
+"#;
+        let parsed = parse_workflow("/.scope/runs/graph.yml", workflow.as_bytes()).unwrap();
+        let definition = parsed.definition();
+        let backend = definition
+            .job(&WorkflowJobId::parse("backend").unwrap())
+            .unwrap();
+        assert_eq!(
+            backend.runner(),
+            &RunnerSelector::named("remote-linux").unwrap()
+        );
+        assert_eq!(backend.container().image(), "rust:1.90");
+        assert_eq!(backend.timeout_seconds(), 20 * 60);
+        assert_eq!(backend.caches()[0].as_str(), "cargo");
+
+        let web = definition
+            .job(&WorkflowJobId::parse("web").unwrap())
+            .unwrap();
+        assert_eq!(web.needs()[0].as_str(), "backend");
+        assert_eq!(
+            web.runner(),
+            &RunnerSelector::named("browser-runner").unwrap()
+        );
+        assert_eq!(web.container().image(), "node:24");
+        assert_eq!(web.timeout_seconds(), 5 * 60);
+        assert!(web.caches().is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_graphs_and_the_removed_flat_step_schema() {
+        let missing =
+            WORKFLOW.replace("jobs:\n  checks:", "jobs:\n  checks:\n    needs: [missing]");
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", missing.as_bytes()),
+            Err(RunConfigError::InvalidWorkflow(
+                WorkflowError::MissingDependency { .. }
+            ))
+        ));
+
+        let flat = WORKFLOW.replace("jobs:\n  checks:\n    ", "");
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", flat.as_bytes()),
+            Err(RunConfigError::InvalidYaml(_))
         ));
     }
 

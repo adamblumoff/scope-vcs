@@ -90,7 +90,8 @@ impl PreparedCaches {
         claim: &ClaimRunResponse,
         pinned_image: &str,
     ) -> anyhow::Result<Self> {
-        if claim.job.workflow.caches().is_empty() {
+        let job = super::dispatch_job(claim)?;
+        if job.caches().is_empty() {
             return Ok(Self {
                 config: config.clone(),
                 mounts: Vec::new(),
@@ -105,11 +106,11 @@ impl PreparedCaches {
         let pinned_image = PinnedContainerImage::parse(pinned_image.to_string())?;
         let mut prepared = Self {
             config: config.clone(),
-            mounts: Vec::with_capacity(claim.job.workflow.caches().len()),
+            mounts: Vec::with_capacity(job.caches().len()),
             lock: Some(lock),
             finished: false,
         };
-        for cache in claim.job.workflow.caches() {
+        for cache in job.caches() {
             let identity = CacheIdentity::new(
                 claim.job.repository_id.clone(),
                 cache.clone(),

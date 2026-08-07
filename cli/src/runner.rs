@@ -9,7 +9,11 @@ use scope_api_contract::{
     AppendAttemptLogRequest, AttemptCacheFinalizationOutcome, AttemptConclusionRequest,
     ClaimRunResponse, CompleteAttemptRequest,
 };
-use scope_domain::runs::{run::StepState, step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES};
+use scope_domain::runs::{
+    run::StepState,
+    step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES,
+    workflow::WorkflowJob,
+};
 use std::{
     path::Path,
     process::Command,
@@ -69,6 +73,14 @@ use workspace::{
 };
 
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
+
+fn dispatch_job(claim: &ClaimRunResponse) -> anyhow::Result<&WorkflowJob> {
+    claim
+        .job
+        .workflow
+        .only_job()
+        .context("multi-job workflows require job-level dispatch")
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExecutionOutcome {
@@ -207,6 +219,7 @@ fn execute_claim(
     capabilities: DockerCapabilities,
     claim: &ClaimRunResponse,
 ) -> anyhow::Result<()> {
+    let job = dispatch_job(claim)?;
     let client = runner_client()?;
     let mut work = RunnerWorkDir::new(&claim.attempt_id)?;
     persist_recovery_claim(&work.path, claim)?;
@@ -244,7 +257,7 @@ fn execute_claim(
     })?;
     require_root_image(&container_image)?;
     log_phase(&claim.attempt_id, "image_resolution", phase);
-    let step_programs = write_step_programs(&work.path, &claim.job.workflow)?;
+    let step_programs = write_step_programs(&work.path, job)?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
     }
@@ -291,7 +304,7 @@ fn execute_claim(
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
     }
-    let execution_deadline_unix = unix_now().saturating_add(claim.job.workflow.timeout_seconds());
+    let execution_deadline_unix = unix_now().saturating_add(job.timeout_seconds());
     mark_recovery_execution_started(&work.path, claim, execution_deadline_unix)?;
     let phase = Instant::now();
     let result = run_steps(
@@ -477,7 +490,7 @@ fn resume_claim_execution(
         Some(deadline) => deadline,
         None => {
             let deadline = container_started_at_unix(&container_name)?
-                .saturating_add(claim.job.workflow.timeout_seconds());
+                .saturating_add(dispatch_job(&claim)?.timeout_seconds());
             mark_recovery_execution_started(&work.path, &claim, deadline)?;
             deadline
         }
@@ -539,7 +552,7 @@ fn resume_claim_execution(
                 .map(|step| step.step_index)
         });
     let Some(active_step_index) = active_step_index else {
-        let succeeded = recovery_status.steps.len() == claim.job.workflow.steps().len()
+        let succeeded = recovery_status.steps.len() == dispatch_job(&claim)?.steps().len()
             && recovery_status
                 .steps
                 .iter()

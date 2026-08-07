@@ -8,8 +8,8 @@ use scope_domain::runs::{
     run::{PinnedContainerImage, RunTrigger, StepConclusion},
     runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities},
     workflow::{
-        CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowPath,
-        WorkflowRevision, WorkflowStep, WorkflowTriggers,
+        CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowJob,
+        WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
     },
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
@@ -736,11 +736,18 @@ fn canary_revision(
         CompiledWorkflow::new(
             phase.workflow_name(),
             WorkflowTriggers::new(true, false).unwrap(),
-            RunnerSelector::named(runner_name).unwrap(),
-            ContainerSpec::new(image).unwrap(),
-            RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS,
-            vec![WorkflowCache::parse(RUNNER_PROTOCOL_CANARY_CACHE_NAME).unwrap()],
-            vec![WorkflowStep::new(phase.step_name(), phase.step_command()).unwrap()],
+            vec![
+                WorkflowJob::new(
+                    WorkflowJobId::parse("canary").unwrap(),
+                    vec![],
+                    RunnerSelector::named(runner_name).unwrap(),
+                    ContainerSpec::new(image).unwrap(),
+                    RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS,
+                    vec![WorkflowCache::parse(RUNNER_PROTOCOL_CANARY_CACHE_NAME).unwrap()],
+                    vec![WorkflowStep::new(phase.step_name(), phase.step_command()).unwrap()],
+                )
+                .unwrap(),
+            ],
         )
         .unwrap(),
     )

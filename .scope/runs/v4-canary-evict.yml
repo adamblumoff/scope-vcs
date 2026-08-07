@@ -7,6 +7,8 @@ container:
 timeout: 5m
 caches:
   - runner-protocol
-steps:
-  - name: Assert cache sentinel before eviction
-    run: test "$(cat /scope/cache/runner-protocol/v4-canary-sentinel)" = 'scope-runner-protocol-v4'
+jobs:
+  evict:
+    steps:
+      - name: Assert cache sentinel before eviction
+        run: test "$(cat /scope/cache/runner-protocol/v4-canary-sentinel)" = 'scope-runner-protocol-v4'

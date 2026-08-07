@@ -9,8 +9,8 @@ use scope_domain::{
         },
         runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
         workflow::{
-            CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowPath,
-            WorkflowRevision, WorkflowStep, WorkflowTriggers,
+            CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowJob,
+            WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
         },
     },
     store::{
@@ -852,11 +852,18 @@ fn revision_for_repository_with_runner(
         CompiledWorkflow::new(
             "Test",
             WorkflowTriggers::new(true, false).unwrap(),
-            runner,
-            ContainerSpec::new("rust:1.90").unwrap(),
-            20 * 60,
-            vec![],
-            vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+            vec![
+                WorkflowJob::new(
+                    WorkflowJobId::parse("checks").unwrap(),
+                    vec![],
+                    runner,
+                    ContainerSpec::new("rust:1.90").unwrap(),
+                    20 * 60,
+                    vec![],
+                    vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+                )
+                .unwrap(),
+            ],
         )
         .unwrap(),
     )

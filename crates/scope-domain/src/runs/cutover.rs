@@ -188,23 +188,24 @@ pub fn validate_runner_protocol_canary_workflow(
     if !workflow.triggers().manual() || workflow.triggers().push_main() {
         return Err(invalid("only the manual trigger may be enabled"));
     }
-    if !matches!(workflow.runner(), RunnerSelector::Named(_)) {
+    let Some(job) = workflow.only_job() else {
+        return Err(invalid("exactly one canary job is required"));
+    };
+    if !matches!(job.runner(), RunnerSelector::Named(_)) {
         return Err(invalid("an exact named runner is required"));
     }
-    if PinnedContainerImage::parse(workflow.container().image()).is_err() {
+    if PinnedContainerImage::parse(job.container().image()).is_err() {
         return Err(invalid("container image must be pinned by sha256 digest"));
     }
-    if workflow.timeout_seconds() != RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS {
+    if job.timeout_seconds() != RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS {
         return Err(invalid("timeout does not match the canary timeout"));
     }
-    if workflow.caches().len() != 1
-        || workflow.caches()[0].as_str() != RUNNER_PROTOCOL_CANARY_CACHE_NAME
-    {
+    if job.caches().len() != 1 || job.caches()[0].as_str() != RUNNER_PROTOCOL_CANARY_CACHE_NAME {
         return Err(invalid("the runner-protocol cache must be the only cache"));
     }
-    if workflow.steps().len() != 1
-        || workflow.steps()[0].name() != phase.step_name()
-        || workflow.steps()[0].run() != phase.step_command()
+    if job.steps().len() != 1
+        || job.steps()[0].name() != phase.step_name()
+        || job.steps()[0].run() != phase.step_command()
     {
         return Err(invalid("the phase-specific step does not match"));
     }
@@ -355,7 +356,10 @@ mod tests {
     use super::*;
     use crate::runs::{
         cache::WorkflowCache,
-        workflow::{ContainerSpec, RunnerSelector, WorkflowStep, WorkflowTriggers},
+        workflow::{
+            ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
+            WorkflowTriggers,
+        },
     };
 
     fn canary_workflow(
@@ -368,11 +372,18 @@ mod tests {
         CompiledWorkflow::new(
             phase.workflow_name(),
             triggers,
-            RunnerSelector::named("canary-runner").unwrap(),
-            ContainerSpec::new(image).unwrap(),
-            RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS,
-            caches,
-            steps,
+            vec![
+                WorkflowJob::new(
+                    WorkflowJobId::parse("canary").unwrap(),
+                    vec![],
+                    RunnerSelector::named("canary-runner").unwrap(),
+                    ContainerSpec::new(image).unwrap(),
+                    RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS,
+                    caches,
+                    steps,
+                )
+                .unwrap(),
+            ],
         )
         .unwrap()
     }

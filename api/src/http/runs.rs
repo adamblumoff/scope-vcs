@@ -91,9 +91,13 @@ pub(crate) async fn create_manual_run(
             "workflow does not enable the manual trigger",
         ));
     }
+    let job = revision
+        .definition()
+        .only_job()
+        .ok_or_else(|| ApiError::bad_request("multi-job workflows require job-level dispatch"))?;
     let desired_runner = match query.runner {
         Some(name) => RunnerSelector::named(name).map_err(ApiError::bad_request)?,
-        None => revision.definition().runner().clone(),
+        None => job.runner().clone(),
     };
     let mut stored = put_content_object(
         state.object_store.as_ref(),
@@ -189,7 +193,12 @@ pub(crate) async fn get_repository_run_detail(
         .run_detail(&run_id)
         .await?
         .ok_or_else(|| ApiError::not_found("run not found"))?;
-    let workflow_steps = detail.workflow_revision.definition().steps();
+    let workflow_steps = detail
+        .workflow_revision
+        .definition()
+        .only_job()
+        .ok_or_else(|| ApiError::internal_message("multi-job run used run-level attempts"))?
+        .steps();
     let attempts = detail
         .attempts
         .into_iter()

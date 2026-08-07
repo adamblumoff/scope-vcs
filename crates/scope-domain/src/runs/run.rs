@@ -247,6 +247,10 @@ impl Run {
         };
         let steps = revision
             .definition()
+            .only_job()
+            .ok_or_else(|| {
+                DomainError::invalid_input("multi-job workflows require job-level dispatch")
+            })?
             .steps()
             .iter()
             .enumerate()
@@ -329,7 +333,13 @@ impl Run {
                 "run trigger is not enabled by the workflow revision",
             ));
         }
-        let workflow_runner = revision.definition().runner();
+        let workflow_runner = revision
+            .definition()
+            .only_job()
+            .ok_or_else(|| {
+                DomainError::invalid_input("multi-job workflows require job-level dispatch")
+            })?
+            .runner();
         // A concrete manual target is a one-run CLI override; push routing remains repository-owned.
         let runner_is_allowed = match self.trigger {
             RunTrigger::PushMain => &self.desired_runner == workflow_runner,

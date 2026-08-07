@@ -4,7 +4,10 @@ use crate::{
     projection::ProjectionViewKey,
     runs::{
         runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerName},
-        workflow::{CompiledWorkflow, ContainerSpec, WorkflowPath, WorkflowStep, WorkflowTriggers},
+        workflow::{
+            CompiledWorkflow, ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowPath,
+            WorkflowStep, WorkflowTriggers,
+        },
     },
     store::SourceBlob,
 };
@@ -59,14 +62,21 @@ fn workflow_revision() -> WorkflowRevision {
         CompiledWorkflow::new(
             "Test",
             WorkflowTriggers::new(true, false).unwrap(),
-            RunnerSelector::Any,
-            ContainerSpec::new("rust:latest").unwrap(),
-            600,
-            vec![],
             vec![
-                WorkflowStep::new("Format", "cargo fmt --check").unwrap(),
-                WorkflowStep::new("Test", "cargo test").unwrap(),
-                WorkflowStep::new("Build", "cargo build").unwrap(),
+                WorkflowJob::new(
+                    WorkflowJobId::parse("checks").unwrap(),
+                    vec![],
+                    RunnerSelector::Any,
+                    ContainerSpec::new("rust:latest").unwrap(),
+                    600,
+                    vec![],
+                    vec![
+                        WorkflowStep::new("Format", "cargo fmt --check").unwrap(),
+                        WorkflowStep::new("Test", "cargo test").unwrap(),
+                        WorkflowStep::new("Build", "cargo build").unwrap(),
+                    ],
+                )
+                .unwrap(),
             ],
         )
         .unwrap(),

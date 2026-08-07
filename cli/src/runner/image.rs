@@ -27,7 +27,7 @@ pub(super) fn resolve_container_image(
         return Ok(image.clone());
     }
 
-    let requested = claim.job.workflow.container().image();
+    let requested = super::dispatch_job(claim)?.container().image();
     command_success_while(
         Command::new("docker").args(["pull", requested]),
         "pull workflow Docker image",
