@@ -138,6 +138,7 @@ where
             Ok(revisions)
                 if revisions
                     .iter()
+                    .filter(|revision| revision.definition().triggers().push_main())
                     .all(|revision| revision.definition().only_job().is_some()) =>
             {
                 revisions

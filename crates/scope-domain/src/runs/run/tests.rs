@@ -123,6 +123,58 @@ fn pinned_image(digit: char) -> PinnedContainerImage {
 }
 
 #[test]
+fn run_level_dispatch_rejects_multi_job_workflows() {
+    let base = workflow_revision();
+    let second = WorkflowJob::new(
+        WorkflowJobId::parse("integration").unwrap(),
+        vec![WorkflowJobId::parse("checks").unwrap()],
+        RunnerSelector::Any,
+        ContainerSpec::new("rust:latest").unwrap(),
+        600,
+        vec![],
+        vec![WorkflowStep::new("Integrate", "cargo test").unwrap()],
+    )
+    .unwrap();
+    let definition = CompiledWorkflow::new(
+        "Test",
+        WorkflowTriggers::new(true, false).unwrap(),
+        vec![base.definition().jobs()[0].clone(), second],
+    )
+    .unwrap();
+    let revision = WorkflowRevision::new(base.workflow().clone(), definition).unwrap();
+    let template = run();
+    let mut run = Run::new(
+        "run-multi",
+        "manual:repo-1:multi:oid",
+        revision.workflow().clone(),
+        revision.digest(),
+        RunTrigger::Manual,
+        Some("user-1".to_string()),
+        template.source,
+        RunnerSelector::Any,
+        10,
+    )
+    .unwrap();
+
+    let error = run
+        .claim(
+            &runner(),
+            &grant(),
+            &revision,
+            "attempt-multi",
+            "e".repeat(64),
+            20,
+            80,
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("multi-job workflows require job-level dispatch")
+    );
+}
+
+#[test]
 fn accepted_sources_pin_manifest_snapshot_audience_and_cutoff() {
     let manifest = SourceBlob {
         content_ref: ContentRef::git_manifest_sha256("a".repeat(64)),
