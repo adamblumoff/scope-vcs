@@ -470,6 +470,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                 super::cache::finalize_volume_names(
                     config,
                     &recovery.progress.cache_volumes,
+                    &recovery.claim.attempt_id,
                     false,
                 )?;
                 abandon_recovery_claim(&client, config, &recovery)?;
@@ -490,6 +491,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                     super::cache::finalize_volume_names(
                         config,
                         &recovery.progress.cache_volumes,
+                        &recovery.claim.attempt_id,
                         false,
                     )?;
                     abandon_recovery_claim(&client, config, &recovery)?;

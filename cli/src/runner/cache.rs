@@ -38,6 +38,13 @@ use record::{
     read_record_for_volume, record_location, write_record,
 };
 
+#[path = "cache_lock.rs"]
+mod identity_lock;
+#[cfg(test)]
+use identity_lock::canonical_identity_lock_digests;
+use identity_lock::{CacheFileLock, CacheIdentityLocks};
+use identity_lock::{lock_cache_identities, lock_recorded_volume_identities};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CacheMount {
     pub(super) volume_name: String,
@@ -56,8 +63,10 @@ struct VolumeInspection {
 
 pub(super) struct PreparedCaches {
     config: RunnerConfig,
+    attempt_id: String,
     mounts: Vec<CacheMount>,
-    lock: Option<File>,
+    lifecycle_lock: Option<CacheFileLock>,
+    _identity_locks: CacheIdentityLocks,
     finished: bool,
 }
 
@@ -71,15 +80,14 @@ impl PreparedCaches {
         if job.caches().is_empty() {
             return Ok(Self {
                 config: config.clone(),
+                attempt_id: claim.attempt_id.clone(),
                 mounts: Vec::new(),
-                lock: None,
+                lifecycle_lock: None,
+                _identity_locks: CacheIdentityLocks::default(),
                 finished: false,
             });
         }
         let root = usable_root(config)?;
-        let lock = lifecycle_lock(&root)?;
-        validate_store(&root, false)?;
-        ensure_capacity(&root, &lock, &config.runner_id)?;
         let pinned_image = PinnedContainerImage::parse(pinned_image.to_string())?;
         let namespace = match claim.canary_phase {
             Some(_) => CacheNamespace::RunnerProtocolCanary,
@@ -88,22 +96,43 @@ impl PreparedCaches {
                 job.id(),
             ),
         };
+        let plans = job
+            .caches()
+            .iter()
+            .map(|cache| {
+                let identity = CacheIdentity::new(
+                    claim.job.repository_id.clone(),
+                    namespace.clone(),
+                    cache.clone(),
+                    &pinned_image,
+                    CachePlatform::LinuxAmd64,
+                )?;
+                let location =
+                    CacheLocation::for_runner(&root, &config.runner_id, &identity.digest());
+                Ok((cache, identity, location))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        // Identity locks are acquired without holding the lifecycle lock. Finalization
+        // takes lifecycle while retaining these locks, so the reverse order here would
+        // deadlock a waiting preparation against the running attempt it follows.
+        let identity_locks = lock_cache_identities(
+            &root,
+            &config.runner_id,
+            plans.iter().map(|(_, identity, _)| identity.digest()),
+        )?;
+        let lock = lifecycle_lock(&root)?;
+        validate_store(&root, false)?;
+        ensure_capacity(&root, &lock, &config.runner_id)?;
         let mut prepared = Self {
             config: config.clone(),
+            attempt_id: claim.attempt_id.clone(),
             mounts: Vec::with_capacity(job.caches().len()),
-            lock: Some(lock),
+            lifecycle_lock: Some(lock),
+            _identity_locks: identity_locks,
             finished: false,
         };
-        for cache in job.caches() {
-            let identity = CacheIdentity::new(
-                claim.job.repository_id.clone(),
-                namespace.clone(),
-                cache.clone(),
-                &pinned_image,
-                CachePlatform::LinuxAmd64,
-            )?;
+        for (cache, identity, location) in plans {
             let digest = identity.digest();
-            let location = CacheLocation::for_runner(&root, &config.runner_id, &digest);
             let record = CacheRecord {
                 format: CACHE_FORMAT,
                 runner_id: config.runner_id.clone(),
@@ -180,19 +209,30 @@ impl PreparedCaches {
 
     pub(super) fn confirm_container(&mut self, container_name: &str) -> anyhow::Result<()> {
         verify_container_mounts(container_name, &self.mounts)?;
-        self.lock.take();
+        self.lifecycle_lock.take();
         Ok(())
     }
 
     pub(super) fn finish(mut self, success: bool) -> anyhow::Result<()> {
-        self.lock.take();
-        finalize_volume_names(&self.config, &self.volume_names(), success)?;
+        self.lifecycle_lock.take();
+        finalize_volume_names_while_identity_locked(
+            &self.config,
+            &self.volume_names(),
+            &self.attempt_id,
+            success,
+        )?;
         self.finished = true;
         Ok(())
     }
 
     pub(super) fn preserve(mut self) {
         self.finished = true;
+        // Recovery is restart-owned. Keep these cross-process identity locks until
+        // this daemon exits so another local slot cannot claim and then collide
+        // with the preserved container/cache before recovery reconciles it.
+        if !self._identity_locks.is_empty() {
+            std::mem::forget(self);
+        }
     }
 }
 
@@ -201,8 +241,13 @@ impl Drop for PreparedCaches {
         if self.finished || self.mounts.is_empty() {
             return;
         }
-        self.lock.take();
-        if let Err(error) = finalize_volume_names(&self.config, &self.volume_names(), false) {
+        self.lifecycle_lock.take();
+        if let Err(error) = finalize_volume_names_while_identity_locked(
+            &self.config,
+            &self.volume_names(),
+            &self.attempt_id,
+            false,
+        ) {
             eprintln!("Could not evict tainted attempt caches: {error:#}");
         }
     }
@@ -211,32 +256,75 @@ impl Drop for PreparedCaches {
 pub(super) fn finalize_volume_names(
     config: &RunnerConfig,
     volumes: &[String],
+    attempt_id: &str,
     success: bool,
 ) -> anyhow::Result<()> {
     if volumes.is_empty() {
         return Ok(());
     }
     let root = usable_root(config)?;
-    let _lock = lifecycle_lock(&root)?;
+    let _identity_locks = lock_recorded_volume_identities(&root, &config.runner_id, volumes)?;
+    finalize_volume_names_at_root(config, &root, volumes, attempt_id, success)
+}
+
+fn finalize_volume_names_while_identity_locked(
+    config: &RunnerConfig,
+    volumes: &[String],
+    attempt_id: &str,
+    success: bool,
+) -> anyhow::Result<()> {
+    if volumes.is_empty() {
+        return Ok(());
+    }
+    let root = usable_root(config)?;
+    finalize_volume_names_at_root(config, &root, volumes, attempt_id, success)
+}
+
+fn finalize_volume_names_at_root(
+    config: &RunnerConfig,
+    root: &Path,
+    volumes: &[String],
+    attempt_id: &str,
+    success: bool,
+) -> anyhow::Result<()> {
+    let _lock = lifecycle_lock(root)?;
     for volume in volumes {
         if volume_is_referenced(volume)? {
             bail!("cache volume {volume} is still referenced by a container");
         }
+        let mut record = read_record_for_volume(root, volume, &config.runner_id)?;
+        ensure_cache_record_owned_by_attempt(&record, attempt_id)?;
         if success {
-            let mut record = read_record_for_volume(&root, volume, &config.runner_id)?;
-            let backing = record_location(&root, &record).backing_path;
+            let backing = record_location(root, &record).backing_path;
             super::command_success(
                 Command::new("sync").args(["-f"]).arg(&backing),
                 "flush successful cache contents",
             )?;
             record.state = CacheState::Ready;
             record.last_used_at_unix = unix_now();
-            write_record(&root, &record)?;
+            write_record(root, &record)?;
         } else {
-            remove_cache(&root, volume, &config.runner_id)?;
+            remove_cache(root, volume, &config.runner_id)?;
         }
     }
     Ok(())
+}
+
+fn ensure_cache_record_owned_by_attempt(
+    record: &CacheRecord,
+    attempt_id: &str,
+) -> anyhow::Result<()> {
+    if matches!(
+        &record.state,
+        CacheState::Tainted { attempt_id: owner } if owner == attempt_id
+    ) {
+        Ok(())
+    } else {
+        bail!(
+            "cache volume {} is not owned by attempt {attempt_id}",
+            record.volume_name
+        )
+    }
 }
 
 pub(super) fn is_reusable_after_execution(
@@ -417,6 +505,7 @@ fn ensure_store_directories(root: &Path) -> anyhow::Result<()> {
     // safely finish initialization without accepting symlinks or other file types.
     require_real_directory(&root.join("metadata"), true, "cache metadata directory")?;
     require_real_directory(&root.join("data"), true, "cache data directory")?;
+    require_real_directory(&root.join("locks"), true, "cache lock directory")?;
     File::open(root)?.sync_all()?;
     Ok(())
 }
@@ -437,7 +526,7 @@ fn store_is_absent_or_empty(root: &Path) -> anyhow::Result<bool> {
     }
 }
 
-fn lifecycle_lock(root: &Path) -> anyhow::Result<File> {
+fn lifecycle_lock(root: &Path) -> anyhow::Result<CacheFileLock> {
     let lock = File::options()
         .create(true)
         .truncate(false)
@@ -446,7 +535,7 @@ fn lifecycle_lock(root: &Path) -> anyhow::Result<File> {
         .open(root.join(".lifecycle.lock"))
         .context("open cache lifecycle lock")?;
     lock.lock().context("lock cache lifecycle")?;
-    Ok(lock)
+    Ok(CacheFileLock::new(lock))
 }
 
 fn create_backing_directory(root: &Path, backing: &Path) -> anyhow::Result<()> {

@@ -342,7 +342,9 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
     match resume_claim_execution(config, recovery) {
         Ok(outcome) => {
             let reusable = cache::is_reusable_after_execution(claim.canary_phase, outcome);
-            if let Err(error) = cache::finalize_volume_names(config, &volumes, reusable) {
+            if let Err(error) =
+                cache::finalize_volume_names(config, &volumes, &claim.attempt_id, reusable)
+            {
                 eprintln!("Could not finalize recovered attempt caches: {error:#}");
                 if outcome.succeeded() && claim.canary_phase.is_some() {
                     let mut work = RunnerWorkDir {

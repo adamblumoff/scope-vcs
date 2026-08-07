@@ -2,6 +2,7 @@ use super::*;
 use crate::test_support::TestDir;
 use scope_domain::runs::cache::WorkflowCache;
 use scope_domain::runs::cutover::RunnerProtocolCanaryPhase;
+use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use std::os::unix::fs::MetadataExt;
 
 fn record(state: CacheState) -> CacheRecord {
@@ -252,6 +253,7 @@ fn ordinary_same_filesystem_directory_is_a_valid_cache_store() {
     assert!(root.join("store.json").is_file());
     assert!(root.join("metadata").is_dir());
     assert!(root.join("data").is_dir());
+    assert!(root.join("locks").is_dir());
     assert!(capacity.available_bytes > 0);
 }
 
@@ -267,6 +269,7 @@ fn interrupted_store_initialization_is_repaired_on_restart() {
     assert!(root.join(".lifecycle.lock").is_file());
     assert!(root.join("metadata").is_dir());
     assert!(root.join("data").is_dir());
+    assert!(root.join("locks").is_dir());
     let record = record(CacheState::Ready);
     let location = record_location(&root, &record);
     write_record(&root, &record).unwrap();
@@ -312,6 +315,224 @@ fn runner_cache_namespaces_reject_symlinks() {
     )
     .unwrap();
     assert!(create_backing_directory(&root, &location.backing_path).is_err());
+
+    let foreign_locks = parent.path().join("foreign-locks");
+    fs::create_dir(&foreign_locks).unwrap();
+    std::os::unix::fs::symlink(
+        &foreign_locks,
+        root.join("locks").join(&record.runner_namespace),
+    )
+    .unwrap();
+    assert!(
+        lock_cache_identities(&root, &record.runner_id, [record.identity_digest.clone()]).is_err()
+    );
+}
+
+#[test]
+fn identity_locks_are_canonical_and_partition_parallel_cache_users() {
+    let parent = TestDir::new("runner-cache-identity-locks");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let first = "a".repeat(64);
+    let second = "b".repeat(64);
+    let third = "c".repeat(64);
+
+    assert_eq!(
+        canonical_identity_lock_digests([second.clone(), first.clone(), second.clone()]).unwrap(),
+        [first.clone(), second.clone()]
+    );
+    let held = lock_cache_identities(&root, "runner-1", [second, first.clone()]).unwrap();
+    assert_eq!(held.len(), 2);
+
+    let exact_path = root
+        .join("locks")
+        .join(runner_namespace("runner-1"))
+        .join(format!("{first}.lock"));
+    let exact = File::options()
+        .read(true)
+        .write(true)
+        .open(exact_path)
+        .unwrap();
+    assert!(matches!(
+        exact.try_lock().unwrap_err(),
+        std::fs::TryLockError::WouldBlock
+    ));
+
+    let distinct = lock_cache_identities(&root, "runner-1", [third]).unwrap();
+    assert_eq!(distinct.len(), 1);
+    drop(distinct);
+    drop(exact);
+    drop(held);
+    File::options()
+        .read(true)
+        .write(true)
+        .open(
+            root.join("locks")
+                .join(runner_namespace("runner-1"))
+                .join(format!("{first}.lock")),
+        )
+        .unwrap()
+        .try_lock()
+        .unwrap();
+}
+
+#[test]
+fn lifecycle_lock_releases_when_its_guard_drops() {
+    let parent = TestDir::new("runner-cache-lifecycle-lock-release");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let held = lifecycle_lock(&root).unwrap();
+    let observer = File::options()
+        .read(true)
+        .write(true)
+        .open(root.join(".lifecycle.lock"))
+        .unwrap();
+    assert!(matches!(
+        observer.try_lock().unwrap_err(),
+        std::fs::TryLockError::WouldBlock
+    ));
+
+    drop(observer);
+    drop(held);
+    File::options()
+        .read(true)
+        .write(true)
+        .open(root.join(".lifecycle.lock"))
+        .unwrap()
+        .try_lock()
+        .unwrap();
+}
+
+#[test]
+fn identity_lock_lives_from_confirmation_through_finalization() {
+    let parent = TestDir::new("runner-cache-identity-lock-lifetime");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let digest = "d".repeat(64);
+    let identity_locks = lock_cache_identities(&root, "runner-1", [digest.clone()]).unwrap();
+    let lock_path = root
+        .join("locks")
+        .join(runner_namespace("runner-1"))
+        .join(format!("{digest}.lock"));
+    let observer = File::options()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    let mut prepared = PreparedCaches {
+        config: RunnerConfig {
+            api_url: "https://api.example.test".to_string(),
+            runner_id: "runner-1".to_string(),
+            name: "linux-box".to_string(),
+            secret: "secret".to_string(),
+            max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
+            cache_root: Some(root),
+        },
+        attempt_id: "attempt-1".to_string(),
+        mounts: Vec::new(),
+        lifecycle_lock: None,
+        _identity_locks: identity_locks,
+        finished: false,
+    };
+
+    prepared
+        .confirm_container("unused-empty-cache-container")
+        .unwrap();
+    assert!(matches!(
+        observer.try_lock().unwrap_err(),
+        std::fs::TryLockError::WouldBlock
+    ));
+    prepared.finish(true).unwrap();
+    drop(observer);
+    File::options()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap()
+        .try_lock()
+        .unwrap();
+}
+
+#[test]
+fn preserved_recovery_keeps_the_identity_locked_until_process_exit() {
+    let parent = TestDir::new("runner-cache-preserved-identity-lock");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let digest = "e".repeat(64);
+    let identity_locks = lock_cache_identities(&root, "runner-1", [digest.clone()]).unwrap();
+    let lock_path = root
+        .join("locks")
+        .join(runner_namespace("runner-1"))
+        .join(format!("{digest}.lock"));
+    let observer = File::options()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    let prepared = PreparedCaches {
+        config: RunnerConfig {
+            api_url: "https://api.example.test".to_string(),
+            runner_id: "runner-1".to_string(),
+            name: "linux-box".to_string(),
+            secret: "secret".to_string(),
+            max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
+            cache_root: Some(root),
+        },
+        attempt_id: "attempt-preserved".to_string(),
+        mounts: Vec::new(),
+        lifecycle_lock: None,
+        _identity_locks: identity_locks,
+        finished: false,
+    };
+
+    prepared.preserve();
+    assert!(matches!(
+        observer.try_lock().unwrap_err(),
+        std::fs::TryLockError::WouldBlock
+    ));
+}
+
+#[test]
+fn recovered_finalization_reacquires_the_recorded_identity_lock() {
+    let parent = TestDir::new("runner-cache-recovered-identity-lock");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let record = record(CacheState::Tainted {
+        attempt_id: "attempt-recovered".to_string(),
+    });
+    write_record(&root, &record).unwrap();
+
+    let locks = lock_recorded_volume_identities(
+        &root,
+        &record.runner_id,
+        std::slice::from_ref(&record.volume_name),
+    )
+    .unwrap();
+    let observer = File::options()
+        .read(true)
+        .write(true)
+        .open(
+            root.join("locks")
+                .join(&record.runner_namespace)
+                .join(format!("{}.lock", record.identity_digest)),
+        )
+        .unwrap();
+    assert!(matches!(
+        observer.try_lock().unwrap_err(),
+        std::fs::TryLockError::WouldBlock
+    ));
+    drop(locks);
+    observer.try_lock().unwrap();
+}
+
+#[test]
+fn finalization_rejects_a_cache_retagged_to_another_attempt() {
+    let owned = record(CacheState::Tainted {
+        attempt_id: "attempt-1".to_string(),
+    });
+    assert!(ensure_cache_record_owned_by_attempt(&owned, "attempt-1").is_ok());
+    assert!(ensure_cache_record_owned_by_attempt(&owned, "attempt-2").is_err());
+    assert!(ensure_cache_record_owned_by_attempt(&record(CacheState::Ready), "attempt-1").is_err());
 }
 
 #[test]
@@ -345,12 +566,14 @@ fn cleared_disposable_default_cache_is_reinitialized() {
     fs::remove_file(root.join("store.json")).unwrap();
     fs::remove_dir(root.join("metadata")).unwrap();
     fs::remove_dir(root.join("data")).unwrap();
+    fs::remove_dir(root.join("locks")).unwrap();
     assert!(root.join(".lifecycle.lock").is_file());
     ensure_usable_root(&root, true).unwrap();
 
     assert!(root.join("store.json").is_file());
     assert!(root.join("metadata").is_dir());
     assert!(root.join("data").is_dir());
+    assert!(root.join("locks").is_dir());
 }
 
 #[test]
