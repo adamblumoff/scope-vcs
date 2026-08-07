@@ -327,6 +327,10 @@ async fn completed_private_discussion_transitions_are_read_only_while_public_sta
                 viewer_user_id: Some(&test_owner_id()),
                 snapshot_version: i64::MAX as u64,
                 cursor: None,
+                discussion_id: None,
+                anchor_revision_id: None,
+                anchor_commit_oid: None,
+                include_revision_anchor: false,
                 limit: 10,
             })
             .await
@@ -385,6 +389,10 @@ async fn completed_private_discussion_transitions_are_read_only_while_public_sta
             viewer_user_id: Some(&test_owner_id()),
             snapshot_version: i64::MAX as u64,
             cursor: None,
+            discussion_id: None,
+            anchor_revision_id: None,
+            anchor_commit_oid: None,
+            include_revision_anchor: false,
             limit: 10,
         })
         .await
@@ -447,6 +455,10 @@ async fn completed_private_discussion_transitions_are_read_only_while_public_sta
                 viewer_user_id: Some(&test_owner_id()),
                 snapshot_version: i64::MAX as u64,
                 cursor: None,
+                discussion_id: None,
+                anchor_revision_id: None,
+                anchor_commit_oid: None,
+                include_revision_anchor: false,
                 limit: 10,
             })
             .await
@@ -469,6 +481,10 @@ async fn completed_private_discussion_transitions_are_read_only_while_public_sta
             viewer_user_id: Some(&test_owner_id()),
             snapshot_version: i64::MAX as u64,
             cursor: None,
+            discussion_id: None,
+            anchor_revision_id: None,
+            anchor_commit_oid: None,
+            include_revision_anchor: false,
             limit: 10,
         })
         .await

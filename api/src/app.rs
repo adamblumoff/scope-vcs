@@ -211,12 +211,16 @@ pub fn router(state: AppState) -> Router {
             delete(http::requests::leave_request),
         )
         .route(
-            routes::REPO_REQUEST_CHANGE_BLOCK_FILES,
-            get(http::request_review::get_request_change_block_files),
+            routes::REPO_REQUEST_REVISIONS,
+            get(http::request_review::list_request_revisions),
         )
         .route(
-            routes::REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF,
-            get(http::request_review::get_request_change_block_file_diff),
+            routes::REPO_REQUEST_REVISION_COMMIT,
+            get(http::request_review::get_request_revision_commit),
+        )
+        .route(
+            routes::REPO_REQUEST_REVISION_COMMIT_FILE_DIFF,
+            get(http::request_review::get_request_revision_commit_file_diff),
         )
         .route(
             routes::REPO_REQUEST_DISCUSSIONS,

@@ -11,11 +11,11 @@ pub mod repo_config;
 pub mod repo_control;
 pub mod repo_visibility;
 #[cfg(test)]
-mod request_change_block_tests;
-#[cfg(test)]
 mod request_identity_tests;
 #[cfg(test)]
 mod request_rating_tests;
+#[cfg(test)]
+mod request_revision_tests;
 #[cfg(test)]
 mod request_submission_tests;
 pub mod requests;

@@ -6,9 +6,8 @@ use super::{
         authorize_start_request, ensure_user_exists, lock_request_repository, repo_by_id,
         request_policy_for_user,
     },
-    request_change_block_rows::{change_blocks_for_request_ids, insert_change_block},
-    request_discussion_rows::{insert_discussion, save_read_state},
     request_invitees::delete_request_invitees,
+    request_revision_rows::{insert_revision, revisions_for_request_ids},
     request_rows::{
         delete_request_rows, insert_request_event_row, insert_request_row, latest_request_events,
         request_by_id, request_by_name, request_event_by_id, request_events_after_position,
@@ -179,9 +178,7 @@ impl RequestStore {
         let mutation = record_request_revision(&mut requests, &mut events, input)?;
         save_request_row(&tx, &mutation.request).await?;
         insert_request_event_row(&tx, &mutation.event).await?;
-        insert_change_block(&tx, &mutation.change_block).await?;
-        insert_discussion(&tx, &mutation.discussion).await?;
-        save_read_state(&tx, &mutation.read_state).await?;
+        insert_revision(&tx, &mutation.revision).await?;
         if !mutation.orphan_objects.is_empty() {
             queue_pending_source_blob_deletion_rows(
                 &tx,
@@ -238,23 +235,21 @@ impl RequestStore {
             .into_iter()
             .map(|event| (event.id.clone(), event))
             .collect::<BTreeMap<_, _>>();
-        let mut change_blocks =
-            change_blocks_for_request_ids(&tx, std::slice::from_ref(&request.id))
-                .await?
-                .into_iter()
-                .map(|change_block| (change_block.id.clone(), change_block))
-                .collect::<BTreeMap<_, _>>();
-        let mutation = close_request(&mut requests, &mut events, &mut change_blocks, input)?;
+        let mut revisions = revisions_for_request_ids(&tx, std::slice::from_ref(&request.id))
+            .await?
+            .into_iter()
+            .map(|revision| (revision.id.clone(), revision))
+            .collect::<BTreeMap<_, _>>();
+        let mutation = close_request(&mut requests, &mut events, &mut revisions, input)?;
         match &mutation {
             CloseRequestMutation::DeletedDraft {
                 request,
-                change_blocks,
+                revisions,
                 orphan_objects,
                 ..
             } => {
-                for change_block in change_blocks {
-                    delete_object_reference(&tx, "request_change_block_snapshot", &change_block.id)
-                        .await?;
+                for revision in revisions {
+                    delete_object_reference(&tx, "request_revision_snapshot", &revision.id).await?;
                 }
                 delete_request_rows(&tx, &request.id).await?;
                 if !orphan_objects.is_empty() {

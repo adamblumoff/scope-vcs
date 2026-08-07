@@ -205,7 +205,7 @@ test('public repository requests route is anonymously readable', async () => {
   })
 })
 
-test('seeded request timeline keeps its order and exposes nested reply branches', async () => {
+test('seeded request discussion and changes stay reciprocal and ordered', async () => {
   await withPage(`/${owner}/update-demo/requests/req_demo_ready`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Add bounded retry timing' }).waitFor()
     const threads = page.locator('.request-discussion-thread')
@@ -213,15 +213,15 @@ test('seeded request timeline keeps its order and exposes nested reply branches'
     assert.deepEqual(
       await threads.evaluateAll((elements) => elements.map(({ id }) => id)),
       [
-        'discussion-thread_event_req_demo_ready_revision_1',
-        'discussion-thread_event_req_demo_ready_revision_2',
-        'discussion-thread_event_req_demo_ready_revision_3',
-        'discussion-thread_event_req_demo_ready_revision_4',
         'discussion-discussion_demo_retry_cap',
         'discussion-discussion_demo_jitter',
         'discussion-discussion_demo_resolved_docs',
+        'discussion-discussion_demo_revision_jitter',
+        'discussion-discussion_demo_revision_tests',
+        'discussion-discussion_demo_revision_final',
       ],
     )
+    assert.equal(await page.getByRole('textbox').count(), 0)
 
     const retryThread = page.locator('#discussion-discussion_demo_retry_cap')
     const expandReplies = retryThread.getByRole('button', { name: '3 replies' })
@@ -245,6 +245,32 @@ test('seeded request timeline keeps its order and exposes nested reply branches'
       .locator('#reply-discussion_reply_demo_retry_cap_nested')
       .getByText('Exactly. Keeping that decision nested', { exact: false })
       .waitFor()
+
+    const anchoredThread = page.locator(
+      '#discussion-discussion_demo_revision_jitter',
+    )
+    await anchoredThread.getByRole('link', { name: /Revision/ }).click()
+    await page.waitForURL((url) => (
+      url.pathname.endsWith('/requests/req_demo_ready/changes') &&
+      url.searchParams.get('revision') === 'event_req_demo_ready_revision_2'
+    ))
+    assert.equal(await page.getByRole('textbox').count(), 0)
+    await page
+      .getByRole('link', { name: /The bounded jitter looks right/ })
+      .click()
+    await page.waitForURL((url) => (
+      url.pathname.endsWith('/requests/req_demo_ready') &&
+      url.searchParams.get('discussion') === 'discussion_demo_revision_jitter'
+    ))
+
+    const requestViews = page.getByRole('navigation', { name: 'Request views' })
+    await requestViews.getByRole('link', { name: 'Changes' }).click()
+    await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready/changes'))
+    await page.getByRole('heading', { level: 2, name: 'Commits' }).waitFor()
+    await page.getByRole('navigation', { name: 'Request views' })
+      .getByRole('link', { name: 'Discussion' })
+      .click()
+    await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready'))
   })
 })
 

@@ -5,6 +5,7 @@ import {
   applyDiscussionChanges,
   collectionFromPage,
   compactDiscussionSummary,
+  includeFocusedDiscussion,
   insertOptimisticDiscussion,
   markDiscussionRead,
   mergeDiscussion,
@@ -15,6 +16,23 @@ import type {
   RequestDiscussion,
   RequestDiscussionView,
 } from './request-discussion-types'
+
+test('includes an explicitly focused discussion beyond the first page', () => {
+  const result = includeFocusedDiscussion(
+    {
+      discussions: [discussion('newest', 10)],
+      next_cursor: 'older',
+      snapshot_version: 10,
+    },
+    {
+      discussions: [discussion('focused', 2)],
+      next_cursor: null,
+      snapshot_version: 10,
+    },
+  )
+  assert.deepEqual(result?.discussions.map(({ id }) => id), ['newest', 'focused'])
+  assert.equal(result?.next_cursor, 'older')
+})
 
 test('appends cursor pages without duplicating discussions', () => {
   const first = collectionFromPage({
@@ -460,6 +478,7 @@ test('compact summary uses the first nonempty Markdown line', () => {
 
 function discussion(id: string, lastActivity: number): RequestDiscussion {
   return {
+    anchor: null,
     author: { handle: 'maya', id: 'user-maya' },
     body_markdown: `Discussion ${id}`,
     client_discussion_id: id,

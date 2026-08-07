@@ -518,6 +518,31 @@ pub(crate) fn run_git_output(
     })
 }
 
+pub(crate) fn run_git_output_bounded(
+    repo: Option<&FsPath>,
+    args: &[&str],
+    action: &str,
+    max_stdout_bytes: usize,
+) -> Result<std::process::Output, ApiError> {
+    let mut command = Command::new("git");
+    if let Some(repo) = repo {
+        command.arg("-C").arg(repo);
+    }
+    command.args(args);
+    git_process_output_with_limits(
+        &mut command,
+        None,
+        RuntimeBudgets::default_git_command_timeout(),
+        max_stdout_bytes,
+    )
+    .map_err(|error| match error.status() {
+        axum::http::StatusCode::PAYLOAD_TOO_LARGE => {
+            ApiError::payload_too_large(format!("{action} exceeded {max_stdout_bytes} bytes"))
+        }
+        _ => error,
+    })
+}
+
 pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {
     let repo_id = scope_domain::store::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
@@ -531,6 +556,13 @@ mod tests {
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn bounded_git_output_rejects_stdout_over_the_limit() {
+        let error =
+            run_git_output_bounded(None, &["--version"], "reading Git version", 1).unwrap_err();
+        assert_eq!(error.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
 
     #[test]
     fn workflow_tree_listing_is_scoped_to_the_runs_directory() {

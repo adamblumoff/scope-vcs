@@ -19,9 +19,12 @@ const REQUEST_REF: &str = "refs/heads/request-branch";
 const PRIVATE_REQUEST_ID: &str = "req_private";
 const PRIVATE_REQUEST_REF: &str = "refs/heads/private-request";
 
+mod http;
 mod merge;
 mod policy;
 mod privacy;
+
+use http::public_get_json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permissioned_clone_fetches_named_public_requests_without_joining() {
@@ -207,6 +210,233 @@ async fn draft_push_records_revision_activity_without_touching_main() {
     assert_eq!(request.activity_version, before.activity_version + 1);
     assert_eq!(request_event_count(&state).await, before_event_count + 1);
     assert!(events.try_recv().is_ok());
+
+    let app = router(state.clone());
+    let revisions = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/changes"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revisions.status(), StatusCode::OK);
+    let revisions = response_json(revisions).await;
+    assert_eq!(revisions["has_earlier_revisions"], false);
+    let revisions = revisions["revisions"].as_array().unwrap();
+    assert_eq!(revisions.len(), 2);
+    assert_eq!(revisions[0]["commits"][0]["message"], "request change");
+    let latest = revisions.last().unwrap();
+    assert_eq!(latest["commits_truncated"], false);
+    assert_eq!(latest["new_head_oid"], request.head_oid);
+    assert_eq!(latest["commits"][0]["message"], "respond with revision");
+    assert_eq!(latest["commits"][0]["change_count"], 1);
+    assert!(latest["commits"][0]["authored_at_unix"].as_u64().unwrap() > 0);
+
+    let revision_id = latest["id"].as_str().unwrap();
+    let commit_oid = latest["commits"][0]["oid"].as_str().unwrap();
+    cache_test_jwks(&state);
+    let abbreviated_anchor = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/timeline"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"body_markdown":"Ambiguous anchor","client_discussion_id":"abbreviated-anchor","anchor":{{"revision_id":"{revision_id}","commit_oid":"{}","path":null}}}}"#,
+                    &commit_oid[..8],
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(abbreviated_anchor.status(), StatusCode::BAD_REQUEST);
+
+    let missing_commit = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/changes/{revision_id}/commits/0000000000000000000000000000000000000000"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_commit.status(), StatusCode::NOT_FOUND);
+
+    let commit = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/changes/{revision_id}/commits/{commit_oid}"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(commit.status(), StatusCode::OK);
+    let commit = response_json(commit).await;
+    assert_eq!(commit["files"][0]["path"], "request.txt");
+
+    let anchored = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/timeline"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"body_markdown":"Review this parser change","client_discussion_id":"anchored-review","anchor":{{"revision_id":"{revision_id}","commit_oid":"{commit_oid}","path":"request.txt"}}}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(anchored.status(), StatusCode::OK);
+    let anchored = response_json(anchored).await;
+    assert_eq!(anchored["discussion"]["anchor"]["revision_id"], revision_id);
+    assert_eq!(anchored["discussion"]["anchor"]["commit_oid"], commit_oid);
+    assert_eq!(anchored["discussion"]["anchor"]["path"], "/request.txt");
+    let anchored_id = anchored["discussion"]["id"].as_str().unwrap();
+    let focused_discussion = public_get_json(
+        &app,
+        format!(
+            "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/timeline?discussion={anchored_id}"
+        ),
+    )
+    .await;
+    assert_eq!(focused_discussion["discussions"][0]["id"], anchored_id);
+
+    let discussions = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/timeline"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(discussions.status(), StatusCode::OK);
+    let discussions = response_json(discussions).await;
+    assert_eq!(discussions["discussions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        discussions["discussions"][0]["client_discussion_id"],
+        "anchored-review"
+    );
+    let filtered_discussions = public_get_json(
+        &app,
+        format!(
+            "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/timeline?revision={revision_id}&commit={commit_oid}"
+        ),
+    )
+    .await;
+    assert_eq!(
+        filtered_discussions["discussions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        filtered_discussions["discussions"][0]["client_discussion_id"],
+        "anchored-review"
+    );
+    let unrelated_discussions = public_get_json(
+        &app,
+        format!(
+            "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/timeline?revision=missing-revision&commit={commit_oid}"
+        ),
+    )
+    .await;
+    assert!(
+        unrelated_discussions["discussions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let private_path = ScopePath::parse("/request.txt").unwrap();
+    state
+        .metadata
+        .repositories()
+        .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
+            repo.policy
+                .add_rule(VisibilityRule::private(private_path.clone()))
+                .unwrap();
+            repo.repo_config.visibility.rules.push(
+                scope_domain::repo_config::RepoConfigVisibilityRule {
+                    path: private_path.as_str().to_string(),
+                    visibility: ConfigVisibility::Private,
+                },
+            );
+            repo.bump_change_version();
+        })
+        .await
+        .unwrap();
+    let redacted_revisions = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/changes"
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(redacted_revisions.status(), StatusCode::OK);
+    let redacted_revisions = response_json(redacted_revisions).await;
+    assert!(
+        redacted_revisions["revisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|revision| revision["commits"].as_array().unwrap().is_empty())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

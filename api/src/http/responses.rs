@@ -8,8 +8,8 @@ pub(crate) use requests::*;
 use scope_api_contract::{
     DeviceLoginStatus, FileChangeKind, FirstPushTokenResponse, GitOid, GitPushTokenResponse,
     RepoInitResponse, RepoLifecycleState, RepoRequestPermissionsResponse, RepoSummaryResponse,
-    RepositoryAccessResponse, RequestChangeBlockResponse, SessionIdentity, UserResponse,
-    Visibility,
+    RepositoryAccessResponse, RequestActorSummaryResponse, RequestRevisionCommitResponse,
+    SessionIdentity, UserResponse, Visibility,
 };
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
@@ -20,6 +20,20 @@ use scope_domain::store::{
     RepositoryActor, StoredRepository, UserAccount,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+pub(crate) fn request_actor_summary_response(
+    user_id: &str,
+    users: &BTreeMap<String, UserAccount>,
+) -> Result<RequestActorSummaryResponse, ApiError> {
+    let user = users
+        .get(user_id)
+        .ok_or_else(|| ApiError::internal_message("request actor was not persisted"))?;
+    Ok(RequestActorSummaryResponse {
+        id: user.id.clone(),
+        handle: user.handle.clone(),
+    })
+}
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -363,8 +377,9 @@ pub(crate) struct RequestFileDiffRequest {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct RequestChangeBlockFilesResponse {
-    pub(crate) change_block: RequestChangeBlockResponse,
+pub(crate) struct RequestRevisionCommitFilesResponse {
+    pub(crate) revision_id: String,
+    pub(crate) commit: RequestRevisionCommitResponse,
     pub(crate) files: Vec<CommitFileResponse>,
 }
 

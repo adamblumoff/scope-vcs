@@ -2,7 +2,8 @@ use crate::{
     api::{RepoSummaryResponse, RequestSummaryResponse, get_repo, list_requests},
     git_repo::{
         GitRepo, branch_config_value, current_branch, fetch_scope_remote_with_bearer,
-        push_head_to_ref_with_bearer, run_git_in_repo, set_branch_config_value,
+        push_head_to_ref_with_bearer, run_git_in_repo, scope_remote_head_oid,
+        set_branch_config_value,
     },
     push::DEFAULT_SCOPE_BRANCH,
     request::remote::{
@@ -56,23 +57,25 @@ pub(super) fn load_context_and_request_id(
     Ok((context, request_id))
 }
 
-pub(super) fn fetch_main_projection(
+pub(super) fn refresh_main_projection(
     git_repo: &GitRepo,
-    context: &RequestContext,
+    target: &RequestRemoteTarget,
     audience: RequestAudience,
     session_token: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let fetch_url = match audience {
-        RequestAudience::Public => &context.target.public_url,
-        RequestAudience::Private => &context.target.permissioned_url,
+        RequestAudience::Public => &target.public_url,
+        RequestAudience::Private => &target.permissioned_url,
     };
     fetch_scope_remote_with_bearer(
         git_repo,
         fetch_url,
-        &context.target.remote,
+        &target.remote,
         DEFAULT_SCOPE_BRANCH,
         session_token,
-    )
+    )?;
+    scope_remote_head_oid(git_repo, &target.remote, DEFAULT_SCOPE_BRANCH)?
+        .context("Scope main projection did not produce a local remote ref")
 }
 
 pub(super) fn push_request_head(
@@ -294,7 +297,14 @@ fn normalized_optional_arg(value: Option<String>) -> Option<String> {
 }
 #[cfg(test)]
 mod tests {
-    use super::inferred_request_name;
+    use super::{inferred_request_name, refresh_main_projection};
+    use crate::{
+        git_repo::GitRepo,
+        git_transport::{GitAccess, ScopeRemote},
+        test_support::TestDir,
+    };
+    use scope_api_contract::RequestAudience;
+    use std::fs;
 
     #[test]
     fn merge_ref_only_names_a_request_for_the_selected_scope_remote() {
@@ -316,5 +326,54 @@ mod tests {
             ),
             "scope-fix"
         );
+    }
+
+    #[test]
+    fn main_projection_refresh_follows_alternating_request_audiences() {
+        let (public, public_oid) = repository_with_commit("public-main", "public.txt");
+        let (private, private_oid) = repository_with_commit("private-main", "private.txt");
+        let checkout = TestDir::git_repo("alternating-main", "main");
+        let repo = GitRepo {
+            root: checkout.path().to_path_buf(),
+        };
+        let target = ScopeRemote {
+            remote: "scope".to_string(),
+            access: GitAccess::Permissioned,
+            public_url: file_url(public.path()),
+            permissioned_url: file_url(private.path()),
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+
+        assert_eq!(
+            refresh_main_projection(&repo, &target, RequestAudience::Public, "unused").unwrap(),
+            public_oid
+        );
+        assert_eq!(
+            refresh_main_projection(&repo, &target, RequestAudience::Private, "unused").unwrap(),
+            private_oid
+        );
+        assert_eq!(
+            refresh_main_projection(&repo, &target, RequestAudience::Public, "unused").unwrap(),
+            public_oid
+        );
+    }
+
+    fn repository_with_commit(label: &str, file: &str) -> (TestDir, String) {
+        let dir = TestDir::git_repo(label, "main");
+        dir.run_git(["config", "user.email", "scope@example.test"]);
+        dir.run_git(["config", "user.name", "Scope Test"]);
+        fs::write(dir.path().join(file), format!("{label}\n")).unwrap();
+        dir.run_git(["add", file]);
+        dir.run_git(["commit", "-m", label]);
+        let oid = String::from_utf8(dir.run_git(["rev-parse", "HEAD"]).stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+        (dir, oid)
+    }
+
+    fn file_url(path: &std::path::Path) -> String {
+        format!("file://{}", path.display())
     }
 }

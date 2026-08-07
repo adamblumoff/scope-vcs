@@ -1,11 +1,10 @@
 use super::*;
 use scope_domain::requests::{
-    Request, RequestActorRole, RequestAudience, RequestChangeBlock, RequestDiscussion,
-    RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus,
-    RequestDiscussionSubject, RequestEvent, RequestEventKind, RequestEventPayload, RequestInvitee,
-    RequestRating,
+    Request, RequestActorRole, RequestAudience, RequestDiscussion, RequestDiscussionAnchor,
+    RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus, RequestEvent,
+    RequestEventKind, RequestEventPayload, RequestInvitee, RequestRating, RequestRevision,
 };
-use scope_domain::store::SourceBlob;
+use scope_domain::{policy::ScopePath, store::SourceBlob};
 
 pub mod request {
     use super::*;
@@ -211,11 +210,11 @@ pub mod request_invitee {
     }
 }
 
-pub mod request_change_block {
+pub mod request_revision {
     use super::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_request_change_blocks")]
+    #[sea_orm(table_name = "scope_request_revisions")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
@@ -234,34 +233,34 @@ pub mod request_change_block {
     impl ActiveModelBehavior for ActiveModel {}
 
     impl Model {
-        pub fn from_domain(value: &RequestChangeBlock) -> Result<Self, PostgresError> {
+        pub fn from_domain(value: &RequestRevision) -> Result<Self, PostgresError> {
             Ok(Self {
                 id: value.id.clone(),
                 request_id: value.request_id.clone(),
-                position: u64_to_i64(value.position, "request change block position")?,
+                position: u64_to_i64(value.position, "request revision position")?,
                 actor_user_id: value.actor_user_id.clone(),
                 old_head_oid: value.old_head_oid.clone(),
                 new_head_oid: value.new_head_oid.clone(),
                 git_snapshot: encode_json(&value.git_snapshot)?,
                 created_at_unix: u64_to_i64(
                     value.created_at_unix,
-                    "request change block creation time",
+                    "request revision creation time",
                 )?,
             })
         }
 
-        pub fn try_into_domain(self) -> Result<RequestChangeBlock, PostgresError> {
-            Ok(RequestChangeBlock {
+        pub fn try_into_domain(self) -> Result<RequestRevision, PostgresError> {
+            Ok(RequestRevision {
                 id: self.id,
                 request_id: self.request_id,
-                position: i64_to_u64(self.position, "request change block position")?,
+                position: i64_to_u64(self.position, "request revision position")?,
                 actor_user_id: self.actor_user_id,
                 old_head_oid: self.old_head_oid,
                 new_head_oid: self.new_head_oid,
                 git_snapshot: decode_json::<SourceBlob>(self.git_snapshot)?,
                 created_at_unix: i64_to_u64(
                     self.created_at_unix,
-                    "request change block creation time",
+                    "request revision creation time",
                 )?,
             })
         }
@@ -328,8 +327,10 @@ pub mod request_discussion {
         pub opened_position: i64,
         pub last_activity_position: i64,
         pub author_user_id: String,
-        pub subject: Json,
-        pub body_markdown: Option<String>,
+        pub body_markdown: String,
+        pub revision_id: Option<String>,
+        pub commit_oid: Option<String>,
+        pub path: Option<String>,
         pub status: String,
         pub client_discussion_id: String,
         pub created_at_unix: i64,
@@ -353,8 +354,20 @@ pub mod request_discussion {
                     "discussion last activity position",
                 )?,
                 author_user_id: value.author_user_id.clone(),
-                subject: encode_json(&value.subject)?,
                 body_markdown: value.body_markdown.clone(),
+                revision_id: value
+                    .anchor
+                    .as_ref()
+                    .map(|anchor| anchor.revision_id.clone()),
+                commit_oid: value
+                    .anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.commit_oid.clone()),
+                path: value
+                    .anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.path.as_ref())
+                    .map(|path| path.as_str().to_string()),
                 status: encode_enum(value.status)?,
                 client_discussion_id: value.client_discussion_id.clone(),
                 created_at_unix: u64_to_i64(value.created_at_unix, "discussion creation time")?,
@@ -367,6 +380,20 @@ pub mod request_discussion {
         }
 
         pub fn try_into_domain(self) -> Result<RequestDiscussion, PostgresError> {
+            let anchor = self
+                .revision_id
+                .map(|revision_id| -> Result<_, PostgresError> {
+                    Ok(RequestDiscussionAnchor {
+                        revision_id,
+                        commit_oid: self.commit_oid,
+                        path: self
+                            .path
+                            .map(ScopePath::parse)
+                            .transpose()
+                            .map_err(PostgresError::internal)?,
+                    })
+                })
+                .transpose()?;
             Ok(RequestDiscussion {
                 id: self.id,
                 request_id: self.request_id,
@@ -376,8 +403,8 @@ pub mod request_discussion {
                     "discussion last activity position",
                 )?,
                 author_user_id: self.author_user_id,
-                subject: decode_json::<RequestDiscussionSubject>(self.subject)?,
                 body_markdown: self.body_markdown,
+                anchor,
                 status: decode_enum::<RequestDiscussionStatus>(self.status)?,
                 client_discussion_id: self.client_discussion_id,
                 created_at_unix: i64_to_u64(self.created_at_unix, "discussion creation time")?,

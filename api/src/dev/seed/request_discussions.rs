@@ -1,7 +1,8 @@
 use crate::error::ApiError;
 use scope_domain::{
     requests::{
-        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput, RequestDiscussionStatus,
+        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput, RequestDiscussionAnchor,
+        RequestDiscussionStatus,
     },
     store::{RepositoryMember, RepositoryMemberPermissions, StoredRepository, UserAccount},
 };
@@ -21,17 +22,16 @@ pub(super) const RETRY_CAP_MAINTAINER_REPLY_ID: &str = "discussion_reply_demo_re
 const RETRY_CAP_CONTRIBUTOR_REPLY_ID: &str = "discussion_reply_demo_retry_cap_quote";
 pub(super) const RESOLVED_DOCS_ID: &str = "discussion_demo_resolved_docs";
 const JITTER_ID: &str = "discussion_demo_jitter";
-const JITTER_BLOCK_THREAD_ID: &str = "thread_event_req_demo_ready_revision_2";
-const TEST_BLOCK_THREAD_ID: &str = "thread_event_req_demo_ready_revision_3";
-const FINAL_BLOCK_THREAD_ID: &str = "thread_event_req_demo_ready_revision_4";
+const JITTER_REVISION_DISCUSSION_ID: &str = "discussion_demo_revision_jitter";
+const TEST_REVISION_DISCUSSION_ID: &str = "discussion_demo_revision_tests";
+const FINAL_REVISION_DISCUSSION_ID: &str = "discussion_demo_revision_final";
 
-struct SeedChangeBlockReply {
+struct SeedRevisionDiscussion {
     discussion_id: &'static str,
-    id: &'static str,
+    revision_id: &'static str,
     actor_user_id: &'static str,
-    client_reply_id: &'static str,
+    client_discussion_id: &'static str,
     body: &'static str,
-    reply_to_reply_id: Option<&'static str>,
 }
 
 pub(super) fn collaborators() -> [UserAccount; 2] {
@@ -69,7 +69,7 @@ pub(crate) async fn seed_request_discussion_gallery(
     create_retry_cap_conversation(metadata).await?;
     create_jitter_conversation(metadata).await?;
     create_resolved_docs_conversation(metadata).await?;
-    create_change_block_conversations(metadata).await?;
+    create_revision_conversations(metadata).await?;
 
     let resolved = metadata
         .requests()
@@ -84,51 +84,51 @@ pub(crate) async fn seed_request_discussion_gallery(
     Ok(())
 }
 
-async fn create_change_block_conversations(metadata: &MetadataStore) -> Result<(), ApiError> {
-    let replies = [
-        SeedChangeBlockReply {
-            discussion_id: JITTER_BLOCK_THREAD_ID,
-            id: "discussion_reply_demo_jitter_block",
+async fn create_revision_conversations(metadata: &MetadataStore) -> Result<(), ApiError> {
+    let discussions = [
+        SeedRevisionDiscussion {
+            discussion_id: JITTER_REVISION_DISCUSSION_ID,
+            revision_id: "event_req_demo_ready_revision_2",
             actor_user_id: MAINTAINER_ID,
-            client_reply_id: "seed_jitter_block",
+            client_discussion_id: "seed_revision_jitter",
             body: concat!(
                 "The bounded jitter looks right. A deterministic random source in the tests ",
                 "would make the boundary behavior easy to review."
             ),
-            reply_to_reply_id: None,
         },
-        SeedChangeBlockReply {
-            discussion_id: TEST_BLOCK_THREAD_ID,
-            id: "discussion_reply_demo_test_block",
+        SeedRevisionDiscussion {
+            discussion_id: TEST_REVISION_DISCUSSION_ID,
+            revision_id: "event_req_demo_ready_revision_3",
             actor_user_id: CONTRIBUTOR_ID,
-            client_reply_id: "seed_test_block",
+            client_discussion_id: "seed_revision_tests",
             body: "The tests now pin both the zero-jitter and maximum-jitter edges.",
-            reply_to_reply_id: None,
         },
-        SeedChangeBlockReply {
-            discussion_id: FINAL_BLOCK_THREAD_ID,
-            id: "discussion_reply_demo_final_block",
+        SeedRevisionDiscussion {
+            discussion_id: FINAL_REVISION_DISCUSSION_ID,
+            revision_id: "event_req_demo_ready_revision_4",
             actor_user_id: MAINTAINER_ID,
-            client_reply_id: "seed_final_block",
+            client_discussion_id: "seed_revision_final",
             body: concat!(
                 "This closes the loop nicely: exported policy, implementation, tests, and ",
                 "contributor documentation all agree."
             ),
-            reply_to_reply_id: None,
         },
     ];
-    for (index, reply) in replies.into_iter().enumerate() {
+    for (index, discussion) in discussions.into_iter().enumerate() {
         metadata
             .requests()
-            .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+            .create_request_discussion(CreateRequestDiscussionInput {
                 request_id: REQUEST_ID.to_string(),
-                discussion_id: reply.discussion_id.to_string(),
-                id: reply.id.to_string(),
-                actor_user_id: reply.actor_user_id.to_string(),
+                id: discussion.discussion_id.to_string(),
+                actor_user_id: discussion.actor_user_id.to_string(),
                 actor_can_participate: false,
-                client_reply_id: reply.client_reply_id.to_string(),
-                body_markdown: reply.body.to_string(),
-                reply_to_reply_id: reply.reply_to_reply_id.map(ToString::to_string),
+                client_discussion_id: discussion.client_discussion_id.to_string(),
+                body_markdown: discussion.body.to_string(),
+                anchor: Some(RequestDiscussionAnchor {
+                    revision_id: discussion.revision_id.to_string(),
+                    commit_oid: None,
+                    path: None,
+                }),
                 now_unix: 1_800_000_150 + index as u64,
             })
             .await?;
@@ -151,6 +151,7 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
                 "make the policy easier to discover."
             )
             .to_string(),
+            anchor: None,
             now_unix: 1_800_000_120,
         })
         .await?;
@@ -225,6 +226,7 @@ async fn create_jitter_conversation(metadata: &MetadataStore) -> Result<(), ApiE
                 "currently retry on exactly the same boundaries."
             )
             .to_string(),
+            anchor: None,
             now_unix: 1_800_000_130,
         })
         .await?;
@@ -263,6 +265,7 @@ async fn create_resolved_docs_conversation(metadata: &MetadataStore) -> Result<(
                 "the unit. Could the doc comment make that explicit?"
             )
             .to_string(),
+            anchor: None,
             now_unix: 1_800_000_140,
         })
         .await?;
@@ -351,11 +354,15 @@ mod tests {
                 viewer_user_id: Some(super::super::DEV_SEED_USER_ID),
                 snapshot_version: request.activity_version,
                 cursor: None,
+                discussion_id: None,
+                anchor_revision_id: None,
+                anchor_commit_oid: None,
+                include_revision_anchor: false,
                 limit: 10,
             })
             .await
             .unwrap();
-        assert_eq!(discussions.discussions.len(), 7);
+        assert_eq!(discussions.discussions.len(), 6);
         assert_eq!(
             discussions
                 .discussions
@@ -363,13 +370,12 @@ mod tests {
                 .map(|model| model.discussion.id.as_str())
                 .collect::<Vec<_>>(),
             vec![
+                FINAL_REVISION_DISCUSSION_ID,
+                TEST_REVISION_DISCUSSION_ID,
+                JITTER_REVISION_DISCUSSION_ID,
                 RESOLVED_DOCS_ID,
                 JITTER_ID,
                 RETRY_CAP_ID,
-                FINAL_BLOCK_THREAD_ID,
-                TEST_BLOCK_THREAD_ID,
-                JITTER_BLOCK_THREAD_ID,
-                "thread_event_req_demo_ready_revision_1",
             ]
         );
         assert_eq!(
@@ -380,20 +386,13 @@ mod tests {
                 .count(),
             5
         );
-        let change_block = discussions
-            .discussions
-            .iter()
-            .find(|model| model.discussion.status == RequestDiscussionStatus::Dormant)
-            .unwrap();
-        assert!(change_block.change_block.is_some());
-        assert!(change_block.discussion.body_markdown.is_none());
         assert_eq!(
             discussions
                 .discussions
                 .iter()
-                .filter(|model| model.change_block.is_some())
+                .filter(|model| model.discussion.anchor.is_some())
                 .count(),
-            4
+            3
         );
         assert_eq!(
             discussions

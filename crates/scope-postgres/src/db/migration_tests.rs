@@ -6,6 +6,8 @@ use crate::migrations;
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 use std::{sync::Arc, time::Duration};
 
+mod request_revisions;
+
 const V6_SCHEMA: &str = include_str!("../migrations/v6.sql");
 const RETIRED_V6_TABLES: &[&str] = &[
     "scope_repository_git_clone_tokens",
@@ -179,6 +181,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0009_request_ratings",
             "m0010_file_visibility_source_of_truth",
             "m0011_compact_request_started_events",
+            "m0012_request_revisions",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -855,6 +858,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0009_request_ratings",
             "m0010_file_visibility_source_of_truth",
             "m0011_compact_request_started_events",
+            "m0012_request_revisions",
         ]
     );
 }
@@ -884,6 +888,7 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0009_request_ratings",
             "m0010_file_visibility_source_of_truth",
             "m0011_compact_request_started_events",
+            "m0012_request_revisions",
         ]
     );
 }

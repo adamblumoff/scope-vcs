@@ -96,12 +96,12 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
         request_state(&catalog, "req_demo_ready"),
         RequestState::Open
     );
-    let ready_blocks = catalog
-        .request_change_blocks
+    let ready_revisions = catalog
+        .request_revisions
         .values()
-        .filter(|block| block.request_id == "req_demo_ready")
+        .filter(|revision| revision.request_id == "req_demo_ready")
         .collect::<Vec<_>>();
-    assert_eq!(ready_blocks.len(), 4);
+    assert_eq!(ready_revisions.len(), 4);
     let ready = catalog.requests.get("req_demo_ready").unwrap();
     let last_request_event_at = catalog
         .request_events
@@ -113,9 +113,9 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     assert!(ready.submitted_at_unix.unwrap() > last_request_event_at);
     assert_eq!(ready.updated_at_unix, ready.submitted_at_unix.unwrap());
     assert!(
-        ready_blocks
+        ready_revisions
             .iter()
-            .all(|block| block.git_snapshot.git_oid == block.new_head_oid)
+            .all(|revision| revision.git_snapshot.git_oid == revision.new_head_oid)
     );
     assert_eq!(request_state(&catalog, "req_demo_held"), RequestState::Open);
     let accepted = catalog.requests.get("req_demo_accepted").unwrap();

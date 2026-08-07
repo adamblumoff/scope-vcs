@@ -66,10 +66,10 @@ pub const REPO_REQUEST_INVITEES_ME: &str =
 pub const REPO_SESSION: &str = "/v1/repos/{owner}/{repo}/session";
 pub const REPO_FILES: &str = "/v1/repos/{owner}/{repo}/files";
 pub const REPO_FILE_CONTENT: &str = "/v1/repos/{owner}/{repo}/files/content";
-pub const REPO_REQUEST_CHANGE_BLOCK_FILES: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}";
-pub const REPO_REQUEST_CHANGE_BLOCK_FILE_DIFF: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{block_id}/file-diff";
+pub const REPO_REQUEST_REVISIONS: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/changes";
+pub const REPO_REQUEST_REVISION_COMMIT: &str =
+    "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{revision_id}/commits/{commit_oid}";
+pub const REPO_REQUEST_REVISION_COMMIT_FILE_DIFF: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{revision_id}/commits/{commit_oid}/file-diff";
 pub const REPO_REQUEST_DISCUSSIONS: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline";
 pub const REPO_REQUEST_DISCUSSION_CHANGES: &str =
@@ -296,6 +296,33 @@ pub fn repo_request_action(owner: &str, repo: &str, request_id: &str, action: &s
     )
 }
 
+pub fn repo_request_discussion(
+    owner: &str,
+    repo: &str,
+    request_id: &str,
+    discussion_id: &str,
+) -> String {
+    format!(
+        "{}/threads/{}",
+        repo_request(owner, repo, request_id),
+        path_segment(discussion_id)
+    )
+}
+
+pub fn repo_request_discussion_action(
+    owner: &str,
+    repo: &str,
+    request_id: &str,
+    discussion_id: &str,
+    action: &str,
+) -> String {
+    format!(
+        "{}/{}",
+        repo_request_discussion(owner, repo, request_id, discussion_id),
+        path_segment(action)
+    )
+}
+
 pub fn git_repo(mode: &str, owner: &str, repo: &str) -> String {
     format!(
         "/git/{}/{}/{}",
@@ -349,6 +376,16 @@ mod tests {
             (
                 repo_request_merge("an owner", "r/name", "request?#1"),
                 "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231/merge",
+            ),
+            (
+                repo_request_discussion_action(
+                    "an owner",
+                    "r/name",
+                    "request?#1",
+                    "thread/#1",
+                    "reopen-and-reply",
+                ),
+                "/v1/repos/an%20owner/r%2Fname/requests/request%3F%231/threads/thread%2F%231/reopen-and-reply",
             ),
             (
                 cli_device_login_poll("code/with space"),

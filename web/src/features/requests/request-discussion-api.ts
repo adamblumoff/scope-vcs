@@ -15,7 +15,11 @@ import type {
 
 
 export type LoadDiscussionsInput = RequestParams & {
+  commit_oid?: string
   cursor?: string
+  discussion_id?: string
+  include_revision_anchor?: boolean
+  revision_id?: string
 }
 
 export type LoadRepliesInput = RequestParams & {
@@ -51,8 +55,12 @@ export async function loadRequestDiscussionsForRequest(
 ) {
   return createApiClient().get<RequestDiscussionPage>(
     `${requestDiscussionsPath(data)}${query({
+      commit: data.commit_oid,
       cursor: data.cursor,
+      discussion: data.discussion_id,
+      include_revision_anchor: data.include_revision_anchor ? 'true' : undefined,
       limit: '25',
+      revision: data.revision_id,
     })}`,
     { auth: 'optional' },
   )
@@ -104,6 +112,7 @@ export async function createRequestDiscussionForRequest(
     {
       auth: 'required',
       body: {
+        anchor: data.anchor,
         body_markdown: data.body_markdown,
         client_discussion_id: data.client_discussion_id,
       },
@@ -136,18 +145,6 @@ export async function resolveRequestDiscussionForRequest(
   return createApiClient().post<RequestDiscussionMutation>(
     requestDiscussionRoute(
       ApiRouteTemplates.repoRequestDiscussionResolve,
-      data,
-    ),
-    { auth: 'required' },
-  )
-}
-
-export async function reopenRequestDiscussionForRequest(
-  data: RequestDiscussionActionInput,
-) {
-  return createApiClient().post<RequestDiscussionMutation>(
-    requestDiscussionRoute(
-      ApiRouteTemplates.repoRequestDiscussionReopen,
       data,
     ),
     { auth: 'required' },

@@ -11,6 +11,19 @@ export type DiscussionCollection = {
   snapshotVersion: number
 }
 
+export function includeFocusedDiscussion(
+  page: RequestDiscussionPage | null,
+  focusedPage: RequestDiscussionPage | null,
+) {
+  const focused = focusedPage?.discussions[0]
+  if (!page || !focused || page.discussions.some(({ id }) => id === focused.id)) return page
+  return {
+    ...page,
+    discussions: [...page.discussions, focused]
+      .sort((left, right) => right.opened_position - left.opened_position),
+  }
+}
+
 export function collectionFromPage(
   page: RequestDiscussionPage,
 ): DiscussionCollection {

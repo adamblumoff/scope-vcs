@@ -146,12 +146,12 @@ fn draft_close_deletes_and_open_close_preserves_exact_actor() {
     let draft = pushed_draft();
     let mut requests = BTreeMap::from([(draft.id.clone(), draft)]);
     let mut events = BTreeMap::new();
-    let mut change_blocks = BTreeMap::new();
+    let mut revisions = BTreeMap::new();
     assert!(matches!(
         close_request(
             &mut requests,
             &mut events,
-            &mut change_blocks,
+            &mut revisions,
             close_input("author", true, false),
         )
         .unwrap(),
@@ -164,7 +164,7 @@ fn draft_close_deletes_and_open_close_preserves_exact_actor() {
     let mutation = close_request(
         &mut requests,
         &mut events,
-        &mut change_blocks,
+        &mut revisions,
         close_input("maintainer", false, true),
     )
     .unwrap();
@@ -191,6 +191,7 @@ fn discussion_moderation_does_not_change_request_lifecycle() {
             actor_can_participate: true,
             client_discussion_id: "client_1".to_string(),
             body_markdown: "Review this invariant".to_string(),
+            anchor: None,
             now_unix: 21,
         },
     )
@@ -229,6 +230,7 @@ fn completed_private_discussion_transitions_are_rejected_before_mutation() {
                 actor_can_participate: true,
                 client_discussion_id: format!("client_{id}"),
                 body_markdown: "Review this invariant".to_string(),
+                anchor: None,
                 now_unix: 21,
             },
         )
@@ -309,6 +311,7 @@ fn completed_public_discussion_transitions_remain_allowed() {
                 actor_can_participate: true,
                 client_discussion_id: format!("client_{id}"),
                 body_markdown: "Review this invariant".to_string(),
+                anchor: None,
                 now_unix: 21,
             },
         )

@@ -19,6 +19,13 @@ pub struct RequestDiscussionReplyReadModel {
     pub child_reply_count: u64,
 }
 
+pub struct DiscussionPageFilter<'a> {
+    pub discussion_id: Option<&'a str>,
+    pub revision_id: Option<&'a str>,
+    pub commit_oid: Option<&'a str>,
+    pub include_revision_anchor: bool,
+}
+
 pub async fn discussion_by_id<C>(
     conn: &C,
     id: &str,
@@ -59,6 +66,7 @@ pub async fn discussions_page_for_request<C>(
     request_id: &str,
     snapshot_version: u64,
     cursor: Option<(u64, String)>,
+    filter: DiscussionPageFilter<'_>,
     limit: u64,
 ) -> Result<Vec<RequestDiscussion>, PostgresError>
 where
@@ -79,6 +87,22 @@ where
         .order_by_desc(entities::request_discussion::Column::OpenedPosition)
         .order_by_asc(entities::request_discussion::Column::Id)
         .limit(limit);
+    if let Some(discussion_id) = filter.discussion_id {
+        query = query.filter(entities::request_discussion::Column::Id.eq(discussion_id));
+    }
+    if let Some(revision_id) = filter.revision_id {
+        query = query.filter(entities::request_discussion::Column::RevisionId.eq(revision_id));
+    }
+    if let Some(commit_oid) = filter.commit_oid {
+        let commit_filter = if filter.include_revision_anchor {
+            Condition::any()
+                .add(entities::request_discussion::Column::CommitOid.eq(commit_oid))
+                .add(entities::request_discussion::Column::CommitOid.is_null())
+        } else {
+            Condition::all().add(entities::request_discussion::Column::CommitOid.eq(commit_oid))
+        };
+        query = query.filter(commit_filter);
+    }
     if let Some((position, id)) = cursor {
         query = query.filter(
             Condition::any()

@@ -2,7 +2,7 @@ use super::text::{short_oid, terminal_text};
 use crate::api::{
     LeaveRequestResponse, RepoSummaryResponse, RepositoryActor, RequestActivityPageResponse,
     RequestAudience, RequestCloseResponse, RequestDetailResponse,
-    RequestDiscussionMutationResponse, RequestDiscussionStatus, RequestEventPayload,
+    RequestDiscussionMutationResponse, RequestDiscussionReplyMutationResponse, RequestEventPayload,
     RequestInviteeMutationResponse, RequestListItemResponse, RequestMergeabilityStatus,
     RequestMutationResponse, RequestPermissionsResponse, RequestState, RequestSummaryResponse,
 };
@@ -79,20 +79,54 @@ pub(super) fn close_receipt(request_id: &str, response: &RequestCloseResponse) -
     }
 }
 
-pub(super) fn discussion_receipt_lines(
+pub(super) fn discussion_started_receipt(
+    request_id: &str,
     response: &RequestDiscussionMutationResponse,
 ) -> Vec<String> {
     let discussion = &response.discussion;
-    vec![
-        format!(
-            "Discussion opened: {} [{}] by @{}",
-            discussion.id,
-            discussion_status_label(discussion.status),
-            terminal_text(&discussion.author.handle)
-        ),
-        format!("Replies: {}", discussion.reply_count),
-        terminal_text(discussion.body_markdown.as_deref().unwrap_or("Code change")),
-    ]
+    let mut lines = vec![format!(
+        "Created discussion {} on request {}",
+        terminal_text(&discussion.id),
+        terminal_text(request_id),
+    )];
+    if let Some(anchor) = discussion.anchor.as_ref() {
+        let mut reference = format!("Revision {}", terminal_text(&anchor.revision_id));
+        if let Some(commit) = anchor.commit_oid.as_deref() {
+            reference.push_str(&format!(" · commit {}", short_oid(commit)));
+        }
+        if let Some(path) = anchor.path.as_deref() {
+            reference.push_str(&format!(" · {}", terminal_text(path)));
+        }
+        lines.push(reference);
+    }
+    lines
+}
+
+pub(super) fn discussion_replied_receipt(
+    response: &RequestDiscussionReplyMutationResponse,
+) -> String {
+    format!(
+        "Replied to discussion {} · reply {}",
+        terminal_text(&response.discussion.id),
+        terminal_text(&response.reply.id),
+    )
+}
+
+pub(super) fn discussion_resolved_receipt(response: &RequestDiscussionMutationResponse) -> String {
+    format!(
+        "Resolved discussion {}",
+        terminal_text(&response.discussion.id),
+    )
+}
+
+pub(super) fn discussion_reopened_receipt(
+    response: &RequestDiscussionReplyMutationResponse,
+) -> String {
+    format!(
+        "Reopened discussion {} · reply {}",
+        terminal_text(&response.discussion.id),
+        terminal_text(&response.reply.id),
+    )
 }
 
 pub(super) fn request_line(request: &RequestSummaryResponse) -> String {
@@ -278,14 +312,6 @@ fn mergeability_label(request: &RequestSummaryResponse) -> String {
             .reason
             .clone()
             .unwrap_or_else(|| "request branch has not been pushed".to_string()),
-    }
-}
-
-fn discussion_status_label(status: RequestDiscussionStatus) -> &'static str {
-    match status {
-        RequestDiscussionStatus::Dormant => "code-change",
-        RequestDiscussionStatus::Open => "open",
-        RequestDiscussionStatus::Resolved => "resolved",
     }
 }
 

@@ -10,7 +10,7 @@ use super::{
     repo_effects::save_repo_effects,
     repository_from_model,
     repository_rows::insert_repository,
-    request_change_block_rows::change_blocks_for_request_ids,
+    request_revision_rows::revisions_for_request_ids,
     request_rows::requests_by_repo_id,
 };
 use crate::error::PostgresError;
@@ -152,13 +152,13 @@ impl RepositoryStore {
             .iter()
             .map(|request| request.id.clone())
             .collect::<Vec<_>>();
-        let change_blocks = change_blocks_for_request_ids(&tx, &request_ids).await?;
-        let mut retained_sources = request_git_snapshots_for_repo(&requests, &change_blocks);
-        let change_block_ids = change_blocks
+        let revisions = revisions_for_request_ids(&tx, &request_ids).await?;
+        let mut retained_sources = request_git_snapshots_for_repo(&requests, &revisions);
+        let revision_ids = revisions
             .iter()
-            .map(|change_block| change_block.id.clone())
+            .map(|revision| revision.id.clone())
             .collect::<Vec<_>>();
-        delete_repository_object_references(&tx, &repo_id, &request_ids, &change_block_ids).await?;
+        delete_repository_object_references(&tx, &repo_id, &request_ids, &revision_ids).await?;
         let runs = entities::run::Entity::find()
             .filter(entities::run::Column::RepoId.eq(repo_id.clone()))
             .all(&tx)
@@ -270,12 +270,16 @@ where
 
 fn request_git_snapshots_for_repo(
     requests: &[Request],
-    change_blocks: &[scope_domain::requests::RequestChangeBlock],
+    revisions: &[scope_domain::requests::RequestRevision],
 ) -> Vec<SourceBlob> {
     let mut snapshots = requests
         .iter()
         .filter_map(|request| request.git_snapshot.clone())
-        .chain(change_blocks.iter().map(|block| block.git_snapshot.clone()))
+        .chain(
+            revisions
+                .iter()
+                .map(|revision| revision.git_snapshot.clone()),
+        )
         .collect::<Vec<_>>();
     snapshots.sort_by(|left, right| left.content_ref.cmp(&right.content_ref));
     snapshots.dedup_by(|left, right| left.content_ref == right.content_ref);

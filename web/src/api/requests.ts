@@ -1,10 +1,11 @@
 import { createApiClient } from '@/api/client'
 import type {
   RequestDetail,
-  RequestChangeBlockFiles,
   RequestList,
   RequestRating,
   RequestRatings,
+  RequestRevisionCommitFiles,
+  RequestRevisions,
   ReviewFileDiff,
   RequestParams,
 } from './types'
@@ -55,24 +56,38 @@ export async function rateRequestForRequest(
   )
 }
 
-export async function loadRequestChangeBlockFilesForRequest(
-  data: LoadRequestChangeBlockFilesInput,
-): Promise<RequestChangeBlockFiles> {
-  return createApiClient().get<RequestChangeBlockFiles>(
-    requestChangeBlockRoute(ApiRouteTemplates.repoRequestChangeBlockFiles, data),
+export async function loadRequestRevisionsForRequest(
+  data: RequestParams & { commit_oid?: string; revision_id?: string },
+): Promise<RequestRevisions> {
+  const search = new URLSearchParams()
+  if (data.revision_id) search.set('revision', data.revision_id)
+  if (data.commit_oid) search.set('commit', data.commit_oid)
+  const path = requestRoute(ApiRouteTemplates.repoRequestRevisions, data)
+  return createApiClient().get<RequestRevisions>(
+    search.size > 0 ? `${path}?${search}` : path,
     { auth: 'optional' },
   )
 }
 
-export type LoadRequestChangeBlockFilesInput = RequestParams & {
-  block_id: string
+export type LoadRequestRevisionCommitInput = RequestParams & {
+  commit_oid: string
+  revision_id: string
 }
 
-export async function loadRequestChangeBlockFileDiffForRequest(
-  data: RequestParams & { block_id: string; path: string },
+export async function loadRequestRevisionCommitForRequest(
+  data: LoadRequestRevisionCommitInput,
+): Promise<RequestRevisionCommitFiles> {
+  return createApiClient().get<RequestRevisionCommitFiles>(
+    requestRevisionCommitRoute(ApiRouteTemplates.repoRequestRevisionCommit, data),
+    { auth: 'optional' },
+  )
+}
+
+export async function loadRequestRevisionCommitFileDiffForRequest(
+  data: LoadRequestRevisionCommitInput & { path: string },
 ): Promise<ReviewFileDiff> {
   return createApiClient().get<ReviewFileDiff>(
-    `${requestChangeBlockRoute(ApiRouteTemplates.repoRequestChangeBlockFileDiff, data)}?path=${encodeURIComponent(data.path)}`,
+    `${requestRevisionCommitRoute(ApiRouteTemplates.repoRequestRevisionCommitFileDiff, data)}?path=${encodeURIComponent(data.path)}`,
     { auth: 'optional' },
   )
 }
@@ -105,14 +120,15 @@ function requestRoute(template: string, data: RequestParams) {
   })
 }
 
-function requestChangeBlockRoute(
+function requestRevisionCommitRoute(
   template: string,
-  data: RequestParams & { block_id: string },
+  data: LoadRequestRevisionCommitInput,
 ) {
   return buildApiPath(template, {
-    block_id: data.block_id,
+    commit_oid: data.commit_oid,
     owner: data.owner,
     repo: data.repo,
     request_id: data.request_id,
+    revision_id: data.revision_id,
   })
 }

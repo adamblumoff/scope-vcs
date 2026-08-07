@@ -46,9 +46,6 @@ export type RequestDiscussionActions = {
     input: RequestParams & { after: number },
   ) => Promise<RequestDiscussionChanges>
   markRead: (input: MarkDiscussionReadInput) => Promise<unknown>
-  reopen: (
-    input: RequestDiscussionActionInput,
-  ) => Promise<RequestDiscussionMutation>
   resolve: (
     input: RequestDiscussionActionInput,
   ) => Promise<RequestDiscussionMutation>
@@ -267,6 +264,7 @@ export function useRequestDiscussionStore({
       try {
         const result = await actions.create({
           ...params,
+          anchor: null,
           body_markdown: body,
           client_discussion_id: clientDiscussionId,
         })
@@ -355,12 +353,12 @@ export function useRequestDiscussionStore({
     [actions, isCurrent, key, params, updateCollection],
   )
 
-  const setResolved = useCallback(
-    async (discussion: RequestDiscussion, resolved: boolean) => {
+  const resolve = useCallback(
+    async (discussion: RequestDiscussion) => {
       const operationKey = key
       setError(null)
       try {
-        const result = await (resolved ? actions.resolve : actions.reopen)({
+        const result = await actions.resolve({
           ...params,
           discussion_id: discussion.id,
         })
@@ -372,9 +370,7 @@ export function useRequestDiscussionStore({
           setError(
             messageFor(
               requestError,
-              resolved
-                ? 'Discussion could not be resolved.'
-                : 'Discussion could not be reopened.',
+              'Discussion could not be resolved.',
             ),
           )
         }
@@ -410,7 +406,7 @@ export function useRequestDiscussionStore({
     refreshing,
     retry,
     setExpanded,
-    setResolved,
+    resolve,
   }
 }
 
@@ -423,7 +419,7 @@ function collectionWithCachedUi(
   const byId = new Map(collection.byId)
   for (const [discussionId, discussion] of byId) {
     const cachedDiscussion = cached.byId.get(discussionId)
-    if (cachedDiscussion?.expanded && !discussion.change_block) {
+    if (cachedDiscussion?.expanded) {
       byId.set(discussionId, { ...discussion, expanded: true })
     }
   }
@@ -444,8 +440,8 @@ function optimisticDiscussion({
   const position = Number.MAX_SAFE_INTEGER
   return {
     author: actor,
+    anchor: null,
     body_markdown: body,
-    change_block: null,
     client_discussion_id: clientDiscussionId,
     created_at_unix: Math.floor(Date.now() / 1000),
     id: clientDiscussionId,

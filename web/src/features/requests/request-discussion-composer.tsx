@@ -4,13 +4,16 @@ import { MessageSquarePlus, Reply, RotateCcw, Send, X } from 'lucide-react'
 import { type FormEvent, type ReactNode, useId, useState } from 'react'
 
 export function RequestDiscussionComposer({
+  onCancel,
   onSubmit,
 }: {
+  onCancel: () => void
   onSubmit: (body: string) => Promise<boolean>
 }) {
   return (
     <Composer
       label="Start a new discussion"
+      onCancel={onCancel}
       onSubmit={onSubmit}
       placeholder="Start a focused discussion about this request…"
       submitIcon={<MessageSquarePlus className="size-3.5" />}
@@ -20,11 +23,13 @@ export function RequestDiscussionComposer({
 }
 
 export function RequestReplyComposer({
+  onCancel,
   onCancelQuote,
   onSubmit,
   quote,
   reopen,
 }: {
+  onCancel: () => void
   onCancelQuote: () => void
   onSubmit: (body: string) => Promise<boolean>
   quote: { author: string; body: string } | null
@@ -33,6 +38,7 @@ export function RequestReplyComposer({
   return (
     <Composer
       label={reopen ? 'Reopen and reply' : 'Reply'}
+      onCancel={onCancel}
       onSubmit={onSubmit}
       placeholder={
         reopen
@@ -55,6 +61,7 @@ export function RequestReplyComposer({
 
 function Composer({
   label,
+  onCancel,
   onCancelQuote,
   onSubmit,
   placeholder,
@@ -63,6 +70,7 @@ function Composer({
   submitLabel,
 }: {
   label: string
+  onCancel: () => void
   onCancelQuote?: () => void
   onSubmit: (body: string) => Promise<boolean>
   placeholder: string
@@ -123,10 +131,15 @@ function Composer({
       />
       <div className="mt-2 flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">Markdown supported</p>
-        <Button disabled={!body.trim() || pending} size="sm" type="submit">
-          {submitIcon}
-          {pending ? 'Posting…' : submitLabel}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button disabled={pending} onClick={onCancel} size="sm" type="button" variant="ghost">
+            Cancel
+          </Button>
+          <Button disabled={!body.trim() || pending} size="sm" type="submit">
+            {submitIcon}
+            {pending ? 'Posting…' : submitLabel}
+          </Button>
+        </div>
       </div>
     </form>
   )
