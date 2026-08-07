@@ -134,13 +134,18 @@ fn job_container_receives_only_copied_source_and_step_programs() {
             workflow: CompiledWorkflow::new(
                 "Test",
                 WorkflowTriggers::new(true, false).unwrap(),
-                vec![WorkflowJob::new(
-                    WorkflowJobId::parse("checks").unwrap(),
-                    vec![], RunnerSelector::Any,
-                    ContainerSpec::new("alpine:3.20").unwrap(), 60,
-                    vec![WorkflowCache::parse("cargo").unwrap()],
-                    vec![WorkflowStep::new("Test", "true").unwrap()],
-                ).unwrap()],
+                vec![
+                    WorkflowJob::new(
+                        WorkflowJobId::parse("checks").unwrap(),
+                        vec![],
+                        RunnerSelector::Any,
+                        ContainerSpec::new("alpine:3.20").unwrap(),
+                        60,
+                        vec![WorkflowCache::parse("cargo").unwrap()],
+                        vec![WorkflowStep::new("Test", "true").unwrap()],
+                    )
+                    .unwrap(),
+                ],
             )
             .unwrap(),
         },
@@ -282,12 +287,18 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
             workflow: CompiledWorkflow::new(
                 "Test",
                 WorkflowTriggers::new(true, false).unwrap(),
-                vec![WorkflowJob::new(
-                    WorkflowJobId::parse("checks").unwrap(),
-                    vec![], RunnerSelector::Any,
-                    ContainerSpec::new("alpine:3.20").unwrap(), 60, Vec::new(),
-                    vec![WorkflowStep::new("Test", "true").unwrap()],
-                ).unwrap()],
+                vec![
+                    WorkflowJob::new(
+                        WorkflowJobId::parse("checks").unwrap(),
+                        vec![],
+                        RunnerSelector::Any,
+                        ContainerSpec::new("alpine:3.20").unwrap(),
+                        60,
+                        Vec::new(),
+                        vec![WorkflowStep::new("Test", "true").unwrap()],
+                    )
+                    .unwrap(),
+                ],
             )
             .unwrap(),
         },

@@ -17,9 +17,11 @@ caches: []
 container:
   image: alpine:3.20
 timeout: 5m
-steps:
-  - name: Test
-    run: printf 'hello from runner\n'
+jobs:
+  checks:
+    steps:
+      - name: Test
+        run: printf 'hello from runner\n'
 "#;
 
 #[tokio::test]
@@ -131,8 +133,10 @@ runs-on: any
 caches: []
 container: { image: alpine:3.20 }
 timeout: 1m
-steps:
-  - { name: Test, run: "true" }
+jobs:
+  checks:
+    steps:
+      - { name: Test, run: "true" }
 "#
             .to_vec(),
         )

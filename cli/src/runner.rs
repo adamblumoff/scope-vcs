@@ -10,9 +10,7 @@ use scope_api_contract::{
     ClaimRunResponse, CompleteAttemptRequest,
 };
 use scope_domain::runs::{
-    run::StepState,
-    step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES,
-    workflow::WorkflowJob,
+    run::StepState, step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES, workflow::WorkflowJob,
 };
 use std::{
     path::Path,

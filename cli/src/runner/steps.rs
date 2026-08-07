@@ -26,10 +26,7 @@ use std::{
 
 const CONTAINER_ACTIVE_STEP: &str = "/scope-active-step";
 
-pub(super) fn write_step_programs(
-    work_dir: &Path,
-    job: &WorkflowJob,
-) -> anyhow::Result<PathBuf> {
+pub(super) fn write_step_programs(work_dir: &Path, job: &WorkflowJob) -> anyhow::Result<PathBuf> {
     let programs = work_dir.join("steps");
     fs::create_dir(&programs).context("create runner step program directory")?;
     for (index, step) in job.steps().iter().enumerate() {
