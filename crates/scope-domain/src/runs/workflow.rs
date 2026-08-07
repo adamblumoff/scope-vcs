@@ -575,8 +575,7 @@ impl CompiledWorkflow {
             .map(|index| &self.jobs[index])
     }
 
-    /// Temporary bridge for the run-level dispatch protocol. Multi-job workflows
-    /// become dispatchable when attempts move beneath jobs.
+    /// Returns the job only when this workflow contains exactly one job.
     pub fn only_job(&self) -> Option<&WorkflowJob> {
         if self.jobs.len() == 1 {
             self.jobs.first()

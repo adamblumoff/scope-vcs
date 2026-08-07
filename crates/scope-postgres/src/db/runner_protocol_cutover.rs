@@ -27,11 +27,11 @@ use recovery::reconcile_abandoned_running_canary;
 
 const CUTOVER_KEY: &str = "current";
 
-fn dispatch_job(revision: &WorkflowRevision) -> Result<&WorkflowJob, PostgresError> {
+fn canary_job(revision: &WorkflowRevision) -> Result<&WorkflowJob, PostgresError> {
     revision
         .definition()
         .only_job()
-        .ok_or_else(|| PostgresError::conflict("multi-job workflows require job-level dispatch"))
+        .ok_or_else(|| PostgresError::conflict("canary workflow must contain exactly one job"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -331,7 +331,7 @@ pub(super) async fn guard_enqueue(
     if state.allows_enqueue() {
         return Ok(());
     }
-    let canonical_runner = dispatch_job(revision)?.runner();
+    let canonical_runner = canary_job(revision)?.runner();
     let canonical_target = run.trigger == RunTrigger::Manual
         && run
             .runner_override
@@ -521,7 +521,7 @@ pub(super) async fn guard_canary_pinned_image(
     let canary = current_canary_for_run(tx, generation, runner_id, run_id, false).await?;
     validate_runner_protocol_canary_workflow(revision.definition(), canary.phase())
         .map_err(PostgresError::from)?;
-    if dispatch_job(revision)?.container().image() != image.as_str() {
+    if canary_job(revision)?.container().image() != image.as_str() {
         return Err(PostgresError::conflict(
             "canary execution must use the workflow's exact digest-pinned image",
         ));
@@ -765,7 +765,7 @@ async fn ensure_canary_target(
     let revision = workflow_revision_for_target(tx, &run).await?;
     validate_runner_protocol_canary_workflow(revision.definition(), phase)
         .map_err(PostgresError::from)?;
-    if run.trigger != RunTrigger::Manual || job.desired_runner != *dispatch_job(&revision)?.runner()
+    if run.trigger != RunTrigger::Manual || job.desired_runner != *canary_job(&revision)?.runner()
     {
         return Err(PostgresError::conflict(
             "canary run must preserve the canonical workflow trigger and exact runner",
@@ -790,8 +790,8 @@ async fn ensure_canary_target(
         let previous_revision = workflow_revision_for_target(tx, &previous_run).await?;
         validate_runner_protocol_canary_workflow(previous_revision.definition(), previous.phase())
             .map_err(PostgresError::from)?;
-        let previous_job = dispatch_job(&previous_revision)?;
-        let job = dispatch_job(&revision)?;
+        let previous_job = canary_job(&previous_revision)?;
+        let job = canary_job(&revision)?;
         if previous_run.workflow.repository_id() != run.workflow.repository_id()
             || previous_job.container().image() != job.container().image()
             || previous_job.caches() != job.caches()

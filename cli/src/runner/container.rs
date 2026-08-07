@@ -11,7 +11,7 @@ pub(super) struct DockerCapabilities {
 
 pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabilities> {
     if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
-        bail!("V4 runners require Linux on amd64");
+        bail!("V5 runners require Linux on amd64");
     }
     command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
     let limits = ResourceLimits::detect()?;
@@ -258,7 +258,7 @@ pub(super) fn require_root_image(image: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         bail!(
-            "workflow image runs as {user:?}; Scope V4 images must run as root because the runner populates /workspace and manages step state inside the container"
+            "workflow image runs as {user:?}; Scope V5 images must run as root because the runner populates /workspace and manages step state inside the container"
         )
     }
 }

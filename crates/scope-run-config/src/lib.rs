@@ -298,7 +298,7 @@ jobs:
 "#;
 
     #[test]
-    fn parses_and_normalizes_v4_workflow() {
+    fn parses_and_normalizes_jobs_workflow() {
         let parsed = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes()).unwrap();
         let definition = parsed.definition();
 
