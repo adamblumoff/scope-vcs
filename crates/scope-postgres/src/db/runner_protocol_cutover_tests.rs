@@ -203,7 +203,7 @@ async fn open_v5_hot_paths_do_not_take_the_cutover_row_lock() {
         .runs()
         .claim_job(
             "run-1",
-            "canary",
+            "checks",
             "runner-1",
             "attempt-1",
             &"a".repeat(64),
@@ -234,7 +234,7 @@ async fn open_v5_hot_paths_do_not_take_the_cutover_row_lock() {
         std::time::Duration::from_secs(2),
         store.runs().claim_job(
             "run-2",
-            "canary",
+            "checks",
             "runner-1",
             "attempt-2",
             &"b".repeat(64),
