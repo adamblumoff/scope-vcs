@@ -316,6 +316,10 @@ steps:
     fn scope_workflows_use_the_current_contract() {
         for (path, bytes) in [
             (
+                "/.scope/runs/backend-checks.yml",
+                include_bytes!("../../../.scope/runs/backend-checks.yml").as_slice(),
+            ),
+            (
                 "/.scope/runs/cli-checks.yml",
                 include_bytes!("../../../.scope/runs/cli-checks.yml").as_slice(),
             ),

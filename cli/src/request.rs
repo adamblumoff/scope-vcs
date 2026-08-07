@@ -10,10 +10,9 @@ use crate::{
     },
     git_repo::{
         GitRepo, current_branch, ensure_clean_working_tree, ensure_git_repo_ready, head_oid,
-        request_side_changed_file_paths, run_git_in_repo, scope_remote_head_oid,
-        try_run_git_in_repo, warn_if_dirty_working_tree,
+        request_side_changed_file_paths, run_git_in_repo, try_run_git_in_repo,
+        warn_if_dirty_working_tree,
     },
-    push::DEFAULT_SCOPE_BRANCH,
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
@@ -44,9 +43,9 @@ use args::{
 };
 use confirm::require_confirmation;
 use local::{
-    fetch_main_projection, load_context, load_context_and_request_id, maybe_request_id_for_context,
-    projection_label_for_audience, push_request_head, remote_main_ref, request_id_for_context,
-    store_request_metadata, track_request_branch_ref,
+    load_context, load_context_and_request_id, maybe_request_id_for_context,
+    projection_label_for_audience, push_request_head, refresh_main_projection, remote_main_ref,
+    request_id_for_context, store_request_metadata, track_request_branch_ref,
 };
 use outcome::*;
 use render::{
@@ -220,7 +219,7 @@ fn start_request_branch(
         args.remote.as_deref(),
     )?;
     let audience = start_audience(context.repo.access.actor, args.audience)?;
-    fetch_main_projection(git_repo, &context, audience, session_token)?;
+    let base_oid = refresh_main_projection(git_repo, &context.target, audience, session_token)?;
     let branch = args.name.trim().to_string();
     scope_domain::requests::validate_request_name(&branch)
         .map_err(|error| anyhow::anyhow!(error.message))?;
@@ -229,8 +228,6 @@ fn start_request_branch(
         bail!("local branch '{branch}' already exists");
     }
     let remote_main = remote_main_ref(&context.target.remote);
-    let base_oid = scope_remote_head_oid(git_repo, &context.target.remote, DEFAULT_SCOPE_BRANCH)?
-        .context("Scope main projection did not produce a local remote ref")?;
     let response = api_start_request(
         client,
         api_url,
@@ -358,9 +355,12 @@ fn push_request_branch(
         .into());
     }
     let request_head_oid = head_oid(git_repo)?;
-    let current_main_oid =
-        scope_remote_head_oid(git_repo, &context.target.remote, DEFAULT_SCOPE_BRANCH)?
-            .unwrap_or_else(|| detail.request.base_main_oid.to_string());
+    let current_main_oid = refresh_main_projection(
+        git_repo,
+        &context.target,
+        detail.request.audience,
+        session_token,
+    )?;
     ensure_public_request_paths_allowed(git_repo, &detail, &current_main_oid, &request_head_oid)?;
     push_request_head(
         &context.target,

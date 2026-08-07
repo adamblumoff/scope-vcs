@@ -70,6 +70,19 @@ use workspace::{
 
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecutionOutcome {
+    Succeeded,
+    Failed,
+    Interrupted,
+}
+
+impl ExecutionOutcome {
+    fn succeeded(self) -> bool {
+        self == Self::Succeeded
+    }
+}
+
 pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
     let config = match config_path {
         Some(path) => load_runner_config_from(path)?,
@@ -297,15 +310,15 @@ fn execute_claim(
         container,
     );
     match result {
-        Ok(success) => {
+        Ok(outcome) => {
             log_phase(&claim.attempt_id, "steps", phase);
             let cleanup = Instant::now();
-            let reusable = cache::is_reusable_after_execution(claim, success);
+            let reusable = cache::is_reusable_after_execution(claim.canary_phase, outcome);
             if let Err(error) = caches.finish(reusable) {
                 eprintln!(
                     "Could not finalize attempt caches; tainted caches were not reused: {error:#}"
                 );
-                if success && claim.canary_phase.is_some() {
+                if outcome.succeeded() && claim.canary_phase.is_some() {
                     cache::finish_canary_ack(
                         &client,
                         config,
@@ -314,7 +327,7 @@ fn execute_claim(
                         AttemptCacheFinalizationOutcome::Failed,
                     )?;
                 }
-            } else if success && claim.canary_phase.is_some() {
+            } else if outcome.succeeded() && claim.canary_phase.is_some() {
                 cache::finish_canary_ack(
                     &client,
                     config,
@@ -350,11 +363,11 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
         return Ok(());
     }
     match resume_claim_execution(config, recovery) {
-        Ok(success) => {
-            let reusable = cache::is_reusable_after_execution(&claim, success);
+        Ok(outcome) => {
+            let reusable = cache::is_reusable_after_execution(claim.canary_phase, outcome);
             if let Err(error) = cache::finalize_volume_names(config, &volumes, reusable) {
                 eprintln!("Could not finalize recovered attempt caches: {error:#}");
-                if success && claim.canary_phase.is_some() {
+                if outcome.succeeded() && claim.canary_phase.is_some() {
                     let mut work = RunnerWorkDir {
                         path: work_dir.clone(),
                         cleanup_on_drop: false,
@@ -367,7 +380,7 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
                         AttemptCacheFinalizationOutcome::Failed,
                     )?;
                 }
-            } else if success && claim.canary_phase.is_some() {
+            } else if outcome.succeeded() && claim.canary_phase.is_some() {
                 let mut work = RunnerWorkDir {
                     path: work_dir.clone(),
                     cleanup_on_drop: false,
@@ -393,7 +406,7 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
 fn resume_claim_execution(
     config: &RunnerConfig,
     recovery: RecoveryAttempt,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<ExecutionOutcome> {
     let RecoveryAttempt { work_dir, recovery } = recovery;
     let mut work = RunnerWorkDir {
         path: work_dir,
@@ -412,7 +425,7 @@ fn resume_claim_execution(
         && drain_pending_stop_logs(config, &claim, &mut work, &mut container, &progress)?
             == PendingStopLogOutcome::AttemptUnavailable
     {
-        return Ok(false);
+        return Ok(ExecutionOutcome::Interrupted);
     }
     if has_pending_stop && let Some(pending) = progress.pending_step_conclusion.take() {
         let control_client = attempt_control_client().map_err(|error| {
@@ -440,10 +453,12 @@ fn resume_claim_execution(
         advance_recovery_past_replayed_step(&mut progress);
     }
     if progress.pending_attempt_abandon {
-        return report_pending_abandon(config, &claim, &mut work).map(|()| false);
+        return report_pending_abandon(config, &claim, &mut work)
+            .map(|()| ExecutionOutcome::Interrupted);
     }
     if let Some(conclusion) = progress.pending_attempt_conclusion.take() {
-        return report_pending_conclusion(config, &claim, &mut work, conclusion).map(|()| false);
+        return report_pending_conclusion(config, &claim, &mut work, conclusion)
+            .map(|()| ExecutionOutcome::Interrupted);
     }
     let control_client = attempt_control_client()?;
     attempt_heartbeat(
@@ -529,7 +544,11 @@ fn resume_claim_execution(
                 .steps
                 .iter()
                 .all(|step| step.state == StepState::Succeeded);
-        return Ok(succeeded);
+        return Ok(if succeeded {
+            ExecutionOutcome::Succeeded
+        } else {
+            ExecutionOutcome::Failed
+        });
     };
     let continuing_active_step = recovery_status
         .steps

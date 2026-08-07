@@ -1,5 +1,8 @@
 use super::recovery::mark_recovery_cache_finalization_pending;
-use super::{ConclusionReportPending, RunnerConfig, RunnerWorkDir, command_stdout, unix_now};
+use super::{
+    ConclusionReportPending, ExecutionOutcome, RunnerConfig, RunnerWorkDir, command_stdout,
+    unix_now,
+};
 use crate::api::finalize_attempt_cache;
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
@@ -8,6 +11,7 @@ use scope_api_contract::{
 };
 use scope_domain::runs::{
     cache::{CacheIdentity, CachePlatform},
+    cutover::RunnerProtocolCanaryPhase,
     run::PinnedContainerImage,
 };
 use serde::{Deserialize, Serialize};
@@ -248,11 +252,15 @@ pub(super) fn finalize_volume_names(
     Ok(())
 }
 
-pub(super) fn is_reusable_after_execution(claim: &ClaimRunResponse, success: bool) -> bool {
-    success
-        && !claim
-            .canary_phase
-            .is_some_and(|phase| phase.evicts_cache_after_success())
+pub(super) fn is_reusable_after_execution(
+    canary_phase: Option<RunnerProtocolCanaryPhase>,
+    outcome: ExecutionOutcome,
+) -> bool {
+    match (canary_phase, outcome) {
+        (None, ExecutionOutcome::Succeeded | ExecutionOutcome::Failed) => true,
+        (Some(phase), ExecutionOutcome::Succeeded) => !phase.evicts_cache_after_success(),
+        _ => false,
+    }
 }
 
 pub(super) fn acknowledge_finalization(
