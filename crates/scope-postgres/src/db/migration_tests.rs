@@ -182,6 +182,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0010_file_visibility_source_of_truth",
             "m0011_compact_request_started_events",
             "m0012_request_revisions",
+            "m0013_workflow_jobs",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -397,12 +398,15 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
         .await
         .unwrap()
         .unwrap();
+    let rewritten_definition = rewritten
+        .try_get::<serde_json::Value>("", "definition")
+        .unwrap();
+    assert_eq!(rewritten_definition["jobs"][0]["id"], "checks");
     assert_eq!(
-        rewritten
-            .try_get::<serde_json::Value>("", "definition")
-            .unwrap()["caches"],
+        rewritten_definition["jobs"][0]["caches"],
         serde_json::json!([])
     );
+    assert!(rewritten_definition.get("steps").is_none());
     assert_ne!(
         rewritten.try_get::<String>("", "digest").unwrap(),
         "a".repeat(64)
@@ -859,6 +863,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0010_file_visibility_source_of_truth",
             "m0011_compact_request_started_events",
             "m0012_request_revisions",
+            "m0013_workflow_jobs",
         ]
     );
 }
@@ -889,6 +894,7 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0010_file_visibility_source_of_truth",
             "m0011_compact_request_started_events",
             "m0012_request_revisions",
+            "m0013_workflow_jobs",
         ]
     );
 }
