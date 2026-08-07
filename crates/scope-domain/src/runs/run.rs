@@ -161,14 +161,13 @@ impl Run {
         Ok(run)
     }
 
-    pub fn has_same_enqueue_request(&self, other: &Self) -> bool {
+    pub fn has_same_enqueue_request_identity(&self, other: &Self) -> bool {
         self.idempotency_key == other.idempotency_key
             && self.workflow == other.workflow
             && self.workflow_revision_digest == other.workflow_revision_digest
             && self.trigger == other.trigger
             && self.requested_by_user_id == other.requested_by_user_id
             && self.source == other.source
-            && self.runner_override == other.runner_override
     }
 
     pub fn can_request_cancellation(&self) -> bool {

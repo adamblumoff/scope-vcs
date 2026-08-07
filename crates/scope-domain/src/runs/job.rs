@@ -418,9 +418,13 @@ fn derive_run_state(run: &mut Run, jobs: &[RunJob], now_unix: u64) -> Result<(),
             "run jobs do not form one non-empty run",
         ));
     }
+    let has_canceled_job = jobs.iter().any(|job| job.state == RunJobState::Canceled);
+    if has_canceled_job {
+        run.cancellation_requested = true;
+    }
     let all_terminal = jobs.iter().all(|job| job.state.is_terminal());
     let next = if all_terminal {
-        if run.cancellation_requested || jobs.iter().any(|job| job.state == RunJobState::Canceled) {
+        if run.cancellation_requested {
             RunState::Canceled
         } else if jobs.iter().any(|job| job.state == RunJobState::Failed) {
             RunState::Failed

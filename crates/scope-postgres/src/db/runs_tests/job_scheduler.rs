@@ -191,7 +191,11 @@ async fn active_cancellation_is_intent_until_runner_acknowledges() {
         .await
         .unwrap();
     assert_eq!(completed.run.state, RunState::Canceled);
+    assert!(completed.run.cancellation_requested);
     assert_eq!(completed.attempt.state, AttemptState::Canceled);
+    let persisted = store.runs().run("run-1").await.unwrap().unwrap();
+    assert_eq!(persisted.state, RunState::Canceled);
+    assert!(persisted.cancellation_requested);
     assert_eq!(
         store
             .runs()

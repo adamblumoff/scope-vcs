@@ -757,6 +757,7 @@ pub(super) async fn enqueue_run_in_transaction(
     guard_enqueue(tx, &run, &revision).await?;
     run.validate_workflow_revision(&revision)
         .map_err(PostgresError::from)?;
+    let requested_jobs = create_run_jobs(&run, &revision).map_err(PostgresError::from)?;
     save_workflow_revision(tx, &revision, run.created_at_unix).await?;
     let model = entities::run::Model::from_domain(&run)?;
     let result = entities::run::Entity::insert(model.into_active_model())
@@ -777,16 +778,19 @@ pub(super) async fn enqueue_run_in_transaction(
                 PostgresError::conflict("run id is already used by another idempotency key")
             })?
             .try_into_domain()?;
-        if !stored.has_same_enqueue_request(&run) {
+        let stored_jobs = jobs_for_run(tx, &stored.id).await?;
+        if !stored.has_same_enqueue_request_identity(&run)
+            || !has_same_effective_runner_request(&stored_jobs, &requested_jobs)
+        {
             return Err(PostgresError::conflict(
                 "run idempotency key is already used by a different enqueue request",
             ));
         }
         return Ok(stored);
     }
-    let jobs = create_run_jobs(&run, &revision).map_err(PostgresError::from)?;
     entities::run_job::Entity::insert_many(
-        jobs.iter()
+        requested_jobs
+            .iter()
             .map(entities::run_job::Model::from_domain)
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -799,6 +803,16 @@ pub(super) async fn enqueue_run_in_transaction(
         insert_object_reference(tx, "run_source", &run.id, object).await?;
     }
     Ok(run)
+}
+
+fn has_same_effective_runner_request(stored: &[RunJob], requested: &[RunJob]) -> bool {
+    stored.len() == requested.len()
+        && stored.iter().all(|stored_job| {
+            requested.iter().any(|requested_job| {
+                stored_job.key == requested_job.key
+                    && stored_job.desired_runner == requested_job.desired_runner
+            })
+        })
 }
 
 async fn save_workflow_revision(

@@ -136,7 +136,12 @@ impl MigrationTrait for Migration {
                 SELECT run.id,
                        revision.definition #>> '{jobs,0,id}',
                        run.desired_runner_name, run.pinned_container_image, run.state,
-                       run.last_attempt_number, run.current_attempt_id, run.created_at_unix,
+                       run.last_attempt_number,
+                       CASE WHEN run.state IN ('leased', 'running')
+                            THEN run.current_attempt_id
+                            ELSE NULL
+                       END,
+                       run.created_at_unix,
                        run.updated_at_unix, run.completed_at_unix
                 FROM scope_runs run
                 JOIN scope_workflow_revisions revision
@@ -174,7 +179,16 @@ impl MigrationTrait for Migration {
                     WHERE state = 'queued';
 
                 ALTER TABLE scope_runs
-                    ADD COLUMN runner_override_name character varying,
+                    ADD COLUMN runner_override_name character varying;
+                UPDATE scope_runs AS run
+                SET runner_override_name = run.desired_runner_name
+                FROM scope_workflow_revisions AS revision
+                WHERE revision.digest = run.workflow_revision_digest
+                  AND run.trigger = 'manual'
+                  AND run.desired_runner_name IS NOT NULL
+                  AND run.desired_runner_name IS DISTINCT FROM
+                      (revision.definition #>> '{jobs,0,runner,name}');
+                ALTER TABLE scope_runs
                     DROP COLUMN pinned_container_image,
                     DROP COLUMN desired_runner_name,
                     DROP COLUMN last_attempt_number,

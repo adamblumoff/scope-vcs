@@ -148,7 +148,7 @@ fn canceled_upstream_cancels_run_and_skips_every_downstream_job() {
 
     reconcile_run(&mut run, &mut jobs, &revision, 20).unwrap();
 
-    assert!(!run.cancellation_requested);
+    assert!(run.cancellation_requested);
     assert_eq!(jobs[1].state, RunJobState::Skipped);
     assert_eq!(jobs[2].state, RunJobState::Skipped);
     assert_eq!(run.state, RunState::Canceled);
