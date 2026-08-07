@@ -1,5 +1,6 @@
 use super::{
-    ConclusionReportPending, RunnerConfig, RunnerWorkDir, conclude_stopped_attempt,
+    ConclusionReportPending, ExecutionOutcome, RunnerConfig, RunnerWorkDir,
+    conclude_stopped_attempt,
     container::{ContainerGuard, stop_container},
     recovery::{
         PendingLogChunk, mark_recovery_abandon_pending, mark_recovery_conclusion_pending,
@@ -137,7 +138,7 @@ pub(super) fn run_steps(
     execution_deadline_unix: u64,
     supervisor: &mut AttemptSupervisor,
     mut container: ContainerGuard,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<ExecutionOutcome> {
     supervisor.set_execution_deadline(execution_deadline_unix);
     let step_count = u32::try_from(claim.job.workflow.steps().len())
         .context("workflow step count exceeds runner protocol")?;
@@ -148,7 +149,8 @@ pub(super) fn run_steps(
         if reason != AttemptStopReason::None && !recovering_step {
             stage_stop_reason_or_preserve(work, claim, reason, &mut container)?;
             stop_attempt_container(work, &mut container)?;
-            return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
+            return conclude_stopped_attempt(config, claim, work, reason)
+                .map(|()| ExecutionOutcome::Interrupted);
         }
         let nonce = match active_step_nonce.take() {
             Some(nonce) => nonce,
@@ -283,7 +285,8 @@ pub(super) fn run_steps(
                 reason => {
                     stage_stop_reason_or_preserve(work, claim, reason, &mut container)?;
                     stop_attempt_container(work, &mut container)?;
-                    return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
+                    return conclude_stopped_attempt(config, claim, work, reason)
+                        .map(|()| ExecutionOutcome::Interrupted);
                 }
             }
         }
@@ -305,7 +308,8 @@ pub(super) fn run_steps(
                 true,
             );
             preserve_stopped_log_recovery(work, &mut container, drain_result)?;
-            return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
+            return conclude_stopped_attempt(config, claim, work, reason)
+                .map(|()| ExecutionOutcome::Interrupted);
         }
         if let Err(error) = select_container_step(&programs, "run", step_index, &nonce) {
             return preserve_after_runner_failure(
@@ -358,7 +362,8 @@ pub(super) fn run_steps(
                         true,
                     );
                     preserve_stopped_log_recovery(work, &mut container, drain_result)?;
-                    return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
+                    return conclude_stopped_attempt(config, claim, work, reason)
+                        .map(|()| ExecutionOutcome::Interrupted);
                 }
             }
             let drain_result = drain_step_logs(
@@ -395,7 +400,8 @@ pub(super) fn run_steps(
                         true,
                     );
                     preserve_stopped_log_recovery(work, &mut container, final_drain_result)?;
-                    return conclude_stopped_attempt(config, claim, work, reason).map(|()| false);
+                    return conclude_stopped_attempt(config, claim, work, reason)
+                        .map(|()| ExecutionOutcome::Interrupted);
                 }
                 return preserve_after_runner_failure(
                     work,
@@ -497,12 +503,16 @@ pub(super) fn run_steps(
         }
         if exit_code != 0 {
             supervisor.mark_execution_finished();
-            return Ok(false);
+            return Ok(if storage_pressure {
+                ExecutionOutcome::Interrupted
+            } else {
+                ExecutionOutcome::Failed
+            });
         }
         step_log_bytes = 0;
     }
     supervisor.mark_execution_finished();
-    Ok(true)
+    Ok(ExecutionOutcome::Succeeded)
 }
 
 fn exit_code_after_storage_guard(observed: i32, storage_pressure: bool) -> i32 {

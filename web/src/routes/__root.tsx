@@ -1,3 +1,5 @@
+import { forceSignedOut, signedOutPublishableKey } from '@/auth-mode'
+import { signedOutClerk } from '@/lib/signed-out-clerk'
 import { ClerkProvider } from '@clerk/tanstack-react-start'
 import {
   HeadContent,
@@ -114,7 +116,15 @@ function RootDocument({ children }: { children: ReactNode }) {
         />
       </head>
       <body>
-        <ClerkProvider appearance={scopeClerkAppearance}>
+        <ClerkProvider
+          appearance={scopeClerkAppearance}
+          {...(forceSignedOut
+            ? {
+                Clerk: signedOutClerk,
+                publishableKey: signedOutPublishableKey,
+              }
+            : {})}
+        >
           {children}
           <Toaster richColors position="bottom-right" />
           <Scripts />

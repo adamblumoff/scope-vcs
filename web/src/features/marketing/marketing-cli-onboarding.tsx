@@ -7,7 +7,7 @@ import {
   domAnimation,
   LazyMotion,
   m,
-  MotionConfig,
+  useReducedMotion,
 } from 'motion/react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 
@@ -47,6 +47,7 @@ export function MarketingCliOnboarding({
 }): ReactElement {
   const [platform, setPlatform] = useState<CliPlatform>(initialPlatform)
   const [showNextSteps, setShowNextSteps] = useState(false)
+  const prefersReducedMotion = useReducedMotion()
   const nextStepsHeadingRef = useRef<HTMLHeadingElement>(null)
   const shouldFocusNextStepsRef = useRef(false)
 
@@ -112,15 +113,17 @@ export function MarketingCliOnboarding({
         value={installCommand}
       />
 
-      <MotionConfig reducedMotion="user">
-        <LazyMotion features={domAnimation}>
-          <AnimatePresence initial={false}>
+      <LazyMotion features={domAnimation}>
+        <AnimatePresence initial={false}>
           {!showNextSteps && (
             <m.div
               className="mt-3 overflow-hidden"
               exit={{ height: 0, marginTop: 0, opacity: 0 }}
               key="manual-reveal"
-              transition={{ duration: 0.2, ease: 'easeOut' }}
+              transition={{
+                duration: prefersReducedMotion ? 0 : 0.2,
+                ease: 'easeOut',
+              }}
             >
               <button
                 className="text-xs text-muted-foreground underline decoration-border-strong underline-offset-4 transition-colors hover:text-foreground"
@@ -139,7 +142,10 @@ export function MarketingCliOnboarding({
               className="overflow-hidden"
               initial={{ height: 0, opacity: 0 }}
               key="next-steps"
-              transition={{ duration: 0.24, ease: 'easeOut' }}
+              transition={{
+                duration: prefersReducedMotion ? 0 : 0.24,
+                ease: 'easeOut',
+              }}
             >
               <div className="mt-5 border-t border-border pt-5">
                 <div className="mb-4 flex items-center gap-2 font-mono text-[11px] font-semibold text-[var(--success-strong)]">
@@ -178,9 +184,8 @@ export function MarketingCliOnboarding({
               </div>
             </m.div>
           )}
-          </AnimatePresence>
-        </LazyMotion>
-      </MotionConfig>
+        </AnimatePresence>
+      </LazyMotion>
     </section>
   )
 }

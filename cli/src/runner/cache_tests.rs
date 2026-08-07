@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_support::TestDir;
+use scope_domain::runs::cutover::RunnerProtocolCanaryPhase;
 use std::os::unix::fs::MetadataExt;
 
 fn record(state: CacheState) -> CacheRecord {
@@ -73,6 +74,28 @@ fn records_keep_taint_explicit() {
     let json = serde_json::to_string(&state).unwrap();
     assert!(json.contains("tainted"));
     assert!(json.contains("attempt-1"));
+}
+
+#[test]
+fn completed_workflows_publish_useful_caches_even_when_a_step_fails() {
+    assert!(is_reusable_after_execution(
+        None,
+        ExecutionOutcome::Succeeded,
+    ));
+    assert!(is_reusable_after_execution(None, ExecutionOutcome::Failed,));
+    assert!(!is_reusable_after_execution(
+        None,
+        ExecutionOutcome::Interrupted,
+    ));
+
+    assert!(!is_reusable_after_execution(
+        Some(RunnerProtocolCanaryPhase::ColdWrite),
+        ExecutionOutcome::Failed,
+    ));
+    assert!(!is_reusable_after_execution(
+        Some(RunnerProtocolCanaryPhase::Evict),
+        ExecutionOutcome::Succeeded,
+    ));
 }
 
 #[test]

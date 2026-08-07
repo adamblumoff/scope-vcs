@@ -446,7 +446,7 @@ up() {
   start_worker
   if [[ "${SCOPE_DEV_HEADLESS_E2E:-0}" != "1" ]]; then
     start_web
-    if ! wait_http "http://localhost:3000" 45; then
+    if ! wait_http "http://localhost:3000" 180; then
       echo "web did not become ready; see $WEB_ERR_LOG" >&2
       exit 1
     fi

@@ -30,8 +30,8 @@ pub(super) enum RequestCommand {
     Merge(RequestMergeArgs),
     #[command(about = "Rate the other terminal request participant")]
     Rate(RequestRateArgs),
-    #[command(about = "Start a top-level discussion on a request")]
-    Discuss(RequestDiscussArgs),
+    #[command(about = "Work with request discussions")]
+    Discussion(RequestDiscussionArgs),
     #[command(about = "Show one request")]
     Show(RequestShowArgs),
     #[command(about = "List visible requests")]
@@ -151,11 +151,86 @@ pub(super) struct RequestRateArgs {
 }
 
 #[derive(Parser)]
-pub(super) struct RequestDiscussArgs {
+pub(super) struct RequestDiscussionArgs {
+    #[command(subcommand)]
+    pub(super) command: RequestDiscussionCommand,
+}
+
+#[derive(Subcommand)]
+pub(super) enum RequestDiscussionCommand {
+    #[command(about = "Start a top-level discussion")]
+    Start(RequestDiscussionStartArgs),
+    #[command(about = "Reply to an open discussion")]
+    Reply(RequestDiscussionReplyArgs),
+    #[command(about = "Resolve a discussion")]
+    Resolve(RequestDiscussionResolveArgs),
+    #[command(about = "Reopen a discussion with a reply")]
+    Reopen(RequestDiscussionReopenArgs),
+}
+
+#[derive(Args)]
+#[group(id = "discussion_body", required = true, multiple = false)]
+pub(super) struct RequestDiscussionBodyArgs {
+    #[arg(long, help = "Literal Markdown body")]
+    pub(super) body: Option<String>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Read the Markdown body from a file, or - for stdin"
+    )]
+    pub(super) body_file: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestDiscussionStartArgs {
     #[command(flatten)]
     pub(super) target: RequestTargetArgs,
-    #[arg(long, help = "Markdown body for the new discussion")]
-    pub(super) body: String,
+    #[command(flatten)]
+    pub(super) content: RequestDiscussionBodyArgs,
+    #[arg(long, value_name = "REVISION", help = "Request revision to reference")]
+    pub(super) revision: Option<String>,
+    #[arg(
+        long,
+        value_name = "OID",
+        requires = "revision",
+        help = "Commit within the referenced revision"
+    )]
+    pub(super) commit: Option<String>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "commit",
+        help = "File within the referenced revision"
+    )]
+    pub(super) path: Option<String>,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestDiscussionReplyArgs {
+    #[arg(value_name = "DISCUSSION", help = "Discussion ID")]
+    pub(super) discussion_id: String,
+    #[command(flatten)]
+    pub(super) target: RequestTargetArgs,
+    #[command(flatten)]
+    pub(super) content: RequestDiscussionBodyArgs,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestDiscussionResolveArgs {
+    #[arg(value_name = "DISCUSSION", help = "Discussion ID")]
+    pub(super) discussion_id: String,
+    #[command(flatten)]
+    pub(super) target: RequestTargetArgs,
+}
+
+#[derive(Parser)]
+pub(super) struct RequestDiscussionReopenArgs {
+    #[arg(value_name = "DISCUSSION", help = "Discussion ID")]
+    pub(super) discussion_id: String,
+    #[command(flatten)]
+    pub(super) target: RequestTargetArgs,
+    #[command(flatten)]
+    pub(super) content: RequestDiscussionBodyArgs,
 }
 
 #[derive(Parser)]
