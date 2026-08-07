@@ -313,11 +313,15 @@ mod tests {
                 "workflow": {
                     "name": "Test",
                     "triggers": { "manual": true, "push_main": false },
-                    "runner": { "kind": "any" },
-                    "container": { "image": "image" },
-                    "timeout_seconds": 60,
-                    "caches": [],
-                    "steps": [{ "name": "Test", "run": "true" }]
+                    "jobs": [{
+                        "id": "checks",
+                        "needs": [],
+                        "runner": { "kind": "any" },
+                        "container": { "image": "image" },
+                        "timeout_seconds": 60,
+                        "caches": [],
+                        "steps": [{ "name": "Test", "run": "true" }]
+                    }]
                 }
             }
         });
