@@ -382,7 +382,10 @@ fn request_side_paths_reject_unrelated_histories() {
         &request_head_oid,
     )
     .unwrap_err();
-    assert!(error.to_string().contains("unrelated Git histories"));
+    let message = error.to_string();
+    assert!(message.contains("unrelated Git histories"));
+    assert!(message.contains("scope request start <name>"));
+    assert!(message.contains("replay the GitHub branch changes"));
 }
 
 #[test]

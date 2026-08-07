@@ -11,6 +11,7 @@ timeout: 45m
 caches:
   - cargo
   - cargo-target
+  - playwright
   - pnpm-store
 steps:
   - name: Install system dependencies
@@ -63,7 +64,9 @@ steps:
   - name: Install dependencies
     run: (cd web && pnpm install --frozen-lockfile --store-dir /scope/cache/pnpm-store)
   - name: Install Chromium
-    run: (cd web && pnpm exec playwright install --with-deps chromium)
+    run: |
+      (cd web && PLAYWRIGHT_BROWSERS_PATH=/scope/cache/playwright \
+        pnpm exec playwright install --with-deps chromium)
   - name: Test
     run: (cd web && pnpm test)
   - name: Check
@@ -128,4 +131,5 @@ steps:
         ./dev/scope-dev up
       SCOPE_SMOKE_REPO=dev/public-demo \
         SCOPE_WEB_BASE_URL=http://localhost:3000 \
+        PLAYWRIGHT_BROWSERS_PATH=/scope/cache/playwright \
         sh -c 'cd web && pnpm test:smoke'
