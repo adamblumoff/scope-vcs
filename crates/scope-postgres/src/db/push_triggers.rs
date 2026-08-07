@@ -398,8 +398,10 @@ runs-on: any
 container: { image: alpine:3.20 }
 timeout: 1m
 caches: []
-steps:
-  - { name: Test, run: "true" }
+jobs:
+  checks:
+    steps:
+      - { name: Test, run: "true" }
 "#
                         .to_vec(),
                     )
@@ -637,8 +639,10 @@ runs-on: any
 container: { image: alpine:3.20 }
 timeout: 1m
 caches: []
-steps:
-  - { name: Test, run: "true" }
+jobs:
+  checks:
+    steps:
+      - { name: Test, run: "true" }
 "#
                 .to_vec(),
             )
