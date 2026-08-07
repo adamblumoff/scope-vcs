@@ -347,4 +347,50 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
             .map(String::as_str),
         Some("m0013_workflow_jobs")
     );
+
+    let old_producer_insert = db
+        .execute_unprepared(
+            "INSERT INTO scope_outbox_jobs (
+                 id, idempotency_key, kind, repo_id, repo_version, payload, state,
+                 attempts, next_run_at_unix, lease_owner, lease_expires_at_unix,
+                 last_error, created_at_unix, updated_at_unix, completed_at_unix
+             ) VALUES (
+                 'outbox_push_jobs_old_after', 'push_main_trigger_evaluation:repo_push_jobs:2',
+                 'push_main_trigger_evaluation', 'repo_push_jobs', 2,
+                 '{}'::jsonb, 'ready', 0, 2, NULL, NULL, NULL, 2, 2, NULL
+             )",
+        )
+        .await;
+    assert!(old_producer_insert.is_err());
+
+    db.execute_unprepared(
+        "INSERT INTO scope_outbox_jobs (
+             id, idempotency_key, kind, repo_id, repo_version, payload, state,
+             attempts, next_run_at_unix, lease_owner, lease_expires_at_unix,
+             last_error, created_at_unix, updated_at_unix, completed_at_unix
+         ) VALUES (
+             'outbox_push_jobs_new_after', 'push_main_trigger_evaluation:repo_push_jobs:3',
+             'push_main_trigger_evaluation', 'repo_push_jobs', 3,
+             '{\"workflow_schema_version\": 3}'::jsonb,
+             'ready', 0, 3, NULL, NULL, NULL, 3, 3, NULL
+         )",
+    )
+    .await
+    .unwrap();
+
+    let unfinished_push_jobs = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count
+             FROM scope_outbox_jobs
+             WHERE kind = 'push_main_trigger_evaluation'
+               AND completed_at_unix IS NULL"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(unfinished_push_jobs, 1);
 }

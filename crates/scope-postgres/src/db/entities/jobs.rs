@@ -3,6 +3,8 @@ use super::*;
 pub mod outbox_job {
     use super::*;
 
+    pub const PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION: u8 = 3;
+
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "scope_outbox_jobs")]
     pub struct Model {
@@ -81,6 +83,7 @@ pub mod outbox_job {
                 repo_id: repo_id.to_string(),
                 repo_version: persisted_repo_version,
                 payload: encode_json(&serde_json::json!({
+                    "workflow_schema_version": PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION,
                     "manifest": manifest,
                     "input": input,
                 }))?,

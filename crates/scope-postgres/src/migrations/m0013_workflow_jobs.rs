@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 const WORKFLOW_JOBS_DIGEST_VERSION: u8 = 3;
 const MIGRATED_JOB_ID: &str = "checks";
 const PUSH_MAIN_TRIGGER_EVALUATION_JOB_KIND: &str = "push_main_trigger_evaluation";
+const PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION: u8 = 3;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -145,6 +146,15 @@ impl MigrationTrait for Migration {
                      ])
                  );",
         )
+        .await?;
+        db.execute_unprepared(&format!(
+            "ALTER TABLE scope_outbox_jobs
+                 ADD CONSTRAINT scope_outbox_jobs_push_workflow_schema_v3 CHECK (
+                     kind <> '{PUSH_MAIN_TRIGGER_EVALUATION_JOB_KIND}' OR
+                     completed_at_unix IS NOT NULL OR
+                     payload @> '{{\"workflow_schema_version\": {PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION}}}'::jsonb
+                 );"
+        ))
         .await?;
         Ok(())
     }
