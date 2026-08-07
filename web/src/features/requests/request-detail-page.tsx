@@ -1,19 +1,12 @@
 import type {
-  AccountSession,
   RequestDetail,
   RepoLiveState,
   RepoParams,
   RequestMutation,
   RequestRating,
   RequestRatings,
-  RequestRevisionCommitFiles,
-  RequestRevisions,
-  ReviewFileDiff,
 } from '@/api/types'
-import type {
-  LoadRequestRevisionCommitInput,
-  RateRequestInput,
-} from '@/api/requests'
+import type { RateRequestInput } from '@/api/requests'
 import { LifecycleBadge } from '@/components/lifecycle-badge'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { Badge } from '@/components/ui/badge'
@@ -21,38 +14,16 @@ import { Button } from '@/components/ui/button'
 import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
 import { GitCommit, History, MessageSquare, ShieldQuestion } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { RequestActivityDrawer } from './request-activity-drawer'
 import type {
   RequestActionCommand,
   RequestActionResult,
 } from './request-actions-api'
 import { RequestContextRail } from './request-context-rail'
-import {
-  RequestChangesWorkbench,
-  type RequestChangesSearch,
-} from './request-changes-workbench'
+import type { RequestActivityPage } from './request-discussion-types'
 import { RequestDescription } from './request-description'
-import type {
-  CreateDiscussionInput,
-  CreateReplyInput,
-  LoadDiscussionsInput,
-  LoadRepliesInput,
-  MarkDiscussionReadInput,
-  RequestDiscussionActionInput,
-  RequestDiscussionRepliesPage,
-  UpdateDescriptionInput,
-} from './request-discussion-api'
-import { RequestDiscussionWorkbench } from './request-discussion-workbench'
-import type { RequestDiscussionActions } from './request-discussion-store'
-import type {
-  RequestActivityPage,
-  RequestDiscussion,
-  RequestDiscussionChanges,
-  RequestDiscussionMutation,
-  RequestDiscussionPage,
-  RequestDiscussionReplyMutation,
-} from './request-discussion-types'
+import type { UpdateDescriptionInput } from './request-discussion-api'
 import {
   requestMergeabilityLabel,
   requestMergeabilityTone,
@@ -89,67 +60,28 @@ export function RequestUnavailablePage({ params }: { params: RepoParams }) {
 }
 
 type RequestDetailPageProps = {
-  account: AccountSession | null
-  activeView: 'changes' | 'discussion'
-  createDiscussion: (input: CreateDiscussionInput) => Promise<RequestDiscussionMutation>
-  createReply: (input: CreateReplyInput) => Promise<RequestDiscussionReplyMutation>
+  children: ReactNode
   detail: RequestDetail
-  discussionPage: RequestDiscussionPage
   live: RepoLiveState
   loadActivity: () => Promise<RequestActivityPage>
-  loadRevisionCommit: (
-    input: LoadRequestRevisionCommitInput,
-  ) => Promise<RequestRevisionCommitFiles>
-  loadRevisionDiff: (
-    input: LoadRequestRevisionCommitInput & { path: string },
-  ) => Promise<ReviewFileDiff>
-  loadDiscussions: (input: LoadDiscussionsInput) => Promise<RequestDiscussionPage>
-  loadDiscussionChanges: (input: {
-    after: number
-    owner: string
-    repo: string
-    request_id: string
-  }) => Promise<RequestDiscussionChanges>
-  loadReplies: (input: LoadRepliesInput) => Promise<RequestDiscussionRepliesPage>
-  markDiscussionRead: (input: MarkDiscussionReadInput) => Promise<unknown>
-  onChangesSearchChange: (search: RequestChangesSearch) => void
   params: RepoParams
   performAction: (command: RequestActionCommand) => Promise<RequestActionResult>
-  reopenAndReply: (input: CreateReplyInput) => Promise<RequestDiscussionReplyMutation>
-  revisions: RequestRevisions | null
   ratings: RequestRatings
   rateRequest: (input: RateRequestInput) => Promise<RequestRating>
-  resolveDiscussion: (input: RequestDiscussionActionInput) => Promise<RequestDiscussionMutation>
   updateDescription: (input: UpdateDescriptionInput) => Promise<RequestMutation>
-  search: RequestChangesSearch & { discussion?: string }
 }
 
 export function RequestDetailPage(props: RequestDetailPageProps) {
   const {
-    account,
-    activeView,
-    createDiscussion,
-    createReply,
+    children,
     detail,
-    discussionPage,
     live,
     loadActivity,
-    loadRevisionCommit,
-    loadRevisionDiff,
-    loadDiscussions,
-    loadDiscussionChanges,
-    loadReplies,
-    markDiscussionRead,
-    onChangesSearchChange,
     params,
     performAction,
-    reopenAndReply,
-    revisions,
     ratings,
     rateRequest,
-    resolveDiscussion,
     updateDescription,
-    search,
   } = props
   const { request } = detail
   const serverDescription = request.description_markdown
@@ -162,50 +94,19 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   const description = descriptionOverride?.server === serverDescription
     ? descriptionOverride.value
     : serverDescription
-  const actor = useMemo(() => ({
-    handle: account?.user?.handle ?? 'Anonymous',
-    id: account?.user?.id ?? 'anonymous',
-  }), [account?.user?.handle, account?.user?.id])
-  const discussionParams = useMemo(() => ({
+  const requestParams = useMemo(() => ({
     owner: params.owner,
     repo: params.repo,
     request_id: request.id,
   }), [params.owner, params.repo, request.id])
-  const discussionActions: RequestDiscussionActions = useMemo(() => ({
-    create: createDiscussion,
-    load: loadDiscussions,
-    loadChanges: loadDiscussionChanges,
-    markRead: markDiscussionRead,
-    resolve: resolveDiscussion,
-  }), [
-    createDiscussion,
-    loadDiscussionChanges,
-    loadDiscussions,
-    markDiscussionRead,
-    resolveDiscussion,
-  ])
-  const threadActions = useMemo(
-    () => ({ createReply, loadReplies, reopenAndReply }),
-    [createReply, loadReplies, reopenAndReply],
-  )
-  const isMaintainer = live.repo.access.actor !== 'Public'
   const hasLifecycleActions = request.permissions.can_submit ||
     request.permissions.can_merge ||
     request.permissions.can_close
 
-  const canResolveDiscussion = useCallback(
-    (discussion: RequestDiscussion) => !['Closed', 'Merged'].includes(request.state) && (
-      isMaintainer ||
-      actor.id === discussion.author.id ||
-      actor.id === request.author_user_id
-    ),
-    [actor.id, isMaintainer, request.author_user_id, request.state],
-  )
-
   async function saveDescription(nextDescription: string) {
     try {
       await updateDescription({
-        ...discussionParams,
+        ...requestParams,
         description_markdown: nextDescription,
       })
       setDescriptionOverride({ server: serverDescription, value: nextDescription })
@@ -276,52 +177,13 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
             description={description}
             onSave={saveDescription}
           />
-          <RequestViewTabs
-            activeView={activeView}
-            params={{ ...params, requestId: request.id }}
-          />
-          {activeView === 'discussion' ? (
-            <RequestDiscussionWorkbench
-              actions={discussionActions}
-              actor={actor}
-              canResolve={canResolveDiscussion}
-              focusedDiscussionId={search.discussion}
-              initialPage={discussionPage}
-              params={discussionParams}
-              permissions={{
-                canOpenDiscussion: request.permissions.can_open_discussion,
-                canReply: request.permissions.can_reply_to_discussion,
-              }}
-              repoId={live.repo.id}
-              request={request}
-              threadActions={threadActions}
-            />
-          ) : revisions ? (
-            <RequestChangesWorkbench
-              audience={live.repo.access.can_read_private_files ? 'private' : 'public'}
-              loadCommit={loadRevisionCommit}
-              loadDiff={loadRevisionDiff}
-              loadDiscussions={loadDiscussions}
-              onSearchChange={onChangesSearchChange}
-              params={discussionParams}
-              repoId={live.repo.id}
-              revisions={revisions}
-              search={search}
-            />
-          ) : (
-            <section className="border-b border-border px-5 py-14 text-center lg:px-7">
-              <GitCommit className="mx-auto size-5 text-muted-foreground" />
-              <h2 className="mt-3 text-sm font-semibold">Changes are unavailable</h2>
-              <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
-                The request conversation is still available. Refresh to try loading its revision history again.
-              </p>
-            </section>
-          )}
+          <RequestViewTabs params={{ ...params, requestId: request.id }} />
+          {children}
         </div>
         <RequestContextRail
           actions={requestActions}
           onRate={rateRequest}
-          params={discussionParams}
+          params={requestParams}
           ratings={ratings}
           request={request}
         />
@@ -350,19 +212,21 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
 }
 
 function RequestViewTabs({
-  activeView,
   params,
 }: {
-  activeView: 'changes' | 'discussion'
   params: RepoParams & { requestId: string }
 }) {
   const tabClass = 'inline-flex h-11 items-center gap-2 border-b-2 px-1 text-sm font-medium transition-colors'
   return (
     <nav aria-label="Request views" className="flex gap-6 border-b border-border px-5 lg:px-7">
       <Link
-        aria-current={activeView === 'discussion' ? 'page' : undefined}
-        className={`${tabClass} ${activeView === 'discussion' ? 'border-brand text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+        activeOptions={{ exact: true }}
+        activeProps={{ className: 'border-brand text-foreground' }}
+        className={tabClass}
+        inactiveProps={{ className: 'border-transparent text-muted-foreground hover:text-foreground' }}
         params={params}
+        preload="intent"
+        resetScroll={false}
         search={{}}
         to="/$owner/$repo/requests/$requestId"
       >
@@ -370,9 +234,12 @@ function RequestViewTabs({
         Discussion
       </Link>
       <Link
-        aria-current={activeView === 'changes' ? 'page' : undefined}
-        className={`${tabClass} ${activeView === 'changes' ? 'border-brand text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+        activeProps={{ className: 'border-brand text-foreground' }}
+        className={tabClass}
+        inactiveProps={{ className: 'border-transparent text-muted-foreground hover:text-foreground' }}
         params={params}
+        preload="intent"
+        resetScroll={false}
         search={{}}
         to="/$owner/$repo/requests/$requestId/changes"
       >
