@@ -275,7 +275,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .clone()
         .oneshot(machine_request(
             "POST",
-            &scope_api_contract::routes::runner_claim(&run_id),
+            &scope_api_contract::routes::runner_claim(&run_id, "checks"),
             &runner_secret,
             Body::empty(),
         ))
@@ -286,7 +286,8 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     let attempt_id = claimed["attempt_id"].as_str().unwrap().to_string();
     let attempt_token = claimed["attempt_token"].as_str().unwrap().to_string();
     assert_eq!(claimed["job"]["git_oid"], git_oid);
-    assert_eq!(claimed["job"]["workflow"]["name"], "Test");
+    assert_eq!(claimed["job"]["job_key"], "checks");
+    assert_eq!(claimed["job"]["definition"]["id"], "checks");
 
     let source_response = app
         .clone()
@@ -472,6 +473,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     assert!(detail["run"].get("attempt_number").is_none());
     assert_eq!(detail["attempts"].as_array().unwrap().len(), 1);
     assert_eq!(detail["attempts"][0]["id"], attempt_id);
+    assert_eq!(detail["attempts"][0]["job_key"], "checks");
     assert_eq!(detail["attempts"][0]["runner_name"], "linux-box");
     assert_eq!(detail["attempts"][0]["state"], "succeeded");
     assert_eq!(detail["attempts"][0]["steps"][0]["name"], "Test");
@@ -643,7 +645,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .clone()
         .oneshot(machine_request(
             "POST",
-            &scope_api_contract::routes::runner_claim(&run_id),
+            &scope_api_contract::routes::runner_claim(&run_id, "checks"),
             &runner_secret,
             Body::empty(),
         ))

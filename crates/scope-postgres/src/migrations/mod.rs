@@ -11,6 +11,7 @@ mod m0010_file_visibility_source_of_truth;
 mod m0011_compact_request_started_events;
 mod m0012_request_revisions;
 mod m0013_workflow_jobs;
+mod m0014_run_jobs;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -39,6 +40,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0011_compact_request_started_events::Migration),
             Box::new(m0012_request_revisions::Migration),
             Box::new(m0013_workflow_jobs::Migration),
+            Box::new(m0014_run_jobs::Migration),
         ]
     }
 }

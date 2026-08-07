@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 const CANARY_IMAGE: &str = "registry.example/runner-canary@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
 #[tokio::test]
-async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
+async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
     let store = runs_tests::postgres_store();
     runs_tests::register_runner(&store, "runner-1", "linux-box").await;
     runs_tests::enqueue(
@@ -59,7 +59,7 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
     assert!(
         store
             .runs()
-            .next_dispatchable_run("runner-1")
+            .next_dispatchable_job("runner-1")
             .await
             .unwrap()
             .is_none()
@@ -127,10 +127,11 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
         assert_eq!(
             store
                 .runs()
-                .next_dispatchable_run("runner-1")
+                .next_dispatchable_job("runner-1")
                 .await
                 .unwrap()
                 .unwrap()
+                .run
                 .id,
             run_id
         );
@@ -149,7 +150,7 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
     }
 
     let fenced = store.admin().runner_protocol_cutover().await.unwrap();
-    assert_eq!(fenced.cutover.state(), RunnerProtocolCutoverState::V4Fenced);
+    assert_eq!(fenced.cutover.state(), RunnerProtocolCutoverState::V5Fenced);
     assert_eq!(fenced.canary_generation, 1);
     assert!(
         fenced
@@ -159,10 +160,10 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
     );
     let opened = store
         .admin()
-        .advance_runner_protocol_cutover(RunnerProtocolCutoverState::V4Open, 50)
+        .advance_runner_protocol_cutover(RunnerProtocolCutoverState::V5Open, 50)
         .await
         .unwrap();
-    assert_eq!(opened.cutover.state(), RunnerProtocolCutoverState::V4Open);
+    assert_eq!(opened.cutover.state(), RunnerProtocolCutoverState::V5Open);
     let (attempt_id, token_hash) = final_ack.unwrap();
     assert_eq!(
         store
@@ -176,17 +177,18 @@ async fn fenced_v4_dispatches_only_the_canary_suite_then_opens() {
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_run("runner-1")
+            .next_dispatchable_job("runner-1")
             .await
             .unwrap()
             .unwrap()
+            .run
             .id,
         "run-general"
     );
 }
 
 #[tokio::test]
-async fn open_v4_hot_paths_do_not_take_the_cutover_row_lock() {
+async fn open_v5_hot_paths_do_not_take_the_cutover_row_lock() {
     let store = runs_tests::postgres_store();
     runs_tests::register_runner(&store, "runner-1", "linux-box").await;
     let revision = runs_tests::revision();
@@ -199,7 +201,15 @@ async fn open_v4_hot_paths_do_not_take_the_cutover_row_lock() {
     runs_tests::enqueue(&store, runs_tests::run("run-2", "manual:two"), revision).await;
     store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
+        .claim_job(
+            "run-1",
+            "canary",
+            "runner-1",
+            "attempt-1",
+            &"a".repeat(64),
+            20,
+            80,
+        )
         .await
         .unwrap();
 
@@ -222,9 +232,15 @@ async fn open_v4_hot_paths_do_not_take_the_cutover_row_lock() {
     .unwrap();
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        store
-            .runs()
-            .claim_run("run-2", "runner-1", "attempt-2", &"b".repeat(64), 22, 90),
+        store.runs().claim_job(
+            "run-2",
+            "canary",
+            "runner-1",
+            "attempt-2",
+            &"b".repeat(64),
+            22,
+            90,
+        ),
     )
     .await
     .expect("claim should not wait for the cutover singleton")
@@ -376,7 +392,7 @@ async fn successful_canary_with_lost_finalization_can_be_retried_after_its_deadl
         .finalize_runner_protocol_canary_cache(&attempt_id, &token_hash, true, 91)
         .await
         .unwrap_err();
-    assert!(late_ack.message.contains("active protocol V4 canary"));
+    assert!(late_ack.message.contains("active protocol V5 canary"));
     let current = store.admin().runner_protocol_cutover().await.unwrap();
     assert_eq!(current.canary_generation, 2);
     assert_eq!(current.canaries[0].run_id(), "run-replacement");
@@ -409,8 +425,9 @@ async fn expired_active_canary_is_terminalized_with_its_replacement() {
         .unwrap();
     store
         .runs()
-        .claim_run(
+        .claim_job(
             "run-expired",
+            "canary",
             "runner-1",
             "attempt-expired",
             &"a".repeat(64),
@@ -487,8 +504,9 @@ async fn running_canary_creation_retry_returns_the_existing_assignment() {
         .unwrap();
     store
         .runs()
-        .claim_run(
+        .claim_job(
             "run-active",
+            "canary",
             "runner-1",
             "attempt-active",
             &"a".repeat(64),
@@ -573,19 +591,41 @@ async fn concurrent_abandoned_canary_retries_converge_on_one_replacement() {
 }
 
 #[tokio::test]
-async fn owned_v3_runner_upgrade_rotates_credentials_atomically() {
+async fn owned_v4_runner_cannot_claim_v5_jobs_and_upgrades_atomically() {
     let store = runs_tests::postgres_store();
     runs_tests::register_runner(&store, "runner-1", "linux-box").await;
+    runs_tests::enqueue(
+        &store,
+        runs_tests::run("run-v5", "manual:v5"),
+        runs_tests::revision(),
+    )
+    .await;
     store
         .db
         .execute(Statement::from_string(
             DatabaseBackend::Postgres,
-            "UPDATE scope_runners SET protocol_version = 3, enabled = FALSE WHERE id = 'runner-1'"
+            "UPDATE scope_runners SET protocol_version = 4, enabled = FALSE WHERE id = 'runner-1'"
                 .to_string(),
         ))
         .await
         .unwrap();
     set_fenced(&store).await;
+
+    assert!(
+        store
+            .runs()
+            .claim_job(
+                "run-v5",
+                "checks",
+                "runner-1",
+                "attempt-v4",
+                &"8".repeat(64),
+                20,
+                80,
+            )
+            .await
+            .is_err()
+    );
 
     let old_hash = "1".repeat(64);
     let new_hash = "9".repeat(64);
@@ -648,7 +688,7 @@ async fn set_fenced(store: &MetadataStore) {
         .db
         .execute(Statement::from_string(
             DatabaseBackend::Postgres,
-            "UPDATE scope_runner_protocol_cutover SET state = 'v4-fenced' WHERE key = 'current'"
+            "UPDATE scope_runner_protocol_cutover SET state = 'v5-fenced' WHERE key = 'current'"
                 .to_string(),
         ))
         .await
@@ -660,7 +700,15 @@ async fn complete_canary_attempt(store: &MetadataStore, run_id: &str) -> (String
     let token_hash = hex::encode(Sha256::digest(run_id.as_bytes()));
     let claim = store
         .runs()
-        .claim_run(run_id, "runner-1", &attempt_id, &token_hash, 21, 90)
+        .claim_job(
+            run_id,
+            "canary",
+            "runner-1",
+            &attempt_id,
+            &token_hash,
+            21,
+            90,
+        )
         .await
         .unwrap();
     assert!(claim.canary_phase.is_some());

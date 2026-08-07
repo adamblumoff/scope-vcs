@@ -3,7 +3,7 @@ use scope_domain::runs::{
     run::{AttemptState, RunState, StepState},
     runner::RunnerCapabilities,
     trigger::PushTriggerEvaluationState,
-    workflow::CompiledWorkflow,
+    workflow::WorkflowJob,
 };
 use serde::{Deserialize, Serialize};
 
@@ -105,7 +105,6 @@ pub struct RunResponse {
     pub state: RunState,
     pub cancellation_requested: bool,
     pub logs_truncated: bool,
-    pub attempt_number: u32,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub completed_at_unix: Option<u64>,
@@ -135,6 +134,7 @@ pub struct RunnerPollResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RunnerRunOffer {
     pub run_id: String,
+    pub job_key: String,
     pub repository_id: String,
     pub workflow_name: String,
     pub git_oid: String,
@@ -152,11 +152,12 @@ pub struct ClaimRunResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RunJobResponse {
     pub run_id: String,
+    pub job_key: String,
     pub repository_id: String,
     pub git_oid: String,
     pub source_digest: String,
     pub pinned_container_image: Option<String>,
-    pub workflow: CompiledWorkflow,
+    pub definition: WorkflowJob,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -261,7 +262,7 @@ mod tests {
     #[test]
     fn cutover_contract_uses_stable_kebab_case_domain_values() {
         let response = RunnerProtocolCutoverResponse {
-            state: RunnerProtocolCutoverState::V4Fenced,
+            state: RunnerProtocolCutoverState::V5Fenced,
             generation: 2,
             canaries: vec![RunnerProtocolCanaryResponse {
                 generation: 2,
@@ -272,7 +273,7 @@ mod tests {
             }],
         };
         let json = serde_json::to_value(&response).unwrap();
-        assert_eq!(json["state"], "v4-fenced");
+        assert_eq!(json["state"], "v5-fenced");
         assert_eq!(json["canaries"][0]["phase"], "warm-read");
         assert_eq!(json["canaries"][0]["status"], "running");
         assert_eq!(

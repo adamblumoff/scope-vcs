@@ -20,8 +20,9 @@ async fn concurrent_claims_create_exactly_one_active_attempt() {
             barrier.wait().await;
             store
                 .runs()
-                .claim_run(
+                .claim_job(
                     "run-1",
+                    "checks",
                     &format!("runner-{index}"),
                     &format!("attempt-{index}"),
                     &format!("{index:064x}"),
@@ -47,7 +48,7 @@ async fn concurrent_claims_create_exactly_one_active_attempt() {
     let stored = store.runs().run("run-1").await.unwrap().unwrap();
     assert_eq!(stored.state, RunState::Leased);
     assert_eq!(
-        stored.current_attempt_id.as_deref(),
+        claims[0].job.current_attempt_id.as_deref(),
         Some(claims[0].attempt.id.as_str())
     );
 }
@@ -60,7 +61,15 @@ async fn attempt_details_are_newest_first_by_internal_ordinal_with_isolated_step
 
     store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-z", &"a".repeat(64), 20, 80)
+        .claim_job(
+            "run-1",
+            "checks",
+            "runner-1",
+            "attempt-z",
+            &"a".repeat(64),
+            20,
+            80,
+        )
         .await
         .unwrap();
     store
@@ -80,7 +89,15 @@ async fn attempt_details_are_newest_first_by_internal_ordinal_with_isolated_step
     store.runs().retry_run("run-1", 20).await.unwrap();
     store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-a", &"b".repeat(64), 20, 80)
+        .claim_job(
+            "run-1",
+            "checks",
+            "runner-1",
+            "attempt-a",
+            &"b".repeat(64),
+            20,
+            80,
+        )
         .await
         .unwrap();
 

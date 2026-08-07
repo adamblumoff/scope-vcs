@@ -1,4 +1,4 @@
-name: Runner protocol V4 eviction canary
+name: Runner protocol V5 eviction canary
 on:
   manual: true
 runs-on: remote-linux
@@ -11,4 +11,4 @@ jobs:
   evict:
     steps:
       - name: Assert cache sentinel before eviction
-        run: test "$(cat /scope/cache/runner-protocol/v4-canary-sentinel)" = 'scope-runner-protocol-v4'
+        run: test "$(cat /scope/cache/runner-protocol/v5-canary-sentinel)" = 'scope-runner-protocol-v5'

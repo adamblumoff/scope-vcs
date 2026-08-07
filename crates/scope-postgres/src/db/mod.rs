@@ -75,6 +75,7 @@ mod request_submission_transactions;
 mod requests;
 mod run_attempt_persistence;
 mod run_details;
+mod run_dispatch;
 mod run_operations;
 mod run_retention;
 mod run_step_operations;

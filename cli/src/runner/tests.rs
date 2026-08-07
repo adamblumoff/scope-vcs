@@ -6,8 +6,7 @@ use super::*;
 use scope_api_contract::StepConclusionRequest;
 use scope_domain::runs::cache::WorkflowCache;
 use scope_domain::runs::workflow::{
-    CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
-    WorkflowTriggers,
+    ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
 };
 use std::{env, fs};
 
@@ -127,25 +126,19 @@ fn job_container_receives_only_copied_source_and_step_programs() {
         canary_phase: None,
         job: RunJobResponse {
             run_id: "run-1".to_string(),
+            job_key: "checks".to_string(),
             repository_id: "owner/repo".to_string(),
             git_oid: "a".repeat(40),
             source_digest: "b".repeat(64),
             pinned_container_image: None,
-            workflow: CompiledWorkflow::new(
-                "Test",
-                WorkflowTriggers::new(true, false).unwrap(),
-                vec![
-                    WorkflowJob::new(
-                        WorkflowJobId::parse("checks").unwrap(),
-                        vec![],
-                        RunnerSelector::Any,
-                        ContainerSpec::new("alpine:3.20").unwrap(),
-                        60,
-                        vec![WorkflowCache::parse("cargo").unwrap()],
-                        vec![WorkflowStep::new("Test", "true").unwrap()],
-                    )
-                    .unwrap(),
-                ],
+            definition: WorkflowJob::new(
+                WorkflowJobId::parse("checks").unwrap(),
+                vec![],
+                RunnerSelector::Any,
+                ContainerSpec::new("alpine:3.20").unwrap(),
+                60,
+                vec![WorkflowCache::parse("cargo").unwrap()],
+                vec![WorkflowStep::new("Test", "true").unwrap()],
             )
             .unwrap(),
         },
@@ -280,25 +273,19 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         canary_phase: None,
         job: RunJobResponse {
             run_id: "run-1".to_string(),
+            job_key: "checks".to_string(),
             repository_id: "owner/repo".to_string(),
             git_oid: "a".repeat(40),
             source_digest: "b".repeat(64),
             pinned_container_image: None,
-            workflow: CompiledWorkflow::new(
-                "Test",
-                WorkflowTriggers::new(true, false).unwrap(),
-                vec![
-                    WorkflowJob::new(
-                        WorkflowJobId::parse("checks").unwrap(),
-                        vec![],
-                        RunnerSelector::Any,
-                        ContainerSpec::new("alpine:3.20").unwrap(),
-                        60,
-                        Vec::new(),
-                        vec![WorkflowStep::new("Test", "true").unwrap()],
-                    )
-                    .unwrap(),
-                ],
+            definition: WorkflowJob::new(
+                WorkflowJobId::parse("checks").unwrap(),
+                vec![],
+                RunnerSelector::Any,
+                ContainerSpec::new("alpine:3.20").unwrap(),
+                60,
+                Vec::new(),
+                vec![WorkflowStep::new("Test", "true").unwrap()],
             )
             .unwrap(),
         },
@@ -343,7 +330,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         .unwrap();
     mark_recovery_execution_started(&root, &claim, 90).unwrap();
     let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    assert_eq!(stored["schema_version"], 4);
+    assert_eq!(stored["schema_version"], 5);
     let stored: ClaimRunResponse = serde_json::from_value(stored["claim"].clone()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);

@@ -23,13 +23,82 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 #[tokio::test]
+async fn independent_jobs_claim_concurrently_with_job_scoped_attempt_ordinals() {
+    let store = postgres_store();
+    register_runner(&store, "runner-1", "linux-box").await;
+    let revision = parallel_revision();
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-parallel",
+            "manual:parallel",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+
+    let build_runs = store.runs();
+    let lint_runs = store.runs();
+    let build_token = "a".repeat(64);
+    let lint_token = "b".repeat(64);
+    let (build, lint) = tokio::join!(
+        build_runs.claim_job(
+            "run-parallel",
+            "build",
+            "runner-1",
+            "attempt-build",
+            &build_token,
+            20,
+            80,
+        ),
+        lint_runs.claim_job(
+            "run-parallel",
+            "lint",
+            "runner-1",
+            "attempt-lint",
+            &lint_token,
+            20,
+            80,
+        ),
+    );
+    let build = build.unwrap();
+    let lint = lint.unwrap();
+    assert_eq!(build.attempt.number, 1);
+    assert_eq!(lint.attempt.number, 1);
+    assert_eq!(build.attempt.job_key.as_str(), "build");
+    assert_eq!(lint.attempt.job_key.as_str(), "lint");
+    assert_eq!(
+        store
+            .runs()
+            .run("run-parallel")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        RunState::Leased
+    );
+}
+
+#[tokio::test]
 async fn active_cancellation_is_intent_until_runner_acknowledges() {
     let store = postgres_store();
     register_runner(&store, "runner-1", "linux-box").await;
     enqueue(&store, run("run-1", "manual:cancel"), revision()).await;
     let claim = store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
+        .claim_job(
+            "run-1",
+            "checks",
+            "runner-1",
+            "attempt-1",
+            &"a".repeat(64),
+            20,
+            80,
+        )
         .await
         .unwrap();
 
@@ -87,7 +156,15 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
     enqueue(&store, run("run-1", "manual:lease"), revision()).await;
     let first = store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
+        .claim_job(
+            "run-1",
+            "checks",
+            "runner-1",
+            "attempt-1",
+            &"a".repeat(64),
+            20,
+            80,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -103,7 +180,15 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
 
     let second = store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-2", &"b".repeat(64), 81, 140)
+        .claim_job(
+            "run-1",
+            "checks",
+            "runner-1",
+            "attempt-2",
+            &"b".repeat(64),
+            81,
+            140,
+        )
         .await
         .unwrap();
     assert_eq!(second.attempt.number, 2);
@@ -173,7 +258,15 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
     enqueue(&store, run("run-1", "manual:retention"), revision).await;
     store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
+        .claim_job(
+            "run-1",
+            "checks",
+            "runner-1",
+            "attempt-1",
+            &"a".repeat(64),
+            20,
+            80,
+        )
         .await
         .unwrap();
     pin_attempt(&store, "attempt-1", "runner-1", &"a".repeat(64), 21).await;
@@ -322,7 +415,15 @@ async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_sto
 
     let claim = store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
+        .claim_job(
+            "run-1",
+            "checks",
+            "runner-1",
+            "attempt-1",
+            &"a".repeat(64),
+            20,
+            80,
+        )
         .await
         .unwrap();
     store
@@ -361,7 +462,15 @@ async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_sto
     assert_eq!(
         store
             .runs()
-            .claim_run("run-1", "runner-1", "attempt-2", &"b".repeat(64), 81, 140,)
+            .claim_job(
+                "run-1",
+                "checks",
+                "runner-1",
+                "attempt-2",
+                &"b".repeat(64),
+                81,
+                140,
+            )
             .await
             .unwrap_err()
             .kind,
@@ -399,10 +508,11 @@ async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_sto
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_run("runner-2")
+            .next_dispatchable_job("runner-2")
             .await
             .unwrap()
             .unwrap()
+            .run
             .id,
         "run-1"
     );
@@ -460,7 +570,7 @@ async fn removing_repository_member_revokes_that_members_runner_grants_atomicall
     assert!(
         store
             .runs()
-            .next_dispatchable_run(&member_runner.id)
+            .next_dispatchable_job(&member_runner.id)
             .await
             .unwrap()
             .is_none()
@@ -509,7 +619,15 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
     enqueue(&store, run("run-1", "manual:logs"), revision()).await;
     store
         .runs()
-        .claim_run("run-1", "runner-1", "attempt-1", &"a".repeat(64), 20, 80)
+        .claim_job(
+            "run-1",
+            "checks",
+            "runner-1",
+            "attempt-1",
+            &"a".repeat(64),
+            20,
+            80,
+        )
         .await
         .unwrap();
     pin_attempt(&store, "attempt-1", "runner-1", &"a".repeat(64), 20).await;
@@ -685,7 +803,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert!(
         store
             .runs()
-            .next_dispatchable_run("runner-1")
+            .next_dispatchable_job("runner-1")
             .await
             .unwrap()
             .is_none()
@@ -693,10 +811,11 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_run("runner-2")
+            .next_dispatchable_job("runner-2")
             .await
             .unwrap()
             .unwrap()
+            .run
             .id,
         "run-1"
     );
@@ -709,7 +828,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert!(
         store
             .runs()
-            .next_dispatchable_run("runner-2")
+            .next_dispatchable_job("runner-2")
             .await
             .unwrap()
             .is_none()
@@ -839,6 +958,31 @@ pub(super) fn revision() -> WorkflowRevision {
     revision_for_repository("owner/repo")
 }
 
+fn parallel_revision() -> WorkflowRevision {
+    let job = |id: &str| {
+        WorkflowJob::new(
+            WorkflowJobId::parse(id).unwrap(),
+            vec![],
+            RunnerSelector::Any,
+            ContainerSpec::new("rust:1.90").unwrap(),
+            20 * 60,
+            vec![],
+            vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+        )
+        .unwrap()
+    };
+    WorkflowRevision::new(
+        workflow_identity_for("owner/repo"),
+        CompiledWorkflow::new(
+            "Parallel",
+            WorkflowTriggers::new(true, false).unwrap(),
+            vec![job("build"), job("lint")],
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
 fn revision_for_repository(repository_id: &str) -> WorkflowRevision {
     revision_for_repository_with_runner(repository_id, RunnerSelector::Any)
 }
@@ -951,7 +1095,7 @@ pub(super) fn run_for_revision(
             size_bytes: 42,
         })
         .unwrap(),
-        desired_runner,
+        Some(desired_runner),
         10,
     )
     .unwrap()

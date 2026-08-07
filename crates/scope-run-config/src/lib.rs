@@ -418,16 +418,16 @@ jobs:
                 include_bytes!("../../../.scope/runs/web-checks.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v4-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-cold-write.yml").as_slice(),
+                "/.scope/runs/v5-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-cold-write.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v4-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-warm-read.yml").as_slice(),
+                "/.scope/runs/v5-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-warm-read.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v4-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-evict.yml").as_slice(),
+                "/.scope/runs/v5-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-evict.yml").as_slice(),
             ),
         ] {
             parse_workflow(path, bytes).unwrap_or_else(|error| {
@@ -445,18 +445,18 @@ jobs:
         for (phase, path, bytes) in [
             (
                 RunnerProtocolCanaryPhase::ColdWrite,
-                "/.scope/runs/v4-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-cold-write.yml").as_slice(),
+                "/.scope/runs/v5-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-cold-write.yml").as_slice(),
             ),
             (
                 RunnerProtocolCanaryPhase::WarmRead,
-                "/.scope/runs/v4-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-warm-read.yml").as_slice(),
+                "/.scope/runs/v5-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-warm-read.yml").as_slice(),
             ),
             (
                 RunnerProtocolCanaryPhase::Evict,
-                "/.scope/runs/v4-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-evict.yml").as_slice(),
+                "/.scope/runs/v5-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-evict.yml").as_slice(),
             ),
         ] {
             let parsed = parse_workflow(path, bytes).unwrap();

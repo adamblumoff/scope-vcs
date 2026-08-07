@@ -12,6 +12,29 @@ pub enum RunState {
     Lost,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunJobState {
+    Blocked,
+    Queued,
+    Leased,
+    Running,
+    Succeeded,
+    Failed,
+    Skipped,
+    Canceled,
+    Lost,
+}
+
+impl RunJobState {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Skipped | Self::Canceled | Self::Lost
+        )
+    }
+}
+
 impl RunState {
     pub fn is_terminal(self) -> bool {
         matches!(

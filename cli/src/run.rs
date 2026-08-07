@@ -100,7 +100,7 @@ pub fn retry(run_id: &str, remote: Option<&str>, no_watch: bool) -> anyhow::Resu
         &target.repo,
         run_id,
     )?;
-    println!("Requeued {} · attempt {}", run.id, run.attempt_number + 1);
+    println!("Requeued {}", run.id);
     if no_watch {
         return Ok(());
     }

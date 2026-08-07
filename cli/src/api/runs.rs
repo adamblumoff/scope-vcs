@@ -352,10 +352,14 @@ pub fn runner_claim(
     api_url: &str,
     runner_secret: &str,
     run_id: &str,
+    job_key: &str,
 ) -> anyhow::Result<ClaimRunResponse> {
     parse_json(
         client
-            .post(format!("{api_url}{}", routes::runner_claim(run_id)))
+            .post(format!(
+                "{api_url}{}",
+                routes::runner_claim(run_id, job_key)
+            ))
             .bearer_auth(runner_secret)
             .send()
             .context("claim Scope run")?,

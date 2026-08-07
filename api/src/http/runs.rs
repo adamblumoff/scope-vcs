@@ -91,14 +91,11 @@ pub(crate) async fn create_manual_run(
             "workflow does not enable the manual trigger",
         ));
     }
-    let job = revision
-        .definition()
-        .only_job()
-        .ok_or_else(|| ApiError::bad_request("multi-job workflows require job-level dispatch"))?;
-    let desired_runner = match query.runner {
-        Some(name) => RunnerSelector::named(name).map_err(ApiError::bad_request)?,
-        None => job.runner().clone(),
-    };
+    let runner_override = query
+        .runner
+        .map(RunnerSelector::named)
+        .transpose()
+        .map_err(ApiError::bad_request)?;
     let mut stored = put_content_object(
         state.object_store.as_ref(),
         ContentObjectKind::GitBundle,
@@ -115,7 +112,7 @@ pub(crate) async fn create_manual_run(
         RunTrigger::Manual,
         Some(user.id),
         RunSource::ephemeral_git_bundle(stored)?,
-        desired_runner,
+        runner_override,
         now,
     )?;
     let run = match state.metadata.runs().enqueue_run(run, revision).await {
@@ -193,17 +190,20 @@ pub(crate) async fn get_repository_run_detail(
         .run_detail(&run_id)
         .await?
         .ok_or_else(|| ApiError::not_found("run not found"))?;
-    let workflow_steps = detail
-        .workflow_revision
-        .definition()
-        .only_job()
-        .ok_or_else(|| ApiError::internal_message("multi-job run used run-level attempts"))?
-        .steps();
+    let workflow = detail.workflow_revision.definition();
     let attempts = detail
         .attempts
         .into_iter()
         .map(|detail| {
             let attempt = detail.attempt;
+            let workflow_steps = workflow
+                .job(&attempt.job_key)
+                .ok_or_else(|| {
+                    ApiError::internal_message(
+                        "persisted run attempt job is missing from its workflow revision",
+                    )
+                })?
+                .steps();
             let steps = detail
                 .steps
                 .into_iter()
@@ -229,6 +229,7 @@ pub(crate) async fn get_repository_run_detail(
                 .collect::<Result<Vec<_>, ApiError>>()?;
             Ok(RepositoryRunAttemptResponse {
                 id: attempt.id,
+                job_key: attempt.job_key.as_str().to_string(),
                 runner_id: attempt.runner_id,
                 runner_name: attempt.runner_name,
                 state: attempt.state.into(),
@@ -629,14 +630,16 @@ pub(crate) fn run_response(run: &Run, logs_truncated: bool) -> RunResponse {
         repository_id: run.workflow.repository_id().to_string(),
         workflow_name: run.workflow.path().name().to_string(),
         git_oid: run.source.git_oid().to_string(),
-        desired_runner: match &run.desired_runner {
-            RunnerSelector::Any => None,
-            RunnerSelector::Named(name) => Some(name.clone()),
-        },
+        desired_runner: run
+            .runner_override
+            .as_ref()
+            .and_then(|runner| match runner {
+                RunnerSelector::Any => None,
+                RunnerSelector::Named(name) => Some(name.clone()),
+            }),
         state: run.state,
         cancellation_requested: run.cancellation_requested,
         logs_truncated,
-        attempt_number: run.last_attempt_number,
         created_at_unix: run.created_at_unix,
         updated_at_unix: run.updated_at_unix,
         completed_at_unix: run.completed_at_unix,
@@ -648,17 +651,20 @@ fn repository_run_summary(run: &Run) -> RepositoryRunSummaryResponse {
         id: run.id.clone(),
         workflow_name: run.workflow.path().name().to_string(),
         git_oid: run.source.git_oid().to_string(),
-        desired_runner: match &run.desired_runner {
-            RunnerSelector::Any => None,
-            RunnerSelector::Named(name) => Some(name.clone()),
-        },
+        desired_runner: run
+            .runner_override
+            .as_ref()
+            .and_then(|runner| match runner {
+                RunnerSelector::Any => None,
+                RunnerSelector::Named(name) => Some(name.clone()),
+            }),
         state: run.state.into(),
         cancellation_requested: run.cancellation_requested,
         created_at_unix: run.created_at_unix,
         updated_at_unix: run.updated_at_unix,
         completed_at_unix: run.completed_at_unix,
         can_cancel: run.can_request_cancellation(),
-        can_retry: run.can_retry(),
+        can_retry: run.state.is_terminal(),
     }
 }
 

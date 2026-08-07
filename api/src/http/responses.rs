@@ -185,6 +185,7 @@ pub(crate) struct RepositoryRunStepResponse {
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryRunAttemptResponse {
     pub(crate) id: String,
+    pub(crate) job_key: String,
     pub(crate) runner_id: String,
     pub(crate) runner_name: String,
     pub(crate) state: RepositoryRunAttemptState,

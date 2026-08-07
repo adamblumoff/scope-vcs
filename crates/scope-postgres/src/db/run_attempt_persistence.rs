@@ -1,6 +1,7 @@
 use super::entities;
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    job::RunJob,
     run::{Run, RunAttempt, RunAttemptStep},
     runner::{Runner, RunnerGrant},
 };
@@ -25,14 +26,21 @@ pub(super) async fn locked_run(
 pub(super) async fn locked_attempt_context(
     tx: &DatabaseTransaction,
     attempt_id: &str,
-) -> Result<(Run, RunAttempt, Vec<RunAttemptStep>), PostgresError> {
-    let run_id = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
+) -> Result<(Run, RunJob, RunAttempt, Vec<RunAttemptStep>), PostgresError> {
+    let target = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
         .one(tx)
         .await
         .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::not_found("run attempt not found"))?
-        .run_id;
-    let run = locked_run(tx, &run_id).await?;
+        .ok_or_else(|| PostgresError::not_found("run attempt not found"))?;
+    // Ordinary runner traffic locks the job and attempt, not their parent run. This lets
+    // independent jobs heartbeat, stream logs, and advance steps concurrently.
+    let run = entities::run::Entity::find_by_id(target.run_id.clone())
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::not_found("run not found"))?
+        .try_into_domain()?;
+    let job = locked_job(tx, &target.run_id, &target.job_key).await?;
     let attempt = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
         .lock_exclusive()
         .one(tx)
@@ -41,7 +49,52 @@ pub(super) async fn locked_attempt_context(
         .ok_or_else(|| PostgresError::not_found("run attempt not found"))?
         .try_into_domain()?;
     let steps = locked_attempt_steps(tx, attempt_id).await?;
-    Ok((run, attempt, steps))
+    Ok((run, job, attempt, steps))
+}
+
+pub(super) async fn locked_job(
+    tx: &DatabaseTransaction,
+    run_id: &str,
+    job_key: &str,
+) -> Result<RunJob, PostgresError> {
+    entities::run_job::Entity::find_by_id((run_id.to_string(), job_key.to_string()))
+        .lock_exclusive()
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::not_found("run job not found"))?
+        .try_into_domain()
+}
+
+pub(super) async fn locked_jobs(
+    tx: &DatabaseTransaction,
+    run_id: &str,
+) -> Result<Vec<RunJob>, PostgresError> {
+    entities::run_job::Entity::find()
+        .filter(entities::run_job::Column::RunId.eq(run_id))
+        .order_by_asc(entities::run_job::Column::JobKey)
+        .lock_exclusive()
+        .all(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(entities::run_job::Model::try_into_domain)
+        .collect()
+}
+
+pub(super) async fn jobs_for_run(
+    tx: &DatabaseTransaction,
+    run_id: &str,
+) -> Result<Vec<RunJob>, PostgresError> {
+    entities::run_job::Entity::find()
+        .filter(entities::run_job::Column::RunId.eq(run_id))
+        .order_by_asc(entities::run_job::Column::JobKey)
+        .all(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(entities::run_job::Model::try_into_domain)
+        .collect()
 }
 
 pub(super) async fn attempt_target(
@@ -56,7 +109,7 @@ pub(super) async fn attempt_target(
     Ok((attempt.run_id, attempt.runner_id))
 }
 
-async fn locked_attempt_steps(
+pub(super) async fn locked_attempt_steps(
     tx: &DatabaseTransaction,
     attempt_id: &str,
 ) -> Result<Vec<RunAttemptStep>, PostgresError> {
@@ -125,6 +178,28 @@ pub(super) async fn save_run(tx: &DatabaseTransaction, run: &Run) -> Result<(), 
     .exec(tx)
     .await
     .map_err(PostgresError::internal)?;
+    Ok(())
+}
+
+pub(super) async fn save_job(tx: &DatabaseTransaction, job: &RunJob) -> Result<(), PostgresError> {
+    entities::run_job::Entity::update(
+        entities::run_job::Model::from_domain(job)?
+            .into_active_model()
+            .reset_all(),
+    )
+    .exec(tx)
+    .await
+    .map_err(PostgresError::internal)?;
+    Ok(())
+}
+
+pub(super) async fn save_jobs(
+    tx: &DatabaseTransaction,
+    jobs: &[RunJob],
+) -> Result<(), PostgresError> {
+    for job in jobs {
+        save_job(tx, job).await?;
+    }
     Ok(())
 }
 

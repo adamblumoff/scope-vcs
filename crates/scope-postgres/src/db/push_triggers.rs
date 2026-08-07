@@ -190,12 +190,7 @@ where
                 RunTrigger::PushMain,
                 None,
                 source,
-                revision
-                    .definition()
-                    .only_job()
-                    .expect("push workflow dispatchability was validated")
-                    .runner()
-                    .clone(),
+                None,
                 now_unix,
             )
             .map_err(PostgresError::from)?;

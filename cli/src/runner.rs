@@ -73,11 +73,7 @@ use workspace::{
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
 
 fn dispatch_job(claim: &ClaimRunResponse) -> anyhow::Result<&WorkflowJob> {
-    claim
-        .job
-        .workflow
-        .only_job()
-        .context("multi-job workflows require job-level dispatch")
+    Ok(&claim.job.definition)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,7 +114,13 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
                 let Some(offer) = response.run else {
                     continue;
                 };
-                match runner_claim(&client, &config.api_url, &config.secret, &offer.run_id) {
+                match runner_claim(
+                    &client,
+                    &config.api_url,
+                    &config.secret,
+                    &offer.run_id,
+                    &offer.job_key,
+                ) {
                     Ok(claim) => run_claim(&config, capabilities, claim),
                     Err(error) => eprintln!("Could not claim {}: {error}", offer.run_id),
                 }
