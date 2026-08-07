@@ -862,10 +862,10 @@ async fn repository_operations_keep_all_active_runs_beyond_the_recent_limit() {
         .await
         .unwrap();
     assert_eq!(runs.len(), 21);
-    assert!(runs.iter().all(|run| !run.state.is_terminal()));
+    assert!(runs.iter().all(|run| !run.run.state.is_terminal()));
     assert_eq!(
         runs.iter()
-            .map(|run| &run.id)
+            .map(|run| &run.run.id)
             .collect::<BTreeSet<_>>()
             .len(),
         runs.len()

@@ -1,6 +1,7 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    job::RunJob,
     run::Run,
     runner::{Runner, RunnerGrant},
 };
@@ -16,6 +17,12 @@ pub struct RepositoryRunner {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryRun {
+    pub run: Run,
+    pub jobs: Vec<RunJob>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentRunLogs {
     pub logs: Vec<StoredRunLog>,
     pub truncated_in_view: bool,
@@ -26,13 +33,14 @@ impl RunStore {
         &self,
         repository_id: &str,
         recent_limit: u64,
-    ) -> Result<Vec<Run>, PostgresError> {
+    ) -> Result<Vec<RepositoryRun>, PostgresError> {
+        let tx = super::begin_metadata_read_snapshot(self.db.as_ref()).await?;
         let mut models = entities::run::Entity::find()
             .filter(entities::run::Column::RepoId.eq(repository_id))
             .filter(entities::run::Column::CompletedAtUnix.is_null())
             .order_by_desc(entities::run::Column::UpdatedAtUnix)
             .order_by_desc(entities::run::Column::Id)
-            .all(self.db.as_ref())
+            .all(&tx)
             .await
             .map_err(PostgresError::internal)?;
         let terminal_limit = recent_limit.saturating_sub(models.len() as u64);
@@ -50,15 +58,47 @@ impl RunStore {
             }
             models.extend(
                 terminal_query
-                    .all(self.db.as_ref())
+                    .all(&tx)
                     .await
                     .map_err(PostgresError::internal)?,
             );
         }
-        models
+        let run_ids = models.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
+        let mut jobs = if run_ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            entities::run_job::Entity::find()
+                .filter(entities::run_job::Column::RunId.is_in(run_ids))
+                .order_by_asc(entities::run_job::Column::RunId)
+                .order_by_asc(entities::run_job::Column::JobKey)
+                .all(&tx)
+                .await
+                .map_err(PostgresError::internal)?
+                .into_iter()
+                .map(entities::run_job::Model::try_into_domain)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .fold(BTreeMap::<String, Vec<RunJob>>::new(), |mut jobs, job| {
+                    jobs.entry(job.run_id.clone()).or_default().push(job);
+                    jobs
+                })
+        };
+        let runs = models
             .into_iter()
             .map(entities::run::Model::try_into_domain)
-            .collect()
+            .map(|run| {
+                let run = run?;
+                let jobs = jobs
+                    .remove(&run.id)
+                    .filter(|jobs| !jobs.is_empty())
+                    .ok_or_else(|| {
+                        PostgresError::internal_message("run is missing its persisted jobs")
+                    })?;
+                Ok(RepositoryRun { jobs, run })
+            })
+            .collect();
+        tx.commit().await.map_err(PostgresError::internal)?;
+        runs
     }
 
     pub async fn repository_runners(

@@ -718,9 +718,13 @@ impl RunStore {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
         guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
-        let (mut run, mut job, mut attempt, mut steps) =
+        let (run_snapshot, mut job, mut attempt, mut steps) =
             locked_attempt_context(&tx, attempt_id).await?;
-        ensure_runner_authorized(&tx, &run, &attempt).await?;
+        ensure_runner_authorized(&tx, &run_snapshot, &attempt).await?;
+        // The job lock keeps independent jobs concurrent. Reloading the parent with a lock only
+        // when this operation will derive and persist aggregate state prevents a stale snapshot
+        // from erasing cancellation intent committed while the job was being acquired.
+        let mut run = locked_run(&tx, &run_snapshot.id).await?;
         mutate(&run, &mut job, &mut attempt, &mut steps).map_err(PostgresError::from)?;
         save_job(&tx, &job).await?;
         save_attempt(&tx, &attempt).await?;

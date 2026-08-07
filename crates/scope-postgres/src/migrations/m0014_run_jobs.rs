@@ -61,6 +61,18 @@ impl MigrationTrait for Migration {
                 ALTER TABLE scope_runners DROP CONSTRAINT scope_runners_v4_cutover;
                 ALTER TABLE scope_runner_protocol_cutover
                     DROP CONSTRAINT scope_runner_protocol_cutover_values;
+                WITH cutover_time AS (
+                    SELECT extract(epoch FROM clock_timestamp())::bigint AS now_unix
+                )
+                UPDATE scope_runs AS run
+                SET state = 'canceled',
+                    cancellation_requested = TRUE,
+                    updated_at_unix = GREATEST(run.updated_at_unix, cutover_time.now_unix),
+                    completed_at_unix = GREATEST(run.updated_at_unix, cutover_time.now_unix)
+                FROM scope_runner_protocol_canaries AS canary, cutover_time
+                WHERE canary.run_id = run.id
+                  AND run.state = 'queued'
+                  AND run.current_attempt_id IS NULL;
                 DELETE FROM scope_runner_protocol_canaries;
                 UPDATE scope_runner_protocol_cutover
                 SET state = CASE

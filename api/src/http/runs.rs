@@ -28,6 +28,7 @@ use scope_api_contract::{
 };
 use scope_domain::{
     runs::{
+        job::{RunJob, can_retry_run},
         run::{Run, RunSource, RunTrigger},
         workflow::{RunnerSelector, WorkflowPath},
     },
@@ -154,7 +155,10 @@ pub(crate) async fn get_repository_operations(
     let now_unix = unix_now()?;
 
     Ok(Json(RepositoryOperationsResponse {
-        runs: runs.iter().map(repository_run_summary).collect(),
+        runs: runs
+            .iter()
+            .map(|entry| repository_run_summary(&entry.run, &entry.jobs))
+            .collect(),
         runners: runners
             .into_iter()
             .map(|entry| {
@@ -243,7 +247,7 @@ pub(crate) async fn get_repository_run_detail(
         .collect::<Result<Vec<_>, ApiError>>()?;
 
     Ok(Json(RepositoryRunDetailResponse {
-        run: repository_run_summary(&detail.run),
+        run: repository_run_summary(&detail.run, &detail.jobs),
         attempts,
     }))
 }
@@ -646,7 +650,7 @@ pub(crate) fn run_response(run: &Run, logs_truncated: bool) -> RunResponse {
     }
 }
 
-fn repository_run_summary(run: &Run) -> RepositoryRunSummaryResponse {
+fn repository_run_summary(run: &Run, jobs: &[RunJob]) -> RepositoryRunSummaryResponse {
     RepositoryRunSummaryResponse {
         id: run.id.clone(),
         workflow_name: run.workflow.path().name().to_string(),
@@ -664,7 +668,7 @@ fn repository_run_summary(run: &Run) -> RepositoryRunSummaryResponse {
         updated_at_unix: run.updated_at_unix,
         completed_at_unix: run.completed_at_unix,
         can_cancel: run.can_request_cancellation(),
-        can_retry: run.state.is_terminal(),
+        can_retry: can_retry_run(run, jobs),
     }
 }
 
@@ -882,6 +886,15 @@ impl Drop for RunTempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scope_domain::{
+        content_ref::ContentRef,
+        runs::{
+            job::RunJob,
+            run::{MAX_RUN_ATTEMPTS, RunJobState, RunState},
+            workflow::{WorkflowIdentity, WorkflowJobId},
+        },
+        store::SourceBlob,
+    };
 
     #[test]
     fn stream_errors_redact_database_diagnostics() {
@@ -893,5 +906,65 @@ mod tests {
 
         assert!(message.starts_with("Scope hit an internal error. (reference: err_"));
         assert!(!message.contains(diagnostic));
+    }
+
+    #[test]
+    fn run_summary_allows_retry_when_every_job_has_capacity() {
+        let run = terminal_run();
+        let available = terminal_job(1);
+        assert!(repository_run_summary(&run, &[available]).can_retry);
+    }
+
+    #[test]
+    fn run_summary_hides_retry_when_any_job_is_exhausted() {
+        let run = terminal_run();
+        let exhausted = terminal_job(MAX_RUN_ATTEMPTS);
+        assert!(!repository_run_summary(&run, &[exhausted]).can_retry);
+    }
+
+    fn terminal_run() -> Run {
+        Run::restore(
+            "run-summary",
+            "manual:summary",
+            WorkflowIdentity::new(
+                "owner/repo",
+                WorkflowPath::parse("/.scope/runs/checks.yml").unwrap(),
+            )
+            .unwrap(),
+            "a".repeat(64),
+            RunTrigger::Manual,
+            Some("user-1".to_string()),
+            RunSource::ephemeral_git_bundle(SourceBlob {
+                content_ref: ContentRef::git_bundle_sha256("b".repeat(64)),
+                sha256: "b".repeat(64),
+                git_oid: "c".repeat(40),
+                git_file_mode: "100644".to_string(),
+                size_bytes: 1,
+            })
+            .unwrap(),
+            None,
+            RunState::Failed,
+            false,
+            1,
+            2,
+            Some(2),
+        )
+        .unwrap()
+    }
+
+    fn terminal_job(last_attempt_number: u32) -> RunJob {
+        RunJob::restore(
+            "run-summary",
+            WorkflowJobId::parse("checks").unwrap(),
+            RunnerSelector::Any,
+            None,
+            RunJobState::Failed,
+            last_attempt_number,
+            None,
+            1,
+            2,
+            Some(2),
+        )
+        .unwrap()
     }
 }

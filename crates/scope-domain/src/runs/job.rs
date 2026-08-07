@@ -380,11 +380,7 @@ pub fn retry_run(
             "persisted run jobs do not match their workflow",
         ));
     }
-    if !run.state.is_terminal()
-        || jobs
-            .iter()
-            .any(|job| job.last_attempt_number >= MAX_RUN_ATTEMPTS)
-    {
+    if !can_retry_run(run, jobs) {
         return Err(DomainError::conflict("run cannot be retried"));
     }
     for job in jobs.iter_mut() {
@@ -406,6 +402,14 @@ pub fn retry_run(
     run.updated_at_unix = now_unix;
     run.completed_at_unix = None;
     Ok(())
+}
+
+pub fn can_retry_run(run: &Run, jobs: &[RunJob]) -> bool {
+    run.state.is_terminal()
+        && !jobs.is_empty()
+        && jobs
+            .iter()
+            .all(|job| job.run_id == run.id && job.last_attempt_number < MAX_RUN_ATTEMPTS)
 }
 
 fn derive_run_state(run: &mut Run, jobs: &[RunJob], now_unix: u64) -> Result<(), DomainError> {

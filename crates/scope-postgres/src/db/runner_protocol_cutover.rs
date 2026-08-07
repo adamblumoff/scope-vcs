@@ -765,8 +765,7 @@ async fn ensure_canary_target(
     let revision = workflow_revision_for_target(tx, &run).await?;
     validate_runner_protocol_canary_workflow(revision.definition(), phase)
         .map_err(PostgresError::from)?;
-    if run.trigger != RunTrigger::Manual || job.desired_runner != *canary_job(&revision)?.runner()
-    {
+    if run.trigger != RunTrigger::Manual || job.desired_runner != *canary_job(&revision)?.runner() {
         return Err(PostgresError::conflict(
             "canary run must preserve the canonical workflow trigger and exact runner",
         ));

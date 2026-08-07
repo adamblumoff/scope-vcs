@@ -1,6 +1,7 @@
 use super::{RunStore, StoredRunLog, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    job::RunJob,
     run::{MAX_RUN_ATTEMPTS, Run, RunAttempt, RunAttemptStep},
     workflow::WorkflowRevision,
 };
@@ -16,6 +17,7 @@ pub struct RunAttemptDetail {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunDetail {
     pub run: Run,
+    pub jobs: Vec<RunJob>,
     pub workflow_revision: WorkflowRevision,
     pub attempts: Vec<RunAttemptDetail>,
 }
@@ -40,10 +42,17 @@ impl RunStore {
             return Ok(None);
         };
         let workflow_revision = super::runs::workflow_revision_for_run(&tx, &run).await?;
+        let jobs = super::run_attempt_persistence::jobs_for_run(&tx, run_id).await?;
+        if jobs.is_empty() {
+            return Err(PostgresError::internal_message(
+                "run is missing its persisted jobs",
+            ));
+        }
         let attempts = run_attempt_details_with(&tx, run_id).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(Some(RunDetail {
             run,
+            jobs,
             workflow_revision,
             attempts,
         }))
