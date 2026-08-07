@@ -91,7 +91,7 @@ pub(super) fn discussion_receipt_lines(
             terminal_text(&discussion.author.handle)
         ),
         format!("Replies: {}", discussion.reply_count),
-        terminal_text(discussion.body_markdown.as_deref().unwrap_or("Code change")),
+        terminal_text(&discussion.body_markdown),
     ]
 }
 
@@ -283,7 +283,6 @@ fn mergeability_label(request: &RequestSummaryResponse) -> String {
 
 fn discussion_status_label(status: RequestDiscussionStatus) -> &'static str {
     match status {
-        RequestDiscussionStatus::Dormant => "code-change",
         RequestDiscussionStatus::Open => "open",
         RequestDiscussionStatus::Resolved => "resolved",
     }

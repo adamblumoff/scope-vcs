@@ -681,10 +681,15 @@ fn discussion_summary(
 
 fn discussion_anchor_response(
     anchor: scope_domain::requests::RequestDiscussionAnchor,
-    _repo: &scope_domain::store::StoredRepository,
+    repo: &scope_domain::store::StoredRepository,
     access: scope_domain::store::RepositoryAccess,
 ) -> RequestDiscussionAnchor {
-    let commit_context_is_visible = access.can_read_private_files;
+    let commit_context_is_visible = anchor
+        .path
+        .as_ref()
+        .map_or(access.can_read_private_files, |path| {
+            repo.policy.can_read(path, access.can_read_private_files)
+        });
     RequestDiscussionAnchor {
         revision_id: anchor.revision_id,
         commit_oid: commit_context_is_visible

@@ -288,6 +288,7 @@ pub fn create_request_discussion(
             .json(&CreateRequestDiscussionRequest {
                 body_markdown: params.body_markdown,
                 client_discussion_id: params.client_discussion_id,
+                anchor: None,
             }),
         target,
         "create request discussion",
