@@ -191,6 +191,9 @@ impl RunStore {
         .map_err(PostgresError::internal)?;
         save_job(&tx, &job).await?;
         let mut run = locked_run(&tx, run_id).await?;
+        if run.cancellation_requested || run.state.is_terminal() {
+            return Err(PostgresError::conflict("run is no longer dispatchable"));
+        }
         let mut jobs = jobs_for_run(&tx, run_id).await?;
         if let Some(stored) = jobs.iter_mut().find(|stored| stored.key == job.key) {
             *stored = job.clone();

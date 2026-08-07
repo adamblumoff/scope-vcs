@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     content_ref::ContentRef,
     runs::{
-        job::{create_run_jobs, reconcile_run, retry_run},
+        job::{create_run_jobs, reconcile_run, request_run_cancellation, retry_run},
         runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
         workflow::{
             CompiledWorkflow, ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowPath,
@@ -152,6 +152,74 @@ fn canceled_upstream_cancels_run_and_skips_every_downstream_job() {
     assert_eq!(jobs[1].state, RunJobState::Skipped);
     assert_eq!(jobs[2].state, RunJobState::Skipped);
     assert_eq!(run.state, RunState::Canceled);
+}
+
+#[test]
+fn canceled_job_terminalizes_non_active_siblings_but_preserves_active_work() {
+    let revision = workflow(&[
+        ("build", &[]),
+        ("lint", &[]),
+        ("docs", &[]),
+        ("package", &["build"]),
+    ]);
+    let mut run = run(&revision);
+    let mut jobs = create_run_jobs(&run, &revision).unwrap();
+    jobs[0].state = RunJobState::Canceled;
+    jobs[0].updated_at_unix = 20;
+    jobs[0].completed_at_unix = Some(20);
+    jobs[1].state = RunJobState::Running;
+    jobs[1].updated_at_unix = 30;
+
+    reconcile_run(&mut run, &mut jobs, &revision, 20).unwrap();
+
+    assert!(run.cancellation_requested);
+    assert_eq!(run.state, RunState::Running);
+    assert_eq!(run.updated_at_unix, 30);
+    assert_eq!(jobs[1].state, RunJobState::Running);
+    assert_eq!(jobs[1].updated_at_unix, 30);
+    assert_eq!(jobs[2].state, RunJobState::Canceled);
+    assert_eq!(jobs[3].state, RunJobState::Skipped);
+}
+
+#[test]
+fn sibling_with_later_timestamp_does_not_reject_independent_reconciliation() {
+    let revision = workflow(&[("build", &[]), ("lint", &[])]);
+    let mut run = run(&revision);
+    let mut jobs = create_run_jobs(&run, &revision).unwrap();
+    jobs[0].state = RunJobState::Succeeded;
+    jobs[0].updated_at_unix = 20;
+    jobs[0].completed_at_unix = Some(20);
+    jobs[1].state = RunJobState::Running;
+    jobs[1].updated_at_unix = 30;
+    run.state = RunState::Running;
+    run.updated_at_unix = 30;
+
+    reconcile_run(&mut run, &mut jobs, &revision, 20).unwrap();
+
+    assert_eq!(run.state, RunState::Running);
+    assert_eq!(run.updated_at_unix, 30);
+    assert_eq!(jobs[1].updated_at_unix, 30);
+}
+
+#[test]
+fn cancellation_uses_each_mutated_entitys_monotonic_time() {
+    let revision = workflow(&[("build", &[]), ("lint", &[])]);
+    let mut run = run(&revision);
+    let mut jobs = create_run_jobs(&run, &revision).unwrap();
+    run.state = RunState::Running;
+    run.updated_at_unix = 30;
+    jobs[0].state = RunJobState::Running;
+    jobs[0].updated_at_unix = 30;
+
+    assert!(request_run_cancellation(&mut run, &mut jobs, 20).unwrap());
+
+    assert!(run.cancellation_requested);
+    assert_eq!(run.state, RunState::Running);
+    assert_eq!(run.updated_at_unix, 30);
+    assert_eq!(jobs[0].state, RunJobState::Running);
+    assert_eq!(jobs[0].updated_at_unix, 30);
+    assert_eq!(jobs[1].state, RunJobState::Canceled);
+    assert_eq!(jobs[1].updated_at_unix, 20);
 }
 
 #[test]

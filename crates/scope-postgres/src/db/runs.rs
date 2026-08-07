@@ -3,8 +3,8 @@ use super::{
     object_references::insert_object_reference,
     run_attempt_persistence::{
         attempt_target, ensure_runner_authorized, jobs_for_run, locked_attempt_context,
-        locked_attempt_steps, locked_jobs, locked_run, runner_by_id, save_attempt,
-        save_attempt_steps, save_job, save_jobs, save_run, save_runner,
+        locked_attempt_steps, locked_heartbeat_context, locked_jobs, locked_run, runner_by_id,
+        save_attempt, save_attempt_steps, save_job, save_jobs, save_run, save_runner,
     },
     runner_protocol_cutover::{
         guard_attempt_operation, guard_canary_pinned_image, guard_enqueue, guard_general_run_write,
@@ -373,7 +373,7 @@ impl RunStore {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
         guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
-        let (run, job, mut attempt, _) = locked_attempt_context(&tx, attempt_id).await?;
+        let (run, job, mut attempt) = locked_heartbeat_context(&tx, attempt_id).await?;
         let mut runner = ensure_runner_authorized(&tx, &run, &attempt).await?;
         let cancellation_requested = attempt
             .heartbeat(
@@ -721,9 +721,6 @@ impl RunStore {
         let (run_snapshot, mut job, mut attempt, mut steps) =
             locked_attempt_context(&tx, attempt_id).await?;
         ensure_runner_authorized(&tx, &run_snapshot, &attempt).await?;
-        // The job lock keeps independent jobs concurrent. Reloading the parent with a lock only
-        // when this operation will derive and persist aggregate state prevents a stale snapshot
-        // from erasing cancellation intent committed while the job was being acquired.
         let mut run = locked_run(&tx, &run_snapshot.id).await?;
         mutate(&run, &mut job, &mut attempt, &mut steps).map_err(PostgresError::from)?;
         save_job(&tx, &job).await?;

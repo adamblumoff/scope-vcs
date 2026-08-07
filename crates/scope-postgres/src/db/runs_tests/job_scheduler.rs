@@ -138,6 +138,69 @@ async fn independent_jobs_claim_concurrently_with_job_scoped_attempt_ordinals() 
 }
 
 #[tokio::test]
+async fn independent_claim_with_older_timestamp_does_not_regress_the_aggregate() {
+    let store = postgres_store();
+    register_runner(&store, "runner-1", "linux-one").await;
+    register_runner(&store, "runner-2", "linux-two").await;
+    let revision = parallel_revision();
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-out-of-order",
+            "manual:out-of-order",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+
+    store
+        .runs()
+        .claim_job(
+            "run-out-of-order",
+            "build",
+            "runner-1",
+            "attempt-build-late",
+            &"a".repeat(64),
+            30,
+            90,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .claim_job(
+            "run-out-of-order",
+            "lint",
+            "runner-2",
+            "attempt-lint-early",
+            &"b".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+
+    let detail = store
+        .runs()
+        .run_detail("run-out-of-order")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.run.state, RunState::Leased);
+    assert_eq!(detail.run.updated_at_unix, 30);
+    assert!(
+        detail
+            .jobs
+            .iter()
+            .all(|job| job.state == scope_domain::runs::run::RunJobState::Leased)
+    );
+}
+
+#[tokio::test]
 async fn active_cancellation_is_intent_until_runner_acknowledges() {
     let store = postgres_store();
     register_runner(&store, "runner-1", "linux-box").await;

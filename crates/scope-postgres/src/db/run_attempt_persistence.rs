@@ -32,8 +32,6 @@ pub(super) async fn locked_attempt_context(
         .await
         .map_err(PostgresError::internal)?
         .ok_or_else(|| PostgresError::not_found("run attempt not found"))?;
-    // Ordinary runner traffic locks the job and attempt, not their parent run. This lets
-    // independent jobs heartbeat, stream logs, and advance steps concurrently.
     let run = entities::run::Entity::find_by_id(target.run_id.clone())
         .one(tx)
         .await
@@ -50,6 +48,35 @@ pub(super) async fn locked_attempt_context(
         .try_into_domain()?;
     let steps = locked_attempt_steps(tx, attempt_id).await?;
     Ok((run, job, attempt, steps))
+}
+
+pub(super) async fn locked_heartbeat_context(
+    tx: &DatabaseTransaction,
+    attempt_id: &str,
+) -> Result<(Run, RunJob, RunAttempt), PostgresError> {
+    let target = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::not_found("run attempt not found"))?;
+    let job = locked_job(tx, &target.run_id, &target.job_key).await?;
+    // Cancellation takes the job lock before mutating the parent. Reading the parent only after
+    // acquiring that job lock observes any cancellation that committed while heartbeat waited,
+    // while keeping ordinary runner traffic free of an aggregate-wide parent lock.
+    let run = entities::run::Entity::find_by_id(target.run_id.clone())
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::not_found("run not found"))?
+        .try_into_domain()?;
+    let attempt = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
+        .lock_exclusive()
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::not_found("run attempt not found"))?
+        .try_into_domain()?;
+    Ok((run, job, attempt))
 }
 
 pub(super) async fn locked_job(

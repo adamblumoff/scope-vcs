@@ -275,7 +275,6 @@ pub fn reconcile_run(
     now_unix: u64,
 ) -> Result<(), DomainError> {
     run.validate_workflow_revision(revision)?;
-    ensure_aggregate_time(run, jobs, now_unix)?;
     let job_indexes = jobs
         .iter()
         .enumerate()
@@ -301,24 +300,27 @@ pub fn reconcile_run(
         if jobs[index].state != RunJobState::Blocked {
             continue;
         }
-        let dependency_states = definition
+        let dependency_facts = definition
             .needs()
             .iter()
             .map(|dependency| {
-                job_indexes
-                    .get(dependency)
-                    .map(|dependency_index| jobs[*dependency_index].state)
+                job_indexes.get(dependency).map(|dependency_index| {
+                    (
+                        jobs[*dependency_index].state,
+                        jobs[*dependency_index].updated_at_unix,
+                    )
+                })
             })
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| DomainError::invariant_violation("run job dependency is missing"))?;
-        let next = if dependency_states
+        let next = if dependency_facts
             .iter()
-            .any(|state| state.is_terminal() && *state != RunJobState::Succeeded)
+            .any(|(state, _)| state.is_terminal() && *state != RunJobState::Succeeded)
         {
             Some(RunJobState::Skipped)
-        } else if dependency_states
+        } else if dependency_facts
             .iter()
-            .all(|state| *state == RunJobState::Succeeded)
+            .all(|(state, _)| *state == RunJobState::Succeeded)
         {
             Some(RunJobState::Queued)
         } else {
@@ -326,10 +328,15 @@ pub fn reconcile_run(
         };
         if let Some(next) = next {
             let job = &mut jobs[index];
+            let transition_time = dependency_facts
+                .iter()
+                .fold(now_unix.max(job.updated_at_unix), |latest, (_, updated)| {
+                    latest.max(*updated)
+                });
             job.state = next;
-            job.updated_at_unix = now_unix;
+            job.updated_at_unix = transition_time;
             if next.is_terminal() {
-                job.completed_at_unix = Some(now_unix);
+                job.completed_at_unix = Some(transition_time);
             }
         }
     }
@@ -341,17 +348,18 @@ pub fn request_run_cancellation(
     jobs: &mut [RunJob],
     now_unix: u64,
 ) -> Result<bool, DomainError> {
-    ensure_aggregate_time(run, jobs, now_unix)?;
-    if !run.request_cancellation(now_unix)? {
+    let request_time = now_unix.max(run.updated_at_unix);
+    if !run.request_cancellation(request_time)? {
         return Ok(false);
     }
     for job in jobs
         .iter_mut()
         .filter(|job| matches!(job.state, RunJobState::Blocked | RunJobState::Queued))
     {
+        let transition_time = now_unix.max(job.updated_at_unix);
         job.state = RunJobState::Canceled;
-        job.updated_at_unix = now_unix;
-        job.completed_at_unix = Some(now_unix);
+        job.updated_at_unix = transition_time;
+        job.completed_at_unix = Some(transition_time);
     }
     derive_run_state(run, jobs, now_unix)?;
     Ok(true)
@@ -364,7 +372,7 @@ pub fn retry_run(
     now_unix: u64,
 ) -> Result<(), DomainError> {
     run.validate_workflow_revision(revision)?;
-    ensure_aggregate_time(run, jobs, now_unix)?;
+    ensure_retry_time(run, jobs, now_unix)?;
     let expected = revision
         .definition()
         .jobs()
@@ -411,8 +419,7 @@ pub fn can_retry_run(run: &Run, jobs: &[RunJob]) -> bool {
             .all(|job| job.run_id == run.id && job.last_attempt_number < MAX_RUN_ATTEMPTS)
 }
 
-fn derive_run_state(run: &mut Run, jobs: &[RunJob], now_unix: u64) -> Result<(), DomainError> {
-    ensure_aggregate_time(run, jobs, now_unix)?;
+fn derive_run_state(run: &mut Run, jobs: &mut [RunJob], now_unix: u64) -> Result<(), DomainError> {
     if jobs.is_empty() || jobs.iter().any(|job| job.run_id != run.id) {
         return Err(DomainError::invariant_violation(
             "run jobs do not form one non-empty run",
@@ -421,6 +428,21 @@ fn derive_run_state(run: &mut Run, jobs: &[RunJob], now_unix: u64) -> Result<(),
     let has_canceled_job = jobs.iter().any(|job| job.state == RunJobState::Canceled);
     if has_canceled_job {
         run.cancellation_requested = true;
+    }
+    if run.cancellation_requested {
+        let cancellation_time = jobs
+            .iter()
+            .filter(|job| job.state == RunJobState::Canceled)
+            .fold(now_unix, |latest, job| latest.max(job.updated_at_unix));
+        for job in jobs
+            .iter_mut()
+            .filter(|job| matches!(job.state, RunJobState::Blocked | RunJobState::Queued))
+        {
+            let transition_time = cancellation_time.max(job.updated_at_unix);
+            job.state = RunJobState::Canceled;
+            job.updated_at_unix = transition_time;
+            job.completed_at_unix = Some(transition_time);
+        }
     }
     let all_terminal = jobs.iter().all(|job| job.state.is_terminal());
     let next = if all_terminal {
@@ -440,13 +462,18 @@ fn derive_run_state(run: &mut Run, jobs: &[RunJob], now_unix: u64) -> Result<(),
     } else {
         RunState::Queued
     };
+    let aggregate_time = jobs
+        .iter()
+        .fold(now_unix.max(run.updated_at_unix), |latest, job| {
+            latest.max(job.updated_at_unix)
+        });
     run.state = next;
-    run.updated_at_unix = now_unix;
-    run.completed_at_unix = next.is_terminal().then_some(now_unix);
+    run.updated_at_unix = aggregate_time;
+    run.completed_at_unix = next.is_terminal().then_some(aggregate_time);
     Ok(())
 }
 
-fn ensure_aggregate_time(run: &Run, jobs: &[RunJob], now_unix: u64) -> Result<(), DomainError> {
+fn ensure_retry_time(run: &Run, jobs: &[RunJob], now_unix: u64) -> Result<(), DomainError> {
     if now_unix < run.updated_at_unix || jobs.iter().any(|job| now_unix < job.updated_at_unix) {
         return Err(DomainError::invalid_input(
             "run aggregate transition time cannot move backward",

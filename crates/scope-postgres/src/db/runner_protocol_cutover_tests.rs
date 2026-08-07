@@ -340,6 +340,14 @@ async fn successful_canary_with_lost_finalization_can_be_retried_after_its_deadl
         .await
         .unwrap();
     let (attempt_id, token_hash) = complete_canary_attempt(&store, "run-abandoned").await;
+    let completed = store
+        .runs()
+        .run_detail("run-abandoned")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(completed.jobs[0].current_attempt_id.is_none());
+    assert_eq!(completed.jobs[0].last_attempt_number, 1);
 
     let error = store
         .admin()

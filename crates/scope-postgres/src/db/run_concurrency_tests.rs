@@ -3,7 +3,7 @@ use crate::error::PostgresErrorKind;
 use scope_domain::runs::run::{
     AttemptConclusion, PinnedContainerImage, RunJobState, RunState, StepState,
 };
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Barrier, task::JoinSet, time::timeout};
 
@@ -152,6 +152,112 @@ async fn active_step_cannot_erase_cancellation_committed_after_its_initial_read(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn heartbeat_waiting_for_job_lock_observes_cancellation_committed_during_the_wait() {
+    let store = Arc::new(postgres_store());
+    register_runner(&store, "runner-1", "linux-box").await;
+    enqueue(
+        &store,
+        run("run-heartbeat-race", "manual:heartbeat-race"),
+        revision(),
+    )
+    .await;
+    store
+        .runs()
+        .claim_job(
+            "run-heartbeat-race",
+            "checks",
+            "runner-1",
+            "attempt-heartbeat-race",
+            &"a".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+
+    let job_lock = store.db.begin().await.unwrap();
+    job_lock
+        .execute_unprepared(
+            "SELECT 1 FROM scope_run_jobs
+             WHERE run_id = 'run-heartbeat-race' AND job_key = 'checks'
+             FOR UPDATE",
+        )
+        .await
+        .unwrap();
+    let blocker_pid = job_lock
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT pg_backend_pid() AS pid".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i32>("", "pid")
+        .unwrap();
+
+    let heartbeat_store = Arc::clone(&store);
+    let heartbeat = tokio::spawn(async move {
+        heartbeat_store
+            .runs()
+            .heartbeat_attempt(
+                "attempt-heartbeat-race",
+                "runner-1",
+                &"a".repeat(64),
+                30,
+                100,
+            )
+            .await
+    });
+    let mut heartbeat_is_waiting = false;
+    for _ in 0..100 {
+        heartbeat_is_waiting = store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT EXISTS (
+                     SELECT 1
+                     FROM pg_stat_activity activity
+                     WHERE activity.pid <> $1
+                       AND $1 = ANY(pg_blocking_pids(activity.pid))
+                 ) AS waiting",
+                [blocker_pid.into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get::<bool>("", "waiting")
+            .unwrap();
+        if heartbeat_is_waiting {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        heartbeat_is_waiting,
+        "heartbeat never waited for the job lock"
+    );
+
+    store
+        .db
+        .execute_unprepared(
+            "UPDATE scope_runs
+             SET cancellation_requested = TRUE, updated_at_unix = 25
+             WHERE id = 'run-heartbeat-race'",
+        )
+        .await
+        .unwrap();
+    job_lock.commit().await.unwrap();
+
+    assert!(
+        timeout(Duration::from_secs(5), heartbeat)
+            .await
+            .expect("heartbeat did not resume after the job lock was released")
+            .unwrap()
+            .unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claim_reloads_parent_before_aggregate_save_and_cannot_regress_concurrent_state() {
     let store = Arc::new(postgres_store());
     register_runner(&store, "runner-1", "linux-box").await;
@@ -213,7 +319,7 @@ async fn claim_reloads_parent_before_aggregate_save_and_cannot_regress_concurren
         .expect("claim did not resume after parent update committed")
         .unwrap()
         .unwrap_err();
-    assert_eq!(error.kind, PostgresErrorKind::InvalidInput);
+    assert_eq!(error.kind, PostgresErrorKind::Conflict);
 
     let detail = store
         .runs()

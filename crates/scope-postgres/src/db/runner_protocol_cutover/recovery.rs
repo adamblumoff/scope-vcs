@@ -10,9 +10,9 @@ use crate::{
 use scope_domain::runs::{
     cutover::{RunnerProtocolCanaryStatus, RunnerProtocolCutoverState},
     job::{reconcile_run, request_run_cancellation},
-    run::{AttemptState, RunState},
+    run::{AttemptState, RunAttempt, RunState},
 };
-use sea_orm::{DatabaseTransaction, EntityTrait, QuerySelect};
+use sea_orm::{ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect};
 
 pub(super) async fn reconcile_abandoned_running_canary(
     tx: &DatabaseTransaction,
@@ -44,15 +44,8 @@ pub(super) async fn reconcile_abandoned_running_canary(
     let mut jobs = locked_jobs(tx, canary.run_id()).await?;
     let mut run = locked_run(tx, canary.run_id()).await?;
 
-    if let Some(attempt_id) = jobs.iter().find_map(|job| job.current_attempt_id.clone()) {
-        let mut attempt = entities::run_attempt::Entity::find_by_id(attempt_id.clone())
-            .lock_exclusive()
-            .one(tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .ok_or_else(|| PostgresError::not_found("run attempt not found"))?
-            .try_into_domain()?;
-        let mut steps = locked_attempt_steps(tx, &attempt_id).await?;
+    if let Some(mut attempt) = latest_canary_attempt(tx, &jobs).await? {
+        let mut steps = locked_attempt_steps(tx, &attempt.id).await?;
         if attempt.run_id != run.id || attempt.runner_id != canary.runner_id() {
             return Err(PostgresError::internal_message(
                 "canary run attempt identity is inconsistent",
@@ -107,6 +100,45 @@ pub(super) async fn reconcile_abandoned_running_canary(
     Ok(())
 }
 
+async fn latest_canary_attempt(
+    tx: &DatabaseTransaction,
+    jobs: &[scope_domain::runs::job::RunJob],
+) -> Result<Option<RunAttempt>, PostgresError> {
+    let [job] = jobs else {
+        return Err(PostgresError::internal_message(
+            "runner protocol canary must have exactly one run job",
+        ));
+    };
+    let query = if let Some(attempt_id) = &job.current_attempt_id {
+        entities::run_attempt::Entity::find_by_id(attempt_id.clone())
+    } else if job.last_attempt_number > 0 {
+        entities::run_attempt::Entity::find()
+            .filter(entities::run_attempt::Column::RunId.eq(&job.run_id))
+            .filter(entities::run_attempt::Column::JobKey.eq(job.key.as_str()))
+            .filter(entities::run_attempt::Column::Number.eq(
+                i32::try_from(job.last_attempt_number).map_err(|_| {
+                    PostgresError::internal_message(
+                        "run job attempt number exceeds PostgreSQL integer range",
+                    )
+                })?,
+            ))
+    } else {
+        return Ok(None);
+    };
+    query
+        .lock_exclusive()
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .map(entities::run_attempt::Model::try_into_domain)
+        .transpose()
+        .and_then(|attempt| {
+            attempt
+                .ok_or_else(|| PostgresError::not_found("run attempt not found"))
+                .map(Some)
+        })
+}
+
 async fn cancel_failed_canary_run(
     tx: &DatabaseTransaction,
     snapshot: &RunnerProtocolCutoverSnapshot,
@@ -119,10 +151,11 @@ async fn cancel_failed_canary_run(
     else {
         return Ok(());
     };
+    let mut jobs = locked_jobs(tx, failed.run_id()).await?;
     let mut run = locked_run(tx, failed.run_id()).await?;
     if !run.state.is_terminal() {
-        run.request_cancellation(now_unix)
-            .map_err(PostgresError::from)?;
+        request_run_cancellation(&mut run, &mut jobs, now_unix).map_err(PostgresError::from)?;
+        save_jobs(tx, &jobs).await?;
         save_run(tx, &run).await?;
     }
     Ok(())
