@@ -93,10 +93,7 @@ fn two_actor_contribution_flow_agrees_across_cli_api_and_git() {
         "Verified.",
     ]);
     assert_command(&reply, "request.discussion.reply");
-    assert_eq!(
-        string_at(&reply, "/result/discussion/id"),
-        discussion_id,
-    );
+    assert_eq!(string_at(&reply, "/result/discussion/id"), discussion_id,);
 
     let resolved = contributor.json([
         "request",
