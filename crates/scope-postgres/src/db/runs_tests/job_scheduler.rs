@@ -127,7 +127,7 @@ async fn run_snapshot_returns_the_run_jobs_and_log_state_together() {
 async fn runner_capacity_is_authoritative_across_concurrent_job_claims() {
     let store = postgres_store();
     register_runner_with_capacity(&store, "runner-1", "linux-box", 2).await;
-    let revision = parallel_revision();
+    let revision = capacity_revision();
     enqueue(
         &store,
         run_for_revision(
@@ -493,6 +493,14 @@ async fn retry_persists_the_jobs_pinned_container_image() {
 }
 
 pub(crate) fn parallel_revision() -> WorkflowRevision {
+    revision_with_jobs(&["build", "lint"])
+}
+
+fn capacity_revision() -> WorkflowRevision {
+    revision_with_jobs(&["build", "lint", "test"])
+}
+
+fn revision_with_jobs(job_ids: &[&str]) -> WorkflowRevision {
     let job = |id: &str| {
         WorkflowJob::new(
             WorkflowJobId::parse(id).unwrap(),
@@ -510,7 +518,7 @@ pub(crate) fn parallel_revision() -> WorkflowRevision {
         CompiledWorkflow::new(
             "Parallel",
             WorkflowTriggers::new(true, false).unwrap(),
-            vec![job("build"), job("lint"), job("test")],
+            job_ids.iter().map(|id| job(id)).collect(),
         )
         .unwrap(),
     )
