@@ -139,7 +139,9 @@ pub fn request_side_changed_file_paths(
     )?;
     if !merge_base_output.status.success() {
         if merge_base_output.status.code() == Some(1) {
-            bail!("current main and request head have unrelated Git histories");
+            bail!(
+                "current main and request head have unrelated Git histories; Scope requests must descend from the repository's Scope main. Run `scope request start <name>` and replay the GitHub branch changes onto that request branch before `scope push`"
+            );
         }
         bail!("find the request branch merge base failed");
     }

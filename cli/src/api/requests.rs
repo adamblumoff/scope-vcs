@@ -19,11 +19,17 @@ pub struct StartRequestParams<'a> {
 }
 
 pub struct CreateRequestDiscussionParams<'a> {
-    pub owner: &'a str,
-    pub repo: &'a str,
-    pub request_id: &'a str,
+    pub target: RequestTarget<'a>,
     pub body_markdown: String,
     pub client_discussion_id: String,
+    pub anchor: Option<RequestDiscussionAnchor>,
+}
+
+pub struct CreateRequestDiscussionReplyParams<'a> {
+    pub target: RequestTarget<'a>,
+    pub discussion_id: &'a str,
+    pub body_markdown: String,
+    pub client_reply_id: String,
 }
 
 pub struct RequestActivityParams<'a> {
@@ -276,11 +282,7 @@ pub fn create_request_discussion(
     session_token: &str,
     params: CreateRequestDiscussionParams<'_>,
 ) -> anyhow::Result<RequestDiscussionMutationResponse> {
-    let target = RequestTarget {
-        owner: params.owner,
-        repo: params.repo,
-        request_id: params.request_id,
-    };
+    let target = params.target;
     execute_request(
         client
             .post(request_action_url(api_url, target, "timeline"))
@@ -288,10 +290,81 @@ pub fn create_request_discussion(
             .json(&CreateRequestDiscussionRequest {
                 body_markdown: params.body_markdown,
                 client_discussion_id: params.client_discussion_id,
-                anchor: None,
+                anchor: params.anchor,
             }),
         target,
         "create request discussion",
+    )
+}
+
+pub fn create_request_discussion_reply(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    params: CreateRequestDiscussionReplyParams<'_>,
+) -> anyhow::Result<RequestDiscussionReplyMutationResponse> {
+    execute_request(
+        client
+            .post(request_discussion_action_url(
+                api_url,
+                params.target,
+                params.discussion_id,
+                "replies",
+            ))
+            .bearer_auth(session_token)
+            .json(&CreateRequestDiscussionReplyRequest {
+                body_markdown: params.body_markdown,
+                client_reply_id: params.client_reply_id,
+                reply_to_reply_id: None,
+            }),
+        params.target,
+        "reply to request discussion",
+    )
+}
+
+pub fn resolve_request_discussion(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    target: RequestTarget<'_>,
+    discussion_id: &str,
+) -> anyhow::Result<RequestDiscussionMutationResponse> {
+    execute_request(
+        client
+            .post(request_discussion_action_url(
+                api_url,
+                target,
+                discussion_id,
+                "resolve",
+            ))
+            .bearer_auth(session_token),
+        target,
+        "resolve request discussion",
+    )
+}
+
+pub fn reopen_and_reply_to_request_discussion(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    params: CreateRequestDiscussionReplyParams<'_>,
+) -> anyhow::Result<RequestDiscussionReplyMutationResponse> {
+    execute_request(
+        client
+            .post(request_discussion_action_url(
+                api_url,
+                params.target,
+                params.discussion_id,
+                "reopen-and-reply",
+            ))
+            .bearer_auth(session_token)
+            .json(&ReopenAndReplyRequest {
+                body_markdown: params.body_markdown,
+                client_reply_id: params.client_reply_id,
+                reply_to_reply_id: None,
+            }),
+        params.target,
+        "reopen request discussion",
     )
 }
 
@@ -309,6 +382,24 @@ fn request_action_url(api_url: &str, target: RequestTarget<'_>, action: &str) ->
             target.owner,
             target.repo,
             target.request_id,
+            action,
+        )
+    )
+}
+
+fn request_discussion_action_url(
+    api_url: &str,
+    target: RequestTarget<'_>,
+    discussion_id: &str,
+    action: &str,
+) -> String {
+    format!(
+        "{api_url}{}",
+        scope_api_contract::routes::repo_request_discussion_action(
+            target.owner,
+            target.repo,
+            target.request_id,
+            discussion_id,
             action,
         )
     )
@@ -532,6 +623,89 @@ mod tests {
         for query in ["after=4", "latest=true", "limit=25"] {
             assert!(request_line.contains(query), "{request_line}");
         }
+    }
+
+    #[test]
+    fn discussion_wrappers_use_explicit_thread_routes_and_payloads() {
+        let stopped = r#"{"code":"conflict","message":"fixture stop","retryable":false}"#;
+
+        let (api_url, start_server) = serve_once(StatusCode::CONFLICT, stopped);
+        create_request_discussion(
+            &Client::new(),
+            &api_url,
+            "token",
+            CreateRequestDiscussionParams {
+                target: target(),
+                body_markdown: "Question\\n".to_string(),
+                client_discussion_id: "client-discussion".to_string(),
+                anchor: Some(RequestDiscussionAnchor {
+                    revision_id: "rev_one".to_string(),
+                    commit_oid: Some("0123456789abcdef".to_string()),
+                    path: Some("src/lib.rs".to_string()),
+                }),
+            },
+        )
+        .unwrap_err();
+        let request = start_server.join().unwrap();
+        assert!(
+            request.starts_with("POST /v1/repos/owner/repo/requests/req_one/timeline HTTP/1.1")
+        );
+        assert!(
+            request.contains(r#""body_markdown":"Question\\n""#),
+            "{request}"
+        );
+        assert!(request.contains(r#""revision_id":"rev_one""#), "{request}");
+        assert!(request.contains(r#""path":"src/lib.rs""#), "{request}");
+
+        let (api_url, reply_server) = serve_once(StatusCode::CONFLICT, stopped);
+        create_request_discussion_reply(
+            &Client::new(),
+            &api_url,
+            "token",
+            CreateRequestDiscussionReplyParams {
+                target: target(),
+                discussion_id: "dsc /one",
+                body_markdown: "Answer".to_string(),
+                client_reply_id: "client-reply".to_string(),
+            },
+        )
+        .unwrap_err();
+        let request = reply_server.join().unwrap();
+        assert!(
+            request.starts_with(
+                "POST /v1/repos/owner/repo/requests/req_one/threads/dsc%20%2Fone/replies HTTP/1.1"
+            ),
+            "{request}"
+        );
+        assert!(request.contains(r#""client_reply_id":"client-reply""#));
+        assert!(request.contains(r#""reply_to_reply_id":null"#));
+
+        let (api_url, resolve_server) = serve_once(StatusCode::CONFLICT, stopped);
+        resolve_request_discussion(&Client::new(), &api_url, "token", target(), "dsc_one")
+            .unwrap_err();
+        let request = resolve_server.join().unwrap();
+        assert!(request.starts_with(
+            "POST /v1/repos/owner/repo/requests/req_one/threads/dsc_one/resolve HTTP/1.1"
+        ));
+
+        let (api_url, reopen_server) = serve_once(StatusCode::CONFLICT, stopped);
+        reopen_and_reply_to_request_discussion(
+            &Client::new(),
+            &api_url,
+            "token",
+            CreateRequestDiscussionReplyParams {
+                target: target(),
+                discussion_id: "dsc_one",
+                body_markdown: "New evidence".to_string(),
+                client_reply_id: "client-reopen".to_string(),
+            },
+        )
+        .unwrap_err();
+        let request = reopen_server.join().unwrap();
+        assert!(request.starts_with(
+            "POST /v1/repos/owner/repo/requests/req_one/threads/dsc_one/reopen-and-reply HTTP/1.1"
+        ));
+        assert!(request.contains(r#""body_markdown":"New evidence""#));
     }
 
     fn target() -> RequestTarget<'static> {

@@ -128,8 +128,9 @@ fn watch_run(
             |event| {
                 match event {
                     RunStreamEvent::Log(log) => {
-                        cursor = log.position;
-                        print!("{}", log.text);
+                        if advance_log_cursor(&mut cursor, log.position) {
+                            print!("{}", log.text);
+                        }
                     }
                     RunStreamEvent::Status(run) if run.state.is_terminal() => terminal = Some(run),
                     RunStreamEvent::Status(_) => {}
@@ -147,6 +148,14 @@ fn watch_run(
         }
         thread::sleep(Duration::from_secs(1));
     }
+}
+
+fn advance_log_cursor(cursor: &mut u64, position: u64) -> bool {
+    if position <= *cursor {
+        return false;
+    }
+    *cursor = position;
+    true
 }
 
 fn print_terminal(run: &RunResponse) {
@@ -265,5 +274,14 @@ mod tests {
         assert_eq!(state_label(RunState::Canceled), "canceled");
         assert_eq!(short_oid("1234567890"), "1234567");
         assert_eq!(short_oid("short"), "short");
+    }
+
+    #[test]
+    fn run_watch_ignores_replayed_log_positions() {
+        let mut cursor = 7;
+        assert!(!advance_log_cursor(&mut cursor, 6));
+        assert!(!advance_log_cursor(&mut cursor, 7));
+        assert!(advance_log_cursor(&mut cursor, 8));
+        assert_eq!(cursor, 8);
     }
 }
