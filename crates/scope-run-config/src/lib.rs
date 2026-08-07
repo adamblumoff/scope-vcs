@@ -5,8 +5,8 @@ use scope_domain::runs::{
         WorkflowJob, WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
     },
 };
-use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use serde::{Deserialize, Deserializer, de::MapAccess, de::Visitor};
+use std::{collections::BTreeSet, fmt};
 use thiserror::Error;
 
 pub const MAX_WORKFLOW_DEFINITION_BYTES: usize = 64 * 1024;
@@ -83,6 +83,7 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
         .collect::<Result<Vec<_>, _>>()?;
     let jobs = raw
         .jobs
+        .0
         .into_iter()
         .map(|(id, job)| {
             let id = WorkflowJobId::parse(id)?;
@@ -182,7 +183,7 @@ struct RawWorkflow {
     timeout: String,
     #[serde(default)]
     caches: Vec<String>,
-    jobs: BTreeMap<String, RawJob>,
+    jobs: RawJobs,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +228,39 @@ struct RawJob {
     #[serde(default)]
     caches: Option<Vec<String>>,
     steps: Vec<RawStep>,
+}
+
+#[derive(Debug)]
+struct RawJobs(Vec<(String, RawJob)>);
+
+impl<'de> Deserialize<'de> for RawJobs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RawJobsVisitor;
+
+        impl<'de> Visitor<'de> for RawJobsVisitor {
+            type Value = RawJobs;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a mapping of workflow job IDs to job definitions")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut jobs = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                while let Some(entry) = map.next_entry()? {
+                    jobs.push(entry);
+                }
+                Ok(RawJobs(jobs))
+            }
+        }
+
+        deserializer.deserialize_map(RawJobsVisitor)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -524,6 +558,16 @@ jobs:
         assert!(matches!(
             parse_workflow("/.scope/runs/test.yml", flat.as_bytes()),
             Err(RunConfigError::InvalidYaml(_))
+        ));
+
+        let duplicate_job = format!(
+            "{WORKFLOW}  checks:\n    steps:\n      - {{ name: Duplicate, run: 'true' }}\n"
+        );
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", duplicate_job.as_bytes()),
+            Err(RunConfigError::InvalidWorkflow(
+                WorkflowError::DuplicateJobId(id)
+            )) if id == "checks"
         ));
     }
 

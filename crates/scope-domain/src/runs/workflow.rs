@@ -818,6 +818,48 @@ mod tests {
             ),
             Err(WorkflowError::InvalidRunnerName)
         ));
+
+        let dependency = WorkflowJobId::parse("checks").unwrap();
+        assert!(matches!(
+            WorkflowJob::new(
+                dependency.clone(),
+                vec![dependency.clone()],
+                RunnerSelector::Any,
+                ContainerSpec::new("rust:1.90").unwrap(),
+                60,
+                vec![],
+                vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+            ),
+            Err(WorkflowError::SelfDependency { job }) if job == "checks"
+        ));
+        assert!(matches!(
+            WorkflowJob::new(
+                WorkflowJobId::parse("web").unwrap(),
+                vec![dependency.clone(), dependency],
+                RunnerSelector::Any,
+                ContainerSpec::new("rust:1.90").unwrap(),
+                60,
+                vec![],
+                vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+            ),
+            Err(WorkflowError::DuplicateDependency { job, dependency })
+                if job == "web" && dependency == "checks"
+        ));
+
+        let duplicate_job = job(
+            "checks",
+            &[],
+            vec![],
+            vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+        );
+        assert!(matches!(
+            CompiledWorkflow::new(
+                "Test",
+                WorkflowTriggers::new(true, false).unwrap(),
+                vec![duplicate_job.clone(), duplicate_job],
+            ),
+            Err(WorkflowError::DuplicateJobId(id)) if id == "checks"
+        ));
     }
 
     #[test]
