@@ -1,7 +1,8 @@
 import type {
   RepoParams,
+  RepoRunHistoryInput,
   RepoRunHistoryPage,
-  RepoRunners,
+  RepoRunWorkflowList,
 } from '@/api/types'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { RouteErrorContent } from '@/components/route-error-page'
@@ -11,42 +12,55 @@ import { cn } from '@/lib/utils'
 import { Link } from '@tanstack/react-router'
 import {
   ArrowRight,
+  GitBranch,
   LoaderCircle,
-  Server,
   TerminalSquare,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
 
 const RUNS_REFRESH_INTERVAL_MS = 2_000
 
-type RunResources = {
+type RunPageResources = {
   history: RepoRunHistoryPage
-  runners: RepoRunners
+  workflows: RepoRunWorkflowList
 }
 
 export function RepositoryRunsPage({
   initialResources,
-  loadResources,
+  loadHistory,
   params,
+  workflow,
 }: {
-  initialResources: RunResources | null
-  loadResources: (input: RepoParams) => Promise<RunResources | null>
+  initialResources: RunPageResources | null
+  loadHistory: (input: RepoRunHistoryInput) => Promise<RepoRunHistoryPage>
   params: RepoParams
+  workflow?: string
 }) {
-  const [resources, setResources] = useState(initialResources)
+  const [history, setHistory] = useState(initialResources?.history ?? null)
   const [refreshError, setRefreshError] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
   const mountedRef = useRef(false)
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
+  const loadedMoreRef = useRef(false)
   const { owner, repo } = params
-  const canRefresh = resources !== null
+  const input = useMemo(
+    () => ({ owner, repo, workflow }),
+    [owner, repo, workflow],
+  )
+  const canRefresh = history !== null
 
   const refresh = useCallback(() => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current
-    const request = loadResources({ owner, repo })
+    const request = loadHistory(input)
       .then((next) => {
         if (!mountedRef.current) return
-        setResources(next)
+        setHistory((current) => ({
+          next_cursor: loadedMoreRef.current
+            ? current?.next_cursor ?? next.next_cursor
+            : next.next_cursor,
+          runs: mergeRunHistory(next.runs, current?.runs ?? []),
+        }))
         setRefreshError(null)
       })
       .catch((error: unknown) => {
@@ -59,7 +73,33 @@ export function RepositoryRunsPage({
       })
     refreshInFlightRef.current = request
     return request
-  }, [loadResources, owner, repo])
+  }, [input, loadHistory])
+
+  const loadMore = useCallback(() => {
+    if (!history?.next_cursor || loadingMore) return
+    setLoadingMore(true)
+    return loadHistory({
+        ...input,
+        after: history.next_cursor,
+      })
+      .then((next) => {
+        if (!mountedRef.current) return
+        loadedMoreRef.current = true
+        setHistory((current) => current
+          ? {
+              next_cursor: next.next_cursor,
+              runs: mergeRunHistory(current.runs, next.runs),
+            }
+          : next)
+        setRefreshError(null)
+      })
+      .catch((error: unknown) => {
+        if (mountedRef.current) setRefreshError(errorMessage(error))
+      })
+      .finally(() => {
+        if (mountedRef.current) setLoadingMore(false)
+      })
+  }, [history?.next_cursor, input, loadHistory, loadingMore])
 
   useEffect(() => {
     mountedRef.current = true
@@ -78,54 +118,125 @@ export function RepositoryRunsPage({
     }
   }, [canRefresh, refresh])
 
-  if (!resources) {
+  if (!initialResources || !history) {
     return (
       <>
         <RunsHeader />
         <div className="px-4 pb-12 sm:px-6 lg:px-8">
           <PageErrorAlert title="Runs unavailable">
-            Sign in as the owner or a repository member to view runs and
-            attached runners.
+            Sign in as the owner or a repository member to view runs.
           </PageErrorAlert>
         </div>
       </>
     )
   }
 
+  const selectedWorkflow = workflow
+    ? initialResources.workflows.workflows.find((item) => item.key === workflow)
+    : undefined
+
   return (
     <>
-      <RunsHeader runCount={resources.history.runs.length} />
-      <div className="px-4 pb-12 sm:px-6 lg:px-8">
-        {refreshError ? (
-          <PageErrorAlert title="Runs could not refresh">
-            <div className="flex flex-wrap items-center gap-3">
-              <span>{refreshError}</span>
-              <Button onClick={() => void refresh()} size="sm" variant="secondary">
-                Retry now
-              </Button>
+      <RunsHeader runCount={history.runs.length} workflowName={selectedWorkflow?.name} />
+      <div className="grid min-w-0 border-t border-border lg:grid-cols-[14rem_minmax(0,1fr)]">
+        <WorkflowNavigation
+          params={params}
+          selectedWorkflow={workflow}
+          workflows={initialResources.workflows.workflows}
+        />
+        <main className="min-w-0 px-4 pb-14 sm:px-6 lg:px-8">
+          {refreshError ? (
+            <div className="pt-5">
+              <PageErrorAlert title="Runs could not refresh">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span>{refreshError}</span>
+                  <Button onClick={() => void refresh()} size="sm" variant="secondary">
+                    Retry now
+                  </Button>
+                </div>
+              </PageErrorAlert>
             </div>
-          </PageErrorAlert>
-        ) : null}
-        <RecentRuns params={params} runs={resources.history.runs} />
-        <Runners owner={owner} repo={repo} runners={resources.runners.runners} />
+          ) : null}
+          <RunHistory
+            loadMore={() => void loadMore()}
+            loadingMore={loadingMore}
+            params={params}
+            runs={history.runs}
+            selectedWorkflowName={selectedWorkflow?.name}
+            showLoadMore={history.next_cursor !== null}
+          />
+        </main>
       </div>
     </>
   )
 }
 
-function RecentRuns({
+function WorkflowNavigation({
   params,
-  runs,
+  selectedWorkflow,
+  workflows,
 }: {
   params: RepoParams
+  selectedWorkflow?: string
+  workflows: RepoRunWorkflowList['workflows']
+}) {
+  const baseClass = 'flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md px-2.5 py-2 text-sm outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring lg:w-full'
+  return (
+    <nav
+      aria-label="Run workflows"
+      className="flex min-w-0 gap-1 overflow-x-auto border-b border-border px-3 py-3 lg:block lg:min-h-[32rem] lg:overflow-visible lg:border-b-0 lg:border-r lg:px-3 lg:py-6"
+    >
+      <p className="hidden px-2.5 pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground lg:block">
+        Workflows
+      </p>
+      <Link
+        activeOptions={{ exact: true }}
+        className={cn(baseClass, !selectedWorkflow && 'bg-muted font-medium text-foreground')}
+        params={params}
+        to="/$owner/$repo/runs"
+      >
+        <GitBranch className="size-3.5" />
+        All workflows
+      </Link>
+      {workflows.map((item) => (
+        <Link
+          className={cn(
+            baseClass,
+            selectedWorkflow === item.key && 'bg-muted font-medium text-foreground',
+          )}
+          key={item.key}
+          params={{ ...params, workflow: item.key }}
+          to="/$owner/$repo/runs/workflows/$workflow"
+        >
+          <span className="size-2 rounded-full border-2 border-current" />
+          <span className="max-w-44 truncate">{item.name}</span>
+        </Link>
+      ))}
+    </nav>
+  )
+}
+
+function RunHistory({
+  loadMore,
+  loadingMore,
+  params,
+  runs,
+  selectedWorkflowName,
+  showLoadMore,
+}: {
+  loadMore: () => void
+  loadingMore: boolean
+  params: RepoParams
   runs: RepoRunHistoryPage['runs']
+  selectedWorkflowName?: string
+  showLoadMore: boolean
 }) {
   return (
-    <section aria-labelledby="recent-runs-heading" className="pt-7 lg:pt-10">
+    <section aria-labelledby="run-history-heading" className="pt-7 lg:pt-9">
       <div className="flex items-center gap-2">
         <TerminalSquare className="size-4 text-muted-foreground" />
-        <h2 className="text-sm font-semibold" id="recent-runs-heading">
-          Recent runs
+        <h2 className="text-sm font-semibold" id="run-history-heading">
+          {selectedWorkflowName ? `${selectedWorkflowName} history` : 'All workflow runs'}
         </h2>
         <span className="text-xs tabular-nums text-muted-foreground">
           {runs.length}
@@ -133,7 +244,7 @@ function RecentRuns({
       </div>
       <div className="mt-3 divide-y divide-border border-y border-border">
         {runs.length === 0 ? (
-          <EmptyRunRow />
+          <EmptyRunRow selectedWorkflowName={selectedWorkflowName} />
         ) : (
           runs.map((run) => {
             const state = run.cancellation_requested ? 'canceling' : run.state
@@ -155,9 +266,7 @@ function RecentRuns({
                 </span>
                 <span className="shrink-0 text-right text-xs text-muted-foreground">
                   <span className="block capitalize text-foreground">{state}</span>
-                  <span className="block">
-                    {formatRunUnixTime(run.updated_at_unix)}
-                  </span>
+                  <span className="block">{formatRunUnixTime(run.updated_at_unix)}</span>
                 </span>
                 <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </Link>
@@ -165,77 +274,25 @@ function RecentRuns({
           })
         )}
       </div>
+      {showLoadMore ? (
+        <div className="flex justify-center pt-5">
+          <Button disabled={loadingMore} onClick={loadMore} variant="secondary">
+            {loadingMore ? <LoaderCircle className="animate-spin" /> : null}
+            Load older runs
+          </Button>
+        </div>
+      ) : null}
     </section>
   )
 }
 
-function Runners({
-  owner,
-  repo,
-  runners,
+function RunsHeader({
+  runCount,
+  workflowName,
 }: {
-  owner: string
-  repo: string
-  runners: RepoRunners['runners']
+  runCount?: number
+  workflowName?: string
 }) {
-  return (
-    <section aria-labelledby="runners-heading" className="pt-9">
-      <div className="flex items-center gap-2">
-        <Server className="size-4 text-muted-foreground" />
-        <h2 className="text-sm font-semibold" id="runners-heading">
-          Runners
-        </h2>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {runners.length}
-        </span>
-      </div>
-      <div className="mt-3 divide-y divide-border border-y border-border">
-        {runners.length === 0 ? (
-          <div className="px-2 py-5 text-sm text-muted-foreground">
-            <p className="font-medium text-foreground">No runners attached</p>
-            <p className="mt-1">
-              Attach a machine with{' '}
-              <code className="break-words">
-                scope runner install --name &lt;name&gt; --repo {owner}/{repo}
-              </code>
-              .
-            </p>
-          </div>
-        ) : (
-          runners.map((runner) => (
-            <div
-              className="grid gap-2 px-2 py-4 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:gap-6"
-              key={runner.id}
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 font-medium">
-                  <StatusDot className="mt-0" state={runner.state} />
-                  <span className="truncate">{runner.name}</span>
-                </div>
-                <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                  {runner.id}
-                </p>
-              </div>
-              <span className="text-xs text-muted-foreground">
-                v{runner.version}
-              </span>
-              <div className="text-xs text-muted-foreground sm:text-right">
-                <div className="capitalize text-foreground">{runner.state}</div>
-                <div>
-                  {runner.last_seen_at_unix
-                    ? `Seen ${formatRunUnixTime(runner.last_seen_at_unix)}`
-                    : 'Never connected'}
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </section>
-  )
-}
-
-function RunsHeader({ runCount }: { runCount?: number }) {
   return (
     <WorkbenchHeader
       actions={(
@@ -243,11 +300,10 @@ function RunsHeader({ runCount }: { runCount?: number }) {
           scope run &lt;workflow&gt; --runner &lt;name&gt;
         </code>
       )}
-      count={runCount === undefined
-        ? undefined
-        : `${runCount} recent ${runCount === 1 ? 'run' : 'runs'}`}
+      count={runCount === undefined ? undefined : `${runCount} loaded`}
       description={(
         <>
+          {workflowName ? `History for ${workflowName}. ` : null}
           Jobs from <code>.scope/runs</code> on your attached machines.
         </>
       )}
@@ -263,10 +319,10 @@ export function RunsPagePending() {
       <RunsHeader />
       <output
         aria-busy="true"
-        className="flex items-center gap-2 px-4 py-10 text-sm text-muted-foreground sm:px-6 lg:px-8"
+        className="flex items-center gap-2 border-t border-border px-4 py-10 text-sm text-muted-foreground sm:px-6 lg:px-8"
       >
         <LoaderCircle className="size-4 animate-spin" />
-        Loading runs
+        Loading workflows and runs
       </output>
     </>
   )
@@ -285,10 +341,12 @@ export function RunsPageError({ error }: { error: unknown }) {
   )
 }
 
-function EmptyRunRow() {
+function EmptyRunRow({ selectedWorkflowName }: { selectedWorkflowName?: string }) {
   return (
     <div className="px-2 py-7">
-      <p className="text-sm font-medium">No runs yet</p>
+      <p className="text-sm font-medium">
+        {selectedWorkflowName ? `No ${selectedWorkflowName} runs yet` : 'No runs yet'}
+      </p>
       <p className="mt-1 text-sm text-muted-foreground">
         Push to main with a matching trigger, or run a workflow manually from the CLI.
       </p>
@@ -306,13 +364,7 @@ export function RunStatusDot({
   return <StatusDot className={className} state={state} />
 }
 
-function StatusDot({
-  className,
-  state,
-}: {
-  className?: string
-  state: string
-}) {
+function StatusDot({ className, state }: { className?: string; state: string }) {
   return (
     <span
       aria-hidden="true"
@@ -326,6 +378,14 @@ function StatusDot({
       )}
     />
   )
+}
+
+function mergeRunHistory(
+  first: RepoRunHistoryPage['runs'],
+  second: RepoRunHistoryPage['runs'],
+) {
+  const seen = new Set(first.map((run) => run.id))
+  return [...first, ...second.filter((run) => !seen.has(run.id))]
 }
 
 function errorMessage(error: unknown) {
