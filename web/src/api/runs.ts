@@ -5,19 +5,11 @@ import type {
   RepoRunHistoryInput,
   RepoRunHistoryPage,
   RepoRunStepLogPage,
-  RepoRunWorkflowList,
   RepoRunners,
   RunActionInput,
   RunStepLogsInput,
 } from '@/api/types'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
-
-export async function loadRepoRunWorkflowsForRequest(data: RepoParams) {
-  return createApiClient().get<RepoRunWorkflowList>(
-    repoPath(ApiRouteTemplates.repoRunWorkflows, data),
-    { auth: 'optional' },
-  )
-}
 
 export async function loadRepoRunHistoryForRequest(data: RepoRunHistoryInput) {
   const query = new URLSearchParams()
