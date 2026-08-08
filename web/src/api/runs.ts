@@ -15,7 +15,7 @@ import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
 export async function loadRepoRunWorkflowsForRequest(data: RepoParams) {
   return createApiClient().get<RepoRunWorkflowList>(
     repoPath(ApiRouteTemplates.repoRunWorkflows, data),
-    { auth: 'required' },
+    { auth: 'optional' },
   )
 }
 
@@ -27,7 +27,7 @@ export async function loadRepoRunHistoryForRequest(data: RepoRunHistoryInput) {
   const suffix = query.size ? `?${query}` : ''
   return createApiClient().get<RepoRunHistoryPage>(
     `${repoPath(ApiRouteTemplates.repoRuns, data)}${suffix}`,
-    { auth: 'required' },
+    { auth: 'optional' },
   )
 }
 
