@@ -331,6 +331,9 @@ pub(super) async fn guard_enqueue(
     if state.allows_enqueue() {
         return Ok(());
     }
+    // This exception is also the bootstrap path after a populated database is
+    // migrated into a new protocol fence: ordinary runs remain blocked while
+    // an operator enqueues the canonical canary suite for the upgraded runner.
     let canonical_runner = canary_job(revision)?.runner();
     let canonical_target = run.trigger == RunTrigger::Manual
         && run

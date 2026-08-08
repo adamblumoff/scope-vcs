@@ -105,6 +105,9 @@ impl MigrationTrait for Migration {
         .await?;
         require_drained_runtime(db).await?;
         rewrite_workflow_revisions(db).await?;
+        // Populated databases deliberately enter the fence without carrying V5
+        // assignments forward. The fenced enqueue guard admits only canonical
+        // V6 canary runs, which supplies the post-migration bootstrap path.
         db.execute_unprepared(
             "ALTER TABLE scope_outbox_jobs
                  DROP CONSTRAINT scope_outbox_jobs_push_workflow_schema_v3;

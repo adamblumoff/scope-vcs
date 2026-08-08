@@ -24,7 +24,7 @@ pub enum CacheError {
     #[error("workflow cache names beginning with {RESERVED_CACHE_NAME_PREFIX:?} are reserved")]
     ReservedName,
     #[error(
-        "workflow cache path must be a normalized absolute path between 1 and {MAX_WORKFLOW_CACHE_PATH_BYTES} bytes"
+        "workflow cache path must be a normalized Docker-mount-safe absolute path between 1 and {MAX_WORKFLOW_CACHE_PATH_BYTES} bytes"
     )]
     InvalidPath,
 }
@@ -58,6 +58,9 @@ impl WorkflowCache {
             || path.len() > MAX_WORKFLOW_CACHE_PATH_BYTES
             || path == "/"
             || !parsed.is_absolute()
+            || path
+                .bytes()
+                .any(|byte| matches!(byte, b',' | b'"' | b'\r' | b'\n'))
             || path
                 .split('/')
                 .skip(1)
@@ -267,7 +270,17 @@ mod tests {
                 "{invalid}"
             );
         }
-        for invalid in ["", "relative", "/", "/cache/../escape", "/cache/./same"] {
+        for invalid in [
+            "",
+            "relative",
+            "/",
+            "/cache/../escape",
+            "/cache/./same",
+            "/cache,readonly",
+            "/cache/\"quoted\"",
+            "/cache/new\nline",
+            "/cache/carriage\rreturn",
+        ] {
             assert!(WorkflowCache::new("cargo", invalid).is_err(), "{invalid}");
         }
     }
