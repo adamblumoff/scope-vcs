@@ -60,7 +60,7 @@ impl WorkflowCache {
             || !parsed.is_absolute()
             || path
                 .bytes()
-                .any(|byte| matches!(byte, b',' | b'"' | b'\r' | b'\n'))
+                .any(|byte| matches!(byte, b'\0' | b',' | b'"' | b'\r' | b'\n'))
             || path
                 .split('/')
                 .skip(1)
@@ -278,6 +278,7 @@ mod tests {
             "/cache/./same",
             "/cache,readonly",
             "/cache/\"quoted\"",
+            "/cache/nul\0byte",
             "/cache/new\nline",
             "/cache/carriage\rreturn",
         ] {
