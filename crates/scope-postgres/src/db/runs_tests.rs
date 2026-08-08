@@ -28,6 +28,7 @@ use std::collections::BTreeSet;
 mod job_scheduler;
 mod retention;
 pub(crate) use job_scheduler::parallel_revision;
+pub(super) mod workflow_fixtures;
 
 #[tokio::test]
 async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempts() {

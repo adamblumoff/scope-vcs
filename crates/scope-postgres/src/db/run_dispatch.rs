@@ -12,8 +12,8 @@ use super::{
 use crate::error::PostgresError;
 use scope_domain::runs::{job::reconcile_run, run::RunJobState, runner::Runner};
 use sea_orm::{
-    ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, IntoActiveModel,
-    QuerySelect, Statement, TransactionTrait,
+    ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, IntoActiveModel, Statement,
+    TransactionTrait,
 };
 
 struct DispatchCandidate {
@@ -148,13 +148,27 @@ impl RunStore {
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(None);
         };
-        let job = locked_job(&tx, &candidate.run_id, &candidate.job_key).await?;
-        let run = locked_run(&tx, &candidate.run_id).await?;
+        // Offers are advisory and claims revalidate every invariant. Snapshot reads
+        // keep polling out of the job -> runner -> grant -> run write-lock order.
+        let job = entities::run_job::Entity::find_by_id((
+            candidate.run_id.clone(),
+            candidate.job_key.clone(),
+        ))
+        .one(&tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::not_found("run job not found"))?
+        .try_into_domain()?;
+        let run = entities::run::Entity::find_by_id(candidate.run_id)
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .ok_or_else(|| PostgresError::not_found("run not found"))?
+            .try_into_domain()?;
         let grant = entities::runner_grant::Entity::find_by_id((
             run.workflow.repository_id().to_string(),
             runner_id.to_string(),
         ))
-        .lock_exclusive()
         .one(&tx)
         .await
         .map_err(PostgresError::internal)?;

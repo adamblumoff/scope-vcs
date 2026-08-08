@@ -1,16 +1,13 @@
 use super::{
     enqueue, postgres_store, register_runner, register_runner_with_capacity, revision, run,
-    run_for_revision, runner_with_capacity, workflow_identity_for,
+    run_for_revision, runner_with_capacity, workflow_fixtures::revision_with_jobs,
 };
 use crate::error::PostgresErrorKind;
 use scope_domain::runs::{
     run::{
         AttemptConclusion, AttemptState, PinnedContainerImage, RunJobState, RunState, RunTrigger,
     },
-    workflow::{
-        CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId,
-        WorkflowRevision, WorkflowStep, WorkflowTriggers,
-    },
+    workflow::{RunnerSelector, WorkflowRevision},
 };
 use sea_orm::ConnectionTrait;
 
@@ -591,29 +588,4 @@ pub(crate) fn parallel_revision() -> WorkflowRevision {
 
 fn capacity_revision() -> WorkflowRevision {
     revision_with_jobs(&["build", "lint", "test"])
-}
-
-fn revision_with_jobs(job_ids: &[&str]) -> WorkflowRevision {
-    let job = |id: &str| {
-        WorkflowJob::new(
-            WorkflowJobId::parse(id).unwrap(),
-            vec![],
-            RunnerSelector::Any,
-            ContainerSpec::new("rust:1.90").unwrap(),
-            20 * 60,
-            vec![],
-            vec![WorkflowStep::new("Test", "cargo test").unwrap()],
-        )
-        .unwrap()
-    };
-    WorkflowRevision::new(
-        workflow_identity_for("owner/repo"),
-        CompiledWorkflow::new(
-            "Parallel",
-            WorkflowTriggers::new(true, false).unwrap(),
-            job_ids.iter().map(|id| job(id)).collect(),
-        )
-        .unwrap(),
-    )
-    .unwrap()
 }

@@ -382,18 +382,21 @@ impl RunStore {
         guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
         let (run, job, mut attempt) = locked_heartbeat_context(&tx, attempt_id).await?;
         let mut runner = ensure_runner_authorized(&tx, &run, &attempt).await?;
+        runner.record_seen(now_unix).map_err(PostgresError::from)?;
+        let observed_now = runner
+            .last_seen_at_unix
+            .ok_or_else(|| PostgresError::internal_message("runner observation time is missing"))?;
         let cancellation_requested = attempt
             .heartbeat(
                 &run,
                 &job,
                 runner_id,
                 token_hash,
-                now_unix,
+                observed_now,
                 lease_expires_at_unix,
             )
             .map_err(PostgresError::from)?;
         save_attempt(&tx, &attempt).await?;
-        runner.record_seen(now_unix).map_err(PostgresError::from)?;
         save_runner(&tx, &runner).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(cancellation_requested)
