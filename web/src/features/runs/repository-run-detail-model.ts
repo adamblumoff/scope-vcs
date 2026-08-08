@@ -73,6 +73,19 @@ export function runAttempts(jobs: readonly JobLike[]) {
   return jobs.flatMap(({ attempts }) => attempts)
 }
 
+export function newlyPopulatedAttempt(
+  previousAttempts: readonly AttemptLike[],
+  nextAttempts: readonly AttemptLike[],
+) {
+  const previousById = new Map(
+    previousAttempts.map((attempt) => [attempt.id, attempt]),
+  )
+  return nextAttempts.find((attempt) => {
+    const previous = previousById.get(attempt.id)
+    return previous?.steps.length === 0 && attempt.steps.length > 0
+  })
+}
+
 export function defaultSelectedJob(jobs: readonly JobLike[]) {
   const preferredStates = [
     'running',

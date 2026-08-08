@@ -4,6 +4,7 @@ import {
   defaultSelectedStep,
   defaultSelectedJob,
   mergeStepLogs,
+  newlyPopulatedAttempt,
   reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
   reconcileExpandedJobs,
@@ -78,6 +79,19 @@ describe('repository run detail model', () => {
         ],
       }],
     ), { attemptId: 'attempt', jobKey: 'checks', stepIndex: 1 })
+  })
+
+  it('finds steps populated in an existing later job attempt', () => {
+    const previous = [
+      { id: 'first', steps: [{ index: 0, state: 'running' }] },
+      { id: 'later', steps: [] },
+    ]
+    const next = [
+      { id: 'first', steps: [{ index: 0, state: 'succeeded' }] },
+      { id: 'later', steps: [{ index: 0, state: 'running' }] },
+    ]
+
+    assert.equal(newlyPopulatedAttempt(previous, next)?.id, 'later')
   })
 
   it('merges incremental logs by stable position', () => {

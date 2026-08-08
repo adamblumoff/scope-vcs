@@ -17,6 +17,7 @@ import {
   defaultSelectedStep,
   defaultSelectedJob,
   mergeStepLogs,
+  newlyPopulatedAttempt,
   reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
   reconcileExpandedJobs,
@@ -164,23 +165,23 @@ export function useRepositoryRunDetailController({
           let pendingAutomaticSelection = current.pendingAutomaticSelection
           let selectionIsAutomatic = current.selectionIsAutomatic
           const currentAttempts = runAttempts(current.detail.jobs)
-          const newest = newAttempt ?? nextAttempts[0]
-          const previousNewest = currentAttempts.find((attempt) =>
-            attempt.id === newest?.id
+          const automaticAttempt = newAttempt ?? newlyPopulatedAttempt(
+            currentAttempts,
+            nextAttempts,
           )
-          const newestGainedSteps = newest?.id === previousNewest?.id &&
-            previousNewest.steps.length === 0 &&
-            newest.steps.length > 0
           if (
             current.selectionIsAutomatic &&
-            (newAttempt !== undefined || newestGainedSteps) &&
-            newest
+            automaticAttempt
           ) {
-            const stepIndex = defaultSelectedStep(newest.steps)
+            const stepIndex = defaultSelectedStep(automaticAttempt.steps)
             if (stepIndex !== null) {
-              const jobKey = attemptJobKey(nextDetail.jobs, newest.id)
+              const jobKey = attemptJobKey(nextDetail.jobs, automaticAttempt.id)
               if (!jobKey) return current
-              const candidate = { attemptId: newest.id, jobKey, stepIndex }
+              const candidate = {
+                attemptId: automaticAttempt.id,
+                jobKey,
+                stepIndex,
+              }
               if (sameSelection(current.selection, candidate)) {
                 pendingAutomaticSelection = null
               } else if (
@@ -239,18 +240,20 @@ export function useRepositoryRunDetailController({
             current.expandedJobs,
             nextDetail.jobs,
           )
-          if (newAttempt && current.selectionIsAutomatic) {
-            const jobKey = attemptJobKey(nextDetail.jobs, newAttempt.id)
+          const expandedAttempts = reconcileExpandedAttempts(
+            current.expandedAttempts,
+            previousIds,
+            nextIds,
+          )
+          if (automaticAttempt && current.selectionIsAutomatic) {
+            const jobKey = attemptJobKey(nextDetail.jobs, automaticAttempt.id)
             if (jobKey) expandedJobs.add(jobKey)
+            expandedAttempts.add(automaticAttempt.id)
           }
           return {
             ...current,
             detail: nextDetail,
-            expandedAttempts: reconcileExpandedAttempts(
-              current.expandedAttempts,
-              previousIds,
-              nextIds,
-            ),
+            expandedAttempts,
             expandedJobs,
             metadataError: null,
             pendingAction: reconciledAction ? null : current.pendingAction,
