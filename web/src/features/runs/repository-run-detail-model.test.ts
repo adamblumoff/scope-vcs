@@ -4,7 +4,7 @@ import {
   defaultSelectedStep,
   defaultSelectedJob,
   mergeStepLogs,
-  newlyPopulatedAttempt,
+  newlySelectableAttempt,
   reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
   reconcileExpandedJobs,
@@ -91,7 +91,16 @@ describe('repository run detail model', () => {
       { id: 'later', steps: [{ index: 0, state: 'running' }] },
     ]
 
-    assert.equal(newlyPopulatedAttempt(previous, next)?.id, 'later')
+    assert.equal(newlySelectableAttempt(previous, next)?.id, 'later')
+  })
+
+  it('skips an empty new attempt for a selectable later job', () => {
+    const next = [
+      { id: 'empty', steps: [] },
+      { id: 'running', steps: [{ index: 0, state: 'running' }] },
+    ]
+
+    assert.equal(newlySelectableAttempt([], next)?.id, 'running')
   })
 
   it('merges incremental logs by stable position', () => {

@@ -71,7 +71,7 @@ export function runAttempts(jobs: readonly JobLike[]) {
   return jobs.flatMap(({ attempts }) => attempts)
 }
 
-export function newlyPopulatedAttempt(
+export function newlySelectableAttempt(
   previousAttempts: readonly AttemptLike[],
   nextAttempts: readonly AttemptLike[],
 ) {
@@ -80,7 +80,8 @@ export function newlyPopulatedAttempt(
   )
   return nextAttempts.find((attempt) => {
     const previous = previousById.get(attempt.id)
-    return previous?.steps.length === 0 && attempt.steps.length > 0
+    return defaultSelectedStep(attempt.steps) !== null &&
+      (previous === undefined || previous.steps.length === 0)
   })
 }
 

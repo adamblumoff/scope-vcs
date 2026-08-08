@@ -17,7 +17,7 @@ import {
   defaultSelectedStep,
   defaultSelectedJob,
   mergeStepLogs,
-  newlyPopulatedAttempt,
+  newlySelectableAttempt,
   reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
   reconcileExpandedJobs,
@@ -156,8 +156,8 @@ export function useRepositoryRunDetailController({
         const nextAttempts = runAttempts(nextDetail.jobs)
         const nextIds = nextAttempts.map((attempt) => attempt.id)
         const previousIds = knownAttemptIdsRef.current ?? []
-        const newAttempt = nextAttempts.find((attempt) =>
-          !previousIds.includes(attempt.id)
+        const newAttempts = nextAttempts.filter(
+          (attempt) => !previousIds.includes(attempt.id),
         )
         knownAttemptIdsRef.current = nextIds
         updateView((current) => {
@@ -165,7 +165,7 @@ export function useRepositoryRunDetailController({
           let pendingAutomaticSelection = current.pendingAutomaticSelection
           let selectionIsAutomatic = current.selectionIsAutomatic
           const currentAttempts = runAttempts(current.detail.jobs)
-          const automaticAttempt = newAttempt ?? newlyPopulatedAttempt(
+          const automaticAttempt = newlySelectableAttempt(
             currentAttempts,
             nextAttempts,
           )
@@ -245,10 +245,12 @@ export function useRepositoryRunDetailController({
             previousIds,
             nextIds,
           )
-          if (automaticAttempt && current.selectionIsAutomatic) {
-            const jobKey = attemptJobKey(nextDetail.jobs, automaticAttempt.id)
-            if (jobKey) expandedJobs.add(jobKey)
-            expandedAttempts.add(automaticAttempt.id)
+          if (current.selectionIsAutomatic) {
+            for (const attempt of newAttempts) {
+              const jobKey = attemptJobKey(nextDetail.jobs, attempt.id)
+              if (jobKey) expandedJobs.add(jobKey)
+            }
+            if (automaticAttempt) expandedAttempts.add(automaticAttempt.id)
           }
           return {
             ...current,
