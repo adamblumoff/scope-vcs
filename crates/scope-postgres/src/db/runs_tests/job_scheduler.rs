@@ -1,16 +1,26 @@
 use super::{
-    enqueue, postgres_store, register_runner, revision, run, run_for_revision,
-    workflow_identity_for,
+    enqueue, postgres_store, register_runner, register_runner_with_capacity, revision, run,
+    run_for_revision, runner_with_capacity, workflow_fixtures::revision_with_jobs,
 };
 use crate::error::PostgresErrorKind;
 use scope_domain::runs::{
-    run::{AttemptConclusion, AttemptState, PinnedContainerImage, RunState, RunTrigger},
-    workflow::{
-        CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId,
-        WorkflowRevision, WorkflowStep, WorkflowTriggers,
+    run::{
+        AttemptConclusion, AttemptState, PinnedContainerImage, RunJobState, RunState, RunTrigger,
     },
+    workflow::{RunnerSelector, WorkflowRevision},
 };
 use sea_orm::ConnectionTrait;
+
+#[tokio::test]
+async fn runner_capacity_round_trips_through_persistence() {
+    let store = postgres_store();
+    let runner = runner_with_capacity("runner-capacity", 4);
+    store.runs().register_runner(runner.clone()).await.unwrap();
+
+    let persisted = store.runs().runner(&runner.id).await.unwrap().unwrap();
+    assert_eq!(persisted.max_concurrent_jobs.get(), 4);
+    assert_eq!(persisted, runner);
+}
 
 #[tokio::test]
 async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_jobs() {
@@ -31,7 +41,7 @@ async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_j
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 10)
             .await
             .unwrap()
             .is_none()
@@ -55,7 +65,7 @@ async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_j
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 10)
             .await
             .unwrap()
             .unwrap()
@@ -66,7 +76,7 @@ async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_j
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-2")
+            .next_dispatchable_job("runner-2", 10)
             .await
             .unwrap()
             .unwrap()
@@ -113,10 +123,10 @@ async fn run_snapshot_returns_the_run_jobs_and_log_state_together() {
 }
 
 #[tokio::test]
-async fn independent_jobs_claim_concurrently_with_job_scoped_attempt_ordinals() {
+async fn runner_capacity_is_authoritative_across_concurrent_job_claims() {
     let store = postgres_store();
-    register_runner(&store, "runner-1", "linux-box").await;
-    let revision = parallel_revision();
+    register_runner_with_capacity(&store, "runner-1", "linux-box", 2).await;
+    let revision = capacity_revision();
     enqueue(
         &store,
         run_for_revision(
@@ -161,6 +171,56 @@ async fn independent_jobs_claim_concurrently_with_job_scoped_attempt_ordinals() 
     assert_eq!(lint.attempt.number, 1);
     assert_eq!(build.attempt.job_key.as_str(), "build");
     assert_eq!(lint.attempt.job_key.as_str(), "lint");
+    assert!(
+        store
+            .runs()
+            .next_dispatchable_job("runner-1", 20)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let at_capacity = store
+        .runs()
+        .claim_job(
+            "run-parallel",
+            "test",
+            "runner-1",
+            "attempt-test-blocked",
+            &"c".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(at_capacity.kind, PostgresErrorKind::ResourceExhausted);
+
+    store
+        .runs()
+        .complete_attempt(
+            &build.attempt.id,
+            &build_token,
+            AttemptConclusion::SetupFailed {
+                exit_code: 1,
+                message: "build setup failed".into(),
+            },
+            21,
+        )
+        .await
+        .unwrap();
+    let test = store
+        .runs()
+        .claim_job(
+            "run-parallel",
+            "test",
+            "runner-1",
+            "attempt-test",
+            &"d".repeat(64),
+            22,
+            82,
+        )
+        .await
+        .unwrap();
+    assert_eq!(test.attempt.job_key.as_str(), "test");
     assert_eq!(
         store
             .runs()
@@ -239,6 +299,97 @@ async fn run_detail_preserves_attempt_history_bounded_per_job() {
             51
         );
     }
+}
+
+#[tokio::test]
+async fn expired_attempts_release_capacity_at_the_lease_deadline() {
+    let store = postgres_store();
+    register_runner(&store, "runner-1", "linux-box").await;
+    let revision = capacity_revision();
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-expired-capacity",
+            "manual:expired-capacity",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+
+    store
+        .runs()
+        .claim_job(
+            "run-expired-capacity",
+            "build",
+            "runner-1",
+            "attempt-expired",
+            &"a".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        store
+            .runs()
+            .next_dispatchable_job("runner-1", 79)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let live_capacity = store
+        .runs()
+        .claim_job(
+            "run-expired-capacity",
+            "lint",
+            "runner-1",
+            "attempt-live-blocked",
+            &"b".repeat(64),
+            79,
+            139,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(live_capacity.kind, PostgresErrorKind::ResourceExhausted);
+
+    let offer = store
+        .runs()
+        .next_dispatchable_job("runner-1", 80)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(offer.job.key.as_str(), "lint");
+    let next = store
+        .runs()
+        .claim_job(
+            "run-expired-capacity",
+            "lint",
+            "runner-1",
+            "attempt-next",
+            &"c".repeat(64),
+            80,
+            140,
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.attempt.id, "attempt-next");
+
+    assert_eq!(
+        store.runs().expired_attempt_ids(80, 10).await.unwrap(),
+        vec!["attempt-expired"]
+    );
+    let recovered = store
+        .runs()
+        .expire_attempt("attempt-expired", 80)
+        .await
+        .unwrap();
+    assert_eq!(recovered.attempt.state, AttemptState::Lost);
+    assert_eq!(recovered.job.state, RunJobState::Queued);
 }
 
 #[tokio::test]
@@ -431,26 +582,9 @@ async fn retry_persists_the_jobs_pinned_container_image() {
 }
 
 pub(crate) fn parallel_revision() -> WorkflowRevision {
-    let job = |id: &str| {
-        WorkflowJob::new(
-            WorkflowJobId::parse(id).unwrap(),
-            vec![],
-            RunnerSelector::Any,
-            ContainerSpec::new("rust:1.90").unwrap(),
-            20 * 60,
-            vec![],
-            vec![WorkflowStep::new("Test", "cargo test").unwrap()],
-        )
-        .unwrap()
-    };
-    WorkflowRevision::new(
-        workflow_identity_for("owner/repo"),
-        CompiledWorkflow::new(
-            "Parallel",
-            WorkflowTriggers::new(true, false).unwrap(),
-            vec![job("build"), job("lint")],
-        )
-        .unwrap(),
-    )
-    .unwrap()
+    revision_with_jobs(&["build", "lint"])
+}
+
+fn capacity_revision() -> WorkflowRevision {
+    revision_with_jobs(&["build", "lint", "test"])
 }

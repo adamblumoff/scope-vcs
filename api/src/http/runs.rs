@@ -2,10 +2,11 @@ use crate::{
     auth::scope::require_scope_user,
     error::ApiError,
     http::responses::{
-        RepositoryOperationsResponse, RepositoryRunAttemptResponse, RepositoryRunDetailResponse,
-        RepositoryRunLogResponse, RepositoryRunStepLogPageResponse, RepositoryRunStepResponse,
-        RepositoryRunnerResponse, RepositoryRunnerState, git_oid_request,
+        RepositoryOperationsResponse, RepositoryRunDetailResponse, RepositoryRunLogResponse,
+        RepositoryRunStepLogPageResponse, RepositoryRunnerResponse, RepositoryRunnerState,
+        git_oid_request,
     },
+    http::run_detail_response::build_run_detail_response,
     http::run_response::{repository_run_summary, run_response},
     persistence::unix_now,
     repo_access::find_repo,
@@ -200,62 +201,8 @@ pub(crate) async fn get_repository_run_detail(
         .run_detail(&run_id)
         .await?
         .ok_or_else(|| ApiError::not_found("run not found"))?;
-    let workflow = detail.workflow_revision.definition();
-    let attempts = detail
-        .attempts
-        .into_iter()
-        .map(|detail| {
-            let attempt = detail.attempt;
-            let workflow_steps = workflow
-                .job(&attempt.job_key)
-                .ok_or_else(|| {
-                    ApiError::internal_message(
-                        "persisted run attempt job is missing from its workflow revision",
-                    )
-                })?
-                .steps();
-            let steps = detail
-                .steps
-                .into_iter()
-                .map(|step| {
-                    let definition =
-                        workflow_steps
-                            .get(step.step_index as usize)
-                            .ok_or_else(|| {
-                                ApiError::internal_message(
-                                    "persisted run step is missing from its workflow revision",
-                                )
-                            })?;
-                    Ok(RepositoryRunStepResponse {
-                        index: step.step_index,
-                        name: definition.name().to_string(),
-                        command: definition.run().to_string(),
-                        state: step.state.into(),
-                        started_at_unix: step.started_at_unix,
-                        completed_at_unix: step.completed_at_unix,
-                        exit_code: step.exit_code,
-                    })
-                })
-                .collect::<Result<Vec<_>, ApiError>>()?;
-            Ok(RepositoryRunAttemptResponse {
-                id: attempt.id,
-                job_key: attempt.job_key.as_str().to_string(),
-                runner_id: attempt.runner_id,
-                runner_name: attempt.runner_name,
-                state: attempt.state.into(),
-                created_at_unix: attempt.created_at_unix,
-                started_at_unix: attempt.started_at_unix,
-                completed_at_unix: attempt.completed_at_unix,
-                terminal_reason: attempt.terminal_reason.map(Into::into),
-                steps,
-            })
-        })
-        .collect::<Result<Vec<_>, ApiError>>()?;
-
-    Ok(Json(RepositoryRunDetailResponse {
-        run: repository_run_summary(&detail.run, &detail.jobs)?,
-        attempts,
-    }))
+    let run = repository_run_summary(&detail.run, &detail.jobs)?;
+    Ok(Json(build_run_detail_response(detail, run)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -513,6 +460,7 @@ async fn stream_run_events(
             cursor = log.position;
             let response = RunLogResponse {
                 attempt_id: log.chunk.attempt_id,
+                job_key: log.job_key,
                 step_index: log.chunk.step_index,
                 position: log.position,
                 sequence: log.chunk.sequence,

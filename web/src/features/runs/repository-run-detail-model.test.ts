@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   defaultSelectedStep,
+  defaultSelectedJob,
   mergeStepLogs,
+  newlySelectableAttempt,
   reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
+  reconcileExpandedJobs,
   runNeedsPolling,
 } from './repository-run-detail-model'
 
@@ -34,6 +37,19 @@ describe('repository run detail model', () => {
     assert.deepEqual([...expanded], ['old', 'retry'])
   })
 
+  it('keeps known job expansion without reopening collapsed jobs', () => {
+    const jobs = [
+      { job: { key: 'backend', state: 'succeeded' }, attempts: [] },
+      { job: { key: 'web', state: 'queued' }, attempts: [] },
+    ]
+    assert.deepEqual([...reconcileExpandedJobs(new Set(), jobs)], [])
+    assert.deepEqual(
+      [...reconcileExpandedJobs(new Set(['web', 'removed']), jobs)],
+      ['web'],
+    )
+    assert.equal(defaultSelectedJob(jobs)?.job.key, 'web')
+  })
+
   it('selects the active or failed step before completed work', () => {
     assert.equal(defaultSelectedStep([
       { index: 0, state: 'succeeded' },
@@ -54,7 +70,7 @@ describe('repository run detail model', () => {
 
   it('advances automatic selection while leaving user selection to the controller', () => {
     assert.deepEqual(reconcileAutomaticStepSelection(
-      { attemptId: 'attempt', stepIndex: 0 },
+      { attemptId: 'attempt', jobKey: 'checks', stepIndex: 0 },
       [{
         id: 'attempt',
         steps: [
@@ -62,7 +78,29 @@ describe('repository run detail model', () => {
           { index: 1, state: 'running' },
         ],
       }],
-    ), { attemptId: 'attempt', stepIndex: 1 })
+    ), { attemptId: 'attempt', jobKey: 'checks', stepIndex: 1 })
+  })
+
+  it('finds steps populated in an existing later job attempt', () => {
+    const previous = [
+      { id: 'first', steps: [{ index: 0, state: 'running' }] },
+      { id: 'later', steps: [] },
+    ]
+    const next = [
+      { id: 'first', steps: [{ index: 0, state: 'succeeded' }] },
+      { id: 'later', steps: [{ index: 0, state: 'running' }] },
+    ]
+
+    assert.equal(newlySelectableAttempt(previous, next)?.id, 'later')
+  })
+
+  it('skips an empty new attempt for a selectable later job', () => {
+    const next = [
+      { id: 'empty', steps: [] },
+      { id: 'running', steps: [{ index: 0, state: 'running' }] },
+    ]
+
+    assert.equal(newlySelectableAttempt([], next)?.id, 'running')
   })
 
   it('merges incremental logs by stable position', () => {

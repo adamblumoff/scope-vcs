@@ -1,7 +1,7 @@
 use scope_domain::runs::{
     cutover::{RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus, RunnerProtocolCutoverState},
     run::{AttemptState, RunState, StepState},
-    runner::RunnerCapabilities,
+    runner::{RunnerCapabilities, RunnerMaxConcurrentJobs},
     trigger::PushTriggerEvaluationState,
     workflow::WorkflowJob,
 };
@@ -15,6 +15,7 @@ pub struct RegisterRunnerRequest {
     pub version: String,
     pub protocol_version: u32,
     pub capabilities: RunnerCapabilities,
+    pub max_concurrent_jobs: RunnerMaxConcurrentJobs,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -28,6 +29,7 @@ pub struct UpgradeRunnerRegistrationRequest {
     pub version: String,
     pub protocol_version: u32,
     pub capabilities: RunnerCapabilities,
+    pub max_concurrent_jobs: RunnerMaxConcurrentJobs,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -81,6 +83,7 @@ pub struct RunnerResponse {
     pub id: String,
     pub version: String,
     pub protocol_version: u32,
+    pub max_concurrent_jobs: RunnerMaxConcurrentJobs,
     pub enabled: bool,
     pub created_at_unix: u64,
     pub last_seen_at_unix: Option<u64>,
@@ -164,6 +167,7 @@ pub struct RunJobResponse {
     pub run_id: String,
     pub job_key: String,
     pub repository_id: String,
+    pub workflow_path: String,
     pub git_oid: String,
     pub source_digest: String,
     pub pinned_container_image: Option<String>,
@@ -252,6 +256,7 @@ pub enum AttemptConclusionRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RunLogResponse {
     pub attempt_id: String,
+    pub job_key: String,
     pub step_index: u32,
     pub position: u64,
     pub sequence: u64,
@@ -319,6 +324,7 @@ mod tests {
                 "run_id": "run-1",
                 "job_key": "checks",
                 "repository_id": "repo-1",
+                "workflow_path": "/.scope/runs/test.yml",
                 "git_oid": "a",
                 "source_digest": "b",
                 "pinned_container_image": null,
@@ -344,10 +350,12 @@ mod tests {
             version: "2.0.0".to_string(),
             protocol_version: 4,
             capabilities: RunnerCapabilities::v1(),
+            max_concurrent_jobs: RunnerMaxConcurrentJobs::new(4).unwrap(),
         };
         let json = serde_json::to_value(upgrade).unwrap();
         assert_eq!(json["version"], "2.0.0");
         assert_eq!(json["protocol_version"], 4);
         assert_eq!(json["capabilities"]["operating_system"], "linux");
+        assert_eq!(json["max_concurrent_jobs"], 4);
     }
 }

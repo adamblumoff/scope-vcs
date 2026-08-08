@@ -406,16 +406,8 @@ jobs:
     fn scope_workflows_use_the_current_contract() {
         for (path, bytes) in [
             (
-                "/.scope/runs/backend-checks.yml",
-                include_bytes!("../../../.scope/runs/backend-checks.yml").as_slice(),
-            ),
-            (
-                "/.scope/runs/cli-checks.yml",
-                include_bytes!("../../../.scope/runs/cli-checks.yml").as_slice(),
-            ),
-            (
-                "/.scope/runs/web-checks.yml",
-                include_bytes!("../../../.scope/runs/web-checks.yml").as_slice(),
+                "/.scope/runs/checks.yml",
+                include_bytes!("../../../.scope/runs/checks.yml").as_slice(),
             ),
             (
                 "/.scope/runs/v5-canary-cold-write.yml",

@@ -15,8 +15,14 @@ pub(super) fn install_systemd_service(config_path: &Path) -> anyhow::Result<()> 
         "reload systemd user units",
     )?;
     command_success(
-        Command::new("systemctl").args(["--user", "enable", "--now", RUNNER_SERVICE_NAME]),
+        Command::new("systemctl").args(["--user", "enable", RUNNER_SERVICE_NAME]),
         "enable Scope runner service",
+    )?;
+    // `restart` also starts an inactive unit. Keeping start and update on the same
+    // path guarantees the daemon reloads the newly written secret and capacity.
+    command_success(
+        Command::new("systemctl").args(["--user", "restart", RUNNER_SERVICE_NAME]),
+        "start or restart Scope runner service",
     )
 }
 

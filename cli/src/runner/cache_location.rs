@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 // The format covers the store layout, metadata records, and Docker volume identity.
 // Old ephemeral cache state is refused rather than kept through a second reader.
-pub(super) const CACHE_FORMAT: u8 = 3;
+pub(super) const CACHE_FORMAT: u8 = 5;
 const RUNNER_NAMESPACE_HEX_LENGTH: usize = 32;
 const VOLUME_DIGEST_HEX_LENGTH: usize = 40;
 

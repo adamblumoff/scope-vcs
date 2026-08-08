@@ -7,7 +7,10 @@ use scope_domain::{
             AttemptConclusion, AttemptState, PinnedContainerImage, Run, RunLogChunk, RunSource,
             RunState, RunTrigger, StepState,
         },
-        runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
+        runner::{
+            RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant,
+            RunnerMaxConcurrentJobs, RunnerName,
+        },
         workflow::{
             CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowJob,
             WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
@@ -25,6 +28,12 @@ use std::collections::BTreeSet;
 mod job_scheduler;
 mod retention;
 pub(crate) use job_scheduler::parallel_revision;
+mod runner_fixtures;
+use runner_fixtures::runner;
+pub(super) use runner_fixtures::{
+    register_runner, register_runner_with_capacity, runner_with_capacity,
+};
+pub(super) mod workflow_fixtures;
 
 #[tokio::test]
 async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempts() {
@@ -313,7 +322,7 @@ async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_sto
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-2")
+            .next_dispatchable_job("runner-2", 83)
             .await
             .unwrap()
             .unwrap()
@@ -333,6 +342,7 @@ async fn removing_repository_member_revokes_that_members_runner_grants_atomicall
         "1.0.0",
         RUNNER_PROTOCOL_VERSION,
         RunnerCapabilities::v1(),
+        RunnerMaxConcurrentJobs::new(1).unwrap(),
         10,
     )
     .unwrap();
@@ -375,7 +385,7 @@ async fn removing_repository_member_revokes_that_members_runner_grants_atomicall
     assert!(
         store
             .runs()
-            .next_dispatchable_job(&member_runner.id)
+            .next_dispatchable_job(&member_runner.id, 20)
             .await
             .unwrap()
             .is_none()
@@ -456,6 +466,8 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         )
         .await
         .unwrap();
+    assert_eq!(stored.job_key, "checks");
+    assert_eq!(retry.job_key, "checks");
     assert_eq!(retry.position, stored.position);
     assert_eq!(
         store
@@ -515,6 +527,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         .await
         .unwrap();
     assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].job_key, "checks");
     assert_eq!(logs[0].chunk.text, "second\n");
     let step_logs = store
         .runs()
@@ -522,6 +535,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         .await
         .unwrap();
     assert_eq!(step_logs.logs.len(), 1);
+    assert_eq!(step_logs.logs[0].job_key, "checks");
     assert_eq!(step_logs.logs[0].chunk.step_index, 0);
     assert!(!step_logs.logs_truncated);
 }
@@ -608,7 +622,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 10)
             .await
             .unwrap()
             .is_none()
@@ -616,7 +630,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-2")
+            .next_dispatchable_job("runner-2", 10)
             .await
             .unwrap()
             .unwrap()
@@ -633,7 +647,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-2")
+            .next_dispatchable_job("runner-2", 10)
             .await
             .unwrap()
             .is_none()
@@ -724,39 +738,6 @@ fn catalog_with_repo() -> CatalogFixture {
         .repositories
         .insert(other_repository.record.id.clone(), other_repository);
     catalog
-}
-
-pub(super) async fn register_runner(store: &MetadataStore, id: &str, name: &str) {
-    let runner = runner(id);
-    store.runs().register_runner(runner.clone()).await.unwrap();
-    store
-        .runs()
-        .grant_runner(
-            RunnerGrant::new(
-                "owner/repo",
-                runner.id,
-                RunnerName::parse(name).unwrap(),
-                "user_owner",
-                10,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-}
-
-fn runner(id: &str) -> Runner {
-    let hash_byte = if id.ends_with('1') { '1' } else { '2' };
-    Runner::new(
-        id,
-        "user_owner",
-        hash_byte.to_string().repeat(64),
-        "1.0.0",
-        RUNNER_PROTOCOL_VERSION,
-        RunnerCapabilities::v1(),
-        10,
-    )
-    .unwrap()
 }
 
 pub(super) fn revision() -> WorkflowRevision {

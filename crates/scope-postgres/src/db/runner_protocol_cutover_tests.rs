@@ -6,7 +6,7 @@ use scope_domain::runs::{
         RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus, RunnerProtocolCutoverState,
     },
     run::{PinnedContainerImage, RunTrigger, StepConclusion},
-    runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities},
+    runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerMaxConcurrentJobs},
     workflow::{
         CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowJob,
         WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
@@ -59,7 +59,7 @@ async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 18)
             .await
             .unwrap()
             .is_none()
@@ -127,7 +127,7 @@ async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
         assert_eq!(
             store
                 .runs()
-                .next_dispatchable_job("runner-1")
+                .next_dispatchable_job("runner-1", 20)
                 .await
                 .unwrap()
                 .unwrap()
@@ -177,7 +177,7 @@ async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 50)
             .await
             .unwrap()
             .unwrap()
@@ -190,7 +190,7 @@ async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
 #[tokio::test]
 async fn open_v5_hot_paths_do_not_take_the_cutover_row_lock() {
     let store = runs_tests::postgres_store();
-    runs_tests::register_runner(&store, "runner-1", "linux-box").await;
+    runs_tests::register_runner_with_capacity(&store, "runner-1", "linux-box", 2).await;
     let revision = runs_tests::revision();
     runs_tests::enqueue(
         &store,
@@ -650,10 +650,13 @@ async fn owned_v4_runner_cannot_claim_v5_jobs_and_upgrades_atomically() {
             .upgrade_runner_registration(
                 "runner-1",
                 "user_other",
-                new_hash.clone(),
-                "2.0.0".to_string(),
-                RUNNER_PROTOCOL_VERSION,
-                RunnerCapabilities::v1(),
+                super::UpgradeRunnerRegistrationCommand {
+                    secret_hash: new_hash.clone(),
+                    version: "2.0.0".to_string(),
+                    protocol_version: RUNNER_PROTOCOL_VERSION,
+                    capabilities: RunnerCapabilities::v1(),
+                    max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
+                },
             )
             .await
             .is_err()
@@ -663,10 +666,13 @@ async fn owned_v4_runner_cannot_claim_v5_jobs_and_upgrades_atomically() {
         .upgrade_runner_registration(
             "runner-1",
             "user_owner",
-            new_hash.clone(),
-            "2.0.0".to_string(),
-            RUNNER_PROTOCOL_VERSION,
-            RunnerCapabilities::v1(),
+            super::UpgradeRunnerRegistrationCommand {
+                secret_hash: new_hash.clone(),
+                version: "2.0.0".to_string(),
+                protocol_version: RUNNER_PROTOCOL_VERSION,
+                capabilities: RunnerCapabilities::v1(),
+                max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
+            },
         )
         .await
         .unwrap();

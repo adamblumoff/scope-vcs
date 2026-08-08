@@ -49,6 +49,39 @@ pub(crate) enum RepositoryRunState {
     Lost,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "kebab-case"))]
+pub(crate) enum RepositoryRunJobState {
+    Blocked,
+    Queued,
+    Leased,
+    Running,
+    Succeeded,
+    Failed,
+    Skipped,
+    Canceled,
+    Lost,
+}
+
+impl From<scope_domain::runs::run::RunJobState> for RepositoryRunJobState {
+    fn from(state: scope_domain::runs::run::RunJobState) -> Self {
+        use scope_domain::runs::run::RunJobState;
+        match state {
+            RunJobState::Blocked => Self::Blocked,
+            RunJobState::Queued => Self::Queued,
+            RunJobState::Leased => Self::Leased,
+            RunJobState::Running => Self::Running,
+            RunJobState::Succeeded => Self::Succeeded,
+            RunJobState::Failed => Self::Failed,
+            RunJobState::Skipped => Self::Skipped,
+            RunJobState::Canceled => Self::Canceled,
+            RunJobState::Lost => Self::Lost,
+        }
+    }
+}
+
 impl From<scope_domain::runs::run::RunState> for RepositoryRunState {
     fn from(state: scope_domain::runs::run::RunState) -> Self {
         use scope_domain::runs::run::RunState;
@@ -185,7 +218,6 @@ pub(crate) struct RepositoryRunStepResponse {
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryRunAttemptResponse {
     pub(crate) id: String,
-    pub(crate) job_key: String,
     pub(crate) runner_id: String,
     pub(crate) runner_name: String,
     pub(crate) state: RepositoryRunAttemptState,
@@ -194,6 +226,24 @@ pub(crate) struct RepositoryRunAttemptResponse {
     pub(crate) completed_at_unix: Option<u64>,
     pub(crate) terminal_reason: Option<RepositoryRunTerminalReason>,
     pub(crate) steps: Vec<RepositoryRunStepResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunJobResponse {
+    pub(crate) key: String,
+    pub(crate) desired_runner: Option<String>,
+    pub(crate) state: RepositoryRunJobState,
+    pub(crate) created_at_unix: u64,
+    pub(crate) updated_at_unix: u64,
+    pub(crate) completed_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunJobDetailResponse {
+    pub(crate) job: RepositoryRunJobResponse,
+    pub(crate) attempts: Vec<RepositoryRunAttemptResponse>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -236,7 +286,7 @@ pub(crate) struct RepositoryRunLogResponse {
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryRunDetailResponse {
     pub(crate) run: RepositoryRunSummaryResponse,
-    pub(crate) attempts: Vec<RepositoryRunAttemptResponse>,
+    pub(crate) jobs: Vec<RepositoryRunJobDetailResponse>,
 }
 
 #[derive(Debug, Serialize)]

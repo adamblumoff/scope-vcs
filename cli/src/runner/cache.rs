@@ -10,54 +10,57 @@ use scope_api_contract::{
     AttemptCacheFinalizationOutcome, AttemptCacheFinalizationRequest, ClaimRunResponse,
 };
 use scope_domain::runs::{
-    cache::{CacheIdentity, CachePlatform},
+    cache::{CacheIdentity, CacheNamespace, CachePlatform},
     cutover::RunnerProtocolCanaryPhase,
     run::PinnedContainerImage,
+    workflow::WorkflowPath,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
-    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
 
 #[path = "cache_location.rs"]
 mod location;
-use location::{CACHE_FORMAT, CacheLocation, runner_namespace, volume_name};
+#[cfg(test)]
+use location::volume_name;
+use location::{CACHE_FORMAT, CacheLocation, runner_namespace};
 
 #[path = "cache_store.rs"]
 mod store;
+#[cfg(test)]
+use store::prune_root;
 use store::{ensure_capacity, has_capacity, validate_store};
+
+#[path = "cache_record.rs"]
+mod record;
+use record::{
+    CacheRecord, CacheState, find_record_for_volume, load_runner_records, metadata_allows_warm,
+    read_record_candidate, record_location, write_record,
+};
+
+#[path = "cache_lock.rs"]
+mod identity_lock;
+#[cfg(test)]
+use identity_lock::canonical_identity_lock_digests;
+use identity_lock::{CacheFileLock, CacheIdentityLocks};
+use identity_lock::{
+    lock_cache_identities, lock_recorded_volume_identities,
+    try_lock_cache_identity_while_lifecycle_locked,
+};
+
+#[path = "cache_finalization.rs"]
+mod finalization;
+pub(super) use finalization::finalize_volume_names;
+use finalization::finalize_volume_names_while_identity_locked;
+#[cfg(test)]
+use finalization::{CacheFinalizationAction, cache_finalization_action};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CacheMount {
     pub(super) volume_name: String,
     pub(super) target: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct CacheRecord {
-    format: u8,
-    runner_id: String,
-    runner_namespace: String,
-    identity_digest: String,
-    repository_id: String,
-    cache_name: String,
-    image: String,
-    container_image: String,
-    platform: String,
-    volume_name: String,
-    state: CacheState,
-    last_used_at_unix: u64,
-}
-
-fn record_location(root: &Path, record: &CacheRecord) -> CacheLocation {
-    CacheLocation::from_namespace(
-        root,
-        record.runner_namespace.clone(),
-        &record.identity_digest,
-    )
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -70,17 +73,12 @@ struct VolumeInspection {
     labels: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
-enum CacheState {
-    Ready,
-    Tainted { attempt_id: String },
-}
-
 pub(super) struct PreparedCaches {
     config: RunnerConfig,
+    attempt_id: String,
     mounts: Vec<CacheMount>,
-    lock: Option<File>,
+    lifecycle_lock: Option<CacheFileLock>,
+    _identity_locks: CacheIdentityLocks,
     finished: bool,
 }
 
@@ -94,37 +92,66 @@ impl PreparedCaches {
         if job.caches().is_empty() {
             return Ok(Self {
                 config: config.clone(),
+                attempt_id: claim.attempt_id.clone(),
                 mounts: Vec::new(),
-                lock: None,
+                lifecycle_lock: None,
+                _identity_locks: CacheIdentityLocks::default(),
                 finished: false,
             });
         }
         let root = usable_root(config)?;
+        let pinned_image = PinnedContainerImage::parse(pinned_image.to_string())?;
+        let namespace = match claim.canary_phase {
+            Some(_) => CacheNamespace::RunnerProtocolCanary,
+            None => CacheNamespace::workflow(
+                &WorkflowPath::parse(claim.job.workflow_path.clone())?,
+                job.id(),
+            ),
+        };
+        let plans = job
+            .caches()
+            .iter()
+            .map(|cache| {
+                let identity = CacheIdentity::new(
+                    claim.job.repository_id.clone(),
+                    namespace.clone(),
+                    cache.clone(),
+                    &pinned_image,
+                    CachePlatform::LinuxAmd64,
+                )?;
+                let location =
+                    CacheLocation::for_runner(&root, &config.runner_id, &identity.digest());
+                Ok((cache, identity, location))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        // Identity locks are acquired without holding the lifecycle lock. Finalization
+        // takes lifecycle while retaining these locks, so the reverse order here would
+        // deadlock a waiting preparation against the running attempt it follows.
+        let identity_locks = lock_cache_identities(
+            &root,
+            &config.runner_id,
+            plans.iter().map(|(_, identity, _)| identity.digest()),
+        )?;
         let lock = lifecycle_lock(&root)?;
         validate_store(&root, false)?;
         ensure_capacity(&root, &lock, &config.runner_id)?;
-        let pinned_image = PinnedContainerImage::parse(pinned_image.to_string())?;
         let mut prepared = Self {
             config: config.clone(),
+            attempt_id: claim.attempt_id.clone(),
             mounts: Vec::with_capacity(job.caches().len()),
-            lock: Some(lock),
+            lifecycle_lock: Some(lock),
+            _identity_locks: identity_locks,
             finished: false,
         };
-        for cache in job.caches() {
-            let identity = CacheIdentity::new(
-                claim.job.repository_id.clone(),
-                cache.clone(),
-                &pinned_image,
-                CachePlatform::LinuxAmd64,
-            )?;
+        for (cache, identity, location) in plans {
             let digest = identity.digest();
-            let location = CacheLocation::for_runner(&root, &config.runner_id, &digest);
             let record = CacheRecord {
                 format: CACHE_FORMAT,
                 runner_id: config.runner_id.clone(),
                 runner_namespace: location.runner_namespace.clone(),
                 identity_digest: digest,
                 repository_id: identity.repository_id().to_string(),
+                namespace: identity.namespace().clone(),
                 cache_name: identity.cache().as_str().to_string(),
                 image: identity.image_digest().to_string(),
                 container_image: pinned_image.as_str().to_string(),
@@ -194,19 +221,30 @@ impl PreparedCaches {
 
     pub(super) fn confirm_container(&mut self, container_name: &str) -> anyhow::Result<()> {
         verify_container_mounts(container_name, &self.mounts)?;
-        self.lock.take();
+        self.lifecycle_lock.take();
         Ok(())
     }
 
     pub(super) fn finish(mut self, success: bool) -> anyhow::Result<()> {
-        self.lock.take();
-        finalize_volume_names(&self.config, &self.volume_names(), success)?;
+        self.lifecycle_lock.take();
+        finalize_volume_names_while_identity_locked(
+            &self.config,
+            &self.volume_names(),
+            &self.attempt_id,
+            success,
+        )?;
         self.finished = true;
         Ok(())
     }
 
     pub(super) fn preserve(mut self) {
         self.finished = true;
+        // Recovery is restart-owned. Keep these cross-process identity locks until
+        // this daemon exits so another local slot cannot claim and then collide
+        // with the preserved container/cache before recovery reconciles it.
+        if !self._identity_locks.is_empty() {
+            std::mem::forget(self);
+        }
     }
 }
 
@@ -215,42 +253,16 @@ impl Drop for PreparedCaches {
         if self.finished || self.mounts.is_empty() {
             return;
         }
-        self.lock.take();
-        if let Err(error) = finalize_volume_names(&self.config, &self.volume_names(), false) {
+        self.lifecycle_lock.take();
+        if let Err(error) = finalize_volume_names_while_identity_locked(
+            &self.config,
+            &self.volume_names(),
+            &self.attempt_id,
+            false,
+        ) {
             eprintln!("Could not evict tainted attempt caches: {error:#}");
         }
     }
-}
-
-pub(super) fn finalize_volume_names(
-    config: &RunnerConfig,
-    volumes: &[String],
-    success: bool,
-) -> anyhow::Result<()> {
-    if volumes.is_empty() {
-        return Ok(());
-    }
-    let root = usable_root(config)?;
-    let _lock = lifecycle_lock(&root)?;
-    for volume in volumes {
-        if volume_is_referenced(volume)? {
-            bail!("cache volume {volume} is still referenced by a container");
-        }
-        if success {
-            let mut record = read_record_for_volume(&root, volume, &config.runner_id)?;
-            let backing = record_location(&root, &record).backing_path;
-            super::command_success(
-                Command::new("sync").args(["-f"]).arg(&backing),
-                "flush successful cache contents",
-            )?;
-            record.state = CacheState::Ready;
-            record.last_used_at_unix = unix_now();
-            write_record(&root, &record)?;
-        } else {
-            remove_cache(&root, volume, &config.runner_id)?;
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn is_reusable_after_execution(
@@ -315,7 +327,7 @@ pub(super) fn list(config: &RunnerConfig) -> anyhow::Result<()> {
     }
     for record in records {
         let state = match record.state {
-            CacheState::Ready => "ready".to_string(),
+            CacheState::Ready { .. } => "ready".to_string(),
             CacheState::Tainted { attempt_id } => format!("tainted:{attempt_id}"),
         };
         println!(
@@ -431,6 +443,7 @@ fn ensure_store_directories(root: &Path) -> anyhow::Result<()> {
     // safely finish initialization without accepting symlinks or other file types.
     require_real_directory(&root.join("metadata"), true, "cache metadata directory")?;
     require_real_directory(&root.join("data"), true, "cache data directory")?;
+    require_real_directory(&root.join("locks"), true, "cache lock directory")?;
     File::open(root)?.sync_all()?;
     Ok(())
 }
@@ -451,7 +464,7 @@ fn store_is_absent_or_empty(root: &Path) -> anyhow::Result<bool> {
     }
 }
 
-fn lifecycle_lock(root: &Path) -> anyhow::Result<File> {
+fn lifecycle_lock(root: &Path) -> anyhow::Result<CacheFileLock> {
     let lock = File::options()
         .create(true)
         .truncate(false)
@@ -460,7 +473,7 @@ fn lifecycle_lock(root: &Path) -> anyhow::Result<File> {
         .open(root.join(".lifecycle.lock"))
         .context("open cache lifecycle lock")?;
     lock.lock().context("lock cache lifecycle")?;
-    Ok(lock)
+    Ok(CacheFileLock::new(lock))
 }
 
 fn create_backing_directory(root: &Path, backing: &Path) -> anyhow::Result<()> {
@@ -536,6 +549,8 @@ fn create_volume(record: &CacheRecord, backing: &Path, runner_id: &str) -> anyho
         &format!("scope.cache-key={}", record.identity_digest),
         "--label",
         &format!("scope.repository-id={}", record.repository_id),
+        "--label",
+        &format!("scope.cache-namespace={}", record.namespace.kind()),
         "--label",
         &format!("scope.cache-name={}", record.cache_name),
         "--label",
@@ -631,6 +646,11 @@ fn volume_matches(
         && volume.options.as_deref() == Some("bind")
         && volume.labels.get("scope.repository-id").map(String::as_str)
             == Some(record.repository_id.as_str())
+        && volume
+            .labels
+            .get("scope.cache-namespace")
+            .map(String::as_str)
+            == Some(record.namespace.kind())
         && volume.labels.get("scope.cache-name").map(String::as_str)
             == Some(record.cache_name.as_str())
         && volume.labels.get("scope.image").map(String::as_str) == Some(record.image.as_str())
@@ -751,97 +771,6 @@ fn verify_container_mounts(container: &str, expected: &[CacheMount]) -> anyhow::
     Ok(())
 }
 
-fn write_record(root: &Path, record: &CacheRecord) -> anyhow::Result<()> {
-    let location = record_location(root, record);
-    let metadata = root.join("metadata");
-    require_real_directory(&metadata, false, "cache metadata directory")?;
-    let directory = location
-        .record_path
-        .parent()
-        .context("cache record path has no runner namespace")?;
-    require_real_directory(directory, true, "runner cache metadata namespace")?;
-    let temporary = location
-        .record_path
-        .with_extension(format!("tmp.{}", std::process::id()));
-    let bytes = serde_json::to_vec(record)?;
-    let mut file = File::create(&temporary)?;
-    file.write_all(&bytes)?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    fs::rename(&temporary, &location.record_path)?;
-    File::open(directory)?.sync_all()?;
-    File::open(metadata)?.sync_all()?;
-    Ok(())
-}
-
-fn read_record_candidate(location: &CacheLocation, runner_id: &str) -> Option<CacheRecord> {
-    let record: CacheRecord =
-        serde_json::from_slice(&fs::read(&location.record_path).ok()?).ok()?;
-    (record.runner_id == runner_id
-        && record.runner_namespace == location.runner_namespace
-        && valid_record(&record, &location.identity_digest))
-    .then_some(record)
-}
-
-fn metadata_allows_warm(existing: &CacheRecord, desired: &CacheRecord) -> bool {
-    matches!(&existing.state, CacheState::Ready)
-        && existing.format == desired.format
-        && existing.runner_id == desired.runner_id
-        && existing.runner_namespace == desired.runner_namespace
-        && existing.identity_digest == desired.identity_digest
-        && existing.repository_id == desired.repository_id
-        && existing.cache_name == desired.cache_name
-        && existing.image == desired.image
-        && existing.container_image == desired.container_image
-        && existing.platform == desired.platform
-        && existing.volume_name == desired.volume_name
-}
-
-fn valid_record(record: &CacheRecord, expected_digest: &str) -> bool {
-    record.format == CACHE_FORMAT
-        && !record.runner_id.is_empty()
-        && record.runner_namespace == runner_namespace(&record.runner_id)
-        && record.identity_digest == expected_digest
-        && record.identity_digest.len() == 64
-        && record
-            .identity_digest
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-        && PinnedContainerImage::parse(record.container_image.clone())
-            .is_ok_and(|image| image.digest() == record.image)
-        && record.volume_name == volume_name(&record.runner_namespace, &record.identity_digest)
-}
-
-fn load_runner_records(root: &Path, runner_id: &str) -> anyhow::Result<Vec<CacheRecord>> {
-    let namespace = runner_namespace(runner_id);
-    let metadata = root.join("metadata");
-    require_real_directory(&metadata, false, "cache metadata directory")?;
-    let directory = metadata.join(&namespace);
-    if !directory.exists() {
-        return Ok(Vec::new());
-    }
-    require_real_directory(&directory, false, "runner cache metadata namespace")?;
-    let mut records = Vec::new();
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file()
-            && entry.path().extension().and_then(|value| value.to_str()) == Some("json")
-        {
-            let record: CacheRecord = serde_json::from_slice(&fs::read(entry.path())?)?;
-            if record.runner_id != runner_id
-                || record.runner_namespace != namespace
-                || !valid_record(&record, &record.identity_digest)
-                || entry.path().file_stem().and_then(|value| value.to_str())
-                    != Some(&record.identity_digest)
-            {
-                bail!("runner cache metadata identity is invalid");
-            }
-            records.push(record);
-        }
-    }
-    Ok(records)
-}
-
 fn require_real_directory(path: &Path, create: bool, label: &str) -> anyhow::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
@@ -853,17 +782,6 @@ fn require_real_directory(path: &Path, create: bool, label: &str) -> anyhow::Res
         }
         Err(error) => Err(error).with_context(|| format!("inspect {label} {}", path.display())),
     }
-}
-
-fn read_record_for_volume(
-    root: &Path,
-    volume: &str,
-    runner_id: &str,
-) -> anyhow::Result<CacheRecord> {
-    load_runner_records(root, runner_id)?
-        .into_iter()
-        .find(|record| record.volume_name == volume)
-        .with_context(|| format!("cache metadata for {volume} is missing"))
 }
 
 fn volume_is_referenced(volume: &str) -> anyhow::Result<bool> {

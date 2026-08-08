@@ -6,6 +6,7 @@ type StepLike = {
 }
 
 type SelectionLike = {
+  jobKey: string
   attemptId: string
   stepIndex: number
 }
@@ -13,6 +14,14 @@ type SelectionLike = {
 type AttemptLike = {
   id: string
   steps: readonly StepLike[]
+}
+
+type JobLike = {
+  job: {
+    key: string
+    state: string
+  }
+  attempts: readonly AttemptLike[]
 }
 
 const MAX_CACHED_STEP_LOG_CHARACTERS = 512 * 1_024
@@ -50,6 +59,49 @@ export function reconcileExpandedAttempts(
   return next
 }
 
+export function reconcileExpandedJobs(
+  expanded: ReadonlySet<string>,
+  jobs: readonly JobLike[],
+) {
+  const jobKeys = jobs.map(({ job }) => job.key)
+  return new Set([...expanded].filter((key) => jobKeys.includes(key)))
+}
+
+export function runAttempts(jobs: readonly JobLike[]) {
+  return jobs.flatMap(({ attempts }) => attempts)
+}
+
+export function newlySelectableAttempt(
+  previousAttempts: readonly AttemptLike[],
+  nextAttempts: readonly AttemptLike[],
+) {
+  const previousById = new Map(
+    previousAttempts.map((attempt) => [attempt.id, attempt]),
+  )
+  return nextAttempts.find((attempt) => {
+    const previous = previousById.get(attempt.id)
+    return defaultSelectedStep(attempt.steps) !== null &&
+      (previous === undefined || previous.steps.length === 0)
+  })
+}
+
+export function defaultSelectedJob(jobs: readonly JobLike[]) {
+  const preferredStates = [
+    'running',
+    'failed',
+    'lost',
+    'canceled',
+    'leased',
+    'queued',
+    'blocked',
+  ]
+  for (const state of preferredStates) {
+    const match = jobs.find(({ job }) => job.state === state)
+    if (match) return match
+  }
+  return jobs[0] ?? null
+}
+
 export function defaultSelectedStep(steps: readonly StepLike[]) {
   const preferred = steps.find((step) => step.state === 'running')?.index
     ?? steps.find((step) => step.state === 'failed')?.index
@@ -74,7 +126,7 @@ export function reconcileAutomaticStepSelection(
   if (stepIndex === null) return null
   return stepIndex === selection.stepIndex
     ? selection
-    : { attemptId: attempt.id, stepIndex }
+    : { ...selection, attemptId: attempt.id, stepIndex }
 }
 
 export function mergeStepLogs<T extends { position: number; text: string }>(

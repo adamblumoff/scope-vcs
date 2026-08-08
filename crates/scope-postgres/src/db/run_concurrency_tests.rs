@@ -1,12 +1,15 @@
 use super::runs_tests::{
-    enqueue, parallel_revision, postgres_store, register_runner, revision, run, run_for_revision,
+    enqueue, parallel_revision, postgres_store, register_runner, register_runner_with_capacity,
+    revision, run, run_for_revision, workflow_fixtures::revision_with_jobs,
 };
 use crate::error::PostgresErrorKind;
-use scope_domain::runs::run::{
-    AttemptConclusion, PinnedContainerImage, RunJobState, RunState, RunTrigger, StepConclusion,
-    StepState,
+use scope_domain::runs::{
+    run::{
+        AttemptConclusion, PinnedContainerImage, RunJobState, RunState, RunTrigger, StepConclusion,
+        StepState,
+    },
+    workflow::RunnerSelector,
 };
-use scope_domain::runs::workflow::RunnerSelector;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Barrier, task::JoinSet, time::timeout};
@@ -148,6 +151,187 @@ async fn completed_sibling_cannot_regress_running_run_while_another_job_is_lease
             .iter()
             .any(|job| job.state == RunJobState::Leased)
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn advisory_poll_does_not_wait_for_claim_write_locks() {
+    let store = Arc::new(postgres_store());
+    register_runner(&store, "runner-1", "linux-box").await;
+    enqueue(
+        &store,
+        run("run-poll-locks", "manual:poll-locks"),
+        revision(),
+    )
+    .await;
+
+    let locks = store.db.begin().await.unwrap();
+    for statement in [
+        "SELECT 1 FROM scope_run_jobs
+         WHERE run_id = 'run-poll-locks' AND job_key = 'checks'
+         FOR UPDATE",
+        "SELECT 1 FROM scope_runs WHERE id = 'run-poll-locks' FOR UPDATE",
+        "SELECT 1 FROM scope_runner_grants WHERE runner_id = 'runner-1' FOR UPDATE",
+    ] {
+        locks.execute_unprepared(statement).await.unwrap();
+    }
+
+    let polling_store = Arc::clone(&store);
+    let poll = tokio::spawn(async move {
+        polling_store
+            .runs()
+            .next_dispatchable_job("runner-1", 20)
+            .await
+    });
+    let result = timeout(Duration::from_secs(2), poll).await;
+    locks.rollback().await.unwrap();
+    let offer = result
+        .expect("advisory poll waited for claim write locks")
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(offer.run.id, "run-poll-locks");
+    assert_eq!(offer.job.key.as_str(), "checks");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stale_heartbeat_cannot_renew_after_capacity_admits_a_replacement() {
+    let store = Arc::new(postgres_store());
+    register_runner_with_capacity(&store, "runner-1", "linux-box", 1).await;
+    let revision = revision_with_jobs(&["build", "lint"]);
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-heartbeat-capacity",
+            "manual:heartbeat-capacity",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+    store
+        .runs()
+        .claim_job(
+            "run-heartbeat-capacity",
+            "build",
+            "runner-1",
+            "attempt-expiring",
+            &"a".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+
+    let grant_lock = store.db.begin().await.unwrap();
+    grant_lock
+        .execute_unprepared(
+            "SELECT 1 FROM scope_runner_grants
+             WHERE runner_id = 'runner-1'
+             FOR UPDATE",
+        )
+        .await
+        .unwrap();
+    let grant_blocker_pid = grant_lock
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT pg_backend_pid() AS pid".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i32>("", "pid")
+        .unwrap();
+
+    let claim_store = Arc::clone(&store);
+    let claim = tokio::spawn(async move {
+        claim_store
+            .runs()
+            .claim_job(
+                "run-heartbeat-capacity",
+                "lint",
+                "runner-1",
+                "attempt-replacement",
+                &"b".repeat(64),
+                80,
+                140,
+            )
+            .await
+    });
+    let mut claim_holds_runner_lock = false;
+    for _ in 0..100 {
+        let probe = store.db.begin().await.unwrap();
+        let result = probe
+            .execute_unprepared(
+                "SELECT 1 FROM scope_runners
+                 WHERE id = 'runner-1'
+                 FOR UPDATE NOWAIT",
+            )
+            .await;
+        let _ = probe.rollback().await;
+        if result.is_err() {
+            claim_holds_runner_lock = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        claim_holds_runner_lock,
+        "claim never reached its runner lock"
+    );
+
+    let heartbeat_store = Arc::clone(&store);
+    let heartbeat = tokio::spawn(async move {
+        heartbeat_store
+            .runs()
+            .heartbeat_attempt("attempt-expiring", "runner-1", &"a".repeat(64), 79, 139)
+            .await
+    });
+    let mut heartbeat_waits_behind_claim = false;
+    for _ in 0..100 {
+        heartbeat_waits_behind_claim = store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT EXISTS (
+                     SELECT 1
+                     FROM pg_stat_activity claimant
+                     JOIN pg_stat_activity heartbeat
+                       ON claimant.pid = ANY(pg_blocking_pids(heartbeat.pid))
+                     WHERE $1 = ANY(pg_blocking_pids(claimant.pid))
+                 ) AS waiting",
+                [grant_blocker_pid.into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get::<bool>("", "waiting")
+            .unwrap();
+        if heartbeat_waits_behind_claim {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        heartbeat_waits_behind_claim,
+        "heartbeat never waited behind the replacement claim"
+    );
+
+    grant_lock.commit().await.unwrap();
+    timeout(Duration::from_secs(5), claim)
+        .await
+        .expect("replacement claim did not finish")
+        .unwrap()
+        .unwrap();
+    let heartbeat_error = timeout(Duration::from_secs(5), heartbeat)
+        .await
+        .expect("stale heartbeat did not finish")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(heartbeat_error.kind, PostgresErrorKind::Unauthenticated);
+    assert!(heartbeat_error.message.contains("expired"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

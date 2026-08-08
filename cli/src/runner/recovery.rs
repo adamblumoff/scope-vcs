@@ -1,5 +1,6 @@
 use super::{
-    AttemptConclusionRequest, ClaimRunResponse, RunnerConfig, runner_client, runner_work_root,
+    AttemptConclusionRequest, ClaimRunResponse, RunnerConfig, job_container_name, runner_client,
+    runner_work_root,
 };
 use crate::api::abandon_attempt;
 use anyhow::{Context, bail};
@@ -17,7 +18,7 @@ const RECOVERY_CLAIM_FILE: &str = "claim.json";
 const RECOVERY_CLAIM_TEMP_FILE: &str = ".claim.json.tmp";
 const RECOVERY_PROGRESS_FILE: &str = "progress.json";
 const RECOVERY_PROGRESS_TEMP_FILE: &str = ".progress.json.tmp";
-const RECOVERY_SCHEMA_VERSION: u8 = 5;
+const RECOVERY_SCHEMA_VERSION: u8 = 7;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RecoveryEnvelope {
@@ -431,7 +432,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
             ),
         };
         if !entry.path().join(RECOVERY_PROGRESS_FILE).is_file() {
-            let container_name = container_name(&claim.attempt_id);
+            let container_name = job_container_name(&claim.attempt_id);
             if !super::supervisor::terminate_container(&container_name) {
                 bail!("could not confirm incomplete Scope container {container_name} was removed");
             }
@@ -440,7 +441,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
             continue;
         }
         let recovery = load_recovery_progress(&claim_path, claim)?;
-        let container_name = container_name(&recovery.claim.attempt_id);
+        let container_name = job_container_name(&recovery.claim.attempt_id);
         let state = container_state(&container_name)?;
         match state {
             ContainerState::Running | ContainerState::Exited => {
@@ -470,6 +471,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                 super::cache::finalize_volume_names(
                     config,
                     &recovery.progress.cache_volumes,
+                    &recovery.claim.attempt_id,
                     false,
                 )?;
                 abandon_recovery_claim(&client, config, &recovery)?;
@@ -490,6 +492,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                     super::cache::finalize_volume_names(
                         config,
                         &recovery.progress.cache_volumes,
+                        &recovery.claim.attempt_id,
                         false,
                     )?;
                     abandon_recovery_claim(&client, config, &recovery)?;
@@ -595,13 +598,13 @@ fn retire_incompatible_recovery_state_with(
         .file_name()
         .and_then(|name| name.to_str())
         .context("incompatible runner recovery directory name must be UTF-8")?;
-    let container_name = container_name(attempt_id);
+    let container_name = job_container_name(attempt_id);
     if !terminate_container(&container_name) {
         bail!("could not confirm incompatible Scope container {container_name} was removed");
     }
     fs::remove_dir_all(work_dir).context("retire incompatible runner recovery state")?;
     eprintln!(
-        "Retired incompatible Scope runner recovery schema {} for attempt {attempt_id}; local state and tainted caches from the pre-V5 attempt will not be resumed. Retry the run from Scope if it is still needed.",
+        "Retired incompatible Scope runner recovery schema {} for attempt {attempt_id}; local state and tainted caches will not be resumed. Retry the run from Scope if it is still needed.",
         schema_version.map_or_else(
             || "missing or invalid".to_string(),
             |version| version.to_string()
@@ -629,10 +632,6 @@ fn abandon_claim(
         &claim.attempt_token,
         &claim.attempt_id,
     )
-}
-
-fn container_name(attempt_id: &str) -> String {
-    format!("scope-{attempt_id}")
 }
 
 fn container_state(container_name: &str) -> anyhow::Result<ContainerState> {
@@ -789,14 +788,14 @@ mod tests {
     }
 
     #[test]
-    fn pre_v5_recovery_is_retired_before_current_schema_decoding() {
-        let root = TestDir::new("runner-v4-recovery");
-        let work_dir = root.path().join("attempt-v4");
+    fn older_recovery_is_retired_before_current_schema_decoding() {
+        let root = TestDir::new("runner-v6-recovery");
+        let work_dir = root.path().join("attempt-v6");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
         fs::write(
             &claim_path,
-            br#"{"schema_version":4,"claim":{"attempt_id":"attempt-v4","attempt_token":"secret"}}"#,
+            br#"{"schema_version":6,"claim":{"attempt_id":"attempt-v6","attempt_token":"secret"}}"#,
         )
         .unwrap();
         fs::write(work_dir.join(RECOVERY_PROGRESS_FILE), b"{}").unwrap();
@@ -804,9 +803,9 @@ mod tests {
         let StoredRecoveryEnvelope::Legacy { schema_version } =
             load_recovery_envelope(&claim_path).unwrap()
         else {
-            panic!("pre-V5 claim unexpectedly decoded as current recovery state");
+            panic!("older claim unexpectedly decoded as current recovery state");
         };
-        assert_eq!(schema_version, Some(4));
+        assert_eq!(schema_version, Some(6));
 
         let mut terminated = None;
         retire_incompatible_recovery_state_with(&work_dir, schema_version, |name| {
@@ -814,7 +813,7 @@ mod tests {
             true
         })
         .unwrap();
-        assert_eq!(terminated.as_deref(), Some("scope-attempt-v4"));
+        assert_eq!(terminated.as_deref(), Some("scope-attempt-v6"));
         assert!(!work_dir.exists());
     }
 
@@ -824,7 +823,7 @@ mod tests {
         let work_dir = root.path().join("attempt-newer");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
-        fs::write(&claim_path, br#"{"schema_version":6}"#).unwrap();
+        fs::write(&claim_path, br#"{"schema_version":8}"#).unwrap();
 
         let StoredRecoveryEnvelope::Newer { schema_version } =
             load_recovery_envelope(&claim_path).unwrap()
@@ -832,7 +831,7 @@ mod tests {
             panic!("newer recovery schema was not preserved");
         };
 
-        assert_eq!(schema_version, 6);
+        assert_eq!(schema_version, 8);
         assert!(claim_path.exists());
     }
 }

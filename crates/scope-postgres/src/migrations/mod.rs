@@ -12,6 +12,7 @@ mod m0011_compact_request_started_events;
 mod m0012_request_revisions;
 mod m0013_workflow_jobs;
 mod m0014_run_jobs;
+mod m0015_runner_capacity;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -41,6 +42,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0012_request_revisions::Migration),
             Box::new(m0013_workflow_jobs::Migration),
             Box::new(m0014_run_jobs::Migration),
+            Box::new(m0015_runner_capacity::Migration),
         ]
     }
 }

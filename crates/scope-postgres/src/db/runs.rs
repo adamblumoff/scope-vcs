@@ -15,7 +15,7 @@ use crate::error::PostgresError;
 use scope_domain::runs::{
     job::{RunJob, create_run_jobs, reconcile_run, request_run_cancellation, retry_run},
     run::{AttemptConclusion, PinnedContainerImage, Run, RunAttempt, RunAttemptStep, RunLogChunk},
-    runner::{Runner, RunnerGrant},
+    runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerMaxConcurrentJobs},
     workflow::WorkflowRevision,
 };
 use sea_orm::{
@@ -46,7 +46,17 @@ pub struct DispatchOffer {
 pub struct StoredRunLog {
     pub position: u64,
     pub run_id: String,
+    pub job_key: String,
     pub chunk: RunLogChunk,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeRunnerRegistrationCommand {
+    pub secret_hash: String,
+    pub version: String,
+    pub protocol_version: u32,
+    pub capabilities: RunnerCapabilities,
+    pub max_concurrent_jobs: RunnerMaxConcurrentJobs,
 }
 
 impl RunStore {
@@ -115,10 +125,7 @@ impl RunStore {
         &self,
         runner_id: &str,
         owner_user_id: &str,
-        secret_hash: String,
-        version: String,
-        protocol_version: u32,
-        capabilities: scope_domain::runs::runner::RunnerCapabilities,
+        command: UpgradeRunnerRegistrationCommand,
     ) -> Result<Runner, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let current = runner_by_id(&tx, runner_id).await?;
@@ -128,10 +135,11 @@ impl RunStore {
         let upgraded = Runner::restore(
             current.id,
             current.owner_user_id,
-            secret_hash,
-            version,
-            protocol_version,
-            capabilities,
+            command.secret_hash,
+            command.version,
+            command.protocol_version,
+            command.capabilities,
+            command.max_concurrent_jobs,
             true,
             current.created_at_unix,
             current.last_seen_at_unix,
@@ -375,18 +383,21 @@ impl RunStore {
         guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
         let (run, job, mut attempt) = locked_heartbeat_context(&tx, attempt_id).await?;
         let mut runner = ensure_runner_authorized(&tx, &run, &attempt).await?;
+        runner.record_seen(now_unix).map_err(PostgresError::from)?;
+        let observed_now = runner
+            .last_seen_at_unix
+            .ok_or_else(|| PostgresError::internal_message("runner observation time is missing"))?;
         let cancellation_requested = attempt
             .heartbeat(
                 &run,
                 &job,
                 runner_id,
                 token_hash,
-                now_unix,
+                observed_now,
                 lease_expires_at_unix,
             )
             .map_err(PostgresError::from)?;
         save_attempt(&tx, &attempt).await?;
-        runner.record_seen(now_unix).map_err(PostgresError::from)?;
         save_runner(&tx, &runner).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(cancellation_requested)
@@ -604,6 +615,7 @@ impl RunStore {
             return Ok(StoredRunLog {
                 position,
                 run_id: existing_run_id,
+                job_key: job.key.as_str().to_string(),
                 chunk: existing_chunk,
             });
         }
@@ -643,6 +655,7 @@ impl RunStore {
         Ok(StoredRunLog {
             position,
             run_id: run.id,
+            job_key: job.key.as_str().to_string(),
             chunk,
         })
     }

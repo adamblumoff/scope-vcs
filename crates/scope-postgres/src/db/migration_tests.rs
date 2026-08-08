@@ -185,6 +185,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0012_request_revisions",
             "m0013_workflow_jobs",
             "m0014_run_jobs",
+            "m0015_runner_capacity",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -881,6 +882,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0012_request_revisions",
             "m0013_workflow_jobs",
             "m0014_run_jobs",
+            "m0015_runner_capacity",
         ]
     );
 }
@@ -913,6 +915,7 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0012_request_revisions",
             "m0013_workflow_jobs",
             "m0014_run_jobs",
+            "m0015_runner_capacity",
         ]
     );
 }

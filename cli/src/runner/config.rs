@@ -1,4 +1,5 @@
 use anyhow::Context;
+use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use std::{
     env, fs,
     io::Write,
@@ -11,6 +12,7 @@ pub(super) struct RunnerConfig {
     pub(super) runner_id: String,
     pub(super) name: String,
     pub(super) secret: String,
+    pub(super) max_concurrent_jobs: RunnerMaxConcurrentJobs,
     pub(super) cache_root: Option<PathBuf>,
 }
 
@@ -222,5 +224,33 @@ mod tests {
             cache_home,
             home,
         ));
+    }
+
+    #[test]
+    fn runner_config_requires_a_valid_capacity() {
+        let json = serde_json::json!({
+            "api_url": "https://api.scope.test",
+            "runner_id": "runner-1",
+            "name": "linux-box",
+            "secret": "secret",
+            "max_concurrent_jobs": 4,
+            "cache_root": null
+        });
+        assert_eq!(
+            serde_json::from_value::<RunnerConfig>(json.clone())
+                .unwrap()
+                .max_concurrent_jobs
+                .get(),
+            4
+        );
+        let mut invalid = json.clone();
+        invalid["max_concurrent_jobs"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<RunnerConfig>(invalid).is_err());
+        let mut missing = json;
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("max_concurrent_jobs");
+        assert!(serde_json::from_value::<RunnerConfig>(missing).is_err());
     }
 }
