@@ -1,8 +1,9 @@
 use super::{RunStore, StoredRunLog, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    job::RunJob,
     run::{MAX_RUN_ATTEMPTS, Run, RunAttempt, RunAttemptStep},
-    workflow::WorkflowRevision,
+    workflow::{MAX_WORKFLOW_JOBS, WorkflowRevision},
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::HashMap;
@@ -16,6 +17,7 @@ pub struct RunAttemptDetail {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunDetail {
     pub run: Run,
+    pub jobs: Vec<RunJob>,
     pub workflow_revision: WorkflowRevision,
     pub attempts: Vec<RunAttemptDetail>,
 }
@@ -40,10 +42,17 @@ impl RunStore {
             return Ok(None);
         };
         let workflow_revision = super::runs::workflow_revision_for_run(&tx, &run).await?;
+        let jobs = super::run_attempt_persistence::jobs_for_run(&tx, run_id).await?;
+        if jobs.is_empty() {
+            return Err(PostgresError::internal_message(
+                "run is missing its persisted jobs",
+            ));
+        }
         let attempts = run_attempt_details_with(&tx, run_id).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(Some(RunDetail {
             run,
+            jobs,
             workflow_revision,
             attempts,
         }))
@@ -70,6 +79,7 @@ impl RunStore {
             .await
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::not_found("run attempt not found"))?;
+        let job_key = attempt.job_key.clone();
         let step_index = i32::try_from(step_index)
             .map_err(|_| PostgresError::invalid_input("step index is too large"))?;
         let step_exists =
@@ -100,6 +110,7 @@ impl RunStore {
                 Ok(StoredRunLog {
                     position,
                     run_id,
+                    job_key: job_key.clone(),
                     chunk: model.try_into_domain()?,
                 })
             })
@@ -118,21 +129,44 @@ impl RunStore {
     ) -> Result<Vec<StoredRunLog>, PostgresError> {
         let after = i64::try_from(after)
             .map_err(|_| PostgresError::invalid_input("run log cursor is too large"))?;
-        entities::run_log::Entity::find()
+        let logs = entities::run_log::Entity::find()
             .filter(entities::run_log::Column::RunId.eq(run_id))
             .filter(entities::run_log::Column::Position.gt(after))
             .order_by_asc(entities::run_log::Column::Position)
             .limit(limit)
             .all(self.db.as_ref())
             .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
+            .map_err(PostgresError::internal)?;
+        let attempt_ids = logs
+            .iter()
+            .map(|model| model.attempt_id.clone())
+            .collect::<Vec<_>>();
+        let jobs_by_attempt = if attempt_ids.is_empty() {
+            HashMap::new()
+        } else {
+            entities::run_attempt::Entity::find()
+                .filter(entities::run_attempt::Column::Id.is_in(attempt_ids))
+                .all(self.db.as_ref())
+                .await
+                .map_err(PostgresError::internal)?
+                .into_iter()
+                .map(|attempt| (attempt.id, attempt.job_key))
+                .collect::<HashMap<_, _>>()
+        };
+        logs.into_iter()
             .map(|model| {
                 let position = entities::i64_to_u64(model.position, "run log position")?;
                 let run_id = model.run_id.clone();
+                let job_key = jobs_by_attempt
+                    .get(&model.attempt_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        PostgresError::internal_message("run log references a missing attempt")
+                    })?;
                 Ok(StoredRunLog {
                     position,
                     run_id,
+                    job_key,
                     chunk: model.try_into_domain()?,
                 })
             })
@@ -162,11 +196,16 @@ async fn run_attempt_details_with<C>(
 where
     C: ConnectionTrait,
 {
+    let max_attempts = u64::from(MAX_RUN_ATTEMPTS)
+        .checked_mul(u64::try_from(MAX_WORKFLOW_JOBS).map_err(|_| {
+            PostgresError::internal_message("workflow job limit does not fit the database query")
+        })?)
+        .ok_or_else(|| PostgresError::internal_message("run attempt query limit overflow"))?;
     let attempts = entities::run_attempt::Entity::find()
         .filter(entities::run_attempt::Column::RunId.eq(run_id))
         .order_by_desc(entities::run_attempt::Column::CreatedAtUnix)
         .order_by_desc(entities::run_attempt::Column::Number)
-        .limit(u64::from(MAX_RUN_ATTEMPTS))
+        .limit(max_attempts)
         .all(conn)
         .await
         .map_err(PostgresError::internal)?;

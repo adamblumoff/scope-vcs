@@ -15,7 +15,7 @@ use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{ClaimRunResponse, CompleteAttemptStepRequest, StepConclusionRequest};
 use scope_domain::runs::run::StepState;
-use scope_domain::runs::workflow::CompiledWorkflow;
+use scope_domain::runs::workflow::WorkflowJob;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -26,13 +26,10 @@ use std::{
 
 const CONTAINER_ACTIVE_STEP: &str = "/scope-active-step";
 
-pub(super) fn write_step_programs(
-    work_dir: &Path,
-    workflow: &CompiledWorkflow,
-) -> anyhow::Result<PathBuf> {
+pub(super) fn write_step_programs(work_dir: &Path, job: &WorkflowJob) -> anyhow::Result<PathBuf> {
     let programs = work_dir.join("steps");
     fs::create_dir(&programs).context("create runner step program directory")?;
-    for (index, step) in workflow.steps().iter().enumerate() {
+    for (index, step) in job.steps().iter().enumerate() {
         let path = programs.join(format!("step-{index}.sh"));
         fs::write(&path, step.run()).with_context(|| format!("write workflow step {index}"))?;
     }
@@ -140,7 +137,7 @@ pub(super) fn run_steps(
     mut container: ContainerGuard,
 ) -> anyhow::Result<ExecutionOutcome> {
     supervisor.set_execution_deadline(execution_deadline_unix);
-    let step_count = u32::try_from(claim.job.workflow.steps().len())
+    let step_count = u32::try_from(super::dispatch_job(claim)?.steps().len())
         .context("workflow step count exceeds runner protocol")?;
     let programs = work.path.join("steps");
     for step_index in first_step_index..step_count {
@@ -598,7 +595,7 @@ pub(super) fn report_step_conclusion_until_reconciled(
                 let reason = supervisor.reason();
                 if reason != AttemptStopReason::None {
                     let final_step = step_index.saturating_add(1)
-                        == u32::try_from(claim.job.workflow.steps().len())
+                        == u32::try_from(super::dispatch_job(claim)?.steps().len())
                             .context("workflow step count exceeds runner protocol")?;
                     let terminal_step = matches!(&conclusion, StepConclusionRequest::Failed { .. })
                         || matches!(&conclusion, StepConclusionRequest::Succeeded) && final_step;
@@ -799,14 +796,14 @@ fn command_success(command: &mut Command, context: &str) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use scope_domain::runs::workflow::{
-        CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowStep, WorkflowTriggers,
+        ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
     };
 
     #[test]
     fn container_restarts_select_read_only_step_programs_without_log_markers() {
-        let workflow = CompiledWorkflow::new(
-            "test",
-            WorkflowTriggers::new(true, false).unwrap(),
+        let job = WorkflowJob::new(
+            WorkflowJobId::parse("checks").unwrap(),
+            vec![],
             RunnerSelector::Any,
             ContainerSpec::new("alpine:3.20").unwrap(),
             60,
@@ -822,7 +819,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
 
-        let programs = write_step_programs(&root, &workflow).unwrap();
+        let programs = write_step_programs(&root, &job).unwrap();
         assert_eq!(
             fs::read_to_string(programs.join("step-0.sh")).unwrap(),
             "printf one"

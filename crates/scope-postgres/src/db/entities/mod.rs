@@ -4,14 +4,16 @@ use crate::error::PostgresError;
 use scope_domain::policy::{Policy, ScopePath, Visibility};
 use scope_domain::projection_views::{ProjectionViewFile, ProjectionViewFileContent};
 use scope_domain::runs::{
+    job::RunJob,
     run::{
         AttemptState, AttemptTerminalReason, PinnedContainerImage, Run, RunAttempt, RunAttemptStep,
-        RunLogChunk, RunSource, RunState, RunTrigger, StepState,
+        RunJobState, RunLogChunk, RunSource, RunState, RunTrigger, StepState,
     },
     runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerName},
     trigger::PushTriggerEvaluation,
     workflow::{
-        CompiledWorkflow, RunnerSelector, WorkflowIdentity, WorkflowPath, WorkflowRevision,
+        CompiledWorkflow, RunnerSelector, WorkflowIdentity, WorkflowJobId, WorkflowPath,
+        WorkflowRevision,
     },
 };
 use scope_domain::store::{
@@ -97,8 +99,8 @@ pub use requests::{
     request_event, request_invitee, request_rating, request_revision,
 };
 pub use runs::{
-    push_trigger_evaluation, run, run_attempt, run_attempt_step, run_log, runner, runner_grant,
-    workflow_revision,
+    push_trigger_evaluation, run, run_attempt, run_attempt_step, run_job, run_log, runner,
+    runner_grant, workflow_revision,
 };
 
 #[cfg(test)]

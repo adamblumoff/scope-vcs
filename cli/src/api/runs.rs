@@ -13,6 +13,8 @@ use scope_api_contract::{
     RunLogResponse, RunResponse, RunnerPollResponse, RunnerResponse,
     UpgradeRunnerRegistrationRequest, UpgradeRunnerRegistrationResponse,
 };
+use scope_domain::runs::run::RunJobState;
+use serde::Deserialize;
 use std::io::BufRead;
 
 pub fn register_runner(
@@ -200,6 +202,44 @@ pub enum RunStreamEvent {
     Status(RunResponse),
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct WatchedRunJob {
+    pub key: String,
+    pub state: RunJobState,
+}
+
+#[derive(Deserialize)]
+struct WatchedRunDetail {
+    jobs: Vec<WatchedRunJobDetail>,
+}
+
+#[derive(Deserialize)]
+struct WatchedRunJobDetail {
+    job: WatchedRunJob,
+}
+
+pub fn run_jobs(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    run_id: &str,
+) -> anyhow::Result<Vec<WatchedRunJob>> {
+    let detail: WatchedRunDetail = parse_json(
+        client
+            .get(format!(
+                "{api_url}{}",
+                routes::repo_run_detail(owner, repo, run_id)
+            ))
+            .bearer_auth(session_token)
+            .send()
+            .context("load Scope run jobs")?,
+        "load Scope run jobs",
+    )?;
+    Ok(detail.jobs.into_iter().map(|detail| detail.job).collect())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn stream_run_events(
     client: &Client,
@@ -352,10 +392,14 @@ pub fn runner_claim(
     api_url: &str,
     runner_secret: &str,
     run_id: &str,
+    job_key: &str,
 ) -> anyhow::Result<ClaimRunResponse> {
     parse_json(
         client
-            .post(format!("{api_url}{}", routes::runner_claim(run_id)))
+            .post(format!(
+                "{api_url}{}",
+                routes::runner_claim(run_id, job_key)
+            ))
             .bearer_auth(runner_secret)
             .send()
             .context("claim Scope run")?,
@@ -601,7 +645,7 @@ mod run_event_stream_tests {
             ": keep-alive\n\n",
             "id: 7\n",
             "event: log\n",
-            "data: {\"attempt_id\":\"attempt-1\",\"step_index\":0,\"position\":7,\"sequence\":2,",
+            "data: {\"attempt_id\":\"attempt-1\",\"job_key\":\"checks\",\"step_index\":0,\"position\":7,\"sequence\":2,",
             "\"text\":\"hello\\n\",\"created_at_unix\":9}\n\n",
             "event: error\n",
             "data: {\"message\":\"must not be reached\"}\n\n"
@@ -616,6 +660,7 @@ mod run_event_stream_tests {
         .unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].position, 7);
+        assert_eq!(logs[0].job_key, "checks");
         assert_eq!(logs[0].text, "hello\n");
     }
 }

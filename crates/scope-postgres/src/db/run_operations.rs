@@ -1,10 +1,11 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    job::RunJob,
     run::Run,
     runner::{Runner, RunnerGrant},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::StoredRunLog;
@@ -16,23 +17,63 @@ pub struct RepositoryRunner {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryRun {
+    pub run: Run,
+    pub jobs: Vec<RunJob>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunSnapshot {
+    pub run: Run,
+    pub jobs: Vec<RunJob>,
+    pub logs_truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentRunLogs {
     pub logs: Vec<StoredRunLog>,
     pub truncated_in_view: bool,
 }
 
 impl RunStore {
+    pub async fn run_snapshot(&self, run_id: &str) -> Result<Option<RunSnapshot>, PostgresError> {
+        let tx = super::begin_metadata_read_snapshot(self.db.as_ref()).await?;
+        let Some(run) = entities::run::Entity::find_by_id(run_id.to_string())
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .map(entities::run::Model::try_into_domain)
+            .transpose()?
+        else {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(None);
+        };
+        let mut jobs = run_jobs_by_ids(&tx, &[run_id.to_string()]).await?;
+        let jobs = jobs
+            .remove(run_id)
+            .filter(|jobs| !jobs.is_empty())
+            .ok_or_else(|| PostgresError::internal_message("run is missing its persisted jobs"))?;
+        let logs_truncated = run_has_truncated_logs_with(&tx, run_id).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(Some(RunSnapshot {
+            run,
+            jobs,
+            logs_truncated,
+        }))
+    }
+
     pub async fn repository_operations_runs(
         &self,
         repository_id: &str,
         recent_limit: u64,
-    ) -> Result<Vec<Run>, PostgresError> {
+    ) -> Result<Vec<RepositoryRun>, PostgresError> {
+        let tx = super::begin_metadata_read_snapshot(self.db.as_ref()).await?;
         let mut models = entities::run::Entity::find()
             .filter(entities::run::Column::RepoId.eq(repository_id))
             .filter(entities::run::Column::CompletedAtUnix.is_null())
             .order_by_desc(entities::run::Column::UpdatedAtUnix)
             .order_by_desc(entities::run::Column::Id)
-            .all(self.db.as_ref())
+            .all(&tx)
             .await
             .map_err(PostgresError::internal)?;
         let terminal_limit = recent_limit.saturating_sub(models.len() as u64);
@@ -50,15 +91,43 @@ impl RunStore {
             }
             models.extend(
                 terminal_query
-                    .all(self.db.as_ref())
+                    .all(&tx)
                     .await
                     .map_err(PostgresError::internal)?,
             );
         }
-        models
+        let run_ids = models.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
+        let mut jobs = run_jobs_by_ids(&tx, &run_ids).await?;
+        let runs = models
             .into_iter()
             .map(entities::run::Model::try_into_domain)
-            .collect()
+            .map(|run| {
+                let run = run?;
+                let jobs = jobs
+                    .remove(&run.id)
+                    .filter(|jobs| !jobs.is_empty())
+                    .ok_or_else(|| {
+                        PostgresError::internal_message("run is missing its persisted jobs")
+                    })?;
+                Ok(RepositoryRun { jobs, run })
+            })
+            .collect();
+        tx.commit().await.map_err(PostgresError::internal)?;
+        runs
+    }
+
+    pub async fn run_jobs(&self, run_id: &str) -> Result<Vec<RunJob>, PostgresError> {
+        let mut jobs = run_jobs_by_ids(self.db.as_ref(), &[run_id.to_string()]).await?;
+        jobs.remove(run_id)
+            .filter(|jobs| !jobs.is_empty())
+            .ok_or_else(|| PostgresError::internal_message("run is missing its persisted jobs"))
+    }
+
+    pub async fn run_jobs_by_ids(
+        &self,
+        run_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<RunJob>>, PostgresError> {
+        run_jobs_by_ids(self.db.as_ref(), run_ids).await
     }
 
     pub async fn repository_runners(
@@ -126,6 +195,22 @@ impl RunStore {
             logs.pop();
         }
         logs.reverse();
+        let attempt_ids = logs
+            .iter()
+            .map(|model| model.attempt_id.clone())
+            .collect::<Vec<_>>();
+        let jobs_by_attempt = if attempt_ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            entities::run_attempt::Entity::find()
+                .filter(entities::run_attempt::Column::Id.is_in(attempt_ids))
+                .all(self.db.as_ref())
+                .await
+                .map_err(PostgresError::internal)?
+                .into_iter()
+                .map(|attempt| (attempt.id, attempt.job_key))
+                .collect::<BTreeMap<_, _>>()
+        };
 
         Ok(RecentRunLogs {
             truncated_in_view,
@@ -134,9 +219,19 @@ impl RunStore {
                 .map(|model| {
                     let position = entities::i64_to_u64(model.position, "run log position")?;
                     let run_id = model.run_id.clone();
+                    let job_key =
+                        jobs_by_attempt
+                            .get(&model.attempt_id)
+                            .cloned()
+                            .ok_or_else(|| {
+                                PostgresError::internal_message(
+                                    "run log references a missing attempt",
+                                )
+                            })?;
                     Ok(StoredRunLog {
                         position,
                         run_id,
+                        job_key,
                         chunk: model.try_into_domain()?,
                     })
                 })
@@ -145,13 +240,7 @@ impl RunStore {
     }
 
     pub async fn run_has_truncated_logs(&self, run_id: &str) -> Result<bool, PostgresError> {
-        Ok(entities::run_attempt::Entity::find()
-            .filter(entities::run_attempt::Column::RunId.eq(run_id))
-            .filter(entities::run_attempt::Column::LogsTruncated.eq(true))
-            .one(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .is_some())
+        run_has_truncated_logs_with(self.db.as_ref(), run_id).await
     }
 
     pub async fn run_ids_with_truncated_logs(
@@ -172,4 +261,44 @@ impl RunStore {
             .map_err(PostgresError::internal)
             .map(|ids| ids.into_iter().collect())
     }
+}
+
+async fn run_has_truncated_logs_with<C>(conn: &C, run_id: &str) -> Result<bool, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    Ok(entities::run_attempt::Entity::find()
+        .filter(entities::run_attempt::Column::RunId.eq(run_id))
+        .filter(entities::run_attempt::Column::LogsTruncated.eq(true))
+        .one(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .is_some())
+}
+
+async fn run_jobs_by_ids<C>(
+    conn: &C,
+    run_ids: &[String],
+) -> Result<BTreeMap<String, Vec<RunJob>>, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    if run_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    Ok(entities::run_job::Entity::find()
+        .filter(entities::run_job::Column::RunId.is_in(run_ids.to_vec()))
+        .order_by_asc(entities::run_job::Column::RunId)
+        .order_by_asc(entities::run_job::Column::JobKey)
+        .all(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(entities::run_job::Model::try_into_domain)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .fold(BTreeMap::new(), |mut jobs, job| {
+            jobs.entry(job.run_id.clone()).or_default().push(job);
+            jobs
+        }))
 }
