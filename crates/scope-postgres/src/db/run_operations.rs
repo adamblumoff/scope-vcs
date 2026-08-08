@@ -23,12 +23,45 @@ pub struct RepositoryRun {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunSnapshot {
+    pub run: Run,
+    pub jobs: Vec<RunJob>,
+    pub logs_truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentRunLogs {
     pub logs: Vec<StoredRunLog>,
     pub truncated_in_view: bool,
 }
 
 impl RunStore {
+    pub async fn run_snapshot(&self, run_id: &str) -> Result<Option<RunSnapshot>, PostgresError> {
+        let tx = super::begin_metadata_read_snapshot(self.db.as_ref()).await?;
+        let Some(run) = entities::run::Entity::find_by_id(run_id.to_string())
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .map(entities::run::Model::try_into_domain)
+            .transpose()?
+        else {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(None);
+        };
+        let mut jobs = run_jobs_by_ids(&tx, &[run_id.to_string()]).await?;
+        let jobs = jobs
+            .remove(run_id)
+            .filter(|jobs| !jobs.is_empty())
+            .ok_or_else(|| PostgresError::internal_message("run is missing its persisted jobs"))?;
+        let logs_truncated = run_has_truncated_logs_with(&tx, run_id).await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(Some(RunSnapshot {
+            run,
+            jobs,
+            logs_truncated,
+        }))
+    }
+
     pub async fn repository_operations_runs(
         &self,
         repository_id: &str,
@@ -181,13 +214,7 @@ impl RunStore {
     }
 
     pub async fn run_has_truncated_logs(&self, run_id: &str) -> Result<bool, PostgresError> {
-        Ok(entities::run_attempt::Entity::find()
-            .filter(entities::run_attempt::Column::RunId.eq(run_id))
-            .filter(entities::run_attempt::Column::LogsTruncated.eq(true))
-            .one(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .is_some())
+        run_has_truncated_logs_with(self.db.as_ref(), run_id).await
     }
 
     pub async fn run_ids_with_truncated_logs(
@@ -208,6 +235,19 @@ impl RunStore {
             .map_err(PostgresError::internal)
             .map(|ids| ids.into_iter().collect())
     }
+}
+
+async fn run_has_truncated_logs_with<C>(conn: &C, run_id: &str) -> Result<bool, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    Ok(entities::run_attempt::Entity::find()
+        .filter(entities::run_attempt::Column::RunId.eq(run_id))
+        .filter(entities::run_attempt::Column::LogsTruncated.eq(true))
+        .one(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .is_some())
 }
 
 async fn run_jobs_by_ids<C>(

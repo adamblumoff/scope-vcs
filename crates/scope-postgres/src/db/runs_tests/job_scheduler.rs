@@ -77,6 +77,42 @@ async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_j
 }
 
 #[tokio::test]
+async fn run_snapshot_returns_the_run_jobs_and_log_state_together() {
+    let store = postgres_store();
+    let revision = parallel_revision();
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-snapshot",
+            "manual:snapshot",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+
+    let snapshot = store
+        .runs()
+        .run_snapshot("run-snapshot")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.run.id, "run-snapshot");
+    assert_eq!(
+        snapshot
+            .jobs
+            .iter()
+            .map(|job| job.key.as_str())
+            .collect::<Vec<_>>(),
+        ["build", "lint"]
+    );
+    assert!(!snapshot.logs_truncated);
+}
+
+#[tokio::test]
 async fn independent_jobs_claim_concurrently_with_job_scoped_attempt_ordinals() {
     let store = postgres_store();
     register_runner(&store, "runner-1", "linux-box").await;

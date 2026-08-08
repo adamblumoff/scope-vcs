@@ -131,14 +131,18 @@ pub(crate) async fn get_run(
     headers: HeaderMap,
     Path((owner, repo_name, run_id)): Path<(String, String, String)>,
 ) -> Result<Json<RunResponse>, ApiError> {
-    let (run, _) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
-    let logs_truncated = state
+    require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
+    let snapshot = state
         .metadata
         .runs()
-        .run_has_truncated_logs(&run_id)
-        .await?;
-    let jobs = state.metadata.runs().run_jobs(&run.id).await?;
-    Ok(Json(run_response(&run, &jobs, logs_truncated)?))
+        .run_snapshot(&run_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("run not found"))?;
+    Ok(Json(run_response(
+        &snapshot.run,
+        &snapshot.jobs,
+        snapshot.logs_truncated,
+    )?))
 }
 
 pub(crate) async fn get_repository_operations(
@@ -531,8 +535,14 @@ async fn stream_run_events(
             }
         }
 
-        let run = match context.state.metadata.runs().run(&context.run_id).await {
-            Ok(Some(run)) => run,
+        let snapshot = match context
+            .state
+            .metadata
+            .runs()
+            .run_snapshot(&context.run_id)
+            .await
+        {
+            Ok(Some(snapshot)) => snapshot,
             Ok(None) => {
                 send_stream_error(&sender, ApiError::not_found("run no longer exists")).await;
                 return;
@@ -542,6 +552,7 @@ async fn stream_run_events(
                 return;
             }
         };
+        let run = &snapshot.run;
         let terminal = run.state.is_terminal();
         if terminal && !terminal_observed {
             // Log append and attempt completion are separate transactions. Seeing the terminal
@@ -553,27 +564,7 @@ async fn stream_run_events(
         }
         if last_state != Some(run.state) && (!terminal || !has_full_page) {
             last_state = Some(run.state);
-            let logs_truncated = match context
-                .state
-                .metadata
-                .runs()
-                .run_has_truncated_logs(&context.run_id)
-                .await
-            {
-                Ok(logs_truncated) => logs_truncated,
-                Err(error) => {
-                    send_stream_error(&sender, error.into()).await;
-                    return;
-                }
-            };
-            let jobs = match context.state.metadata.runs().run_jobs(&run.id).await {
-                Ok(jobs) => jobs,
-                Err(error) => {
-                    send_stream_error(&sender, error.into()).await;
-                    return;
-                }
-            };
-            let response = match run_response(&run, &jobs, logs_truncated) {
+            let response = match run_response(run, &snapshot.jobs, snapshot.logs_truncated) {
                 Ok(response) => response,
                 Err(error) => {
                     send_stream_error(&sender, error).await;
