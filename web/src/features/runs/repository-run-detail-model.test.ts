@@ -37,12 +37,12 @@ describe('repository run detail model', () => {
     assert.deepEqual([...expanded], ['old', 'retry'])
   })
 
-  it('keeps known job expansion and falls back to the first job', () => {
+  it('keeps known job expansion without reopening collapsed jobs', () => {
     const jobs = [
       { job: { key: 'backend', state: 'succeeded' }, attempts: [] },
       { job: { key: 'web', state: 'queued' }, attempts: [] },
     ]
-    assert.deepEqual([...reconcileExpandedJobs(new Set(), jobs)], ['backend'])
+    assert.deepEqual([...reconcileExpandedJobs(new Set(), jobs)], [])
     assert.deepEqual(
       [...reconcileExpandedJobs(new Set(['web', 'removed']), jobs)],
       ['web'],

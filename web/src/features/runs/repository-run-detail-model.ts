@@ -64,9 +64,7 @@ export function reconcileExpandedJobs(
   jobs: readonly JobLike[],
 ) {
   const jobKeys = jobs.map(({ job }) => job.key)
-  const next = new Set([...expanded].filter((key) => jobKeys.includes(key)))
-  if (next.size === 0 && jobKeys[0]) next.add(jobKeys[0])
-  return next
+  return new Set([...expanded].filter((key) => jobKeys.includes(key)))
 }
 
 export function runAttempts(jobs: readonly JobLike[]) {
