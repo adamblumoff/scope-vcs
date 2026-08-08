@@ -281,7 +281,6 @@ pub(crate) async fn complete_step(
     Json(input): Json<CompleteAttemptStepRequest>,
 ) -> Result<Json<AttemptStatusResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
-    let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
     let conclusion = match input.conclusion {
         StepConclusionRequest::Succeeded => StepConclusion::Succeeded,
         StepConclusionRequest::Failed { exit_code } => StepConclusion::Failed { exit_code },
@@ -291,7 +290,6 @@ pub(crate) async fn complete_step(
         .runs()
         .complete_attempt_step(
             &attempt_id,
-            &authenticated.attempt.runner_id,
             &token_hash,
             step_index,
             conclusion,
@@ -308,7 +306,6 @@ pub(crate) async fn complete(
     Json(input): Json<CompleteAttemptRequest>,
 ) -> Result<Json<AttemptStatusResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
-    let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
     let conclusion = match input.conclusion {
         AttemptConclusionRequest::SetupFailed { exit_code, message } => {
             AttemptConclusion::SetupFailed { exit_code, message }
@@ -319,13 +316,7 @@ pub(crate) async fn complete(
     let claim = state
         .metadata
         .runs()
-        .complete_attempt(
-            &attempt_id,
-            &authenticated.attempt.runner_id,
-            &token_hash,
-            conclusion,
-            unix_now()?,
-        )
+        .complete_attempt(&attempt_id, &token_hash, conclusion, unix_now()?)
         .await?;
     Ok(Json(attempt_status(&claim)))
 }

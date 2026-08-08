@@ -125,7 +125,6 @@ async fn completed_sibling_cannot_regress_running_run_while_another_job_is_lease
         .runs()
         .complete_attempt_step(
             &build.attempt.id,
-            "runner-1",
             &"a".repeat(64),
             0,
             StepConclusion::Succeeded,
@@ -451,7 +450,6 @@ async fn attempt_details_are_newest_first_by_internal_ordinal_with_isolated_step
         .runs()
         .complete_attempt(
             "attempt-z",
-            "runner-1",
             &"a".repeat(64),
             AttemptConclusion::SetupFailed {
                 exit_code: 1,

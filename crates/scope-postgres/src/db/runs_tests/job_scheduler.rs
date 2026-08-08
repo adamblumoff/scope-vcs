@@ -350,7 +350,6 @@ async fn active_cancellation_is_intent_until_runner_acknowledges() {
         .runs()
         .complete_attempt(
             &claim.attempt.id,
-            "runner-1",
             &"a".repeat(64),
             AttemptConclusion::Canceled,
             50,
@@ -410,7 +409,6 @@ async fn retry_persists_the_jobs_pinned_container_image() {
         .runs()
         .complete_attempt(
             "attempt-retry-pin",
-            "runner-1",
             &"a".repeat(64),
             AttemptConclusion::SetupFailed {
                 exit_code: 1,

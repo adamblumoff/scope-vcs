@@ -738,14 +738,7 @@ async fn complete_canary_attempt(store: &MetadataStore, run_id: &str) -> (String
         .unwrap();
     store
         .runs()
-        .complete_attempt_step(
-            &attempt_id,
-            "runner-1",
-            &token_hash,
-            0,
-            StepConclusion::Succeeded,
-            24,
-        )
+        .complete_attempt_step(&attempt_id, &token_hash, 0, StepConclusion::Succeeded, 24)
         .await
         .unwrap();
     (attempt_id, token_hash)

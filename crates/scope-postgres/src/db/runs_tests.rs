@@ -98,7 +98,6 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
         .runs()
         .complete_attempt(
             &first.attempt.id,
-            "runner-1",
             &"a".repeat(64),
             AttemptConclusion::SetupFailed {
                 exit_code: 1,
@@ -155,7 +154,6 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
         .runs()
         .complete_attempt_step(
             "attempt-1",
-            "runner-1",
             &"a".repeat(64),
             0,
             StepConclusion::Succeeded,
@@ -163,6 +161,54 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
         )
         .await
         .unwrap();
+    let replayed = store
+        .runs()
+        .complete_attempt_step(
+            "attempt-1",
+            &"a".repeat(64),
+            0,
+            StepConclusion::Succeeded,
+            31,
+        )
+        .await
+        .unwrap();
+    assert_eq!(replayed.attempt.state, AttemptState::Succeeded);
+    assert_eq!(replayed.run.state, RunState::Succeeded);
+    assert_eq!(
+        store
+            .runs()
+            .complete_attempt_step(
+                "attempt-1",
+                &"b".repeat(64),
+                0,
+                StepConclusion::Succeeded,
+                32,
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        PostgresErrorKind::Unauthenticated
+    );
+    store
+        .runs()
+        .revoke_runner_grant("owner/repo", "runner-1", 33)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .runs()
+            .complete_attempt_step(
+                "attempt-1",
+                &"a".repeat(64),
+                0,
+                StepConclusion::Succeeded,
+                34,
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        PostgresErrorKind::PermissionDenied
+    );
 
     assert_eq!(
         store

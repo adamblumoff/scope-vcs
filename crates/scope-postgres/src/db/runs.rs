@@ -395,13 +395,15 @@ impl RunStore {
     pub async fn complete_attempt(
         &self,
         attempt_id: &str,
-        runner_id: &str,
         token_hash: &str,
         conclusion: AttemptConclusion,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         self.mutate_attempt(attempt_id, |run, job, attempt, steps| {
-            attempt.complete(run, job, steps, runner_id, token_hash, conclusion, now_unix)
+            let runner_id = attempt.runner_id.clone();
+            attempt.complete(
+                run, job, steps, &runner_id, token_hash, conclusion, now_unix,
+            )
         })
         .await
     }

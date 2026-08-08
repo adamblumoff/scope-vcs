@@ -22,7 +22,6 @@ impl RunStore {
     pub async fn complete_attempt_step(
         &self,
         attempt_id: &str,
-        runner_id: &str,
         token_hash: &str,
         step_index: u32,
         conclusion: StepConclusion,
@@ -39,15 +38,17 @@ impl RunStore {
             == Some(step_count);
         if matches!(conclusion, StepConclusion::Failed { .. }) || last_step {
             self.mutate_attempt(attempt_id, |_, job, attempt, steps| {
+                let runner_id = attempt.runner_id.clone();
                 attempt.complete_step(
-                    job, steps, runner_id, token_hash, step_index, conclusion, now_unix,
+                    job, steps, &runner_id, token_hash, step_index, conclusion, now_unix,
                 )
             })
             .await
         } else {
             self.mutate_active_attempt(attempt_id, |_, job, attempt, steps| {
+                let runner_id = attempt.runner_id.clone();
                 attempt.complete_step(
-                    job, steps, runner_id, token_hash, step_index, conclusion, now_unix,
+                    job, steps, &runner_id, token_hash, step_index, conclusion, now_unix,
                 )
             })
             .await
