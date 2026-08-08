@@ -11,9 +11,9 @@ use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{CreateManualRunQuery, RunResponse, RunRunnerSelection};
 use scope_domain::runs::run::{RunJobState, RunState};
-use std::{
-    collections::BTreeMap, env, fs, path::PathBuf, process::Command, thread, time::Duration,
-};
+use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
+
+const MAX_PARTIAL_JOB_LINE_BYTES: usize = 8 * 1_024;
 
 pub fn start(
     workflow: &str,
@@ -197,28 +197,71 @@ fn print_terminal(run: &RunResponse, jobs: Option<&[crate::api::WatchedRunJob]>)
 
 #[derive(Default)]
 struct JobLineBuffers {
-    partial: BTreeMap<String, String>,
+    active_job: Option<String>,
+    partial: String,
 }
 
 impl JobLineBuffers {
     fn push(&mut self, job: &str, text: &str) -> Vec<String> {
-        let buffered = self.partial.entry(job.to_string()).or_default();
-        buffered.push_str(text);
         let mut lines = Vec::new();
-        while let Some(end) = buffered.find('\n') {
-            let line = buffered.drain(..=end).collect::<String>();
-            lines.push(format!("[{job}] {line}"));
+        if self
+            .active_job
+            .as_deref()
+            .is_some_and(|active| active != job)
+        {
+            lines.extend(self.finish());
+        }
+        self.active_job.get_or_insert_with(|| job.to_string());
+        self.partial.push_str(text);
+        while let Some(end) = job_line_end(&self.partial) {
+            let line = self.partial.drain(..end).collect::<String>();
+            lines.push(format!("[{job}] {}\n", line.trim_end_matches(['\r', '\n'])));
+        }
+        while self.partial.len() > MAX_PARTIAL_JOB_LINE_BYTES {
+            let end = bounded_char_end(&self.partial, MAX_PARTIAL_JOB_LINE_BYTES);
+            let line = self.partial.drain(..end).collect::<String>();
+            lines.push(format!("[{job}] {line}\n"));
+        }
+        if self.partial.is_empty() {
+            self.active_job = None;
         }
         lines
     }
 
     fn finish(&mut self) -> Vec<String> {
-        let partial = std::mem::take(&mut self.partial);
-        partial
-            .into_iter()
-            .filter_map(|(job, line)| (!line.is_empty()).then(|| format!("[{job}] {line}\n")))
-            .collect()
+        let Some(job) = self.active_job.take() else {
+            return Vec::new();
+        };
+        let line = std::mem::take(&mut self.partial);
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            Vec::new()
+        } else {
+            vec![format!("[{job}] {line}\n")]
+        }
     }
+}
+
+fn job_line_end(text: &str) -> Option<usize> {
+    let newline = text.find('\n').map(|index| index + 1);
+    let carriage_return = text.find('\r').and_then(|index| {
+        let following = text.as_bytes().get(index + 1)?;
+        Some(index + if *following == b'\n' { 2 } else { 1 })
+    });
+    match (newline, carriage_return) {
+        (Some(newline), Some(carriage_return)) => Some(newline.min(carriage_return)),
+        (Some(newline), None) => Some(newline),
+        (None, Some(carriage_return)) => Some(carriage_return),
+        (None, None) => None,
+    }
+}
+
+fn bounded_char_end(text: &str, limit: usize) -> usize {
+    let mut end = limit.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 fn print_job_lines(lines: Vec<String>) {
@@ -386,15 +429,47 @@ mod tests {
     }
 
     #[test]
-    fn run_watch_buffers_partial_lines_independently_by_job() {
+    fn run_watch_preserves_job_order_when_partial_lines_interleave() {
         let mut buffers = JobLineBuffers::default();
         assert!(buffers.push("backend", "compiling").is_empty());
-        assert_eq!(buffers.push("web", "testing\n"), ["[web] testing\n"]);
+        assert_eq!(
+            buffers.push("web", "testing\n"),
+            ["[backend] compiling\n", "[web] testing\n"],
+        );
         assert_eq!(
             buffers.push("backend", " complete\nnext"),
-            ["[backend] compiling complete\n"],
+            ["[backend]  complete\n"],
         );
         assert_eq!(buffers.finish(), ["[backend] next\n"]);
+    }
+
+    #[test]
+    fn run_watch_flushes_carriage_returns_and_bounds_partial_lines() {
+        let mut buffers = JobLineBuffers::default();
+        assert_eq!(
+            buffers.push("web", "building 10%\rbuilding 20%\r"),
+            ["[web] building 10%\n"],
+        );
+        assert_eq!(
+            buffers.push("web", "done\n"),
+            ["[web] building 20%\n", "[web] done\n",]
+        );
+
+        let long_line = "x".repeat(MAX_PARTIAL_JOB_LINE_BYTES + 1);
+        let flushed = buffers.push("web", &long_line);
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(
+            flushed[0].len(),
+            MAX_PARTIAL_JOB_LINE_BYTES + "[web] \n".len()
+        );
+        assert_eq!(buffers.finish(), ["[web] x\n"]);
+    }
+
+    #[test]
+    fn run_watch_preserves_crlf_split_across_chunks() {
+        let mut buffers = JobLineBuffers::default();
+        assert!(buffers.push("windows", "complete\r").is_empty());
+        assert_eq!(buffers.push("windows", "\n"), ["[windows] complete\n"]);
     }
 
     #[test]
