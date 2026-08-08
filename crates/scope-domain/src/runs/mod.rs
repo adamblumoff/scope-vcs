@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod cutover;
+pub mod job;
 mod log;
 pub mod run;
 pub mod runner;

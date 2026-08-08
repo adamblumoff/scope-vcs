@@ -1,4 +1,7 @@
-use super::{CACHE_FORMAT, load_runner_records, remove_cache, volume_is_referenced};
+use super::{
+    CACHE_FORMAT, load_runner_records, remove_cache,
+    try_lock_cache_identity_while_lifecycle_locked, volume_is_referenced,
+};
 use crate::runner::command_stdout;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
@@ -111,13 +114,13 @@ pub(super) fn has_capacity(root: &Path) -> anyhow::Result<bool> {
 
 pub(super) fn ensure_capacity(
     root: &Path,
-    _lifecycle_lock: &File,
+    lifecycle_lock: &File,
     runner_id: &str,
 ) -> anyhow::Result<()> {
     if has_capacity(root)? {
         return Ok(());
     }
-    prune_root(root, runner_id)?;
+    prune_root(root, lifecycle_lock, runner_id)?;
     if has_capacity(root)? {
         Ok(())
     } else {
@@ -125,12 +128,28 @@ pub(super) fn ensure_capacity(
     }
 }
 
-fn prune_root(root: &Path, runner_id: &str) -> anyhow::Result<()> {
+pub(super) fn prune_root(
+    root: &Path,
+    lifecycle_lock: &File,
+    runner_id: &str,
+) -> anyhow::Result<()> {
     // The root may be shared by live registrations, so capacity cleanup can
     // evict only the caller's namespace and must fail closed if that is insufficient.
     let mut records = load_runner_records(root, runner_id)?;
     records.sort_by_key(|record| record.last_used_at_unix);
     for record in records {
+        // Preparation and finalization take identity before lifecycle. Admission
+        // already holds lifecycle, so it may only try the reverse order: a busy
+        // identity is active and must be skipped without waiting.
+        let Some(_identity_lock) = try_lock_cache_identity_while_lifecycle_locked(
+            root,
+            runner_id,
+            &record.identity_digest,
+            lifecycle_lock,
+        )?
+        else {
+            continue;
+        };
         if volume_is_referenced(&record.volume_name)? {
             continue;
         }

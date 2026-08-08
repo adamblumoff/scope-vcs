@@ -1,6 +1,6 @@
 use super::{
     RunnerConfig, attempt_control_client, cache,
-    container::stop_container,
+    container::{job_container_name, stop_container},
     resources::{storage_has_emergency_capacity_at, transient_storage_root},
     unix_now,
 };
@@ -149,7 +149,7 @@ impl AttemptSupervisor {
         let storage_stop = Arc::clone(&self.stop);
         let thread_storage_pressure = Arc::clone(&self.storage_pressure);
         let storage_attempt_id = attempt_id.to_string();
-        let container_name = format!("scope-{storage_attempt_id}");
+        let container_name = job_container_name(&storage_attempt_id);
         self.storage_handle = Some(thread::spawn(move || {
             run_storage_monitor(
                 &storage_stop,

@@ -132,6 +132,8 @@ enum RunnerCommand {
         name: String,
         #[arg(long, value_name = "OWNER/REPO")]
         repo: String,
+        #[arg(long, value_name = "1-16")]
+        max_concurrent_jobs: Option<u8>,
     },
     Status,
     Doctor,
@@ -321,7 +323,11 @@ fn run_workflow(args: RunArgs) -> anyhow::Result<()> {
 
 fn run_runner(command: RunnerCommand) -> anyhow::Result<()> {
     match command {
-        RunnerCommand::Install { name, repo } => scope_cli::runner::install(&name, &repo),
+        RunnerCommand::Install {
+            name,
+            repo,
+            max_concurrent_jobs,
+        } => scope_cli::runner::install(&name, &repo, max_concurrent_jobs),
         RunnerCommand::Status => scope_cli::runner::status(),
         RunnerCommand::Doctor => scope_cli::runner::doctor(),
         RunnerCommand::Cache { command } => match command {

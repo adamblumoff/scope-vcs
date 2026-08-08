@@ -40,18 +40,19 @@ pub(crate) async fn poll(
 ) -> Result<Json<RunnerPollResponse>, ApiError> {
     let runner = require_runner(&state, &headers).await?;
     for iteration in 0..POLL_ITERATIONS {
-        if let Some(run) = state
+        if let Some(offer) = state
             .metadata
             .runs()
-            .next_dispatchable_run(&runner.id)
+            .next_dispatchable_job(&runner.id, unix_now()?)
             .await?
         {
             return Ok(Json(RunnerPollResponse {
                 run: Some(RunnerRunOffer {
-                    run_id: run.id,
-                    repository_id: run.workflow.repository_id().to_string(),
-                    workflow_name: run.workflow.path().name().to_string(),
-                    git_oid: run.source.git_oid().to_string(),
+                    run_id: offer.run.id,
+                    job_key: offer.job.key.as_str().to_string(),
+                    repository_id: offer.run.workflow.repository_id().to_string(),
+                    workflow_name: offer.run.workflow.path().name().to_string(),
+                    git_oid: offer.run.source.git_oid().to_string(),
                 }),
             }));
         }
@@ -65,7 +66,7 @@ pub(crate) async fn poll(
 pub(crate) async fn claim(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(run_id): Path<String>,
+    Path((run_id, job_key)): Path<(String, String)>,
 ) -> Result<Json<ClaimRunResponse>, ApiError> {
     let runner = require_runner(&state, &headers).await?;
     let now = unix_now()?;
@@ -74,8 +75,9 @@ pub(crate) async fn claim(
     let claim = state
         .metadata
         .runs()
-        .claim_run(
+        .claim_job(
             &run_id,
+            &job_key,
             &runner.id,
             &generate_prefixed_id("attempt_")?,
             &attempt_token_hash,
@@ -90,15 +92,22 @@ pub(crate) async fn claim(
         canary_phase: claim.canary_phase,
         job: RunJobResponse {
             run_id: claim.run.id,
+            job_key: claim.job.key.as_str().to_string(),
             repository_id: claim.run.workflow.repository_id().to_string(),
+            workflow_path: claim.run.workflow.path().as_str().to_string(),
             git_oid: claim.run.source.git_oid().to_string(),
             source_digest: claim.run.source.digest().to_string(),
             pinned_container_image: claim
-                .run
+                .job
                 .pinned_container_image
                 .as_ref()
                 .map(|image| image.as_str().to_string()),
-            workflow: claim.workflow_revision.definition().clone(),
+            definition: claim
+                .workflow_revision
+                .definition()
+                .job(&claim.job.key)
+                .expect("claimed run job definition must exist")
+                .clone(),
         },
     }))
 }
@@ -123,7 +132,7 @@ pub(crate) async fn pin_container_image(
         )
         .await?;
     let image = claim
-        .run
+        .job
         .pinned_container_image
         .expect("successful image pin must persist an immutable image");
     Ok(Json(PinAttemptContainerImageResponse {
@@ -258,6 +267,7 @@ pub(crate) async fn append_log(
         .await?;
     Ok(Json(scope_api_contract::RunLogResponse {
         attempt_id: log.chunk.attempt_id,
+        job_key: log.job_key,
         step_index: log.chunk.step_index,
         position: log.position,
         sequence: log.chunk.sequence,
@@ -273,7 +283,6 @@ pub(crate) async fn complete_step(
     Json(input): Json<CompleteAttemptStepRequest>,
 ) -> Result<Json<AttemptStatusResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
-    let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
     let conclusion = match input.conclusion {
         StepConclusionRequest::Succeeded => StepConclusion::Succeeded,
         StepConclusionRequest::Failed { exit_code } => StepConclusion::Failed { exit_code },
@@ -283,7 +292,6 @@ pub(crate) async fn complete_step(
         .runs()
         .complete_attempt_step(
             &attempt_id,
-            &authenticated.attempt.runner_id,
             &token_hash,
             step_index,
             conclusion,
@@ -300,7 +308,6 @@ pub(crate) async fn complete(
     Json(input): Json<CompleteAttemptRequest>,
 ) -> Result<Json<AttemptStatusResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
-    let authenticated = require_attempt(&state, &headers, &attempt_id).await?;
     let conclusion = match input.conclusion {
         AttemptConclusionRequest::SetupFailed { exit_code, message } => {
             AttemptConclusion::SetupFailed { exit_code, message }
@@ -311,13 +318,7 @@ pub(crate) async fn complete(
     let claim = state
         .metadata
         .runs()
-        .complete_attempt(
-            &attempt_id,
-            &authenticated.attempt.runner_id,
-            &token_hash,
-            conclusion,
-            unix_now()?,
-        )
+        .complete_attempt(&attempt_id, &token_hash, conclusion, unix_now()?)
         .await?;
     Ok(Json(attempt_status(&claim)))
 }

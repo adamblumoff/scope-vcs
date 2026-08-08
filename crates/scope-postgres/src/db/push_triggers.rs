@@ -136,23 +136,7 @@ where
             .iter()
             .map(|workflow| (workflow.path.as_str(), workflow.bytes.as_slice()));
         match scope_run_config::parse_workflow_set(&job.repo_id, files) {
-            Ok(revisions)
-                if revisions
-                    .iter()
-                    .filter(|revision| revision.definition().triggers().push_main())
-                    .all(|revision| revision.definition().only_job().is_some()) =>
-            {
-                revisions
-            }
-            Ok(_) => {
-                evaluation
-                    .configuration_error(
-                        "multi-job workflows require job-level dispatch".to_string(),
-                        now_unix,
-                    )
-                    .map_err(PostgresError::from)?;
-                Vec::new()
-            }
+            Ok(revisions) => revisions,
             Err(error) => {
                 evaluation
                     .configuration_error(error.to_string(), now_unix)
@@ -190,12 +174,7 @@ where
                 RunTrigger::PushMain,
                 None,
                 source,
-                revision
-                    .definition()
-                    .only_job()
-                    .expect("push workflow dispatchability was validated")
-                    .runner()
-                    .clone(),
+                None,
                 now_unix,
             )
             .map_err(PostgresError::from)?;
@@ -409,9 +388,13 @@ container: { image: alpine:3.20 }
 timeout: 1m
 caches: []
 jobs:
-  checks:
+  backend:
     steps:
-      - { name: Test, run: "true" }
+      - { name: Backend, run: "true" }
+  web:
+    needs: [backend]
+    steps:
+      - { name: Web, run: "true" }
 "#
                         .to_vec(),
                     )
@@ -483,6 +466,12 @@ jobs:
             .unwrap();
         assert_eq!(run.trigger, RunTrigger::PushMain);
         assert_eq!(run.source.git_oid(), head_oid);
+        let jobs = entities::run_job::Entity::find()
+            .filter(entities::run_job::Column::RunId.eq(run.id.clone()))
+            .all(store.db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(jobs.len(), 2);
         let later = store
             .runs()
             .push_trigger_evaluation(&repo_id, later_head_oid)

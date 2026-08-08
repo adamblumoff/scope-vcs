@@ -13,7 +13,6 @@ use scope_domain::runs::{
     run::StepState, step::MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES, workflow::WorkflowJob,
 };
 use std::{
-    path::Path,
     process::Command,
     thread,
     time::{Duration, Instant},
@@ -25,12 +24,14 @@ mod config;
 mod container;
 mod image;
 mod management;
+mod resource_admission;
 mod resources;
 mod source;
 mod step_logs;
 mod steps;
 mod supervisor;
 mod systemd;
+mod worker_pool;
 mod workspace;
 use checkout::checkout_exact_commit;
 use config::{RunnerConfig, load_runner_config, load_runner_config_from, scope_config_home};
@@ -38,8 +39,8 @@ use config::{RunnerConfig, load_runner_config, load_runner_config_from, scope_co
 use container::apply_container_limits;
 use container::{
     ContainerGuard, DockerCapabilities, JobContainerSpec, configure_job_container_creation,
-    configure_source_copy, container_started_at_unix, doctor_local, probe_storage_quota_support,
-    require_root_image, stop_container,
+    configure_source_copy, container_started_at_unix, doctor_local, job_container_name,
+    probe_storage_quota_support, require_root_image, stop_container,
 };
 use image::resolve_container_image;
 #[cfg(test)]
@@ -47,6 +48,9 @@ use management::parse_repository;
 pub use management::{
     add_repository, doctor, install, list_caches, prune_caches, remove_repository, status,
 };
+pub use worker_pool::daemon;
+#[cfg(test)]
+use worker_pool::{initialize_after_recovery, run_slot_workers};
 mod recovery;
 use recovery::{
     RecoveryAttempt, RecoveryProgress, mark_recovery_abandon_pending,
@@ -73,11 +77,7 @@ use workspace::{
 const LOG_CHUNK_BYTES: usize = 16 * 1024;
 
 fn dispatch_job(claim: &ClaimRunResponse) -> anyhow::Result<&WorkflowJob> {
-    claim
-        .job
-        .workflow
-        .only_job()
-        .context("multi-job workflows require job-level dispatch")
+    Ok(&claim.job.definition)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,75 +93,67 @@ impl ExecutionOutcome {
     }
 }
 
-pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
-    let config = match config_path {
-        Some(path) => load_runner_config_from(path)?,
-        None => load_runner_config()?,
-    };
-    let capabilities = doctor_local(false)?;
-    let client = runner_client()?;
-    eprintln!("Scope runner {} is polling {}", config.name, config.api_url);
-    loop {
-        resume_interrupted_attempts(&config)?;
-        if let Err(error) = cache::admit(&config) {
-            eprintln!("Runner admission paused: {error:#}");
-            thread::sleep(Duration::from_secs(5));
-            continue;
-        }
-        if let Err(error) = ResourceLimits::detect() {
-            eprintln!("Runner admission paused: {error:#}");
-            thread::sleep(Duration::from_secs(5));
-            continue;
-        }
-        match runner_poll(&client, &config.api_url, &config.secret) {
-            Ok(response) => {
-                let Some(offer) = response.run else {
-                    continue;
-                };
-                match runner_claim(&client, &config.api_url, &config.secret, &offer.run_id) {
-                    Ok(claim) => run_claim(&config, capabilities, claim),
-                    Err(error) => eprintln!("Could not claim {}: {error}", offer.run_id),
-                }
-            }
-            Err(error) => {
-                eprintln!("Runner poll failed: {error}");
-                thread::sleep(Duration::from_secs(5));
-            }
-        }
-    }
-}
-
 fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
-    for recovery in recover_runner_state(config)? {
+    let restart_required = run_recovery_tasks(recover_runner_state(config)?, |recovery| {
         let attempt_id = recovery.recovery.claim.attempt_id.clone();
         let attempt_token = recovery.recovery.claim.attempt_token.clone();
-        if let Err(error) = resume_claim(config, recovery) {
-            eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
-            if is_conclusion_report_pending(&error) {
-                continue;
-            }
-            if let Ok(client) = runner_client() {
-                let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
-            }
+        let Err(error) = resume_claim(config, recovery) else {
+            return false;
+        };
+        eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
+        if requires_recovery_restart(&error) {
+            return true;
         }
+        if let Ok(client) = runner_client() {
+            let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
+        }
+        false
+    })
+    .into_iter()
+    .any(|restart_required| restart_required);
+    if restart_required {
+        Err(RecoveryRestartRequired.into())
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
-fn run_claim(config: &RunnerConfig, capabilities: DockerCapabilities, claim: ClaimRunResponse) {
-    if let Err(error) = execute_claim(config, capabilities, &claim) {
+fn run_recovery_tasks<T: Send, R: Send>(tasks: Vec<T>, recover: impl Fn(T) -> R + Sync) -> Vec<R> {
+    thread::scope(|scope| {
+        let recover = &recover;
+        tasks
+            .into_iter()
+            .map(|task| scope.spawn(move || recover(task)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    })
+}
+
+fn run_claim(
+    config: &RunnerConfig,
+    capabilities: DockerCapabilities,
+    limits: &ResourceLimits,
+    claim: ClaimRunResponse,
+) -> anyhow::Result<()> {
+    if let Err(error) = execute_claim(config, capabilities, limits, &claim) {
         eprintln!(
             "Run {} failed before completion: {error:#}",
             claim.job.run_id
         );
-        if is_conclusion_report_pending(&error) {
-            return;
+        if requires_recovery_restart(&error) {
+            return Err(error).context("restart runner to reconcile preserved attempt state");
         }
         let client = match runner_client() {
             Ok(client) => client,
             Err(client_error) => {
                 eprintln!("Could not report failure: {client_error}");
-                return;
+                return Ok(());
             }
         };
         if let Err(report_error) = complete_attempt(
@@ -185,6 +177,7 @@ fn run_claim(config: &RunnerConfig, capabilities: DockerCapabilities, claim: Cla
             );
         }
     }
+    Ok(())
 }
 
 fn bounded_setup_failure_message(error: &anyhow::Error) -> String {
@@ -215,6 +208,7 @@ fn bounded_setup_failure_message(error: &anyhow::Error) -> String {
 fn execute_claim(
     config: &RunnerConfig,
     capabilities: DockerCapabilities,
+    limits: &ResourceLimits,
     claim: &ClaimRunResponse,
 ) -> anyhow::Result<()> {
     let job = dispatch_job(claim)?;
@@ -260,16 +254,15 @@ fn execute_claim(
         return Ok(());
     }
     let phase = Instant::now();
-    let limits = ResourceLimits::detect()?;
     let capabilities = if capabilities.storage_quota_supported {
         capabilities
     } else {
-        probe_storage_quota_support(&container_image, &limits)?
+        probe_storage_quota_support(&container_image, limits)?
     };
     let mut caches = cache::PreparedCaches::prepare(config, claim, &container_image)?;
     mark_recovery_caches_attached(&work.path, claim, &caches.volume_names())?;
     log_phase(&claim.attempt_id, "cache_prepare", phase);
-    let container_name = format!("scope-{}", claim.attempt_id);
+    let container_name = job_container_name(&claim.attempt_id);
     let mut create = Command::new("docker");
     let phase = Instant::now();
     configure_job_container_creation(
@@ -280,7 +273,7 @@ fn execute_claim(
             name: &container_name,
             image: &container_image,
             step_programs: &step_programs,
-            limits: &limits,
+            limits,
             capabilities,
             caches: caches.mounts(),
         },
@@ -353,6 +346,7 @@ fn execute_claim(
         Err(error) => {
             if !work.cleanup_on_drop {
                 caches.preserve();
+                return Err(error.context(RecoveryRestartRequired));
             }
             Err(error)
         }
@@ -376,7 +370,9 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
     match resume_claim_execution(config, recovery) {
         Ok(outcome) => {
             let reusable = cache::is_reusable_after_execution(claim.canary_phase, outcome);
-            if let Err(error) = cache::finalize_volume_names(config, &volumes, reusable) {
+            if let Err(error) =
+                cache::finalize_volume_names(config, &volumes, &claim.attempt_id, reusable)
+            {
                 eprintln!("Could not finalize recovered attempt caches: {error:#}");
                 if outcome.succeeded() && claim.canary_phase.is_some() {
                     let mut work = RunnerWorkDir {
@@ -428,7 +424,7 @@ fn resume_claim_execution(
         work.preserve();
     }
     let mut progress = recovery.progress;
-    let container_name = format!("scope-{}", claim.attempt_id);
+    let container_name = job_container_name(&claim.attempt_id);
     let mut container = ContainerGuard::new(container_name.clone());
     let has_pending_stop =
         progress.pending_attempt_abandon || progress.pending_attempt_conclusion.is_some();
@@ -739,6 +735,24 @@ fn is_conclusion_report_pending(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<ConclusionReportPending>())
+}
+
+#[derive(Debug)]
+struct RecoveryRestartRequired;
+
+impl std::fmt::Display for RecoveryRestartRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("preserved attempt state requires runner restart")
+    }
+}
+
+impl std::error::Error for RecoveryRestartRequired {}
+
+fn requires_recovery_restart(error: &anyhow::Error) -> bool {
+    is_conclusion_report_pending(error)
+        || error
+            .chain()
+            .any(|cause| cause.is::<RecoveryRestartRequired>())
 }
 
 fn report_pending_conclusion(

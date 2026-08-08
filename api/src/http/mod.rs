@@ -17,6 +17,8 @@ pub(crate) mod request_review;
 pub(crate) mod requests;
 pub(crate) mod responses;
 pub(crate) mod routes;
+mod run_detail_response;
+mod run_response;
 pub(crate) mod runner_protocol;
 pub(crate) mod runners;
 pub(crate) mod runs;

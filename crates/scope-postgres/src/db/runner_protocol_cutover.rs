@@ -1,6 +1,9 @@
 use super::{
     AdminStore, RunStore, entities,
-    run_attempt_persistence::{ensure_runner_authorized, locked_attempt_context},
+    run_attempt_persistence::{
+        ensure_runner_authorized, locked_attempt_context, locked_jobs, locked_run, save_jobs,
+        save_run,
+    },
 };
 use crate::error::{PostgresError, PostgresErrorKind};
 use scope_domain::runs::{
@@ -9,12 +12,14 @@ use scope_domain::runs::{
         RunnerProtocolCanaryStatus, RunnerProtocolCutover, RunnerProtocolCutoverState,
         validate_runner_protocol_canary_workflow,
     },
+    job::request_run_cancellation,
     run::{AttemptState, PinnedContainerImage, Run, RunTrigger},
     runner::Runner,
     workflow::{WorkflowJob, WorkflowRevision},
 };
 use sea_orm::{
-    ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, Statement, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, QueryFilter,
+    Statement, TransactionTrait,
 };
 
 mod recovery;
@@ -22,11 +27,11 @@ use recovery::reconcile_abandoned_running_canary;
 
 const CUTOVER_KEY: &str = "current";
 
-fn dispatch_job(revision: &WorkflowRevision) -> Result<&WorkflowJob, PostgresError> {
+fn canary_job(revision: &WorkflowRevision) -> Result<&WorkflowJob, PostgresError> {
     revision
         .definition()
         .only_job()
-        .ok_or_else(|| PostgresError::conflict("multi-job workflows require job-level dispatch"))
+        .ok_or_else(|| PostgresError::conflict("canary workflow must contain exactly one job"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,20 +66,20 @@ impl AdminStore {
         if current != next
             && (current, next)
                 != (
-                    RunnerProtocolCutoverState::V4Fenced,
-                    RunnerProtocolCutoverState::V4Open,
+                    RunnerProtocolCutoverState::V5Fenced,
+                    RunnerProtocolCutoverState::V5Open,
                 )
         {
             return Err(PostgresError::conflict(
-                "startup migration owns the V3 rewrite; runtime may only open a fenced V4 cutover",
+                "startup migration owns the protocol rewrite; runtime may only open a fenced V5 cutover",
             ));
         }
-        if current == RunnerProtocolCutoverState::V4Fenced
-            && next == RunnerProtocolCutoverState::V4Open
+        if current == RunnerProtocolCutoverState::V5Fenced
+            && next == RunnerProtocolCutoverState::V5Open
             && !canary_suite_succeeded(&snapshot)
         {
             return Err(PostgresError::conflict(
-                "the current cold-write, warm-read, and evict canary generation must succeed before V4 opens",
+                "the current cold-write, warm-read, and evict canary generation must succeed before V5 opens",
             ));
         }
 
@@ -99,9 +104,9 @@ impl AdminStore {
     ) -> Result<RunnerProtocolCutoverSnapshot, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let mut snapshot = load_snapshot(&tx, true).await?;
-        if snapshot.cutover.state() != RunnerProtocolCutoverState::V4Fenced {
+        if snapshot.cutover.state() != RunnerProtocolCutoverState::V5Fenced {
             return Err(PostgresError::conflict(
-                "runner protocol canaries can only be assigned while V4 is fenced",
+                "runner protocol canaries can only be assigned while V5 is fenced",
             ));
         }
 
@@ -133,19 +138,7 @@ impl AdminStore {
             ensure_canary_target(&tx, pending.phase(), runner_id, run_id, &snapshot.canaries)
                 .await?;
             if pending.run_id() != run_id {
-                tx.execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Postgres,
-                    "UPDATE scope_runs
-                     SET state = 'canceled', cancellation_requested = TRUE,
-                         updated_at_unix = $1, completed_at_unix = $1
-                     WHERE id = $2 AND state = 'queued' AND current_attempt_id IS NULL",
-                    [
-                        u64_to_i64(now_unix, "canary reassignment time")?.into(),
-                        pending.run_id().into(),
-                    ],
-                ))
-                .await
-                .map_err(PostgresError::internal)?;
+                cancel_unclaimed_canary_run(&tx, pending.run_id(), now_unix).await?;
             }
             let replacement =
                 RunnerProtocolCanary::new(pending.generation(), pending.phase(), runner_id, run_id)
@@ -213,7 +206,7 @@ impl AdminStore {
             .map_err(PostgresError::internal)?;
             save_cutover_state(
                 &tx,
-                RunnerProtocolCutoverState::V4Fenced,
+                RunnerProtocolCutoverState::V5Fenced,
                 snapshot.canary_generation,
                 now_unix,
             )
@@ -223,6 +216,23 @@ impl AdminStore {
         snapshot.canaries.push(canary);
         Ok(snapshot)
     }
+}
+
+async fn cancel_unclaimed_canary_run(
+    tx: &DatabaseTransaction,
+    run_id: &str,
+    now_unix: u64,
+) -> Result<(), PostgresError> {
+    let mut jobs = locked_jobs(tx, run_id).await?;
+    let mut run = locked_run(tx, run_id).await?;
+    if jobs.iter().any(|job| job.current_attempt_id.is_some()) {
+        return Err(PostgresError::conflict(
+            "pending canary run was claimed before reassignment",
+        ));
+    }
+    request_run_cancellation(&mut run, &mut jobs, now_unix).map_err(PostgresError::from)?;
+    save_jobs(tx, &jobs).await?;
+    save_run(tx, &run).await
 }
 
 impl RunStore {
@@ -249,11 +259,9 @@ impl RunStore {
         let mut canary =
             current_canary_for_run(&tx, generation, &target.runner_id, &target.run_id, true)
                 .await?;
-        let (run, attempt, _) = locked_attempt_context(&tx, attempt_id).await?;
+        let (run, job, attempt, _) = locked_attempt_context(&tx, attempt_id).await?;
         ensure_runner_authorized(&tx, &run, &attempt).await?;
-        if attempt.token_hash != token_hash
-            || run.current_attempt_id.as_deref() != Some(attempt.id.as_str())
-        {
+        if attempt.token_hash != token_hash || attempt.job_key != job.key {
             return Err(PostgresError::permission_denied(
                 "attempt credentials are invalid",
             ));
@@ -263,14 +271,14 @@ impl RunStore {
                 "cache finalization requires a successful canary attempt",
             ));
         }
-        if cutover.state() == RunnerProtocolCutoverState::V4Open
+        if cutover.state() == RunnerProtocolCutoverState::V5Open
             && succeeded
             && canary.status() == RunnerProtocolCanaryStatus::Succeeded
         {
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(canary);
         }
-        if cutover.state() != RunnerProtocolCutoverState::V4Fenced {
+        if cutover.state() != RunnerProtocolCutoverState::V5Fenced {
             return Err(PostgresError::unavailable(
                 "cache finalization is only accepted for the active fenced canary",
             ));
@@ -323,8 +331,12 @@ pub(super) async fn guard_enqueue(
     if state.allows_enqueue() {
         return Ok(());
     }
+    let canonical_runner = canary_job(revision)?.runner();
     let canonical_target = run.trigger == RunTrigger::Manual
-        && run.desired_runner == *dispatch_job(revision)?.runner();
+        && run
+            .runner_override
+            .as_ref()
+            .is_none_or(|runner| runner == canonical_runner);
     if !state.allows_canary() || canary_candidate_phase(revision).is_none() || !canonical_target {
         return Err(PostgresError::unavailable(format!(
             "only canonical runner protocol canary runs may be created while cutover is {}",
@@ -440,11 +452,11 @@ pub(super) async fn mark_canary_claimed(
     now_unix: u64,
 ) -> Result<Option<RunnerProtocolCanaryPhase>, PostgresError> {
     let (cutover, _) = load_cutover(tx, false).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V4Fenced {
+    if cutover.state() != RunnerProtocolCutoverState::V5Fenced {
         return Ok(None);
     }
     let (cutover, generation) = load_cutover(tx, true).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V4Fenced {
+    if cutover.state() != RunnerProtocolCutoverState::V5Fenced {
         return Ok(None);
     }
     let mut canary = current_canary_for_run(tx, generation, runner_id, run_id, true).await?;
@@ -468,7 +480,7 @@ pub(super) async fn guard_attempt_operation(
     // Keep the open-state hot path lock-free. While fenced, serialize the
     // operation with canary reassignment and phase advancement using the same
     // singleton -> canary lock order as claims and terminal updates.
-    let (cutover, generation) = if cutover.state() == RunnerProtocolCutoverState::V4Fenced {
+    let (cutover, generation) = if cutover.state() == RunnerProtocolCutoverState::V5Fenced {
         load_cutover(tx, true).await?
     } else {
         (cutover, generation)
@@ -477,7 +489,7 @@ pub(super) async fn guard_attempt_operation(
         .state()
         .allows_attempt_operation(runner.protocol_version)
         && match cutover.state() {
-            RunnerProtocolCutoverState::V4Fenced => {
+            RunnerProtocolCutoverState::V5Fenced => {
                 match current_canary_for_run(tx, generation, runner_id, run_id, true).await {
                     Ok(_) => true,
                     Err(error) if error.kind == PostgresErrorKind::Unavailable => false,
@@ -503,13 +515,13 @@ pub(super) async fn guard_canary_pinned_image(
     image: &PinnedContainerImage,
 ) -> Result<(), PostgresError> {
     let (cutover, generation) = load_cutover(tx, false).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V4Fenced {
+    if cutover.state() != RunnerProtocolCutoverState::V5Fenced {
         return Ok(());
     }
     let canary = current_canary_for_run(tx, generation, runner_id, run_id, false).await?;
     validate_runner_protocol_canary_workflow(revision.definition(), canary.phase())
         .map_err(PostgresError::from)?;
-    if dispatch_job(revision)?.container().image() != image.as_str() {
+    if canary_job(revision)?.container().image() != image.as_str() {
         return Err(PostgresError::conflict(
             "canary execution must use the workflow's exact digest-pinned image",
         ));
@@ -525,14 +537,14 @@ pub(super) async fn record_canary_attempt_terminal(
     now_unix: u64,
 ) -> Result<(), PostgresError> {
     let (cutover, _) = load_cutover(tx, false).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V4Fenced
+    if cutover.state() != RunnerProtocolCutoverState::V5Fenced
         || !state.is_terminal()
         || state == AttemptState::Succeeded
     {
         return Ok(());
     }
     let (cutover, generation) = load_cutover(tx, true).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V4Fenced {
+    if cutover.state() != RunnerProtocolCutoverState::V5Fenced {
         return Ok(());
     }
     let mut canary = match current_canary_for_run(tx, generation, runner_id, run_id, true).await {
@@ -715,7 +727,7 @@ async fn ensure_canary_target(
         .try_into_domain()?;
     if !runner.supports_dispatch() {
         return Err(PostgresError::conflict(
-            "canary runner must be enabled and support protocol V4",
+            "canary runner must be enabled and support protocol V5",
         ));
     }
     let run = entities::run::Entity::find_by_id(run_id.to_string())
@@ -724,7 +736,14 @@ async fn ensure_canary_target(
         .map_err(PostgresError::internal)?
         .ok_or_else(|| PostgresError::not_found("canary run not found"))?
         .try_into_domain()?;
-    if run.state != scope_domain::runs::run::RunState::Queued || run.current_attempt_id.is_some() {
+    let job = entities::run_job::Entity::find()
+        .filter(entities::run_job::Column::RunId.eq(&run.id))
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::conflict("canary run job is missing"))?
+        .try_into_domain()?;
+    if run.state != scope_domain::runs::run::RunState::Queued || job.current_attempt_id.is_some() {
         return Err(PostgresError::conflict(
             "canary run must be unclaimed and queued",
         ));
@@ -738,7 +757,7 @@ async fn ensure_canary_target(
     .map_err(PostgresError::internal)?
     .ok_or_else(|| PostgresError::conflict("canary runner is not attached to the run repository"))?
     .try_into_domain()?;
-    if !grant.is_active() || !run.desired_runner.matches_name(grant.name.as_str()) {
+    if !grant.is_active() || !job.desired_runner.matches_name(grant.name.as_str()) {
         return Err(PostgresError::conflict(
             "canary runner grant does not match the queued run",
         ));
@@ -746,8 +765,7 @@ async fn ensure_canary_target(
     let revision = workflow_revision_for_target(tx, &run).await?;
     validate_runner_protocol_canary_workflow(revision.definition(), phase)
         .map_err(PostgresError::from)?;
-    if run.trigger != RunTrigger::Manual || run.desired_runner != *dispatch_job(&revision)?.runner()
-    {
+    if run.trigger != RunTrigger::Manual || job.desired_runner != *canary_job(&revision)?.runner() {
         return Err(PostgresError::conflict(
             "canary run must preserve the canonical workflow trigger and exact runner",
         ));
@@ -771,8 +789,8 @@ async fn ensure_canary_target(
         let previous_revision = workflow_revision_for_target(tx, &previous_run).await?;
         validate_runner_protocol_canary_workflow(previous_revision.definition(), previous.phase())
             .map_err(PostgresError::from)?;
-        let previous_job = dispatch_job(&previous_revision)?;
-        let job = dispatch_job(&revision)?;
+        let previous_job = canary_job(&previous_revision)?;
+        let job = canary_job(&revision)?;
         if previous_run.workflow.repository_id() != run.workflow.repository_id()
             || previous_job.container().image() != job.container().image()
             || previous_job.caches() != job.caches()
@@ -835,7 +853,7 @@ where
         ))
         .await
         .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::unavailable("run is not the active protocol V4 canary"))?;
+        .ok_or_else(|| PostgresError::unavailable("run is not the active protocol V5 canary"))?;
     canary_from_row(&row)
 }
 
@@ -887,8 +905,8 @@ fn canary_from_row(row: &sea_orm::QueryResult) -> Result<RunnerProtocolCanary, P
 
 fn parse_cutover_state(value: &str) -> Result<RunnerProtocolCutoverState, PostgresError> {
     match value {
-        "v4-fenced" => Ok(RunnerProtocolCutoverState::V4Fenced),
-        "v4-open" => Ok(RunnerProtocolCutoverState::V4Open),
+        "v5-fenced" => Ok(RunnerProtocolCutoverState::V5Fenced),
+        "v5-open" => Ok(RunnerProtocolCutoverState::V5Open),
         _ => Err(PostgresError::internal_message(
             "invalid runner protocol cutover state",
         )),
@@ -897,8 +915,8 @@ fn parse_cutover_state(value: &str) -> Result<RunnerProtocolCutoverState, Postgr
 
 fn cutover_state_name(state: RunnerProtocolCutoverState) -> &'static str {
     match state {
-        RunnerProtocolCutoverState::V4Fenced => "v4-fenced",
-        RunnerProtocolCutoverState::V4Open => "v4-open",
+        RunnerProtocolCutoverState::V5Fenced => "v5-fenced",
+        RunnerProtocolCutoverState::V5Open => "v5-open",
     }
 }
 

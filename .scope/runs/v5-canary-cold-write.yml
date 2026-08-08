@@ -1,4 +1,4 @@
-name: Runner protocol V4 cold-write canary
+name: Runner protocol V5 cold-write canary
 on:
   manual: true
 runs-on: remote-linux
@@ -11,4 +11,4 @@ jobs:
   cold-write:
     steps:
       - name: Write cache sentinel
-        run: printf '%s' 'scope-runner-protocol-v4' > /scope/cache/runner-protocol/v4-canary-sentinel
+        run: printf '%s' 'scope-runner-protocol-v5' > /scope/cache/runner-protocol/v5-canary-sentinel

@@ -1,4 +1,4 @@
-name: Runner protocol V4 warm-read canary
+name: Runner protocol V5 warm-read canary
 on:
   manual: true
 runs-on: remote-linux
@@ -11,4 +11,4 @@ jobs:
   warm-read:
     steps:
       - name: Assert warm cache sentinel
-        run: test "$(cat /scope/cache/runner-protocol/v4-canary-sentinel)" = 'scope-runner-protocol-v4'
+        run: test "$(cat /scope/cache/runner-protocol/v5-canary-sentinel)" = 'scope-runner-protocol-v5'

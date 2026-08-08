@@ -298,7 +298,7 @@ jobs:
 "#;
 
     #[test]
-    fn parses_and_normalizes_v4_workflow() {
+    fn parses_and_normalizes_jobs_workflow() {
         let parsed = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes()).unwrap();
         let definition = parsed.definition();
 
@@ -406,28 +406,20 @@ jobs:
     fn scope_workflows_use_the_current_contract() {
         for (path, bytes) in [
             (
-                "/.scope/runs/backend-checks.yml",
-                include_bytes!("../../../.scope/runs/backend-checks.yml").as_slice(),
+                "/.scope/runs/checks.yml",
+                include_bytes!("../../../.scope/runs/checks.yml").as_slice(),
             ),
             (
-                "/.scope/runs/cli-checks.yml",
-                include_bytes!("../../../.scope/runs/cli-checks.yml").as_slice(),
+                "/.scope/runs/v5-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-cold-write.yml").as_slice(),
             ),
             (
-                "/.scope/runs/web-checks.yml",
-                include_bytes!("../../../.scope/runs/web-checks.yml").as_slice(),
+                "/.scope/runs/v5-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-warm-read.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v4-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-cold-write.yml").as_slice(),
-            ),
-            (
-                "/.scope/runs/v4-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-warm-read.yml").as_slice(),
-            ),
-            (
-                "/.scope/runs/v4-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-evict.yml").as_slice(),
+                "/.scope/runs/v5-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-evict.yml").as_slice(),
             ),
         ] {
             parse_workflow(path, bytes).unwrap_or_else(|error| {
@@ -445,18 +437,18 @@ jobs:
         for (phase, path, bytes) in [
             (
                 RunnerProtocolCanaryPhase::ColdWrite,
-                "/.scope/runs/v4-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-cold-write.yml").as_slice(),
+                "/.scope/runs/v5-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-cold-write.yml").as_slice(),
             ),
             (
                 RunnerProtocolCanaryPhase::WarmRead,
-                "/.scope/runs/v4-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-warm-read.yml").as_slice(),
+                "/.scope/runs/v5-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-warm-read.yml").as_slice(),
             ),
             (
                 RunnerProtocolCanaryPhase::Evict,
-                "/.scope/runs/v4-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v4-canary-evict.yml").as_slice(),
+                "/.scope/runs/v5-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v5-canary-evict.yml").as_slice(),
             ),
         ] {
             let parsed = parse_workflow(path, bytes).unwrap();

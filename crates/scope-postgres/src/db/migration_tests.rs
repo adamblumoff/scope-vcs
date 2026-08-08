@@ -7,6 +7,7 @@ use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, St
 use std::{sync::Arc, time::Duration};
 
 mod request_revisions;
+mod run_jobs;
 
 const V6_SCHEMA: &str = include_str!("../migrations/v6.sql");
 const RETIRED_V6_TABLES: &[&str] = &[
@@ -183,6 +184,8 @@ async fn fresh_database_reaches_exact_latest_schema() {
             "m0011_compact_request_started_events",
             "m0012_request_revisions",
             "m0013_workflow_jobs",
+            "m0014_run_jobs",
+            "m0015_runner_capacity",
         ]
     );
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
@@ -231,7 +234,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 42);
+    assert_eq!(scope_table_count, 43);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
     assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
     let review_columns = db
@@ -419,7 +422,7 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v4-fenced");
+    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v5-fenced");
     let run_digest = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -590,8 +593,7 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
             "
-                SELECT state, cancellation_requested, last_attempt_number,
-                       current_attempt_id, completed_at_unix
+                SELECT state, cancellation_requested, completed_at_unix
                 FROM scope_runs
                 WHERE id = 'run_active'
             "
@@ -602,9 +604,21 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
         .unwrap();
     assert_eq!(run.try_get::<String>("", "state").unwrap(), "queued");
     assert!(!run.try_get::<bool>("", "cancellation_requested").unwrap());
-    assert_eq!(run.try_get::<i32>("", "last_attempt_number").unwrap(), 0);
+    let job = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT job_key, state, last_attempt_number, current_attempt_id
+             FROM scope_run_jobs WHERE run_id = 'run_active'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.try_get::<String>("", "job_key").unwrap(), "checks");
+    assert_eq!(job.try_get::<String>("", "state").unwrap(), "queued");
+    assert_eq!(job.try_get::<i32>("", "last_attempt_number").unwrap(), 0);
     assert!(
-        run.try_get::<Option<String>>("", "current_attempt_id")
+        job.try_get::<Option<String>>("", "current_attempt_id")
             .unwrap()
             .is_none()
     );
@@ -634,6 +648,7 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
         "idx_scope_run_attempts_active",
         "idx_scope_run_attempts_runner",
         "idx_scope_run_attempts_expiring",
+        "idx_scope_run_jobs_dispatch",
         "idx_scope_run_logs_run_position",
         "idx_scope_run_logs_step_position",
     ] {
@@ -647,11 +662,13 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
                     count(*) FILTER (
                         WHERE conname IN (
                             'fk_scope_run_attempts_run',
+                            'fk_scope_run_attempts_job',
                             'fk_scope_run_attempts_runner',
                             'fk_scope_run_attempt_steps_attempt',
                             'fk_scope_run_logs_run',
                             'fk_scope_run_logs_step',
-                            'fk_scope_runs_current_attempt'
+                            'fk_scope_run_jobs_run',
+                            'fk_scope_run_jobs_current_attempt'
                         )
                     ) AS foreign_keys,
                     bool_or(
@@ -670,7 +687,7 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(constraints.try_get::<i64>("", "foreign_keys").unwrap(), 6);
+    assert_eq!(constraints.try_get::<i64>("", "foreign_keys").unwrap(), 8);
     assert!(constraints.try_get::<bool>("", "lease_check").unwrap());
     assert!(constraints.try_get::<bool>("", "byte_check").unwrap());
 }
@@ -864,6 +881,8 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
             "m0011_compact_request_started_events",
             "m0012_request_revisions",
             "m0013_workflow_jobs",
+            "m0014_run_jobs",
+            "m0015_runner_capacity",
         ]
     );
 }
@@ -895,6 +914,8 @@ async fn concurrent_api_migration_attempts_serialize() {
             "m0011_compact_request_started_events",
             "m0012_request_revisions",
             "m0013_workflow_jobs",
+            "m0014_run_jobs",
+            "m0015_runner_capacity",
         ]
     );
 }

@@ -14,6 +14,7 @@ pub mod runner {
         pub version: String,
         pub protocol_version: i32,
         pub capabilities: Json,
+        pub max_concurrent_jobs: i32,
         pub enabled: bool,
         pub created_at_unix: i64,
         pub last_seen_at_unix: Option<i64>,
@@ -33,6 +34,7 @@ pub mod runner {
                 version: runner.version.clone(),
                 protocol_version: u32_to_i32(runner.protocol_version, "runner protocol version")?,
                 capabilities: encode_json(&runner.capabilities)?,
+                max_concurrent_jobs: i32::from(runner.max_concurrent_jobs.get()),
                 enabled: runner.enabled,
                 created_at_unix: u64_to_i64(runner.created_at_unix, "runner creation time")?,
                 last_seen_at_unix: runner
@@ -50,6 +52,12 @@ pub mod runner {
                 self.version,
                 i32_to_u32(self.protocol_version, "runner protocol version")?,
                 decode_json::<RunnerCapabilities>(self.capabilities)?,
+                scope_domain::runs::runner::RunnerMaxConcurrentJobs::new(
+                    u8::try_from(self.max_concurrent_jobs).map_err(|_| {
+                        PostgresError::invalid_input("persisted runner capacity is invalid")
+                    })?,
+                )
+                .map_err(PostgresError::invalid_input)?,
                 self.enabled,
                 i64_to_u64(self.created_at_unix, "runner creation time")?,
                 self.last_seen_at_unix
@@ -239,12 +247,9 @@ pub mod run {
         pub trigger: String,
         pub requested_by_user_id: Option<String>,
         pub source: Json,
-        pub pinned_container_image: Option<String>,
-        pub desired_runner_name: Option<String>,
+        pub runner_override_name: Option<String>,
         pub state: String,
         pub cancellation_requested: bool,
-        pub last_attempt_number: i32,
-        pub current_attempt_id: Option<String>,
         pub created_at_unix: i64,
         pub updated_at_unix: i64,
         pub completed_at_unix: Option<i64>,
@@ -266,21 +271,14 @@ pub mod run {
                 trigger: encode_enum(run.trigger)?,
                 requested_by_user_id: run.requested_by_user_id.clone(),
                 source: encode_json(&run.source)?,
-                pinned_container_image: run
-                    .pinned_container_image
-                    .as_ref()
-                    .map(|image| image.as_str().to_string()),
-                desired_runner_name: match &run.desired_runner {
-                    RunnerSelector::Any => None,
-                    RunnerSelector::Named(name) => Some(name.clone()),
-                },
+                runner_override_name: run.runner_override.as_ref().and_then(
+                    |runner| match runner {
+                        RunnerSelector::Any => None,
+                        RunnerSelector::Named(name) => Some(name.clone()),
+                    },
+                ),
                 state: encode_enum(run.state)?,
                 cancellation_requested: run.cancellation_requested,
-                last_attempt_number: u32_to_i32(
-                    run.last_attempt_number,
-                    "run last attempt number",
-                )?,
-                current_attempt_id: run.current_attempt_id.clone(),
                 created_at_unix: u64_to_i64(run.created_at_unix, "run creation time")?,
                 updated_at_unix: u64_to_i64(run.updated_at_unix, "run update time")?,
                 completed_at_unix: run
@@ -296,10 +294,11 @@ pub mod run {
                 WorkflowPath::parse(self.workflow_path).map_err(PostgresError::invalid_input)?,
             )
             .map_err(PostgresError::invalid_input)?;
-            let desired_runner = match self.desired_runner_name {
-                Some(name) => RunnerSelector::named(name).map_err(PostgresError::invalid_input)?,
-                None => RunnerSelector::Any,
-            };
+            let runner_override = self
+                .runner_override_name
+                .map(RunnerSelector::named)
+                .transpose()
+                .map_err(PostgresError::invalid_input)?;
             Run::restore(
                 self.id,
                 self.idempotency_key,
@@ -308,19 +307,93 @@ pub mod run {
                 decode_enum::<RunTrigger>(self.trigger)?,
                 self.requested_by_user_id,
                 decode_json::<RunSource>(self.source)?,
-                self.pinned_container_image
-                    .map(PinnedContainerImage::parse)
-                    .transpose()
-                    .map_err(PostgresError::invalid_input)?,
-                desired_runner,
+                runner_override,
                 decode_enum::<RunState>(self.state)?,
                 self.cancellation_requested,
-                i32_to_u32(self.last_attempt_number, "run last attempt number")?,
-                self.current_attempt_id,
                 i64_to_u64(self.created_at_unix, "run creation time")?,
                 i64_to_u64(self.updated_at_unix, "run update time")?,
                 self.completed_at_unix
                     .map(|value| i64_to_u64(value, "run completion time"))
+                    .transpose()?,
+            )
+            .map_err(PostgresError::invalid_input)
+        }
+    }
+}
+
+pub mod run_job {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_run_jobs")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub run_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub job_key: String,
+        pub desired_runner_name: Option<String>,
+        pub pinned_container_image: Option<String>,
+        pub state: String,
+        pub last_attempt_number: i32,
+        pub current_attempt_id: Option<String>,
+        pub created_at_unix: i64,
+        pub updated_at_unix: i64,
+        pub completed_at_unix: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(job: &RunJob) -> Result<Self, PostgresError> {
+            Ok(Self {
+                run_id: job.run_id.clone(),
+                job_key: job.key.as_str().to_string(),
+                desired_runner_name: match &job.desired_runner {
+                    RunnerSelector::Any => None,
+                    RunnerSelector::Named(name) => Some(name.clone()),
+                },
+                pinned_container_image: job
+                    .pinned_container_image
+                    .as_ref()
+                    .map(|image| image.as_str().to_string()),
+                state: encode_enum(job.state)?,
+                last_attempt_number: u32_to_i32(
+                    job.last_attempt_number,
+                    "run job last attempt number",
+                )?,
+                current_attempt_id: job.current_attempt_id.clone(),
+                created_at_unix: u64_to_i64(job.created_at_unix, "run job creation time")?,
+                updated_at_unix: u64_to_i64(job.updated_at_unix, "run job update time")?,
+                completed_at_unix: job
+                    .completed_at_unix
+                    .map(|value| u64_to_i64(value, "run job completion time"))
+                    .transpose()?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RunJob, PostgresError> {
+            let desired_runner = match self.desired_runner_name {
+                Some(name) => RunnerSelector::named(name).map_err(PostgresError::invalid_input)?,
+                None => RunnerSelector::Any,
+            };
+            RunJob::restore(
+                self.run_id,
+                WorkflowJobId::parse(self.job_key).map_err(PostgresError::invalid_input)?,
+                desired_runner,
+                self.pinned_container_image
+                    .map(PinnedContainerImage::parse)
+                    .transpose()
+                    .map_err(PostgresError::invalid_input)?,
+                decode_enum::<RunJobState>(self.state)?,
+                i32_to_u32(self.last_attempt_number, "run job last attempt number")?,
+                self.current_attempt_id,
+                i64_to_u64(self.created_at_unix, "run job creation time")?,
+                i64_to_u64(self.updated_at_unix, "run job update time")?,
+                self.completed_at_unix
+                    .map(|value| i64_to_u64(value, "run job completion time"))
                     .transpose()?,
             )
             .map_err(PostgresError::invalid_input)
@@ -337,6 +410,7 @@ pub mod run_attempt {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub run_id: String,
+        pub job_key: String,
         pub number: i32,
         pub runner_id: String,
         pub runner_name: String,
@@ -364,6 +438,7 @@ pub mod run_attempt {
             Ok(Self {
                 id: attempt.id.clone(),
                 run_id: attempt.run_id.clone(),
+                job_key: attempt.job_key.as_str().to_string(),
                 number: u32_to_i32(attempt.number, "run attempt number")?,
                 runner_id: attempt.runner_id.clone(),
                 runner_name: attempt.runner_name.clone(),
@@ -404,6 +479,7 @@ pub mod run_attempt {
             RunAttempt::restore(
                 self.id,
                 self.run_id,
+                WorkflowJobId::parse(self.job_key).map_err(PostgresError::invalid_input)?,
                 i32_to_u32(self.number, "run attempt number")?,
                 self.runner_id,
                 self.runner_name,

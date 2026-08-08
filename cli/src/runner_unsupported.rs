@@ -4,7 +4,11 @@ fn unsupported() -> anyhow::Result<()> {
     anyhow::bail!("self-hosted Scope runners require Linux")
 }
 
-pub fn install(_name: &str, _repository: &str) -> anyhow::Result<()> {
+pub fn install(
+    _name: &str,
+    _repository: &str,
+    _max_concurrent_jobs: Option<u8>,
+) -> anyhow::Result<()> {
     unsupported()
 }
 

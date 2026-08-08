@@ -9,12 +9,19 @@ pub(super) struct DockerCapabilities {
     pub(super) storage_quota_supported: bool,
 }
 
-pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabilities> {
+pub(super) fn job_container_name(attempt_id: &str) -> String {
+    format!("scope-{attempt_id}")
+}
+
+pub(super) fn doctor_local(
+    run_container: bool,
+    max_concurrent_jobs: scope_domain::runs::runner::RunnerMaxConcurrentJobs,
+) -> anyhow::Result<(DockerCapabilities, ResourceLimits)> {
     if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
-        bail!("V4 runners require Linux on amd64");
+        bail!("V5 runners require Linux on amd64");
     }
     command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
-    let limits = ResourceLimits::detect()?;
+    let limits = ResourceLimits::detect(max_concurrent_jobs)?;
     let capabilities = if run_container {
         let mut command = Command::new("docker");
         command.args(["run", "--rm"]);
@@ -55,7 +62,7 @@ pub(super) fn doctor_local(run_container: bool) -> anyhow::Result<DockerCapabili
         Command::new("systemctl").args(["--user", "--version"]),
         "find systemd user service support",
     )?;
-    Ok(capabilities)
+    Ok((capabilities, limits))
 }
 
 pub(super) fn probe_storage_quota_support(
@@ -258,7 +265,7 @@ pub(super) fn require_root_image(image: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         bail!(
-            "workflow image runs as {user:?}; Scope V4 images must run as root because the runner populates /workspace and manages step state inside the container"
+            "workflow image runs as {user:?}; Scope V5 images must run as root because the runner populates /workspace and manages step state inside the container"
         )
     }
 }

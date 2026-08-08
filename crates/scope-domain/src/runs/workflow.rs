@@ -421,6 +421,51 @@ struct PersistedWorkflowJob {
     steps: Vec<PersistedWorkflowStep>,
 }
 
+impl<'de> Deserialize<'de> for WorkflowJob {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let job = PersistedWorkflowJob::deserialize(deserializer)?;
+        let id = WorkflowJobId::parse(job.id).map_err(D::Error::custom)?;
+        let needs = job
+            .needs
+            .into_iter()
+            .map(WorkflowJobId::parse)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(D::Error::custom)?;
+        let runner = match job.runner {
+            PersistedRunnerSelector::Any => RunnerSelector::Any,
+            PersistedRunnerSelector::Named(name) => {
+                RunnerSelector::named(name).map_err(D::Error::custom)?
+            }
+        };
+        let container = ContainerSpec::new(job.container.image).map_err(D::Error::custom)?;
+        let caches = job
+            .caches
+            .into_iter()
+            .map(WorkflowCache::parse)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(D::Error::custom)?;
+        let steps = job
+            .steps
+            .into_iter()
+            .map(|step| WorkflowStep::new(step.name, step.run))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(D::Error::custom)?;
+        WorkflowJob::new(
+            id,
+            needs,
+            runner,
+            container,
+            job.timeout_seconds,
+            caches,
+            steps,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedWorkflowStep {
@@ -530,8 +575,7 @@ impl CompiledWorkflow {
             .map(|index| &self.jobs[index])
     }
 
-    /// Temporary bridge for the run-level dispatch protocol. Multi-job workflows
-    /// become dispatchable when attempts move beneath jobs.
+    /// Returns the job only when this workflow contains exactly one job.
     pub fn only_job(&self) -> Option<&WorkflowJob> {
         if self.jobs.len() == 1 {
             self.jobs.first()

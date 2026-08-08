@@ -345,7 +345,7 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
             .await
             .last()
             .map(String::as_str),
-        Some("m0013_workflow_jobs")
+        Some("m0015_runner_capacity")
     );
 
     let old_producer_insert = db
@@ -393,4 +393,55 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
         .try_get::<i64>("", "count")
         .unwrap();
     assert_eq!(unfinished_push_jobs, 1);
+}
+
+#[tokio::test]
+async fn runner_capacity_migration_sets_and_enforces_the_domain_range() {
+    let (_target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(14))
+        .await
+        .unwrap();
+    db.execute_unprepared(
+        "INSERT INTO scope_users (id, handle, email, email_verified)
+         VALUES ('user_capacity', 'capacity', 'capacity@scope.test', TRUE);
+         INSERT INTO scope_runners (
+             id, owner_user_id, secret_hash, version, protocol_version,
+             capabilities, enabled, created_at_unix, last_seen_at_unix
+         ) VALUES (
+             'runner_capacity', 'user_capacity', repeat('a', 64), '0.1.0', 5,
+             '{\"operating_system\":\"linux\",\"architecture\":\"amd64\",\"container_engine\":\"docker\"}'::jsonb,
+             TRUE, 1, NULL
+         );",
+    )
+    .await
+    .unwrap();
+
+    migrations::apply(db.as_ref()).await.unwrap();
+    let capacity = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT max_concurrent_jobs FROM scope_runners
+             WHERE id = 'runner_capacity'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i32>("", "max_concurrent_jobs")
+        .unwrap();
+    assert_eq!(capacity, 1);
+    assert!(
+        db.execute_unprepared(
+            "UPDATE scope_runners SET max_concurrent_jobs = 0
+             WHERE id = 'runner_capacity'"
+        )
+        .await
+        .is_err()
+    );
+    db.execute_unprepared(
+        "UPDATE scope_runners SET max_concurrent_jobs = 16
+         WHERE id = 'runner_capacity'",
+    )
+    .await
+    .unwrap();
 }

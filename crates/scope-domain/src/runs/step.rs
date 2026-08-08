@@ -1,6 +1,7 @@
 use super::{
+    job::RunJob,
     run::{Run, RunAttempt},
-    state::{AttemptState, RunState, StepState},
+    state::{AttemptState, RunJobState, StepState},
 };
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
@@ -178,9 +179,11 @@ impl RunAttemptStep {
 }
 
 impl RunAttempt {
+    #[allow(clippy::too_many_arguments)]
     pub fn start_step(
         &mut self,
-        run: &mut Run,
+        run: &Run,
+        job: &mut RunJob,
         steps: &mut [RunAttemptStep],
         runner_id: &str,
         token_hash: &str,
@@ -188,11 +191,11 @@ impl RunAttempt {
         now_unix: u64,
     ) -> Result<(), DomainError> {
         if self.state == AttemptState::Leased && step_index == 0 {
-            self.start(run, runner_id, token_hash, now_unix)?;
+            self.start(run, job, runner_id, token_hash, now_unix)?;
         } else {
-            self.authenticate(run, runner_id, token_hash, now_unix)?;
+            self.authenticate(job, runner_id, token_hash, now_unix)?;
         }
-        if self.state != AttemptState::Running || run.state != RunState::Running {
+        if self.state != AttemptState::Running || job.state != RunJobState::Running {
             return Err(DomainError::conflict("attempt is not running"));
         }
         self.validate_steps(steps)?;
@@ -219,16 +222,16 @@ impl RunAttempt {
             return Err(DomainError::conflict("workflow steps must start in order"));
         }
         self.ensure_time_not_before_heartbeat(now_unix)?;
-        run.ensure_time_not_before_update(now_unix)?;
+        job.ensure_time_not_before_update(now_unix)?;
         steps[index].start(now_unix);
-        run.updated_at_unix = now_unix;
+        job.updated_at_unix = now_unix;
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn complete_step(
         &mut self,
-        run: &mut Run,
+        job: &mut RunJob,
         steps: &mut [RunAttemptStep],
         runner_id: &str,
         token_hash: &str,
@@ -238,8 +241,8 @@ impl RunAttempt {
     ) -> Result<(), DomainError> {
         let index = usize::try_from(step_index)
             .map_err(|_| DomainError::invalid_input("step index is too large"))?;
-        if self.state.is_terminal() || run.state.is_terminal() {
-            self.authenticate_identity(run, runner_id, token_hash)?;
+        if self.state.is_terminal() || job.state.is_terminal() {
+            self.authenticate_identity(job, runner_id, token_hash)?;
             return if step_matches_conclusion(steps.get(index), conclusion) {
                 Ok(())
             } else {
@@ -248,7 +251,7 @@ impl RunAttempt {
                 ))
             };
         }
-        self.authenticate(run, runner_id, token_hash, now_unix)?;
+        self.authenticate(job, runner_id, token_hash, now_unix)?;
         self.validate_steps(steps)?;
         let Some(step) = steps.get(index) else {
             return Err(DomainError::invalid_input("workflow step does not exist"));
@@ -266,18 +269,18 @@ impl RunAttempt {
             return Err(DomainError::conflict("step is not running"));
         }
         self.ensure_time_not_before_heartbeat(now_unix)?;
-        run.ensure_time_not_before_update(now_unix)?;
+        job.ensure_time_not_before_update(now_unix)?;
         match conclusion {
             StepConclusion::Succeeded => {
                 steps[index].succeed(now_unix);
-                run.updated_at_unix = now_unix;
+                job.updated_at_unix = now_unix;
                 if index + 1 == steps.len() {
                     self.state = AttemptState::Succeeded;
                     self.completed_at_unix = Some(now_unix);
                     self.terminal_reason = None;
-                    run.state = RunState::Succeeded;
-                    run.cancellation_requested = false;
-                    run.completed_at_unix = Some(now_unix);
+                    job.state = RunJobState::Succeeded;
+                    job.current_attempt_id = None;
+                    job.completed_at_unix = Some(now_unix);
                 }
             }
             StepConclusion::Failed { exit_code } => {
@@ -294,10 +297,10 @@ impl RunAttempt {
                     step_index,
                     exit_code,
                 });
-                run.state = RunState::Failed;
-                run.cancellation_requested = false;
-                run.updated_at_unix = now_unix;
-                run.completed_at_unix = Some(now_unix);
+                job.state = RunJobState::Failed;
+                job.current_attempt_id = None;
+                job.updated_at_unix = now_unix;
+                job.completed_at_unix = Some(now_unix);
             }
         }
         Ok(())
