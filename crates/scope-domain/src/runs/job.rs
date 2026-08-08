@@ -131,7 +131,7 @@ impl RunJob {
         }
         if !runner.supports_dispatch() {
             return Err(DomainError::conflict(
-                "runner does not support the V5 dispatch protocol",
+                "runner does not support the V6 dispatch protocol",
             ));
         }
         if !grant.is_active()

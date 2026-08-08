@@ -423,7 +423,7 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v5-fenced");
+    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v6-fenced");
     let run_digest = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,

@@ -10,24 +10,24 @@ use super::{
 pub const RUNNER_PROTOCOL_CANARY_CACHE_NAME: &str = "runner-protocol";
 pub const RUNNER_PROTOCOL_CANARY_CACHE_PATH: &str = "/scope/cache/runner-protocol";
 pub const RUNNER_PROTOCOL_CANARY_SENTINEL_PATH: &str =
-    "/scope/cache/runner-protocol/v5-canary-sentinel";
-pub const RUNNER_PROTOCOL_CANARY_SENTINEL_VALUE: &str = "scope-runner-protocol-v5";
+    "/scope/cache/runner-protocol/v6-canary-sentinel";
+pub const RUNNER_PROTOCOL_CANARY_SENTINEL_VALUE: &str = "scope-runner-protocol-v6";
 pub const RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS: u64 = 5 * 60;
 pub const RUNNER_PROTOCOL_CANARY_COLD_WRITE_COMMAND: &str =
-    "printf '%s' 'scope-runner-protocol-v5' > /scope/cache/runner-protocol/v5-canary-sentinel";
+    "printf '%s' 'scope-runner-protocol-v6' > /scope/cache/runner-protocol/v6-canary-sentinel";
 pub const RUNNER_PROTOCOL_CANARY_READ_COMMAND: &str =
-    "test \"$(cat /scope/cache/runner-protocol/v5-canary-sentinel)\" = 'scope-runner-protocol-v5'";
+    "test \"$(cat /scope/cache/runner-protocol/v6-canary-sentinel)\" = 'scope-runner-protocol-v6'";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerProtocolCutoverState {
-    V5Fenced,
-    V5Open,
+    V6Fenced,
+    V6Open,
 }
 
 impl RunnerProtocolCutoverState {
     pub fn can_transition_to(self, next: Self) -> bool {
-        matches!((self, next), (Self::V5Fenced, Self::V5Open))
+        matches!((self, next), (Self::V6Fenced, Self::V6Open))
     }
 
     pub fn allows_runner_registration(self, protocol_version: u32) -> bool {
@@ -39,7 +39,7 @@ impl RunnerProtocolCutoverState {
     }
 
     pub fn allows_workflow_writes(self) -> bool {
-        self == Self::V5Open
+        self == Self::V6Open
     }
 
     pub fn allows_enqueue(self) -> bool {
@@ -47,7 +47,7 @@ impl RunnerProtocolCutoverState {
     }
 
     pub fn allows_claim(self, protocol_version: u32) -> bool {
-        self == Self::V5Open && protocol_version == RUNNER_PROTOCOL_VERSION
+        self == Self::V6Open && protocol_version == RUNNER_PROTOCOL_VERSION
     }
 
     pub fn allows_attempt_operation(self, protocol_version: u32) -> bool {
@@ -56,7 +56,7 @@ impl RunnerProtocolCutoverState {
     }
 
     pub fn allows_canary(self) -> bool {
-        self == Self::V5Fenced
+        self == Self::V6Fenced
     }
 }
 
@@ -68,7 +68,7 @@ pub struct RunnerProtocolCutover {
 impl RunnerProtocolCutover {
     pub fn new() -> Self {
         Self {
-            state: RunnerProtocolCutoverState::V5Fenced,
+            state: RunnerProtocolCutoverState::V6Fenced,
         }
     }
 
@@ -147,9 +147,9 @@ pub enum RunnerProtocolCanaryPhase {
 impl RunnerProtocolCanaryPhase {
     pub fn workflow_name(self) -> &'static str {
         match self {
-            Self::ColdWrite => "Runner protocol V5 cold-write canary",
-            Self::WarmRead => "Runner protocol V5 warm-read canary",
-            Self::Evict => "Runner protocol V5 eviction canary",
+            Self::ColdWrite => "Runner protocol V6 cold-write canary",
+            Self::WarmRead => "Runner protocol V6 warm-read canary",
+            Self::Evict => "Runner protocol V6 eviction canary",
         }
     }
 
@@ -407,34 +407,34 @@ mod tests {
     #[test]
     fn cutover_only_moves_forward_one_state_at_a_time() {
         let mut cutover = RunnerProtocolCutover::new();
-        assert_eq!(cutover.state(), RunnerProtocolCutoverState::V5Fenced);
+        assert_eq!(cutover.state(), RunnerProtocolCutoverState::V6Fenced);
         assert!(
             cutover
-                .transition(RunnerProtocolCutoverState::V5Open)
+                .transition(RunnerProtocolCutoverState::V6Open)
                 .unwrap()
         );
         assert!(
             cutover
-                .transition(RunnerProtocolCutoverState::V5Fenced)
+                .transition(RunnerProtocolCutoverState::V6Fenced)
                 .is_err()
         );
         assert!(
             !cutover
-                .transition(RunnerProtocolCutoverState::V5Open)
+                .transition(RunnerProtocolCutoverState::V6Open)
                 .unwrap()
         );
     }
 
     #[test]
     fn state_gates_protocol_operations_without_outer_policy() {
-        let fenced = RunnerProtocolCutoverState::V5Fenced;
+        let fenced = RunnerProtocolCutoverState::V6Fenced;
         assert!(fenced.allows_runner_registration(RUNNER_PROTOCOL_VERSION));
         assert!(!fenced.allows_enqueue());
         assert!(!fenced.allows_claim(RUNNER_PROTOCOL_VERSION));
         assert!(fenced.allows_attempt_operation(RUNNER_PROTOCOL_VERSION));
         assert!(fenced.allows_canary());
 
-        let open = RunnerProtocolCutoverState::V5Open;
+        let open = RunnerProtocolCutoverState::V6Open;
         assert!(open.allows_workflow_writes());
         assert!(open.allows_enqueue());
         assert!(open.allows_claim(RUNNER_PROTOCOL_VERSION));

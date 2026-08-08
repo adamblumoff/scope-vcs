@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn cutover_contract_uses_stable_kebab_case_domain_values() {
         let response = RunnerProtocolCutoverResponse {
-            state: RunnerProtocolCutoverState::V5Fenced,
+            state: RunnerProtocolCutoverState::V6Fenced,
             generation: 2,
             canaries: vec![RunnerProtocolCanaryResponse {
                 generation: 2,
@@ -288,7 +288,7 @@ mod tests {
             }],
         };
         let json = serde_json::to_value(&response).unwrap();
-        assert_eq!(json["state"], "v5-fenced");
+        assert_eq!(json["state"], "v6-fenced");
         assert_eq!(json["canaries"][0]["phase"], "warm-read");
         assert_eq!(json["canaries"][0]["status"], "running");
         assert_eq!(

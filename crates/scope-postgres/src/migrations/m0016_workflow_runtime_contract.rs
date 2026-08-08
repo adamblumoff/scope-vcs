@@ -98,7 +98,9 @@ impl MigrationTrait for Migration {
         let db = manager.get_connection();
         db.execute_unprepared(
             "LOCK TABLE scope_outbox_jobs, scope_run_attempts, scope_runs,
-                        scope_workflow_revisions IN ACCESS EXCLUSIVE MODE",
+                        scope_workflow_revisions, scope_runners,
+                        scope_runner_protocol_cutover, scope_runner_protocol_canaries
+             IN ACCESS EXCLUSIVE MODE",
         )
         .await?;
         require_drained_runtime(db).await?;
@@ -111,6 +113,42 @@ impl MigrationTrait for Migration {
                      kind <> 'push_main_trigger_evaluation' OR
                      completed_at_unix IS NOT NULL OR
                      payload @> '{\"workflow_schema_version\": 4}'::jsonb
+                 );
+             ALTER TABLE scope_runner_protocol_cutover
+                 DROP CONSTRAINT scope_runner_protocol_cutover_values;
+             ALTER TABLE scope_runners
+                 DROP CONSTRAINT scope_runners_v5_cutover;
+             WITH cutover_time AS (
+                 SELECT extract(epoch FROM clock_timestamp())::bigint AS now_unix
+             )
+             UPDATE scope_runs AS run
+             SET state = 'canceled',
+                 cancellation_requested = TRUE,
+                 updated_at_unix = GREATEST(run.updated_at_unix, cutover_time.now_unix),
+                 completed_at_unix = GREATEST(run.updated_at_unix, cutover_time.now_unix)
+             FROM scope_runner_protocol_canaries AS canary, cutover_time
+             WHERE canary.run_id = run.id
+               AND run.state = 'queued';
+             DELETE FROM scope_runner_protocol_canaries;
+             UPDATE scope_runner_protocol_cutover
+             SET state = CASE
+                     WHEN EXISTS (SELECT 1 FROM scope_workflow_revisions)
+                     THEN 'v6-fenced'
+                     ELSE 'v6-open'
+                 END,
+                 canary_generation = 0,
+                 updated_at_unix = extract(epoch FROM clock_timestamp())::bigint
+             WHERE key = 'current';
+             ALTER TABLE scope_runner_protocol_cutover
+                 ADD CONSTRAINT scope_runner_protocol_cutover_values CHECK (
+                     state IN ('v6-fenced', 'v6-open') AND
+                     canary_generation >= 0 AND
+                     updated_at_unix >= 0
+                 );
+             UPDATE scope_runners SET enabled = FALSE WHERE protocol_version < 6;
+             ALTER TABLE scope_runners
+                 ADD CONSTRAINT scope_runners_v6_cutover CHECK (
+                     protocol_version >= 6 OR NOT enabled
                  );",
         )
         .await?;
