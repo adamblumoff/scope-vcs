@@ -219,7 +219,7 @@ async fn migrated_manual_runner_targets_remain_idempotent_without_guessing_raw_o
     migrations::apply(db.as_ref()).await.unwrap();
     db.execute_unprepared(
         "UPDATE scope_runner_protocol_cutover
-         SET state = 'v5-open'
+         SET state = 'v6-open'
          WHERE key = 'current'",
     )
     .await
@@ -305,7 +305,7 @@ async fn migrated_revision(db: &DatabaseConnection, run_id: &str) -> WorkflowRev
 }
 
 #[tokio::test]
-async fn run_job_migration_resets_the_protocol_authority_to_v5_fenced() {
+async fn workflow_runtime_migration_resets_the_protocol_authority_to_v6_fenced() {
     let (_target, db, _lease) = isolated_database().await;
     migrations::Migrator::up(db.as_ref(), Some(13))
         .await
@@ -391,7 +391,7 @@ async fn run_job_migration_resets_the_protocol_authority_to_v5_fenced() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v5-fenced");
+    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v6-fenced");
     assert_eq!(cutover.try_get::<i64>("", "canary_generation").unwrap(), 0);
     let retired = db
         .query_one(Statement::from_string(
