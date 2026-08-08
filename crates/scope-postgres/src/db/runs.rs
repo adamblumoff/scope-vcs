@@ -46,6 +46,7 @@ pub struct DispatchOffer {
 pub struct StoredRunLog {
     pub position: u64,
     pub run_id: String,
+    pub job_key: String,
     pub chunk: RunLogChunk,
 }
 
@@ -614,6 +615,7 @@ impl RunStore {
             return Ok(StoredRunLog {
                 position,
                 run_id: existing_run_id,
+                job_key: job.key.as_str().to_string(),
                 chunk: existing_chunk,
             });
         }
@@ -653,6 +655,7 @@ impl RunStore {
         Ok(StoredRunLog {
             position,
             run_id: run.id,
+            job_key: job.key.as_str().to_string(),
             chunk,
         })
     }

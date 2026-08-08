@@ -256,6 +256,7 @@ pub enum AttemptConclusionRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RunLogResponse {
     pub attempt_id: String,
+    pub job_key: String,
     pub step_index: u32,
     pub position: u64,
     pub sequence: u64,

@@ -466,6 +466,8 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         )
         .await
         .unwrap();
+    assert_eq!(stored.job_key, "checks");
+    assert_eq!(retry.job_key, "checks");
     assert_eq!(retry.position, stored.position);
     assert_eq!(
         store
@@ -525,6 +527,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         .await
         .unwrap();
     assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].job_key, "checks");
     assert_eq!(logs[0].chunk.text, "second\n");
     let step_logs = store
         .runs()
@@ -532,6 +535,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         .await
         .unwrap();
     assert_eq!(step_logs.logs.len(), 1);
+    assert_eq!(step_logs.logs[0].job_key, "checks");
     assert_eq!(step_logs.logs[0].chunk.step_index, 0);
     assert!(!step_logs.logs_truncated);
 }

@@ -1,7 +1,7 @@
 use crate::{
     api::{
         RunStreamEvent, api_url, cancel_run, create_manual_run, http_client_builder, retry_run,
-        stream_run_events,
+        run_jobs, stream_run_events,
     },
     git_repo::{GitRepo, ensure_git_repo_ready, head_oid, warn_if_dirty_working_tree},
     git_transport::{ScopeRemote, select_scope_fetch_remote},
@@ -10,8 +10,10 @@ use crate::{
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{CreateManualRunQuery, RunResponse, RunRunnerSelection};
-use scope_domain::runs::run::RunState;
+use scope_domain::runs::run::{RunJobState, RunState};
 use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
+
+const MAX_PARTIAL_JOB_LINE_BYTES: usize = 8 * 1_024;
 
 pub fn start(
     workflow: &str,
@@ -115,9 +117,10 @@ fn watch_run(
     run_id: &str,
 ) -> anyhow::Result<()> {
     let mut cursor = 0;
+    let mut line_buffers = JobLineBuffers::default();
     loop {
         let mut terminal = None;
-        stream_run_events(
+        let stream_result = stream_run_events(
             client,
             api_url,
             session_token,
@@ -129,7 +132,7 @@ fn watch_run(
                 match event {
                     RunStreamEvent::Log(log) => {
                         if advance_log_cursor(&mut cursor, log.position) {
-                            print!("{}", log.text);
+                            print_job_lines(line_buffers.push(&log.job_key, &log.text));
                         }
                     }
                     RunStreamEvent::Status(run) if run.state.is_terminal() => terminal = Some(run),
@@ -137,9 +140,27 @@ fn watch_run(
                 }
                 Ok(terminal.is_none())
             },
-        )?;
+        );
+        flush_partial_lines_on_stream_error(stream_result, &mut line_buffers)?;
         if let Some(run) = terminal {
-            print_terminal(&run);
+            print_job_lines(line_buffers.finish());
+            let jobs = run_summary_client().and_then(|summary_client| {
+                run_jobs(
+                    &summary_client,
+                    api_url,
+                    session_token,
+                    &target.owner,
+                    &target.repo,
+                    run_id,
+                )
+            });
+            match jobs {
+                Ok(jobs) => print_terminal(&run, Some(&jobs)),
+                Err(error) => {
+                    print_terminal(&run, None);
+                    eprintln!("Warning: job summary could not be loaded: {error:#}");
+                }
+            }
             return if run.state == RunState::Succeeded {
                 Ok(())
             } else {
@@ -158,7 +179,7 @@ fn advance_log_cursor(cursor: &mut u64, position: u64) -> bool {
     true
 }
 
-fn print_terminal(run: &RunResponse) {
+fn print_terminal(run: &RunResponse, jobs: Option<&[crate::api::WatchedRunJob]>) {
     println!(
         "\nRun {} · {} · {}",
         state_label(run.state),
@@ -168,6 +189,98 @@ fn print_terminal(run: &RunResponse) {
     if run.logs_truncated {
         eprintln!("Warning: this run exceeded the stored log limit; earlier output was truncated.");
     }
+    if let Some(jobs) = jobs {
+        println!("Jobs:");
+        for job in jobs {
+            println!("  {} · {}", job.key, job_state_label(job.state));
+        }
+    }
+}
+
+#[derive(Default)]
+struct JobLineBuffers {
+    active_job: Option<String>,
+    partial: String,
+}
+
+impl JobLineBuffers {
+    fn push(&mut self, job: &str, text: &str) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self
+            .active_job
+            .as_deref()
+            .is_some_and(|active| active != job)
+        {
+            lines.extend(self.finish());
+        }
+        self.active_job.get_or_insert_with(|| job.to_string());
+        self.partial.push_str(text);
+        while let Some(end) = job_line_end(&self.partial) {
+            let line = self.partial.drain(..end).collect::<String>();
+            lines.push(format!("[{job}] {}\n", line.trim_end_matches(['\r', '\n'])));
+        }
+        while self.partial.len() > MAX_PARTIAL_JOB_LINE_BYTES {
+            let end = bounded_char_end(&self.partial, MAX_PARTIAL_JOB_LINE_BYTES);
+            let line = self.partial.drain(..end).collect::<String>();
+            lines.push(format!("[{job}] {line}\n"));
+        }
+        if self.partial.is_empty() {
+            self.active_job = None;
+        }
+        lines
+    }
+
+    fn finish(&mut self) -> Vec<String> {
+        let Some(job) = self.active_job.take() else {
+            return Vec::new();
+        };
+        let line = std::mem::take(&mut self.partial);
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            Vec::new()
+        } else {
+            vec![format!("[{job}] {line}\n")]
+        }
+    }
+}
+
+fn job_line_end(text: &str) -> Option<usize> {
+    let newline = text.find('\n').map(|index| index + 1);
+    let carriage_return = text.find('\r').and_then(|index| {
+        let following = text.as_bytes().get(index + 1)?;
+        Some(index + if *following == b'\n' { 2 } else { 1 })
+    });
+    match (newline, carriage_return) {
+        (Some(newline), Some(carriage_return)) => Some(newline.min(carriage_return)),
+        (Some(newline), None) => Some(newline),
+        (None, Some(carriage_return)) => Some(carriage_return),
+        (None, None) => None,
+    }
+}
+
+fn bounded_char_end(text: &str, limit: usize) -> usize {
+    let mut end = limit.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+fn print_job_lines(lines: Vec<String>) {
+    for line in lines {
+        print!("{line}");
+    }
+}
+
+fn flush_partial_lines_on_stream_error(
+    result: anyhow::Result<()>,
+    line_buffers: &mut JobLineBuffers,
+) -> anyhow::Result<()> {
+    if let Err(error) = result {
+        print_job_lines(line_buffers.finish());
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn scope_target(
@@ -222,6 +335,13 @@ fn run_client() -> anyhow::Result<Client> {
         .context("build run HTTP client")
 }
 
+fn run_summary_client() -> anyhow::Result<Client> {
+    http_client_builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .context("build run summary HTTP client")
+}
+
 fn state_label(state: RunState) -> &'static str {
     match state {
         RunState::Queued => "queued",
@@ -239,6 +359,20 @@ fn runner_selection_label(selection: &RunRunnerSelection) -> &str {
         RunRunnerSelection::Any => "any runner",
         RunRunnerSelection::Named { name } => name,
         RunRunnerSelection::Mixed => "multiple runners",
+    }
+}
+
+fn job_state_label(state: RunJobState) -> &'static str {
+    match state {
+        RunJobState::Blocked => "blocked",
+        RunJobState::Queued => "queued",
+        RunJobState::Leased => "leased",
+        RunJobState::Running => "running",
+        RunJobState::Succeeded => "succeeded",
+        RunJobState::Failed => "failed",
+        RunJobState::Skipped => "skipped",
+        RunJobState::Canceled => "canceled",
+        RunJobState::Lost => "lost",
     }
 }
 
@@ -301,5 +435,70 @@ mod tests {
         assert!(!advance_log_cursor(&mut cursor, 7));
         assert!(advance_log_cursor(&mut cursor, 8));
         assert_eq!(cursor, 8);
+    }
+
+    #[test]
+    fn run_watch_preserves_job_order_when_partial_lines_interleave() {
+        let mut buffers = JobLineBuffers::default();
+        assert!(buffers.push("backend", "compiling").is_empty());
+        assert_eq!(
+            buffers.push("web", "testing\n"),
+            ["[backend] compiling\n", "[web] testing\n"],
+        );
+        assert_eq!(
+            buffers.push("backend", " complete\nnext"),
+            ["[backend]  complete\n"],
+        );
+        assert_eq!(buffers.finish(), ["[backend] next\n"]);
+    }
+
+    #[test]
+    fn run_watch_flushes_carriage_returns_and_bounds_partial_lines() {
+        let mut buffers = JobLineBuffers::default();
+        assert_eq!(
+            buffers.push("web", "building 10%\rbuilding 20%\r"),
+            ["[web] building 10%\n"],
+        );
+        assert_eq!(
+            buffers.push("web", "done\n"),
+            ["[web] building 20%\n", "[web] done\n",]
+        );
+
+        let long_line = "x".repeat(MAX_PARTIAL_JOB_LINE_BYTES + 1);
+        let flushed = buffers.push("web", &long_line);
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(
+            flushed[0].len(),
+            MAX_PARTIAL_JOB_LINE_BYTES + "[web] \n".len()
+        );
+        assert_eq!(buffers.finish(), ["[web] x\n"]);
+    }
+
+    #[test]
+    fn run_watch_preserves_crlf_split_across_chunks() {
+        let mut buffers = JobLineBuffers::default();
+        assert!(buffers.push("windows", "complete\r").is_empty());
+        assert_eq!(buffers.push("windows", "\n"), ["[windows] complete\n"]);
+    }
+
+    #[test]
+    fn run_watch_flushes_partial_lines_before_returning_a_stream_error() {
+        let mut buffers = JobLineBuffers::default();
+        assert!(buffers.push("backend", "partial diagnostic").is_empty());
+
+        let error = flush_partial_lines_on_stream_error(
+            Err(anyhow::anyhow!("stream failed")),
+            &mut buffers,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "stream failed");
+        assert!(buffers.finish().is_empty());
+    }
+
+    #[test]
+    fn run_job_labels_cover_scheduler_states() {
+        assert_eq!(job_state_label(RunJobState::Blocked), "blocked");
+        assert_eq!(job_state_label(RunJobState::Skipped), "skipped");
     }
 }
