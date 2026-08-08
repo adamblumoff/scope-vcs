@@ -4,7 +4,7 @@ use std::{
     fs::{self, File},
     ops::Deref,
     os::unix::fs::MetadataExt,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 pub(super) struct CacheFileLock(File);
@@ -48,47 +48,14 @@ pub(super) fn lock_cache_identities(
     runner_id: &str,
     digests: impl IntoIterator<Item = String>,
 ) -> anyhow::Result<CacheIdentityLocks> {
-    let runner_namespace = runner_namespace(runner_id);
     let lock_namespace = {
         let _lifecycle_lock = lifecycle_lock(root)?;
-        let locks = root.join("locks");
-        require_real_directory(&locks, false, "cache lock directory")?;
-        let namespace = locks.join(&runner_namespace);
-        require_real_directory(&namespace, true, "runner cache lock namespace")?;
-        File::open(&locks)?.sync_all()?;
-        namespace
+        identity_lock_namespace(root, runner_id)?
     };
     let digests = canonical_identity_lock_digests(digests)?;
     let mut locks = CacheIdentityLocks(Vec::with_capacity(digests.len()));
     for digest in digests {
-        let path = lock_namespace.join(format!("{digest}.lock"));
-        if let Ok(metadata) = fs::symlink_metadata(&path)
-            && (!metadata.file_type().is_file() || metadata.file_type().is_symlink())
-        {
-            bail!(
-                "cache identity lock must be a regular file: {}",
-                path.display()
-            );
-        }
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&path)
-            .with_context(|| format!("open cache identity lock {}", path.display()))?;
-        let path_metadata = fs::symlink_metadata(&path)?;
-        let file_metadata = lock.metadata()?;
-        if !path_metadata.file_type().is_file()
-            || path_metadata.file_type().is_symlink()
-            || path_metadata.dev() != file_metadata.dev()
-            || path_metadata.ino() != file_metadata.ino()
-        {
-            bail!(
-                "cache identity lock path changed while opening: {}",
-                path.display()
-            );
-        }
+        let lock = open_identity_lock(&lock_namespace, &digest)?;
         lock.lock()
             .with_context(|| format!("lock cache identity {digest}"))?;
         locks.0.push(CacheFileLock::new(lock));
@@ -118,6 +85,67 @@ pub(super) fn lock_recorded_volume_identities(
             .collect()
     };
     lock_cache_identities(root, runner_id, digests)
+}
+
+pub(super) fn try_lock_cache_identity_while_lifecycle_locked(
+    root: &Path,
+    runner_id: &str,
+    digest: &str,
+    _lifecycle_lock: &File,
+) -> anyhow::Result<Option<CacheFileLock>> {
+    let digest = canonical_identity_lock_digests([digest.to_string()])?
+        .pop()
+        .expect("one cache identity digest was provided");
+    let namespace = identity_lock_namespace(root, runner_id)?;
+    let lock = open_identity_lock(&namespace, &digest)?;
+    match lock.try_lock() {
+        Ok(()) => Ok(Some(CacheFileLock::new(lock))),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(error)) => {
+            Err(error).with_context(|| format!("try lock cache identity {digest}"))
+        }
+    }
+}
+
+fn identity_lock_namespace(root: &Path, runner_id: &str) -> anyhow::Result<PathBuf> {
+    let locks = root.join("locks");
+    require_real_directory(&locks, false, "cache lock directory")?;
+    let namespace = locks.join(runner_namespace(runner_id));
+    require_real_directory(&namespace, true, "runner cache lock namespace")?;
+    File::open(&locks)?.sync_all()?;
+    Ok(namespace)
+}
+
+fn open_identity_lock(namespace: &Path, digest: &str) -> anyhow::Result<File> {
+    let path = namespace.join(format!("{digest}.lock"));
+    if let Ok(metadata) = fs::symlink_metadata(&path)
+        && (!metadata.file_type().is_file() || metadata.file_type().is_symlink())
+    {
+        bail!(
+            "cache identity lock must be a regular file: {}",
+            path.display()
+        );
+    }
+    let lock = File::options()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("open cache identity lock {}", path.display()))?;
+    let path_metadata = fs::symlink_metadata(&path)?;
+    let file_metadata = lock.metadata()?;
+    if !path_metadata.file_type().is_file()
+        || path_metadata.file_type().is_symlink()
+        || path_metadata.dev() != file_metadata.dev()
+        || path_metadata.ino() != file_metadata.ino()
+    {
+        bail!(
+            "cache identity lock path changed while opening: {}",
+            path.display()
+        );
+    }
+    Ok(lock)
 }
 
 pub(super) fn canonical_identity_lock_digests(

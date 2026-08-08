@@ -94,26 +94,45 @@ impl ExecutionOutcome {
 }
 
 fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
-    let mut restart_required = false;
-    for recovery in recover_runner_state(config)? {
+    let restart_required = run_recovery_tasks(recover_runner_state(config)?, |recovery| {
         let attempt_id = recovery.recovery.claim.attempt_id.clone();
         let attempt_token = recovery.recovery.claim.attempt_token.clone();
-        if let Err(error) = resume_claim(config, recovery) {
-            eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
-            if requires_recovery_restart(&error) {
-                restart_required = true;
-                continue;
-            }
-            if let Ok(client) = runner_client() {
-                let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
-            }
+        let Err(error) = resume_claim(config, recovery) else {
+            return false;
+        };
+        eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
+        if requires_recovery_restart(&error) {
+            return true;
         }
-    }
+        if let Ok(client) = runner_client() {
+            let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
+        }
+        false
+    })
+    .into_iter()
+    .any(|restart_required| restart_required);
     if restart_required {
         Err(RecoveryRestartRequired.into())
     } else {
         Ok(())
     }
+}
+
+fn run_recovery_tasks<T: Send, R: Send>(tasks: Vec<T>, recover: impl Fn(T) -> R + Sync) -> Vec<R> {
+    thread::scope(|scope| {
+        let recover = &recover;
+        tasks
+            .into_iter()
+            .map(|task| scope.spawn(move || recover(task)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    })
 }
 
 fn run_claim(

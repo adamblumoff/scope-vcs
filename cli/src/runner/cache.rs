@@ -29,6 +29,8 @@ use location::{CACHE_FORMAT, CacheLocation, runner_namespace};
 
 #[path = "cache_store.rs"]
 mod store;
+#[cfg(test)]
+use store::prune_root;
 use store::{ensure_capacity, has_capacity, validate_store};
 
 #[path = "cache_record.rs"]
@@ -43,7 +45,10 @@ mod identity_lock;
 #[cfg(test)]
 use identity_lock::canonical_identity_lock_digests;
 use identity_lock::{CacheFileLock, CacheIdentityLocks};
-use identity_lock::{lock_cache_identities, lock_recorded_volume_identities};
+use identity_lock::{
+    lock_cache_identities, lock_recorded_volume_identities,
+    try_lock_cache_identity_while_lifecycle_locked,
+};
 
 #[path = "cache_finalization.rs"]
 mod finalization;

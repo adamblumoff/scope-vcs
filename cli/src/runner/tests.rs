@@ -9,7 +9,43 @@ use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use scope_domain::runs::workflow::{
     ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
 };
-use std::{env, fs, path::Path};
+use std::{
+    env, fs,
+    path::Path,
+    sync::{Arc, Mutex, mpsc},
+};
+
+#[test]
+fn recovered_attempts_start_before_any_recovery_can_finish() {
+    let (started_sender, started_receiver) = mpsc::channel();
+    let (release_sender, release_receiver) = mpsc::channel();
+    let release_receiver = Arc::new(Mutex::new(release_receiver));
+    let recovery = thread::spawn(move || {
+        run_recovery_tasks(vec![1, 2], move |attempt| {
+            started_sender.send(attempt).unwrap();
+            release_receiver.lock().unwrap().recv().unwrap();
+            attempt
+        })
+    });
+
+    let first = started_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("first recovered attempt did not start");
+    let second = match started_receiver.recv_timeout(Duration::from_secs(1)) {
+        Ok(second) => second,
+        Err(error) => {
+            release_sender.send(()).unwrap();
+            release_sender.send(()).unwrap();
+            let _ = recovery.join();
+            panic!("second recovered attempt waited for the first to finish: {error}");
+        }
+    };
+    assert_ne!(first, second);
+
+    release_sender.send(()).unwrap();
+    release_sender.send(()).unwrap();
+    assert_eq!(recovery.join().unwrap(), [1, 2]);
+}
 
 #[test]
 fn recovery_runs_exactly_once_before_slot_workers_start() {

@@ -466,6 +466,30 @@ fn identity_lock_lives_from_confirmation_through_finalization() {
 }
 
 #[test]
+fn admission_pruning_skips_unreferenced_cache_with_a_held_identity_lock() {
+    let parent = TestDir::new("runner-cache-prune-active-identity");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let record = record(CacheState::Tainted {
+        attempt_id: "attempt-active".to_string(),
+    });
+    write_record(&root, &record).unwrap();
+    let identity_locks =
+        lock_cache_identities(&root, &record.runner_id, [record.identity_digest.clone()]).unwrap();
+    let lifecycle = lifecycle_lock(&root).unwrap();
+
+    prune_root(&root, &lifecycle, &record.runner_id).unwrap();
+
+    assert!(
+        find_record_for_volume(&root, &record.volume_name, &record.runner_id)
+            .unwrap()
+            .is_some()
+    );
+    drop(lifecycle);
+    drop(identity_locks);
+}
+
+#[test]
 fn preserved_recovery_keeps_the_identity_locked_until_process_exit() {
     let parent = TestDir::new("runner-cache-preserved-identity-lock");
     let root = parent.path().join("scope/runner");
