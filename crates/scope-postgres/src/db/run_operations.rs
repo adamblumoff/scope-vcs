@@ -195,6 +195,22 @@ impl RunStore {
             logs.pop();
         }
         logs.reverse();
+        let attempt_ids = logs
+            .iter()
+            .map(|model| model.attempt_id.clone())
+            .collect::<Vec<_>>();
+        let jobs_by_attempt = if attempt_ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            entities::run_attempt::Entity::find()
+                .filter(entities::run_attempt::Column::Id.is_in(attempt_ids))
+                .all(self.db.as_ref())
+                .await
+                .map_err(PostgresError::internal)?
+                .into_iter()
+                .map(|attempt| (attempt.id, attempt.job_key))
+                .collect::<BTreeMap<_, _>>()
+        };
 
         Ok(RecentRunLogs {
             truncated_in_view,
@@ -203,9 +219,19 @@ impl RunStore {
                 .map(|model| {
                     let position = entities::i64_to_u64(model.position, "run log position")?;
                     let run_id = model.run_id.clone();
+                    let job_key =
+                        jobs_by_attempt
+                            .get(&model.attempt_id)
+                            .cloned()
+                            .ok_or_else(|| {
+                                PostgresError::internal_message(
+                                    "run log references a missing attempt",
+                                )
+                            })?;
                     Ok(StoredRunLog {
                         position,
                         run_id,
+                        job_key,
                         chunk: model.try_into_domain()?,
                     })
                 })

@@ -26,6 +26,98 @@ jobs:
         run: printf 'hello from runner\n'
 "#;
 
+const MULTI_JOB_WORKFLOW: &str = r#"
+name: Parallel checks
+on:
+  manual: true
+runs-on: any
+caches: []
+container:
+  image: alpine:3.20
+timeout: 5m
+jobs:
+  backend:
+    steps:
+      - { name: Backend, run: "true" }
+  web:
+    steps:
+      - { name: Web, run: "true" }
+  integration:
+    needs: [backend, web]
+    steps:
+      - { name: Integration, run: "true" }
+"#;
+
+#[tokio::test]
+async fn run_detail_exposes_jobs_in_workflow_order_with_independent_state() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let app = router(state);
+    let source = temp_git_repo("multi-job-run-detail");
+    fs::create_dir_all(source.join(".scope/runs")).unwrap();
+    fs::write(source.join(".scope/runs/parallel.yml"), MULTI_JOB_WORKFLOW).unwrap();
+    run_git(Some(&source), &["add", "."], "stage multi-job run source").unwrap();
+    commit_all(&source, "multi-job run source");
+    let git_oid = git_head_oid(&source);
+    let bundle_path = source.join("source.bundle");
+    run_git(
+        Some(&source),
+        &["bundle", "create", bundle_path.to_str().unwrap(), "HEAD"],
+        "create multi-job run bundle",
+    )
+    .unwrap();
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "{}?workflow=parallel&git_oid={git_oid}&request_id=22222222222222222222222222222222",
+                    scope_api_contract::routes::repo_runs(TEST_REPO_OWNER, TEST_REPO_NAME)
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(fs::read(bundle_path).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let run_id = response_json(created).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let detail = app
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_run_detail(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &run_id,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = response_json(detail).await;
+    let jobs = detail["jobs"].as_array().unwrap();
+    assert_eq!(jobs.len(), 3);
+    assert_eq!(jobs[0]["job"]["key"], "backend");
+    assert_eq!(jobs[0]["job"]["state"], "queued");
+    assert_eq!(jobs[1]["job"]["key"], "integration");
+    assert_eq!(jobs[1]["job"]["state"], "blocked");
+    assert_eq!(jobs[2]["job"]["key"], "web");
+    assert_eq!(jobs[2]["job"]["state"], "queued");
+    assert!(
+        jobs.iter()
+            .all(|job| job["attempts"].as_array().unwrap().is_empty())
+    );
+}
+
 #[tokio::test]
 async fn owned_runner_upgrade_rotates_machine_credentials_over_http() {
     let state = test_state_with_repo();
@@ -485,14 +577,19 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     assert_eq!(detail["run"]["runner_selection"]["kind"], "named");
     assert_eq!(detail["run"]["runner_selection"]["name"], "linux-box");
     assert!(detail["run"].get("attempt_number").is_none());
-    assert_eq!(detail["attempts"].as_array().unwrap().len(), 1);
-    assert_eq!(detail["attempts"][0]["id"], attempt_id);
-    assert_eq!(detail["attempts"][0]["job_key"], "checks");
-    assert_eq!(detail["attempts"][0]["runner_name"], "linux-box");
-    assert_eq!(detail["attempts"][0]["state"], "succeeded");
-    assert_eq!(detail["attempts"][0]["steps"][0]["name"], "Test");
-    assert_eq!(detail["attempts"][0]["steps"][0]["state"], "succeeded");
-    assert_eq!(detail["attempts"][0]["steps"][0]["exit_code"], 0);
+    assert_eq!(detail["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["jobs"][0]["job"]["key"], "checks");
+    assert_eq!(detail["jobs"][0]["job"]["state"], "succeeded");
+    assert_eq!(detail["jobs"][0]["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["jobs"][0]["attempts"][0]["id"], attempt_id);
+    assert_eq!(detail["jobs"][0]["attempts"][0]["runner_name"], "linux-box");
+    assert_eq!(detail["jobs"][0]["attempts"][0]["state"], "succeeded");
+    assert_eq!(detail["jobs"][0]["attempts"][0]["steps"][0]["name"], "Test");
+    assert_eq!(
+        detail["jobs"][0]["attempts"][0]["steps"][0]["state"],
+        "succeeded"
+    );
+    assert_eq!(detail["jobs"][0]["attempts"][0]["steps"][0]["exit_code"], 0);
 
     let step_logs = app
         .clone()
@@ -624,6 +721,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .unwrap();
     let terminal_events = String::from_utf8(terminal_events.to_vec()).unwrap();
     assert!(terminal_events.contains("\"text\":\"chunk-130\\n\""));
+    assert!(terminal_events.contains("\"job_key\":\"checks\""));
     assert!(terminal_events.contains("\"state\":\"succeeded\""));
     assert!(terminal_events.contains("\"logs_truncated\":false"));
 
@@ -687,8 +785,11 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .await
         .unwrap();
     let retried_detail = response_json(retried_detail).await;
-    assert_eq!(retried_detail["attempts"][0]["id"], newer_attempt_id);
-    assert_eq!(retried_detail["attempts"][1]["id"], attempt_id);
+    assert_eq!(
+        retried_detail["jobs"][0]["attempts"][0]["id"],
+        newer_attempt_id
+    );
+    assert_eq!(retried_detail["jobs"][0]["attempts"][1]["id"], attempt_id);
     let retried_detail_json = serde_json::to_string(&retried_detail).unwrap();
     assert!(!retried_detail_json.contains("\"number\""));
     assert!(!retried_detail_json.contains("attempt_number"));

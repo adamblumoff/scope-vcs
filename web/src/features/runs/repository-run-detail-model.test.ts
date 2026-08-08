@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   defaultSelectedStep,
+  defaultSelectedJob,
   mergeStepLogs,
   reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
+  reconcileExpandedJobs,
   runNeedsPolling,
 } from './repository-run-detail-model'
 
@@ -34,6 +36,19 @@ describe('repository run detail model', () => {
     assert.deepEqual([...expanded], ['old', 'retry'])
   })
 
+  it('keeps known job expansion and falls back to the first job', () => {
+    const jobs = [
+      { job: { key: 'backend', state: 'succeeded' }, attempts: [] },
+      { job: { key: 'web', state: 'queued' }, attempts: [] },
+    ]
+    assert.deepEqual([...reconcileExpandedJobs(new Set(), jobs)], ['backend'])
+    assert.deepEqual(
+      [...reconcileExpandedJobs(new Set(['web', 'removed']), jobs)],
+      ['web'],
+    )
+    assert.equal(defaultSelectedJob(jobs)?.job.key, 'web')
+  })
+
   it('selects the active or failed step before completed work', () => {
     assert.equal(defaultSelectedStep([
       { index: 0, state: 'succeeded' },
@@ -54,7 +69,7 @@ describe('repository run detail model', () => {
 
   it('advances automatic selection while leaving user selection to the controller', () => {
     assert.deepEqual(reconcileAutomaticStepSelection(
-      { attemptId: 'attempt', stepIndex: 0 },
+      { attemptId: 'attempt', jobKey: 'checks', stepIndex: 0 },
       [{
         id: 'attempt',
         steps: [
@@ -62,7 +77,7 @@ describe('repository run detail model', () => {
           { index: 1, state: 'running' },
         ],
       }],
-    ), { attemptId: 'attempt', stepIndex: 1 })
+    ), { attemptId: 'attempt', jobKey: 'checks', stepIndex: 1 })
   })
 
   it('merges incremental logs by stable position', () => {

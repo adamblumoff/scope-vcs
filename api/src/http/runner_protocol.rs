@@ -267,6 +267,7 @@ pub(crate) async fn append_log(
         .await?;
     Ok(Json(scope_api_contract::RunLogResponse {
         attempt_id: log.chunk.attempt_id,
+        job_key: log.job_key,
         step_index: log.chunk.step_index,
         position: log.position,
         sequence: log.chunk.sequence,

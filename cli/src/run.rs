@@ -1,7 +1,7 @@
 use crate::{
     api::{
         RunStreamEvent, api_url, cancel_run, create_manual_run, http_client_builder, retry_run,
-        stream_run_events,
+        run_jobs, stream_run_events,
     },
     git_repo::{GitRepo, ensure_git_repo_ready, head_oid, warn_if_dirty_working_tree},
     git_transport::{ScopeRemote, select_scope_fetch_remote},
@@ -10,8 +10,10 @@ use crate::{
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{CreateManualRunQuery, RunResponse, RunRunnerSelection};
-use scope_domain::runs::run::RunState;
-use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
+use scope_domain::runs::run::{RunJobState, RunState};
+use std::{
+    collections::BTreeMap, env, fs, path::PathBuf, process::Command, thread, time::Duration,
+};
 
 pub fn start(
     workflow: &str,
@@ -115,6 +117,7 @@ fn watch_run(
     run_id: &str,
 ) -> anyhow::Result<()> {
     let mut cursor = 0;
+    let mut line_buffers = JobLineBuffers::default();
     loop {
         let mut terminal = None;
         stream_run_events(
@@ -129,7 +132,7 @@ fn watch_run(
                 match event {
                     RunStreamEvent::Log(log) => {
                         if advance_log_cursor(&mut cursor, log.position) {
-                            print!("{}", log.text);
+                            print_job_lines(line_buffers.push(&log.job_key, &log.text));
                         }
                     }
                     RunStreamEvent::Status(run) if run.state.is_terminal() => terminal = Some(run),
@@ -139,7 +142,16 @@ fn watch_run(
             },
         )?;
         if let Some(run) = terminal {
-            print_terminal(&run);
+            print_job_lines(line_buffers.finish());
+            let jobs = run_jobs(
+                client,
+                api_url,
+                session_token,
+                &target.owner,
+                &target.repo,
+                run_id,
+            )?;
+            print_terminal(&run, &jobs);
             return if run.state == RunState::Succeeded {
                 Ok(())
             } else {
@@ -158,7 +170,7 @@ fn advance_log_cursor(cursor: &mut u64, position: u64) -> bool {
     true
 }
 
-fn print_terminal(run: &RunResponse) {
+fn print_terminal(run: &RunResponse, jobs: &[crate::api::WatchedRunJob]) {
     println!(
         "\nRun {} · {} · {}",
         state_label(run.state),
@@ -167,6 +179,42 @@ fn print_terminal(run: &RunResponse) {
     );
     if run.logs_truncated {
         eprintln!("Warning: this run exceeded the stored log limit; earlier output was truncated.");
+    }
+    println!("Jobs:");
+    for job in jobs {
+        println!("  {} · {}", job.key, job_state_label(job.state));
+    }
+}
+
+#[derive(Default)]
+struct JobLineBuffers {
+    partial: BTreeMap<String, String>,
+}
+
+impl JobLineBuffers {
+    fn push(&mut self, job: &str, text: &str) -> Vec<String> {
+        let buffered = self.partial.entry(job.to_string()).or_default();
+        buffered.push_str(text);
+        let mut lines = Vec::new();
+        while let Some(end) = buffered.find('\n') {
+            let line = buffered.drain(..=end).collect::<String>();
+            lines.push(format!("[{job}] {line}"));
+        }
+        lines
+    }
+
+    fn finish(&mut self) -> Vec<String> {
+        let partial = std::mem::take(&mut self.partial);
+        partial
+            .into_iter()
+            .filter_map(|(job, line)| (!line.is_empty()).then(|| format!("[{job}] {line}\n")))
+            .collect()
+    }
+}
+
+fn print_job_lines(lines: Vec<String>) {
+    for line in lines {
+        print!("{line}");
     }
 }
 
@@ -242,6 +290,20 @@ fn runner_selection_label(selection: &RunRunnerSelection) -> &str {
     }
 }
 
+fn job_state_label(state: RunJobState) -> &'static str {
+    match state {
+        RunJobState::Blocked => "blocked",
+        RunJobState::Queued => "queued",
+        RunJobState::Leased => "leased",
+        RunJobState::Running => "running",
+        RunJobState::Succeeded => "succeeded",
+        RunJobState::Failed => "failed",
+        RunJobState::Skipped => "skipped",
+        RunJobState::Canceled => "canceled",
+        RunJobState::Lost => "lost",
+    }
+}
+
 fn short_oid(oid: &str) -> &str {
     oid.get(..7).unwrap_or(oid)
 }
@@ -301,5 +363,23 @@ mod tests {
         assert!(!advance_log_cursor(&mut cursor, 7));
         assert!(advance_log_cursor(&mut cursor, 8));
         assert_eq!(cursor, 8);
+    }
+
+    #[test]
+    fn run_watch_buffers_partial_lines_independently_by_job() {
+        let mut buffers = JobLineBuffers::default();
+        assert!(buffers.push("backend", "compiling").is_empty());
+        assert_eq!(buffers.push("web", "testing\n"), ["[web] testing\n"]);
+        assert_eq!(
+            buffers.push("backend", " complete\nnext"),
+            ["[backend] compiling complete\n"],
+        );
+        assert_eq!(buffers.finish(), ["[backend] next\n"]);
+    }
+
+    #[test]
+    fn run_job_labels_cover_scheduler_states() {
+        assert_eq!(job_state_label(RunJobState::Blocked), "blocked");
+        assert_eq!(job_state_label(RunJobState::Skipped), "skipped");
     }
 }
