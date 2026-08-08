@@ -144,14 +144,16 @@ fn watch_run(
         flush_partial_lines_on_stream_error(stream_result, &mut line_buffers)?;
         if let Some(run) = terminal {
             print_job_lines(line_buffers.finish());
-            let jobs = run_jobs(
-                client,
-                api_url,
-                session_token,
-                &target.owner,
-                &target.repo,
-                run_id,
-            );
+            let jobs = run_summary_client().and_then(|summary_client| {
+                run_jobs(
+                    &summary_client,
+                    api_url,
+                    session_token,
+                    &target.owner,
+                    &target.repo,
+                    run_id,
+                )
+            });
             match jobs {
                 Ok(jobs) => print_terminal(&run, Some(&jobs)),
                 Err(error) => {
@@ -331,6 +333,13 @@ fn run_client() -> anyhow::Result<Client> {
         .timeout(Duration::from_secs(120))
         .build()
         .context("build run HTTP client")
+}
+
+fn run_summary_client() -> anyhow::Result<Client> {
+    http_client_builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .context("build run summary HTTP client")
 }
 
 fn state_label(state: RunState) -> &'static str {
