@@ -5,7 +5,7 @@ use scope_domain::{
     runs::{
         run::{
             AttemptConclusion, AttemptState, PinnedContainerImage, Run, RunLogChunk, RunSource,
-            RunState, RunTrigger, StepConclusion, StepState,
+            RunState, RunTrigger, StepState,
         },
         runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
         workflow::{
@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 mod job_scheduler;
+mod retention;
 pub(crate) use job_scheduler::parallel_revision;
 
 #[tokio::test]
@@ -122,124 +123,6 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
     let lost = store.runs().expire_attempt("attempt-2", 140).await.unwrap();
     assert_eq!(lost.run.state, RunState::Lost);
     assert_eq!(lost.attempt.state, AttemptState::Lost);
-}
-
-#[tokio::test]
-async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomically() {
-    let store = postgres_store();
-    register_runner(&store, "runner-1", "linux-box").await;
-    let revision = revision();
-    let revision_digest = revision.digest().to_string();
-    enqueue(&store, run("run-1", "manual:retention"), revision).await;
-    store
-        .runs()
-        .claim_job(
-            "run-1",
-            "checks",
-            "runner-1",
-            "attempt-1",
-            &"a".repeat(64),
-            20,
-            80,
-        )
-        .await
-        .unwrap();
-    pin_attempt(&store, "attempt-1", "runner-1", &"a".repeat(64), 21).await;
-    store
-        .runs()
-        .start_attempt_step("attempt-1", "runner-1", &"a".repeat(64), 0, 22)
-        .await
-        .unwrap();
-    store
-        .runs()
-        .complete_attempt_step(
-            "attempt-1",
-            &"a".repeat(64),
-            0,
-            StepConclusion::Succeeded,
-            30,
-        )
-        .await
-        .unwrap();
-    let replayed = store
-        .runs()
-        .complete_attempt_step(
-            "attempt-1",
-            &"a".repeat(64),
-            0,
-            StepConclusion::Succeeded,
-            31,
-        )
-        .await
-        .unwrap();
-    assert_eq!(replayed.attempt.state, AttemptState::Succeeded);
-    assert_eq!(replayed.run.state, RunState::Succeeded);
-    assert_eq!(
-        store
-            .runs()
-            .complete_attempt_step(
-                "attempt-1",
-                &"b".repeat(64),
-                0,
-                StepConclusion::Succeeded,
-                32,
-            )
-            .await
-            .unwrap_err()
-            .kind,
-        PostgresErrorKind::Unauthenticated
-    );
-    store
-        .runs()
-        .revoke_runner_grant("owner/repo", "runner-1", 33)
-        .await
-        .unwrap();
-    assert_eq!(
-        store
-            .runs()
-            .complete_attempt_step(
-                "attempt-1",
-                &"a".repeat(64),
-                0,
-                StepConclusion::Succeeded,
-                34,
-            )
-            .await
-            .unwrap_err()
-            .kind,
-        PostgresErrorKind::PermissionDenied
-    );
-
-    assert_eq!(
-        store
-            .runs()
-            .prune_terminal_runs(29, 40, 10, &super::generated_ids::test_generated_id)
-            .await
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        store
-            .runs()
-            .prune_terminal_runs(30, 40, 10, &super::generated_ids::test_generated_id)
-            .await
-            .unwrap(),
-        1
-    );
-    assert!(store.runs().run("run-1").await.unwrap().is_none());
-    assert!(
-        entities::workflow_revision::Entity::find_by_id(revision_digest)
-            .one(store.db.as_ref())
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let cleanup = store
-        .cleanup()
-        .source_blob_cleanup_batch(400, &super::generated_ids::test_generated_id)
-        .await
-        .unwrap();
-    assert_eq!(cleanup.pending.len(), 1);
 }
 
 #[tokio::test]
