@@ -330,7 +330,19 @@ async fn run_job_migration_resets_the_protocol_authority_to_v5_fenced() {
          INSERT INTO scope_workflow_revisions (digest, definition, created_at_unix)
          VALUES (
              repeat('a', 64),
-             jsonb_build_object('jobs', jsonb_build_array(jsonb_build_object('id', 'checks'))),
+             jsonb_build_object(
+                 'name', 'Canary',
+                 'triggers', jsonb_build_object('manual', true, 'push_main', false),
+                 'jobs', jsonb_build_array(jsonb_build_object(
+                     'id', 'checks',
+                     'needs', jsonb_build_array(),
+                     'runner', jsonb_build_object('kind', 'named', 'name', 'remote-linux'),
+                     'container', jsonb_build_object('image', 'alpine:3.20'),
+                     'timeout_seconds', 300,
+                     'caches', jsonb_build_array(),
+                     'steps', jsonb_build_array(jsonb_build_object('name', 'Test', 'run', 'true'))
+                 ))
+             ),
              1
          );
          INSERT INTO scope_runs (

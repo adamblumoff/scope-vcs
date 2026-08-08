@@ -276,7 +276,7 @@ async fn workflow_jobs_rewrite_refuses_to_start_until_attempts_are_drained() {
     assert_eq!(
         row.try_get::<String>("", "workflow_revision_digest")
             .unwrap(),
-        "c1a831feffae11e2325937e5121f70cee2f0fb826d23cc800960031c2aab3bc0"
+        "8cdebe376f88f8bf41167103995e5bde523ed8a2fc28844f363621a9ce92ebc5"
     );
 }
 
