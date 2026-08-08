@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
+import { mergeRunHistory, refreshRunHistoryPage } from './run-history-model'
 
 const RUNS_REFRESH_INTERVAL_MS = 2_000
 
@@ -60,12 +61,11 @@ export function RepositoryRunsPage({
           setRefreshError(null)
           return
         }
-        setHistory((current) => ({
-          next_cursor: loadedMoreRef.current
-            ? current?.next_cursor ?? next.next_cursor
-            : next.next_cursor,
-          runs: mergeRunHistory(next.runs, current?.runs ?? []),
-        }))
+        setHistory((current) => refreshRunHistoryPage(
+          current,
+          next,
+          loadedMoreRef.current,
+        ))
         setRefreshError(null)
       })
       .catch((error: unknown) => {
@@ -388,14 +388,6 @@ function StatusDot({ className, state }: { className?: string; state: string }) 
       )}
     />
   )
-}
-
-function mergeRunHistory(
-  first: RepoRunHistoryPage['runs'],
-  second: RepoRunHistoryPage['runs'],
-) {
-  const seen = new Set(first.map((run) => run.id))
-  return [...first, ...second.filter((run) => !seen.has(run.id))]
 }
 
 function errorMessage(error: unknown) {
