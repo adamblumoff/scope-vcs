@@ -30,7 +30,7 @@ import {
   type StepLogState,
   useRepositoryRunDetailController,
 } from './repository-run-detail-controller'
-import { RunStatusDot } from './repository-runs-page'
+import { RunStatusDot } from './run-status-dot'
 import { RunJobGraph } from './run-job-graph'
 import { runJobPanelId } from './run-job-ids'
 import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'

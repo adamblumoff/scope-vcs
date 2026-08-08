@@ -9,13 +9,15 @@ import {
   buildRunJobGraph,
 } from './run-job-graph-model'
 import { runJobPanelId } from './run-job-ids'
-import { RunStatusDot } from './repository-runs-page'
+import { RunStatusDot } from './run-status-dot'
 
 export function RunJobGraph({
+  compact = false,
   expandedJobs,
   jobs,
   onToggleJob,
 }: {
+  compact?: boolean
   expandedJobs: ReadonlySet<string>
   jobs: readonly RepoRunJobDetail[]
   onToggleJob: (job: RepoRunJobDetail) => void
@@ -34,7 +36,10 @@ export function RunJobGraph({
   return (
     <div
       aria-label="Job dependency graph"
-      className="max-h-[min(70vh,42rem)] overflow-auto border-y border-border bg-muted/15 py-3"
+      className={cn(
+        'max-h-[min(70vh,42rem)] overflow-auto border-y border-border py-3',
+        compact ? 'bg-background' : 'bg-muted/15',
+      )}
     >
       <div
         className="relative"
