@@ -62,31 +62,31 @@ fn recovery_and_resource_detection_finish_before_slot_workers_start() {
         {
             let events = std::sync::Arc::clone(&events);
             move || {
-                events.lock().unwrap().push("resource-detection".to_string());
+                events
+                    .lock()
+                    .unwrap()
+                    .push("resource-detection".to_string());
                 Ok(())
             }
         },
     )
     .unwrap();
-    let error = run_slot_workers(
-        RunnerMaxConcurrentJobs::new(3).unwrap(),
-        {
-            let events = std::sync::Arc::clone(&events);
-            let start_barrier = std::sync::Arc::clone(&start_barrier);
-            move |slot| {
-                let mut events = events.lock().unwrap();
-                assert_eq!(events.first().map(String::as_str), Some("recovery"));
-                assert_eq!(
-                    events.get(1).map(String::as_str),
-                    Some("resource-detection")
-                );
-                events.push(format!("slot-{slot}"));
-                drop(events);
-                start_barrier.wait();
-                Ok(())
-            }
-        },
-    )
+    let error = run_slot_workers(RunnerMaxConcurrentJobs::new(3).unwrap(), {
+        let events = std::sync::Arc::clone(&events);
+        let start_barrier = std::sync::Arc::clone(&start_barrier);
+        move |slot| {
+            let mut events = events.lock().unwrap();
+            assert_eq!(events.first().map(String::as_str), Some("recovery"));
+            assert_eq!(
+                events.get(1).map(String::as_str),
+                Some("resource-detection")
+            );
+            events.push(format!("slot-{slot}"));
+            drop(events);
+            start_barrier.wait();
+            Ok(())
+        }
+    })
     .unwrap_err();
     assert!(error.to_string().contains("stopped unexpectedly"));
 
@@ -103,16 +103,13 @@ fn recovery_and_resource_detection_finish_before_slot_workers_start() {
 #[test]
 fn preserved_attempts_restart_before_resource_detection() {
     let resource_detections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let error = initialize_after_recovery(
-        || Err(RecoveryRestartRequired.into()),
-        {
-            let resource_detections = std::sync::Arc::clone(&resource_detections);
-            move || {
-                resource_detections.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(())
-            }
-        },
-    )
+    let error = initialize_after_recovery(|| Err(RecoveryRestartRequired.into()), {
+        let resource_detections = std::sync::Arc::clone(&resource_detections);
+        move || {
+            resource_detections.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    })
     .unwrap_err();
 
     assert!(requires_recovery_restart(&error));
@@ -129,16 +126,13 @@ fn preserved_attempts_restart_before_resource_detection() {
 fn a_later_slot_failure_is_reported_without_waiting_for_an_earlier_slot() {
     let start_barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
     let started_at = Instant::now();
-    let error = run_slot_workers(
-        RunnerMaxConcurrentJobs::new(2).unwrap(),
-        move |slot| {
-            start_barrier.wait();
-            if slot == 1 {
-                thread::sleep(Duration::from_millis(500));
-            }
-            anyhow::bail!("slot {slot} test failure")
-        },
-    )
+    let error = run_slot_workers(RunnerMaxConcurrentJobs::new(2).unwrap(), move |slot| {
+        start_barrier.wait();
+        if slot == 1 {
+            thread::sleep(Duration::from_millis(500));
+        }
+        anyhow::bail!("slot {slot} test failure")
+    })
     .unwrap_err();
 
     assert!(started_at.elapsed() < Duration::from_millis(250));

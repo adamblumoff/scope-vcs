@@ -34,10 +34,9 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
     );
     let slots = config.max_concurrent_jobs;
     let admission = ResourceAdmissionCoordinator::new(slots, limits);
-    run_slot_workers(
-        slots,
-        move |slot| runner_slot(config.clone(), capabilities, admission.clone(), slot),
-    )
+    run_slot_workers(slots, move |slot| {
+        runner_slot(config.clone(), capabilities, admission.clone(), slot)
+    })
 }
 
 fn runner_slot(
@@ -133,10 +132,7 @@ pub(super) fn initialize_after_recovery<T>(
     initialize()
 }
 
-pub(super) fn run_slot_workers<W>(
-    slots: RunnerMaxConcurrentJobs,
-    worker: W,
-) -> anyhow::Result<()>
+pub(super) fn run_slot_workers<W>(slots: RunnerMaxConcurrentJobs, worker: W) -> anyhow::Result<()>
 where
     W: Fn(u8) -> anyhow::Result<()> + Send + Sync + 'static,
 {
