@@ -198,7 +198,6 @@ async fn runner_capacity_is_authoritative_across_concurrent_job_claims() {
         .runs()
         .complete_attempt(
             &build.attempt.id,
-            "runner-1",
             &build_token,
             AttemptConclusion::SetupFailed {
                 exit_code: 1,
