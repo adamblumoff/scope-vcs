@@ -260,9 +260,17 @@ export type MarkRequestDiscussionReadRequest = { through_position: number, };
 
 export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestTimelineChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } };
 
+export type RunRunnerSelection = { "kind": "any" } | { "kind": "named", name: string, } | { "kind": "mixed" };
+
 export type RepositoryRunState = "queued" | "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
-export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, desired_runner: string | null, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
+export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, runner_selection: RunRunnerSelection, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
+
+export type RepositoryRunJobState = "blocked" | "queued" | "leased" | "running" | "succeeded" | "failed" | "skipped" | "canceled" | "lost";
+
+export type RepositoryRunJobResponse = { key: string, desired_runner: string | null, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
+
+export type RepositoryRunJobDetailResponse = { job: RepositoryRunJobResponse, attempts: Array<RepositoryRunAttemptResponse>, };
 
 export type RepositoryRunAttemptState = "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
@@ -282,7 +290,7 @@ export type RepositoryOperationsResponse = { runs: Array<RepositoryRunSummaryRes
 
 export type RepositoryRunLogResponse = { position: number, sequence: number, text: string, created_at_unix: number, };
 
-export type RepositoryRunDetailResponse = { run: RepositoryRunSummaryResponse, attempts: Array<RepositoryRunAttemptResponse>, };
+export type RepositoryRunDetailResponse = { run: RepositoryRunSummaryResponse, jobs: Array<RepositoryRunJobDetailResponse>, };
 
 export type RepositoryRunStepLogPageResponse = { logs: Array<RepositoryRunLogResponse>, next_after: number, logs_truncated: boolean, };
 

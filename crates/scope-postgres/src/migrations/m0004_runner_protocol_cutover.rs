@@ -1,10 +1,43 @@
-use scope_domain::runs::workflow::{
-    CompiledWorkflow, WorkflowIdentity, WorkflowPath, WorkflowRevision,
-};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::{DbErr, MigrationName, MigrationTrait, SchemaManager};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+
+const HISTORICAL_WORKFLOW_DIGEST_VERSION: u8 = 2;
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalCompiledWorkflowV4 {
+    name: String,
+    triggers: HistoricalTriggers,
+    runner: Value,
+    container: HistoricalContainer,
+    timeout_seconds: u64,
+    caches: Vec<String>,
+    steps: Vec<HistoricalStep>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalTriggers {
+    manual: bool,
+    push_main: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalContainer {
+    image: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalStep {
+    name: String,
+    run: String,
+}
 
 pub struct Migration;
 
@@ -125,12 +158,6 @@ where
                 .to_string(),
         ))
         .await?;
-    let identity = WorkflowIdentity::new(
-        "cutover",
-        WorkflowPath::parse("/.scope/runs/cutover.yml")
-            .map_err(|error| DbErr::Migration(error.to_string()))?,
-    )
-    .map_err(|error| DbErr::Migration(error.to_string()))?;
     let mut rewrites = BTreeMap::new();
     for row in rows {
         let old_digest = row.try_get::<String>("", "digest")?;
@@ -146,11 +173,21 @@ where
                 "workflow rewrite encountered an already-V4 definition".to_string(),
             ));
         }
-        let compiled: CompiledWorkflow = serde_json::from_value(definition.clone())
+        let compiled: HistoricalCompiledWorkflowV4 = serde_json::from_value(definition)
             .map_err(|error| DbErr::Migration(error.to_string()))?;
-        let revision = WorkflowRevision::new(identity.clone(), compiled)
-            .map_err(|error| DbErr::Migration(error.to_string()))?;
-        let new_digest = revision.digest().to_string();
+        #[derive(Serialize)]
+        struct DigestInput<'a> {
+            version: u8,
+            definition: &'a HistoricalCompiledWorkflowV4,
+        }
+        let bytes = serde_json::to_vec(&DigestInput {
+            version: HISTORICAL_WORKFLOW_DIGEST_VERSION,
+            definition: &compiled,
+        })
+        .map_err(|error| DbErr::Migration(error.to_string()))?;
+        let new_digest = hex::encode(Sha256::digest(bytes));
+        let definition =
+            serde_json::to_value(compiled).map_err(|error| DbErr::Migration(error.to_string()))?;
         if rewrites
             .insert(old_digest.clone(), new_digest.clone())
             .is_some()

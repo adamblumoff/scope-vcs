@@ -1,5 +1,5 @@
 use super::{
-    ResourceLimits, RunnerConfig, cache,
+    RunnerConfig, cache,
     config::{load_runner_config_from, runner_cache_root, runner_config_path, store_runner_config},
     doctor_local, load_runner_config, runner_client, runner_poll,
     systemd::{install_systemd_service, print_linger_status},
@@ -14,11 +14,16 @@ use crate::{
 };
 use anyhow::bail;
 use scope_api_contract::{RegisterRunnerRequest, RunnerResponse, UpgradeRunnerRegistrationRequest};
-use scope_domain::runs::runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities};
+use scope_domain::runs::runner::{
+    RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerMaxConcurrentJobs,
+};
 
-pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
+pub fn install(
+    name: &str,
+    repository: &str,
+    requested_max_concurrent_jobs: Option<u8>,
+) -> anyhow::Result<()> {
     let (owner, repo) = parse_repository(repository)?;
-    doctor_local(true)?;
     let api_url = api_url();
     let client = runner_client()?;
     let session = session_from_cache_or_device(&client, &api_url)?;
@@ -33,6 +38,11 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
                 config_path.display()
             );
         }
+        let max_concurrent_jobs = requested_max_concurrent_jobs
+            .map(RunnerMaxConcurrentJobs::new)
+            .transpose()?
+            .unwrap_or(config.max_concurrent_jobs);
+        doctor_local(true, max_concurrent_jobs)?;
         let cache_root = runner_cache_root(config.cache_root.as_deref())?;
         cache::initialize(&cache_root)?;
         let upgraded = upgrade_runner_registration(
@@ -44,9 +54,11 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 protocol_version: RUNNER_PROTOCOL_VERSION,
                 capabilities: RunnerCapabilities::v1(),
+                max_concurrent_jobs,
             },
         )?;
         config.secret = upgraded.secret;
+        config.max_concurrent_jobs = max_concurrent_jobs;
         config.cache_root = Some(cache_root);
         store_runner_config(&config_path, &config)?;
         let runner = upgraded.runner;
@@ -72,6 +84,9 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
         print_linger_status();
         return Ok(());
     }
+    let max_concurrent_jobs =
+        RunnerMaxConcurrentJobs::new(requested_max_concurrent_jobs.unwrap_or(1))?;
+    doctor_local(true, max_concurrent_jobs)?;
     let requested_cache_root = runner_cache_root(None)?;
     cache::initialize(&requested_cache_root)?;
     let registered = register_runner(
@@ -85,6 +100,7 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol_version: RUNNER_PROTOCOL_VERSION,
             capabilities: RunnerCapabilities::v1(),
+            max_concurrent_jobs,
         },
     )?;
     let config = RunnerConfig {
@@ -92,6 +108,7 @@ pub fn install(name: &str, repository: &str) -> anyhow::Result<()> {
         runner_id: registered.runner.id,
         name: name.to_string(),
         secret: registered.secret,
+        max_concurrent_jobs,
         cache_root: Some(requested_cache_root),
     };
     if let Err(error) = store_runner_config(&config_path, &config) {
@@ -153,15 +170,20 @@ pub fn remove_repository(repository: &str) -> anyhow::Result<()> {
 }
 
 pub fn doctor() -> anyhow::Result<()> {
-    let capabilities = doctor_local(true)?;
-    if let Ok(config) = load_runner_config() {
+    let config = load_runner_config().ok();
+    let max_concurrent_jobs = config.as_ref().map_or_else(
+        || RunnerMaxConcurrentJobs::new(1),
+        |config| Ok(config.max_concurrent_jobs),
+    )?;
+    let (capabilities, limits) = doctor_local(true, max_concurrent_jobs)?;
+    if let Some(config) = config {
         cache::doctor(&config)?;
-        let limits = ResourceLimits::detect()?;
         println!(
-            "✓ live resources ({} MiB memory, {:.3} CPU, {} PIDs)",
+            "✓ live resources per slot ({} MiB memory, {:.3} CPU, {} PIDs across {} slot(s))",
             limits.memory_bytes / (1024 * 1024),
             limits.cpu_millis as f64 / 1000.0,
-            limits.pids
+            limits.pids,
+            max_concurrent_jobs.get(),
         );
         let client = runner_client()?;
         runner_poll(&client, &config.api_url, &config.secret)?;
@@ -195,14 +217,15 @@ pub(super) fn print_runner_status(name: &str, runner: &RunnerResponse) {
         .and_then(|last_seen| unix_now().checked_sub(last_seen))
         .is_some_and(|age| age <= 90);
     println!(
-        "{} · {} · {}",
+        "{} · {} · {} · {} slot(s)",
         name,
         if online { "online" } else { "offline" },
         if runner.enabled {
             "enabled"
         } else {
             "disabled"
-        }
+        },
+        runner.max_concurrent_jobs.get(),
     );
     for grant in runner.grants.iter().filter(|grant| grant.active) {
         println!("  {} as {}", grant.repository_id, grant.name);

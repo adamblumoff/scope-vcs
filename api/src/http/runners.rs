@@ -20,6 +20,7 @@ use scope_domain::{
     runs::runner::{Runner, RunnerGrant, RunnerName},
     store::RepositoryActor,
 };
+use scope_postgres::db::UpgradeRunnerRegistrationCommand;
 
 pub(crate) async fn register_runner(
     State(state): State<AppState>,
@@ -37,6 +38,7 @@ pub(crate) async fn register_runner(
         input.version,
         input.protocol_version,
         input.capabilities,
+        input.max_concurrent_jobs,
         now,
     )?;
     let grant = RunnerGrant::new(
@@ -82,10 +84,13 @@ pub(crate) async fn upgrade_runner_registration(
         .upgrade_runner_registration(
             &runner_id,
             &user.id,
-            secret_hash,
-            input.version,
-            input.protocol_version,
-            input.capabilities,
+            UpgradeRunnerRegistrationCommand {
+                secret_hash,
+                version: input.version,
+                protocol_version: input.protocol_version,
+                capabilities: input.capabilities,
+                max_concurrent_jobs: input.max_concurrent_jobs,
+            },
         )
         .await?;
     let grants = state.metadata.runs().runner_grants(&runner.id).await?;
@@ -186,6 +191,7 @@ pub(crate) fn runner_response(runner: Runner, grants: Vec<RunnerGrant>) -> Runne
         id: runner.id,
         version: runner.version,
         protocol_version: runner.protocol_version,
+        max_concurrent_jobs: runner.max_concurrent_jobs,
         enabled: runner.enabled,
         created_at_unix: runner.created_at_unix,
         last_seen_at_unix: runner.last_seen_at_unix,

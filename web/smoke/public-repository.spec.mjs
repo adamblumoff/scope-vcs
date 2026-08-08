@@ -262,15 +262,49 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       url.pathname.endsWith('/requests/req_demo_ready') &&
       url.searchParams.get('discussion') === 'discussion_demo_revision_jitter'
     ))
+    await page.locator('.request-discussion-thread').first().waitFor()
 
     const requestViews = page.getByRole('navigation', { name: 'Request views' })
-    await requestViews.getByRole('link', { name: 'Changes' }).click()
+    const changesLink = requestViews.getByRole('link', { name: 'Changes' })
+    await page.waitForFunction(
+      (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
+      await changesLink.elementHandle(),
+    )
+    const requestHeading = await page
+      .getByRole('heading', { level: 1, name: 'Add bounded retry timing' })
+      .elementHandle()
+    const requestNavigation = await requestViews.elementHandle()
+    assert(requestHeading)
+    assert(requestNavigation)
+    await page.locator('#main-content').evaluate((element) => {
+      element.scrollTop = 200
+    })
+    await page.waitForFunction(
+      () => document.querySelector('#main-content')?.scrollTop === 200,
+    )
+    const requestScroll = await page.locator('#main-content').evaluate(
+      (element) => element.scrollTop,
+    )
+    assert(requestScroll > 0)
+
+    await changesLink.click()
     await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready/changes'))
     await page.getByRole('heading', { level: 2, name: 'Commits' }).waitFor()
+    await assertRequestShellPreserved(page, {
+      heading: requestHeading,
+      navigation: requestNavigation,
+      scroll: requestScroll,
+    })
     await page.getByRole('navigation', { name: 'Request views' })
       .getByRole('link', { name: 'Discussion' })
       .click()
     await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready'))
+    await page.locator('.request-discussion-thread').first().waitFor()
+    await assertRequestShellPreserved(page, {
+      heading: requestHeading,
+      navigation: requestNavigation,
+      scroll: requestScroll,
+    })
   })
 })
 
@@ -379,6 +413,24 @@ async function assertRepositoryChromePreserved(page, chrome) {
       chrome,
     ),
     true,
+  )
+}
+
+async function assertRequestShellPreserved(page, shell) {
+  assert.equal(
+    await page.evaluate(
+      ({ heading, navigation }) =>
+        heading === document.querySelector('h1') &&
+        navigation === document.querySelector('nav[aria-label="Request views"]'),
+      shell,
+    ),
+    true,
+  )
+  assert.equal(
+    await page.locator('#main-content').evaluate(
+      (element) => element.scrollTop,
+    ),
+    shell.scroll,
   )
 }
 

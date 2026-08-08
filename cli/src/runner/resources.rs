@@ -1,4 +1,5 @@
 use anyhow::{Context, bail};
+use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use std::{
     fs,
     num::NonZeroUsize,
@@ -25,6 +26,21 @@ struct TransientCapacity {
     available_inodes: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ResourceCapacity {
+    memory_headroom: u64,
+    cpu_millis: u64,
+    pid_headroom: u64,
+    transient: TransientCapacity,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct ResourceUsage {
+    pub(super) memory_bytes: u64,
+    pub(super) pids: u64,
+    pub(super) storage_bytes: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResourceLimits {
     pub(super) memory_bytes: u64,
@@ -34,52 +50,8 @@ pub(super) struct ResourceLimits {
 }
 
 impl ResourceLimits {
-    pub(super) fn detect() -> anyhow::Result<Self> {
-        let host_memory = mem_available_bytes(&fs::read_to_string("/proc/meminfo")?)?;
-        let cgroup_path = unified_cgroup_path(&fs::read_to_string("/proc/self/cgroup")?)?;
-        let cgroup = read_cgroup_capacity(Path::new("/sys/fs/cgroup"), &cgroup_path)?;
-        let memory_headroom = cgroup
-            .memory_headroom
-            .map_or(host_memory, |value| value.min(host_memory));
-        if memory_headroom < DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY {
-            bail!(
-                "runner has {} MiB memory headroom; at least {} MiB is required",
-                memory_headroom / MIB,
-                (DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY) / MIB
-            );
-        }
-
-        let host_cpus = std::thread::available_parallelism()
-            .unwrap_or(NonZeroUsize::new(1).expect("one is non-zero"))
-            .get() as u64
-            * 1000;
-        let cpu_capacity = [
-            Some(host_cpus),
-            cgroup.cpu_quota_millis,
-            cgroup.cpuset_cpus.map(|count| count * 1000),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or(1000);
-        let cpu_millis = job_cpu_millis(cpu_capacity)?;
-
-        let pids = cgroup
-            .pid_headroom
-            .map(|headroom| headroom.saturating_sub(PID_RESERVE))
-            .unwrap_or(MAX_JOB_PIDS)
-            .min(MAX_JOB_PIDS);
-        if pids < MIN_JOB_PIDS {
-            bail!("runner has {pids} available PIDs; at least {MIN_JOB_PIDS} are required");
-        }
-        let storage_bytes = transient_storage_bytes()?;
-
-        Ok(Self {
-            memory_bytes: memory_headroom - DAEMON_MEMORY_RESERVE,
-            cpu_millis,
-            pids,
-            storage_bytes,
-        })
+    pub(super) fn detect(max_concurrent_jobs: RunnerMaxConcurrentJobs) -> anyhow::Result<Self> {
+        ResourceCapacity::detect()?.limits(max_concurrent_jobs)
     }
 
     pub(super) fn apply(&self, command: &mut Command) {
@@ -97,6 +69,239 @@ impl ResourceLimits {
             &pids,
         ]);
     }
+}
+
+impl ResourceCapacity {
+    pub(super) fn detect() -> anyhow::Result<Self> {
+        let host_memory = mem_available_bytes(&fs::read_to_string("/proc/meminfo")?)?;
+        let cgroup_path = unified_cgroup_path(&fs::read_to_string("/proc/self/cgroup")?)?;
+        let cgroup = read_cgroup_capacity(Path::new("/sys/fs/cgroup"), &cgroup_path)?;
+        let memory_headroom = cgroup
+            .memory_headroom
+            .map_or(host_memory, |value| value.min(host_memory));
+        let host_cpus = std::thread::available_parallelism()
+            .unwrap_or(NonZeroUsize::new(1).expect("one is non-zero"))
+            .get() as u64
+            * 1000;
+        let cpu_millis = [
+            Some(host_cpus),
+            cgroup.cpu_quota_millis,
+            cgroup.cpuset_cpus.map(|count| count * 1000),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(1000);
+        Ok(Self {
+            memory_headroom,
+            cpu_millis,
+            pid_headroom: cgroup
+                .pid_headroom
+                .unwrap_or(MAX_JOB_PIDS.saturating_add(PID_RESERVE)),
+            transient: transient_storage_capacity()?,
+        })
+    }
+
+    fn limits(
+        self,
+        max_concurrent_jobs: RunnerMaxConcurrentJobs,
+    ) -> anyhow::Result<ResourceLimits> {
+        let slots = u64::from(max_concurrent_jobs.get());
+        let required_memory = DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY.saturating_mul(slots);
+        if self.memory_headroom < required_memory {
+            bail!(
+                "runner has {} MiB memory headroom; at least {} MiB is required for {slots} job slot(s)",
+                self.memory_headroom / MIB,
+                required_memory / MIB
+            );
+        }
+        let memory_bytes = per_slot_budget(
+            self.memory_headroom - DAEMON_MEMORY_RESERVE,
+            MIN_JOB_MEMORY,
+            slots,
+        )
+        .expect("validated memory budget fits every slot");
+        let cpu_millis = job_cpu_millis(self.cpu_millis, slots)?;
+        let pids = self
+            .pid_headroom
+            .saturating_sub(PID_RESERVE)
+            .min(MAX_JOB_PIDS);
+        let required_pids = MIN_JOB_PIDS.saturating_mul(slots);
+        if pids < required_pids {
+            bail!(
+                "runner has {pids} available PIDs; at least {required_pids} are required for {slots} job slot(s)"
+            );
+        }
+        let storage_bytes = safe_transient_storage_bytes(self.transient, slots)?;
+
+        Ok(ResourceLimits {
+            memory_bytes,
+            cpu_millis,
+            pids: per_slot_budget(pids, MIN_JOB_PIDS, slots)
+                .expect("validated PID budget fits every slot"),
+            storage_bytes,
+        })
+    }
+
+    pub(super) fn ensure_admission(
+        self,
+        limits: &ResourceLimits,
+        active: &[ResourceUsage],
+        pending: u8,
+    ) -> anyhow::Result<()> {
+        // Live headroom reflects current active usage, but Docker limits are
+        // ceilings. Reserve every active job's unconsumed budget plus pending
+        // and newly offered slots so that later growth cannot overcommit.
+        let pending = u64::from(pending) + 1;
+        let active_memory = active.iter().fold(0_u64, |reserved, usage| {
+            reserved.saturating_add(limits.memory_bytes.saturating_sub(usage.memory_bytes))
+        });
+        let active_pids = active.iter().fold(0_u64, |reserved, usage| {
+            reserved.saturating_add(limits.pids.saturating_sub(usage.pids))
+        });
+        let active_storage = active.iter().fold(0_u64, |reserved, usage| {
+            reserved.saturating_add(limits.storage_bytes.saturating_sub(usage.storage_bytes))
+        });
+        let occupied = active.len() as u64 + pending;
+        require_capacity(
+            "memory",
+            self.memory_headroom,
+            DAEMON_MEMORY_RESERVE + active_memory + limits.memory_bytes.saturating_mul(pending),
+        )?;
+        require_capacity(
+            "CPU",
+            self.cpu_millis,
+            DAEMON_CPU_RESERVE_MILLIS + limits.cpu_millis.saturating_mul(occupied),
+        )?;
+        require_capacity(
+            "PIDs",
+            self.pid_headroom,
+            PID_RESERVE + active_pids + limits.pids.saturating_mul(pending),
+        )?;
+        require_capacity(
+            "transient storage",
+            self.transient.available_bytes,
+            TRANSIENT_DISK_RESERVE + active_storage + limits.storage_bytes.saturating_mul(pending),
+        )?;
+        if let Some(available) = self.transient.available_inodes
+            && available < EMERGENCY_INODE_FLOOR
+        {
+            bail!(
+                "runner has {available} free transient-storage inodes; at least {EMERGENCY_INODE_FLOOR} are required"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn exactly_provisioned(limits: &ResourceLimits, slots: u8) -> Self {
+        let slots = u64::from(slots);
+        Self {
+            memory_headroom: DAEMON_MEMORY_RESERVE + limits.memory_bytes * slots,
+            cpu_millis: DAEMON_CPU_RESERVE_MILLIS + limits.cpu_millis * slots,
+            pid_headroom: PID_RESERVE + limits.pids * slots,
+            transient: TransientCapacity {
+                available_bytes: TRANSIENT_DISK_RESERVE + limits.storage_bytes * slots,
+                available_inodes: Some(EMERGENCY_INODE_FLOOR),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn after_active_usage(self, limits: &ResourceLimits) -> Self {
+        Self {
+            memory_headroom: self.memory_headroom.saturating_sub(limits.memory_bytes),
+            pid_headroom: self.pid_headroom.saturating_sub(limits.pids),
+            transient: TransientCapacity {
+                available_bytes: self
+                    .transient
+                    .available_bytes
+                    .saturating_sub(limits.storage_bytes),
+                ..self.transient
+            },
+            ..self
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn shrink_cpu_by(self, millis: u64) -> Self {
+        Self {
+            cpu_millis: self.cpu_millis.saturating_sub(millis),
+            ..self
+        }
+    }
+}
+
+pub(super) fn scope_container_usage(container_name: &str) -> anyhow::Result<ResourceUsage> {
+    let output = Command::new("docker")
+        .args([
+            "inspect",
+            "--size",
+            "--format={{.State.Pid}} {{.SizeRw}}",
+            container_name,
+        ])
+        .output()
+        .context("inspect active Scope container usage")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("No such object") {
+            return Ok(ResourceUsage::default());
+        }
+        bail!("inspect active Scope container usage: {}", stderr.trim());
+    }
+    let (pid, storage_bytes) =
+        parse_container_inspection(&String::from_utf8_lossy(&output.stdout))?;
+    if pid == 0 {
+        return Ok(ResourceUsage {
+            storage_bytes,
+            ..ResourceUsage::default()
+        });
+    }
+    let cgroup_path = unified_cgroup_path(
+        &fs::read_to_string(format!("/proc/{pid}/cgroup"))
+            .context("read active Scope container cgroup")?,
+    )?;
+    let cgroup = Path::new("/sys/fs/cgroup").join(cgroup_path);
+    Ok(ResourceUsage {
+        memory_bytes: read_usage_value(&cgroup.join("memory.current"))?,
+        pids: read_usage_value(&cgroup.join("pids.current"))?,
+        storage_bytes,
+    })
+}
+
+fn parse_container_inspection(output: &str) -> anyhow::Result<(u32, u64)> {
+    let mut fields = output.split_whitespace();
+    let pid = fields
+        .next()
+        .context("active Scope container PID is missing")?
+        .parse()
+        .context("parse active Scope container PID")?;
+    let storage = fields
+        .next()
+        .context("active Scope container writable size is missing")?
+        .parse::<i64>()
+        .context("parse active Scope container writable size")?;
+    if fields.next().is_some() {
+        bail!("active Scope container inspection has extra fields");
+    }
+    let storage = u64::try_from(storage)
+        .context("active Scope container writable size cannot be negative")?;
+    Ok((pid, storage))
+}
+
+fn read_usage_value(path: &Path) -> anyhow::Result<u64> {
+    fs::read_to_string(path)
+        .with_context(|| format!("read active Scope container usage from {}", path.display()))?
+        .trim()
+        .parse()
+        .with_context(|| format!("parse active Scope container usage from {}", path.display()))
+}
+
+fn require_capacity(name: &str, available: u64, required: u64) -> anyhow::Result<()> {
+    if available < required {
+        bail!("runner {name} headroom is {available}; {required} is required for live admission");
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -225,20 +430,26 @@ fn minimum(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     }
 }
 
-fn job_cpu_millis(capacity: u64) -> anyhow::Result<u64> {
-    let required = DAEMON_CPU_RESERVE_MILLIS + MIN_JOB_CPU_MILLIS;
+fn per_slot_budget(budget: u64, minimum: u64, slots: u64) -> Option<u64> {
+    let per_slot = budget / slots;
+    (per_slot >= minimum).then_some(per_slot)
+}
+
+fn job_cpu_millis(capacity: u64, slots: u64) -> anyhow::Result<u64> {
+    let required = DAEMON_CPU_RESERVE_MILLIS + MIN_JOB_CPU_MILLIS.saturating_mul(slots);
     if capacity < required {
         bail!(
-            "runner has {:.3} CPU capacity; at least {:.3} CPU is required to preserve the daemon reserve",
+            "runner has {:.3} CPU capacity; at least {:.3} CPU is required for {slots} job slot(s) and the daemon reserve",
             capacity as f64 / 1000.0,
             required as f64 / 1000.0
         );
     }
-    Ok(capacity - DAEMON_CPU_RESERVE_MILLIS)
-}
-
-fn transient_storage_bytes() -> anyhow::Result<u64> {
-    safe_transient_storage_bytes(transient_storage_capacity()?)
+    Ok(per_slot_budget(
+        capacity - DAEMON_CPU_RESERVE_MILLIS,
+        MIN_JOB_CPU_MILLIS,
+        slots,
+    )
+    .expect("validated CPU budget fits every slot"))
 }
 
 fn has_emergency_capacity(capacity: TransientCapacity) -> bool {
@@ -308,7 +519,7 @@ fn parse_transient_capacity(output: &str) -> anyhow::Result<TransientCapacity> {
     })
 }
 
-fn safe_transient_storage_bytes(capacity: TransientCapacity) -> anyhow::Result<u64> {
+fn safe_transient_storage_bytes(capacity: TransientCapacity, slots: u64) -> anyhow::Result<u64> {
     if let Some(available_inodes) = capacity.available_inodes
         && available_inodes < EMERGENCY_INODE_FLOOR
     {
@@ -321,14 +532,16 @@ fn safe_transient_storage_bytes(capacity: TransientCapacity) -> anyhow::Result<u
     let job = capacity
         .available_bytes
         .saturating_sub(TRANSIENT_DISK_RESERVE);
-    if job < MIN_JOB_STORAGE {
+    let required = MIN_JOB_STORAGE.saturating_mul(slots);
+    if job < required {
         bail!(
-            "Docker data root has {} MiB safe headroom; at least {} MiB is required",
+            "Docker data root has {} MiB safe headroom; at least {} MiB is required for {slots} job slot(s)",
             job / MIB,
-            MIN_JOB_STORAGE / MIB
+            required / MIB
         );
     }
-    Ok(job)
+    Ok(per_slot_budget(job, MIN_JOB_STORAGE, slots)
+        .expect("validated storage budget fits every slot"))
 }
 
 fn mem_available_bytes(meminfo: &str) -> anyhow::Result<u64> {
@@ -408,6 +621,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_active_container_inspection() {
+        assert_eq!(parse_container_inspection("123 456\n").unwrap(), (123, 456));
+        assert!(parse_container_inspection("").is_err());
+        assert!(parse_container_inspection("123").is_err());
+        assert!(parse_container_inspection("123 -1").is_err());
+        assert!(parse_container_inspection("123 456 extra").is_err());
+    }
+
+    #[test]
     fn parses_only_the_unified_process_cgroup_path() {
         assert_eq!(
             unified_cgroup_path(
@@ -470,11 +692,20 @@ mod tests {
 
     #[test]
     fn cpu_admission_never_oversubscribes_or_consumes_the_daemon_reserve() {
-        assert!(job_cpu_millis(500).is_err());
-        assert!(job_cpu_millis(999).is_err());
-        assert_eq!(job_cpu_millis(1000).unwrap(), 500);
-        assert_eq!(job_cpu_millis(1500).unwrap(), 1000);
-        assert_eq!(job_cpu_millis(4000).unwrap(), 3500);
+        assert!(job_cpu_millis(500, 1).is_err());
+        assert!(job_cpu_millis(999, 1).is_err());
+        assert_eq!(job_cpu_millis(1000, 1).unwrap(), 500);
+        assert_eq!(job_cpu_millis(1500, 1).unwrap(), 1000);
+        assert_eq!(job_cpu_millis(4000, 1).unwrap(), 3500);
+        assert_eq!(job_cpu_millis(2500, 4).unwrap(), 500);
+        assert!(job_cpu_millis(2499, 4).is_err());
+    }
+
+    #[test]
+    fn per_slot_budget_never_dips_below_the_resource_minimum() {
+        assert_eq!(per_slot_budget(2048, 512, 4), Some(512));
+        assert_eq!(per_slot_budget(2051, 512, 4), Some(512));
+        assert_eq!(per_slot_budget(2047, 512, 4), None);
     }
 
     #[test]
@@ -511,27 +742,49 @@ mod tests {
     fn transient_storage_preserves_the_host_reserve_on_any_filesystem() {
         let available = TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE + 123;
         assert_eq!(
-            safe_transient_storage_bytes(TransientCapacity {
-                available_bytes: available,
-                available_inodes: Some(EMERGENCY_INODE_FLOOR),
-            })
+            safe_transient_storage_bytes(
+                TransientCapacity {
+                    available_bytes: available,
+                    available_inodes: Some(EMERGENCY_INODE_FLOOR),
+                },
+                1,
+            )
             .unwrap(),
             MIN_JOB_STORAGE + 123
         );
         assert!(
-            safe_transient_storage_bytes(TransientCapacity {
-                available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE - 1,
-                available_inodes: Some(EMERGENCY_INODE_FLOOR),
-            })
+            safe_transient_storage_bytes(
+                TransientCapacity {
+                    available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE - 1,
+                    available_inodes: Some(EMERGENCY_INODE_FLOOR),
+                },
+                1,
+            )
             .is_err()
         );
         assert!(
-            safe_transient_storage_bytes(TransientCapacity {
-                available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE,
-                available_inodes: Some(EMERGENCY_INODE_FLOOR - 1),
-            })
+            safe_transient_storage_bytes(
+                TransientCapacity {
+                    available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE,
+                    available_inodes: Some(EMERGENCY_INODE_FLOOR - 1),
+                },
+                1,
+            )
             .is_err()
         );
+    }
+
+    #[test]
+    fn storage_budget_is_divided_per_slot_and_rejects_undersized_slots() {
+        let capacity = |job_bytes| TransientCapacity {
+            available_bytes: TRANSIENT_DISK_RESERVE + job_bytes,
+            available_inodes: Some(EMERGENCY_INODE_FLOOR),
+        };
+        assert_eq!(
+            safe_transient_storage_bytes(capacity(4 * MIN_JOB_STORAGE), 4).unwrap(),
+            MIN_JOB_STORAGE
+        );
+        assert!(safe_transient_storage_bytes(capacity(4 * MIN_JOB_STORAGE - 1), 4).is_err());
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub(super) const JOB_KIND: &str = "push_main_trigger_evaluation";
 
 #[derive(Deserialize)]
 struct PushMainTriggerJobPayload {
+    workflow_schema_version: u8,
     manifest: SourceBlob,
     input: PushTriggerInput,
 }
@@ -173,7 +174,7 @@ where
                 RunTrigger::PushMain,
                 None,
                 source,
-                revision.definition().runner().clone(),
+                None,
                 now_unix,
             )
             .map_err(PostgresError::from)?;
@@ -213,7 +214,16 @@ where
         .await
         .map_err(PostgresError::internal)?
         .ok_or_else(|| PostgresError::not_found("push trigger outbox job not found"))?;
-    serde_json::from_value(payload.payload).map_err(PostgresError::internal)
+    let payload: PushMainTriggerJobPayload =
+        serde_json::from_value(payload.payload).map_err(PostgresError::internal)?;
+    if payload.workflow_schema_version
+        != entities::outbox_job::PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION
+    {
+        return Err(PostgresError::internal_message(
+            "unsupported push trigger workflow schema version",
+        ));
+    }
+    Ok(payload)
 }
 
 pub(super) async fn mark_terminal_failure(
@@ -377,8 +387,14 @@ runs-on: any
 container: { image: alpine:3.20 }
 timeout: 1m
 caches: []
-steps:
-  - { name: Test, run: "true" }
+jobs:
+  backend:
+    steps:
+      - { name: Backend, run: "true" }
+  web:
+    needs: [backend]
+    steps:
+      - { name: Web, run: "true" }
 "#
                         .to_vec(),
                     )
@@ -392,6 +408,19 @@ steps:
         )
         .await
         .unwrap();
+        let payload = entities::outbox_job::Entity::find()
+            .filter(entities::outbox_job::Column::RepoId.eq(repo_id.clone()))
+            .filter(entities::outbox_job::Column::RepoVersion.eq(1))
+            .filter(entities::outbox_job::Column::Kind.eq(JOB_KIND))
+            .one(store.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap()
+            .payload;
+        assert_eq!(
+            payload["workflow_schema_version"],
+            entities::outbox_job::PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION
+        );
         let later_head_oid = "3333333333333333333333333333333333333333";
         enqueue_push_main_trigger_evaluation(
             store.db.as_ref(),
@@ -437,6 +466,12 @@ steps:
             .unwrap();
         assert_eq!(run.trigger, RunTrigger::PushMain);
         assert_eq!(run.source.git_oid(), head_oid);
+        let jobs = entities::run_job::Entity::find()
+            .filter(entities::run_job::Column::RunId.eq(run.id.clone()))
+            .all(store.db.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(jobs.len(), 2);
         let later = store
             .runs()
             .push_trigger_evaluation(&repo_id, later_head_oid)
@@ -616,8 +651,10 @@ runs-on: any
 container: { image: alpine:3.20 }
 timeout: 1m
 caches: []
-steps:
-  - { name: Test, run: "true" }
+jobs:
+  checks:
+    steps:
+      - { name: Test, run: "true" }
 "#
                 .to_vec(),
             )

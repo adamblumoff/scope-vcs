@@ -1,15 +1,18 @@
 use super::{RunnerProtocolCutoverSnapshot, current_canary_for_run, save_canary_status};
 use crate::{
+    db::entities,
     db::run_attempt_persistence::{
-        locked_attempt_context, locked_run, save_attempt, save_attempt_steps, save_run,
+        locked_attempt_steps, locked_jobs, locked_run, save_attempt, save_attempt_steps, save_jobs,
+        save_run,
     },
     error::PostgresError,
 };
 use scope_domain::runs::{
     cutover::{RunnerProtocolCanaryStatus, RunnerProtocolCutoverState},
-    run::{AttemptState, RunState},
+    job::{reconcile_run, request_run_cancellation},
+    run::{AttemptState, RunAttempt, RunState},
 };
-use sea_orm::DatabaseTransaction;
+use sea_orm::{ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect};
 
 pub(super) async fn reconcile_abandoned_running_canary(
     tx: &DatabaseTransaction,
@@ -19,7 +22,7 @@ pub(super) async fn reconcile_abandoned_running_canary(
 ) -> Result<(), PostgresError> {
     debug_assert_eq!(
         snapshot.cutover.state(),
-        RunnerProtocolCutoverState::V4Fenced
+        RunnerProtocolCutoverState::V5Fenced
     );
     let Some(index) = snapshot
         .canaries
@@ -38,11 +41,11 @@ pub(super) async fn reconcile_abandoned_running_canary(
         true,
     )
     .await?;
+    let mut jobs = locked_jobs(tx, canary.run_id()).await?;
     let mut run = locked_run(tx, canary.run_id()).await?;
 
-    if let Some(attempt_id) = run.current_attempt_id.clone() {
-        let (mut locked_run, mut attempt, mut steps) =
-            locked_attempt_context(tx, &attempt_id).await?;
+    if let Some(mut attempt) = latest_canary_attempt(tx, &jobs).await? {
+        let mut steps = locked_attempt_steps(tx, &attempt.id).await?;
         if attempt.run_id != run.id || attempt.runner_id != canary.runner_id() {
             return Err(PostgresError::internal_message(
                 "canary run attempt identity is inconsistent",
@@ -58,11 +61,18 @@ pub(super) async fn reconcile_abandoned_running_canary(
                     attempt.lease_expires_at_unix
                 )));
             }
+            let job = jobs
+                .iter_mut()
+                .find(|job| job.key == attempt.job_key)
+                .ok_or_else(|| PostgresError::internal_message("canary run job is missing"))?;
             attempt
-                .expire(&mut locked_run, &mut steps, now_unix)
+                .expire(&run, job, &mut steps, now_unix)
                 .map_err(PostgresError::from)?;
+            let revision = super::workflow_revision_for_target(tx, &run).await?;
+            reconcile_run(&mut run, &mut jobs, &revision, now_unix).map_err(PostgresError::from)?;
             save_attempt(tx, &attempt).await?;
             save_attempt_steps(tx, &steps).await?;
+            save_jobs(tx, &jobs).await?;
         }
         if attempt.state == AttemptState::Succeeded && now_unix < attempt.token_expires_at_unix {
             if retries_running_canary {
@@ -73,15 +83,14 @@ pub(super) async fn reconcile_abandoned_running_canary(
                 attempt.token_expires_at_unix
             )));
         }
-        if locked_run.state == RunState::Queued {
-            locked_run
-                .request_cancellation(now_unix)
-                .map_err(PostgresError::from)?;
+        if run.state == RunState::Queued {
+            request_run_cancellation(&mut run, &mut jobs, now_unix).map_err(PostgresError::from)?;
+            save_jobs(tx, &jobs).await?;
         }
-        save_run(tx, &locked_run).await?;
+        save_run(tx, &run).await?;
     } else if !run.state.is_terminal() {
-        run.request_cancellation(now_unix)
-            .map_err(PostgresError::from)?;
+        request_run_cancellation(&mut run, &mut jobs, now_unix).map_err(PostgresError::from)?;
+        save_jobs(tx, &jobs).await?;
         save_run(tx, &run).await?;
     }
 
@@ -89,6 +98,45 @@ pub(super) async fn reconcile_abandoned_running_canary(
     save_canary_status(tx, &canary, now_unix).await?;
     snapshot.canaries[index] = canary;
     Ok(())
+}
+
+async fn latest_canary_attempt(
+    tx: &DatabaseTransaction,
+    jobs: &[scope_domain::runs::job::RunJob],
+) -> Result<Option<RunAttempt>, PostgresError> {
+    let [job] = jobs else {
+        return Err(PostgresError::internal_message(
+            "runner protocol canary must have exactly one run job",
+        ));
+    };
+    let query = if let Some(attempt_id) = &job.current_attempt_id {
+        entities::run_attempt::Entity::find_by_id(attempt_id.clone())
+    } else if job.last_attempt_number > 0 {
+        entities::run_attempt::Entity::find()
+            .filter(entities::run_attempt::Column::RunId.eq(&job.run_id))
+            .filter(entities::run_attempt::Column::JobKey.eq(job.key.as_str()))
+            .filter(entities::run_attempt::Column::Number.eq(
+                i32::try_from(job.last_attempt_number).map_err(|_| {
+                    PostgresError::internal_message(
+                        "run job attempt number exceeds PostgreSQL integer range",
+                    )
+                })?,
+            ))
+    } else {
+        return Ok(None);
+    };
+    query
+        .lock_exclusive()
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .map(entities::run_attempt::Model::try_into_domain)
+        .transpose()
+        .and_then(|attempt| {
+            attempt
+                .ok_or_else(|| PostgresError::not_found("run attempt not found"))
+                .map(Some)
+        })
 }
 
 async fn cancel_failed_canary_run(
@@ -103,10 +151,11 @@ async fn cancel_failed_canary_run(
     else {
         return Ok(());
     };
+    let mut jobs = locked_jobs(tx, failed.run_id()).await?;
     let mut run = locked_run(tx, failed.run_id()).await?;
     if !run.state.is_terminal() {
-        run.request_cancellation(now_unix)
-            .map_err(PostgresError::from)?;
+        request_run_cancellation(&mut run, &mut jobs, now_unix).map_err(PostgresError::from)?;
+        save_jobs(tx, &jobs).await?;
         save_run(tx, &run).await?;
     }
     Ok(())

@@ -75,6 +75,7 @@ mod request_submission_transactions;
 mod requests;
 mod run_attempt_persistence;
 mod run_details;
+mod run_dispatch;
 mod run_operations;
 mod run_retention;
 mod run_step_operations;
@@ -85,7 +86,7 @@ mod runs;
 pub use run_details::{RunAttemptDetail, RunDetail, StoredAttemptStepLogs};
 pub use run_operations::{RecentRunLogs, RepositoryRunner};
 pub use runner_protocol_cutover::RunnerProtocolCutoverSnapshot;
-pub use runs::{DispatchClaim, StoredRunLog};
+pub use runs::{DispatchClaim, StoredRunLog, UpgradeRunnerRegistrationCommand};
 #[cfg(test)]
 mod run_concurrency_tests;
 #[cfg(test)]
