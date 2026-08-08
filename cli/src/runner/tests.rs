@@ -9,7 +9,7 @@ use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use scope_domain::runs::workflow::{
     ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
 };
-use std::{cell::RefCell, env, fs, path::Path};
+use std::{env, fs, path::Path};
 
 #[test]
 fn recovery_runs_exactly_once_before_slot_workers_start() {
@@ -71,63 +71,6 @@ fn preserved_attempts_restart_before_any_slot_can_poll_again() {
     assert!(!requires_recovery_restart(&anyhow::anyhow!(
         "ordinary setup failure"
     )));
-}
-
-#[test]
-fn every_claim_refreshes_live_resource_limits_before_acquiring_work() {
-    let slots = RunnerMaxConcurrentJobs::new(2).unwrap();
-    let first = ResourceLimits {
-        memory_bytes: 2 * 1024 * 1024 * 1024,
-        cpu_millis: 1500,
-        pids: 256,
-        storage_bytes: 8 * 1024 * 1024 * 1024,
-    };
-    let second = ResourceLimits {
-        memory_bytes: 1024 * 1024 * 1024,
-        cpu_millis: 1000,
-        pids: 192,
-        storage_bytes: 4 * 1024 * 1024 * 1024,
-    };
-    let detected = RefCell::new(vec![first.clone(), second.clone()].into_iter());
-    let events = RefCell::new(Vec::new());
-
-    let admit = |claim| {
-        claim_with_fresh_limits(
-            slots,
-            |detected_slots| {
-                assert_eq!(detected_slots, slots);
-                events.borrow_mut().push("detect");
-                Ok(detected.borrow_mut().next().unwrap())
-            },
-            || {
-                events.borrow_mut().push("claim");
-                Ok::<_, ()>(claim)
-            },
-        )
-        .unwrap()
-    };
-    let (first_limits, first_claim) = admit("first");
-    let (second_limits, second_claim) = admit("second");
-
-    assert_eq!(first_limits, first);
-    assert_eq!(second_limits, second);
-    assert_eq!(first_claim.unwrap(), "first");
-    assert_eq!(second_claim.unwrap(), "second");
-    assert_eq!(*events.borrow(), ["detect", "claim", "detect", "claim"]);
-
-    let claim_started = std::cell::Cell::new(false);
-    assert!(
-        claim_with_fresh_limits(
-            slots,
-            |_| anyhow::bail!("live headroom is below the per-slot minimum"),
-            || {
-                claim_started.set(true);
-                Ok::<_, ()>(())
-            },
-        )
-        .is_err()
-    );
-    assert!(!claim_started.get());
 }
 
 #[test]

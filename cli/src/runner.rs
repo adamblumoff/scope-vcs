@@ -24,6 +24,7 @@ mod config;
 mod container;
 mod image;
 mod management;
+mod resource_admission;
 mod resources;
 mod source;
 mod step_logs;
@@ -49,7 +50,7 @@ pub use management::{
 };
 pub use worker_pool::daemon;
 #[cfg(test)]
-use worker_pool::{claim_with_fresh_limits, run_after_recovery};
+use worker_pool::run_after_recovery;
 mod recovery;
 use recovery::{
     RecoveryAttempt, RecoveryProgress, mark_recovery_abandon_pending,

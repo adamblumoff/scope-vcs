@@ -26,6 +26,14 @@ struct TransientCapacity {
     available_inodes: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ResourceCapacity {
+    memory_headroom: u64,
+    cpu_millis: u64,
+    pid_headroom: u64,
+    transient: TransientCapacity,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResourceLimits {
     pub(super) memory_bytes: u64,
@@ -36,63 +44,7 @@ pub(super) struct ResourceLimits {
 
 impl ResourceLimits {
     pub(super) fn detect(max_concurrent_jobs: RunnerMaxConcurrentJobs) -> anyhow::Result<Self> {
-        let slots = u64::from(max_concurrent_jobs.get());
-        let host_memory = mem_available_bytes(&fs::read_to_string("/proc/meminfo")?)?;
-        let cgroup_path = unified_cgroup_path(&fs::read_to_string("/proc/self/cgroup")?)?;
-        let cgroup = read_cgroup_capacity(Path::new("/sys/fs/cgroup"), &cgroup_path)?;
-        let memory_headroom = cgroup
-            .memory_headroom
-            .map_or(host_memory, |value| value.min(host_memory));
-        let required_memory = DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY.saturating_mul(slots);
-        if memory_headroom < required_memory {
-            bail!(
-                "runner has {} MiB memory headroom; at least {} MiB is required for {slots} job slot(s)",
-                memory_headroom / MIB,
-                required_memory / MIB
-            );
-        }
-        let memory_bytes = per_slot_budget(
-            memory_headroom - DAEMON_MEMORY_RESERVE,
-            MIN_JOB_MEMORY,
-            slots,
-        )
-        .expect("validated memory budget fits every slot");
-
-        let host_cpus = std::thread::available_parallelism()
-            .unwrap_or(NonZeroUsize::new(1).expect("one is non-zero"))
-            .get() as u64
-            * 1000;
-        let cpu_capacity = [
-            Some(host_cpus),
-            cgroup.cpu_quota_millis,
-            cgroup.cpuset_cpus.map(|count| count * 1000),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or(1000);
-        let cpu_millis = job_cpu_millis(cpu_capacity, slots)?;
-
-        let pids = cgroup
-            .pid_headroom
-            .map(|headroom| headroom.saturating_sub(PID_RESERVE))
-            .unwrap_or(MAX_JOB_PIDS)
-            .min(MAX_JOB_PIDS);
-        let required_pids = MIN_JOB_PIDS.saturating_mul(slots);
-        if pids < required_pids {
-            bail!(
-                "runner has {pids} available PIDs; at least {required_pids} are required for {slots} job slot(s)"
-            );
-        }
-        let storage_bytes = transient_storage_bytes(slots)?;
-
-        Ok(Self {
-            memory_bytes,
-            cpu_millis,
-            pids: per_slot_budget(pids, MIN_JOB_PIDS, slots)
-                .expect("validated PID budget fits every slot"),
-            storage_bytes,
-        })
+        ResourceCapacity::detect()?.limits(max_concurrent_jobs)
     }
 
     pub(super) fn apply(&self, command: &mut Command) {
@@ -110,6 +62,166 @@ impl ResourceLimits {
             &pids,
         ]);
     }
+}
+
+impl ResourceCapacity {
+    pub(super) fn detect() -> anyhow::Result<Self> {
+        let host_memory = mem_available_bytes(&fs::read_to_string("/proc/meminfo")?)?;
+        let cgroup_path = unified_cgroup_path(&fs::read_to_string("/proc/self/cgroup")?)?;
+        let cgroup = read_cgroup_capacity(Path::new("/sys/fs/cgroup"), &cgroup_path)?;
+        let memory_headroom = cgroup
+            .memory_headroom
+            .map_or(host_memory, |value| value.min(host_memory));
+        let host_cpus = std::thread::available_parallelism()
+            .unwrap_or(NonZeroUsize::new(1).expect("one is non-zero"))
+            .get() as u64
+            * 1000;
+        let cpu_millis = [
+            Some(host_cpus),
+            cgroup.cpu_quota_millis,
+            cgroup.cpuset_cpus.map(|count| count * 1000),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(1000);
+        Ok(Self {
+            memory_headroom,
+            cpu_millis,
+            pid_headroom: cgroup
+                .pid_headroom
+                .unwrap_or(MAX_JOB_PIDS.saturating_add(PID_RESERVE)),
+            transient: transient_storage_capacity()?,
+        })
+    }
+
+    fn limits(
+        self,
+        max_concurrent_jobs: RunnerMaxConcurrentJobs,
+    ) -> anyhow::Result<ResourceLimits> {
+        let slots = u64::from(max_concurrent_jobs.get());
+        let required_memory = DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY.saturating_mul(slots);
+        if self.memory_headroom < required_memory {
+            bail!(
+                "runner has {} MiB memory headroom; at least {} MiB is required for {slots} job slot(s)",
+                self.memory_headroom / MIB,
+                required_memory / MIB
+            );
+        }
+        let memory_bytes = per_slot_budget(
+            self.memory_headroom - DAEMON_MEMORY_RESERVE,
+            MIN_JOB_MEMORY,
+            slots,
+        )
+        .expect("validated memory budget fits every slot");
+        let cpu_millis = job_cpu_millis(self.cpu_millis, slots)?;
+        let pids = self
+            .pid_headroom
+            .saturating_sub(PID_RESERVE)
+            .min(MAX_JOB_PIDS);
+        let required_pids = MIN_JOB_PIDS.saturating_mul(slots);
+        if pids < required_pids {
+            bail!(
+                "runner has {pids} available PIDs; at least {required_pids} are required for {slots} job slot(s)"
+            );
+        }
+        let storage_bytes = safe_transient_storage_bytes(self.transient, slots)?;
+
+        Ok(ResourceLimits {
+            memory_bytes,
+            cpu_millis,
+            pids: per_slot_budget(pids, MIN_JOB_PIDS, slots)
+                .expect("validated PID budget fits every slot"),
+            storage_bytes,
+        })
+    }
+
+    pub(super) fn ensure_admission(
+        self,
+        limits: &ResourceLimits,
+        active: u8,
+        pending: u8,
+    ) -> anyhow::Result<()> {
+        // Live memory, PID, and disk headroom already reflects active jobs.
+        // Pending claims do not consume resources yet, so reserve their full
+        // stable budget. CPU is a fixed capacity rather than a headroom metric
+        // and therefore accounts for every active and pending slot.
+        let pending = u64::from(pending) + 1;
+        let occupied = u64::from(active) + pending;
+        require_capacity(
+            "memory",
+            self.memory_headroom,
+            DAEMON_MEMORY_RESERVE + limits.memory_bytes.saturating_mul(pending),
+        )?;
+        require_capacity(
+            "CPU",
+            self.cpu_millis,
+            DAEMON_CPU_RESERVE_MILLIS + limits.cpu_millis.saturating_mul(occupied),
+        )?;
+        require_capacity(
+            "PIDs",
+            self.pid_headroom,
+            PID_RESERVE + limits.pids.saturating_mul(pending),
+        )?;
+        require_capacity(
+            "transient storage",
+            self.transient.available_bytes,
+            TRANSIENT_DISK_RESERVE + limits.storage_bytes.saturating_mul(pending),
+        )?;
+        if let Some(available) = self.transient.available_inodes
+            && available < EMERGENCY_INODE_FLOOR
+        {
+            bail!(
+                "runner has {available} free transient-storage inodes; at least {EMERGENCY_INODE_FLOOR} are required"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn exactly_provisioned(limits: &ResourceLimits, slots: u8) -> Self {
+        let slots = u64::from(slots);
+        Self {
+            memory_headroom: DAEMON_MEMORY_RESERVE + limits.memory_bytes * slots,
+            cpu_millis: DAEMON_CPU_RESERVE_MILLIS + limits.cpu_millis * slots,
+            pid_headroom: PID_RESERVE + limits.pids * slots,
+            transient: TransientCapacity {
+                available_bytes: TRANSIENT_DISK_RESERVE + limits.storage_bytes * slots,
+                available_inodes: Some(EMERGENCY_INODE_FLOOR),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn after_active_usage(self, limits: &ResourceLimits) -> Self {
+        Self {
+            memory_headroom: self.memory_headroom.saturating_sub(limits.memory_bytes),
+            pid_headroom: self.pid_headroom.saturating_sub(limits.pids),
+            transient: TransientCapacity {
+                available_bytes: self
+                    .transient
+                    .available_bytes
+                    .saturating_sub(limits.storage_bytes),
+                ..self.transient
+            },
+            ..self
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn shrink_memory_by(self, bytes: u64) -> Self {
+        Self {
+            memory_headroom: self.memory_headroom.saturating_sub(bytes),
+            ..self
+        }
+    }
+}
+
+fn require_capacity(name: &str, available: u64, required: u64) -> anyhow::Result<()> {
+    if available < required {
+        bail!("runner {name} headroom is {available}; {required} is required for live admission");
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -258,10 +370,6 @@ fn job_cpu_millis(capacity: u64, slots: u64) -> anyhow::Result<u64> {
         slots,
     )
     .expect("validated CPU budget fits every slot"))
-}
-
-fn transient_storage_bytes(slots: u64) -> anyhow::Result<u64> {
-    safe_transient_storage_bytes(transient_storage_capacity()?, slots)
 }
 
 fn has_emergency_capacity(capacity: TransientCapacity) -> bool {
