@@ -33,7 +33,7 @@ export function RepositoryRunsPage({
   workflow,
 }: {
   initialResources: RunPageResources | null
-  loadHistory: (input: RepoRunHistoryInput) => Promise<RepoRunHistoryPage>
+  loadHistory: (input: RepoRunHistoryInput) => Promise<RepoRunHistoryPage | null>
   params: RepoParams
   workflow?: string
 }) {
@@ -55,6 +55,11 @@ export function RepositoryRunsPage({
     const request = loadHistory(input)
       .then((next) => {
         if (!mountedRef.current) return
+        if (!next) {
+          setHistory(null)
+          setRefreshError(null)
+          return
+        }
         setHistory((current) => ({
           next_cursor: loadedMoreRef.current
             ? current?.next_cursor ?? next.next_cursor
@@ -84,6 +89,11 @@ export function RepositoryRunsPage({
       })
       .then((next) => {
         if (!mountedRef.current) return
+        if (!next) {
+          setHistory(null)
+          setRefreshError(null)
+          return
+        }
         loadedMoreRef.current = true
         setHistory((current) => current
           ? {
