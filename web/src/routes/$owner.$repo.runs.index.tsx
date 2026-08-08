@@ -1,4 +1,4 @@
-import { HttpError } from '@/api/client'
+import { createApiClient, HttpError } from '@/api/client'
 import {
   loadRepoRunHistoryForRequest,
   loadRepoRunnersForRequest,
@@ -18,9 +18,10 @@ const loadRepoRunResources = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(async ({ data }) => {
     try {
+      const api = createApiClient()
       const [history, runners] = await Promise.all([
-        loadRepoRunHistoryForRequest(data),
-        loadRepoRunnersForRequest(data),
+        loadRepoRunHistoryForRequest(data, api),
+        loadRepoRunnersForRequest(data, api),
       ])
       return { history, runners }
     } catch (error) {
