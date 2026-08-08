@@ -1,6 +1,6 @@
 use super::{
-    DockerCapabilities, ResourceLimits, RunnerConfig, cache, load_runner_config,
-    load_runner_config_from,
+    DockerCapabilities, ResourceLimits, RunnerConfig, cache, job_container_name,
+    load_runner_config, load_runner_config_from,
     resource_admission::{ResourceAdmissionCoordinator, ResourceAdmissionReservation},
     resume_interrupted_attempts, run_claim, runner_claim, runner_client, runner_poll,
 };
@@ -56,15 +56,19 @@ fn runner_slot(
                 let Some(offer) = response.run else {
                     continue;
                 };
-                let admitted = match admit_and_claim(&admission, || {
-                    runner_claim(
-                        &client,
-                        &config.api_url,
-                        &config.secret,
-                        &offer.run_id,
-                        &offer.job_key,
-                    )
-                }) {
+                let admitted = match admit_and_claim(
+                    &admission,
+                    || {
+                        runner_claim(
+                            &client,
+                            &config.api_url,
+                            &config.secret,
+                            &offer.run_id,
+                            &offer.job_key,
+                        )
+                    },
+                    |claim| job_container_name(&claim.attempt_id),
+                ) {
                     Ok(Ok(admitted)) => admitted,
                     Ok(Err(error)) => {
                         eprintln!(
@@ -101,19 +105,21 @@ impl<T> AdmittedClaim<T> {
     }
 }
 
-fn admit_and_claim<T, E, C>(
+fn admit_and_claim<T, E, C, N>(
     admission: &ResourceAdmissionCoordinator,
     claim: C,
+    container_name: N,
 ) -> anyhow::Result<Result<AdmittedClaim<T>, E>>
 where
     C: FnOnce() -> Result<T, E>,
+    N: FnOnce(&T) -> String,
 {
     let mut reservation = admission.reserve()?;
     let claim = match claim() {
         Ok(claim) => claim,
         Err(error) => return Ok(Err(error)),
     };
-    reservation.activate();
+    reservation.activate(container_name(&claim));
     Ok(Ok(AdmittedClaim { claim, reservation }))
 }
 
@@ -154,7 +160,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::resources::ResourceCapacity;
+    use crate::runner::resources::{ResourceCapacity, ResourceUsage};
     use std::{
         collections::VecDeque,
         sync::{
@@ -180,43 +186,98 @@ mod tests {
         let after_first = exact.after_active_usage(&limits);
         let capacities = Arc::new(Mutex::new(VecDeque::from([exact, after_first])));
         let detections = Arc::new(AtomicUsize::new(0));
-        let admission = ResourceAdmissionCoordinator::for_test(slots, limits.clone(), {
-            let capacities = Arc::clone(&capacities);
-            let detections = Arc::clone(&detections);
-            move || {
-                detections.fetch_add(1, Ordering::SeqCst);
-                Ok(capacities.lock().unwrap().pop_front().unwrap())
-            }
-        });
+        let admission = ResourceAdmissionCoordinator::for_test(
+            slots,
+            limits.clone(),
+            {
+                let capacities = Arc::clone(&capacities);
+                let detections = Arc::clone(&detections);
+                move || {
+                    detections.fetch_add(1, Ordering::SeqCst);
+                    Ok(capacities.lock().unwrap().pop_front().unwrap())
+                }
+            },
+            {
+                let limits = limits.clone();
+                move |container_name| {
+                    assert_eq!(container_name, "first");
+                    Ok(ResourceUsage {
+                        memory_bytes: limits.memory_bytes,
+                        pids: limits.pids,
+                        storage_bytes: limits.storage_bytes,
+                    })
+                }
+            },
+        );
 
-        let first = admit_and_claim(&admission, || Ok::<_, ()>("first"))
-            .unwrap()
-            .unwrap();
-        let second = admit_and_claim(&admission, || Ok::<_, ()>("second"))
-            .unwrap()
-            .unwrap();
-        assert!(admit_and_claim(&admission, || Ok::<_, ()>("third")).is_err());
+        let first = admit_and_claim(
+            &admission,
+            || Ok::<_, ()>("first"),
+            |claim| claim.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        let second = admit_and_claim(
+            &admission,
+            || Ok::<_, ()>("second"),
+            |claim| claim.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            admit_and_claim(
+                &admission,
+                || Ok::<_, ()>("third"),
+                |claim| claim.to_string()
+            )
+            .is_err()
+        );
         assert_eq!(first.reservation.limits(), &limits);
         assert_eq!(second.reservation.limits(), &limits);
         assert_eq!(detections.load(Ordering::SeqCst), 2);
     }
 
     #[test]
-    fn external_headroom_shrink_rejects_a_later_claim() {
+    fn active_ceiling_reserves_memory_not_yet_used_by_the_container() {
         let slots = RunnerMaxConcurrentJobs::new(2).unwrap();
         let limits = limits();
         let exact = ResourceCapacity::exactly_provisioned(&limits, slots.get());
-        let shrunken = exact.after_active_usage(&limits).shrink_memory_by(1);
+        // The first container uses 100 MiB while an external process consumes
+        // the other 900 MiB of its 1 GiB ceiling.
+        let shrunken = exact.after_active_usage(&limits);
         let capacities = Arc::new(Mutex::new(VecDeque::from([exact, shrunken])));
-        let admission = ResourceAdmissionCoordinator::for_test(slots, limits, {
-            let capacities = Arc::clone(&capacities);
-            move || Ok(capacities.lock().unwrap().pop_front().unwrap())
-        });
+        let admission = ResourceAdmissionCoordinator::for_test(
+            slots,
+            limits.clone(),
+            {
+                let capacities = Arc::clone(&capacities);
+                move || Ok(capacities.lock().unwrap().pop_front().unwrap())
+            },
+            {
+                let limits = limits.clone();
+                move |container_name| {
+                    assert_eq!(container_name, "first");
+                    Ok(ResourceUsage {
+                        memory_bytes: 100 * 1024 * 1024,
+                        pids: limits.pids,
+                        storage_bytes: limits.storage_bytes,
+                    })
+                }
+            },
+        );
 
-        let _first = admit_and_claim(&admission, || Ok::<_, ()>("first"))
-            .unwrap()
-            .unwrap();
-        let error = match admit_and_claim(&admission, || Ok::<_, ()>("second")) {
+        let _first = admit_and_claim(
+            &admission,
+            || Ok::<_, ()>("first"),
+            |claim| claim.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        let error = match admit_and_claim(
+            &admission,
+            || Ok::<_, ()>("second"),
+            |claim| claim.to_string(),
+        ) {
             Err(error) => error,
             Ok(_) => panic!("shrunken headroom admitted another claim"),
         };
@@ -224,11 +285,60 @@ mod tests {
     }
 
     #[test]
+    fn cpu_admission_always_reserves_the_full_active_ceiling() {
+        let slots = RunnerMaxConcurrentJobs::new(2).unwrap();
+        let limits = limits();
+        let exact = ResourceCapacity::exactly_provisioned(&limits, slots.get());
+        let cpu_short = exact.after_active_usage(&limits).shrink_cpu_by(1);
+        let capacities = Arc::new(Mutex::new(VecDeque::from([exact, cpu_short])));
+        let admission = ResourceAdmissionCoordinator::for_test(
+            slots,
+            limits.clone(),
+            {
+                let capacities = Arc::clone(&capacities);
+                move || Ok(capacities.lock().unwrap().pop_front().unwrap())
+            },
+            {
+                let limits = limits.clone();
+                move |_| {
+                    Ok(ResourceUsage {
+                        memory_bytes: limits.memory_bytes,
+                        pids: limits.pids,
+                        storage_bytes: limits.storage_bytes,
+                    })
+                }
+            },
+        );
+
+        let _first = admit_and_claim(
+            &admission,
+            || Ok::<_, ()>("first"),
+            |claim| claim.to_string(),
+        )
+        .unwrap()
+        .unwrap();
+        let error = match admit_and_claim(
+            &admission,
+            || Ok::<_, ()>("second"),
+            |claim| claim.to_string(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("CPU overcommit admitted another claim"),
+        };
+        assert!(error.to_string().contains("CPU headroom"));
+    }
+
+    #[test]
     fn concurrent_offers_cannot_share_one_free_reservation() {
         let slots = RunnerMaxConcurrentJobs::new(2).unwrap();
         let limits = limits();
         let capacity = ResourceCapacity::exactly_provisioned(&limits, 1);
-        let admission = ResourceAdmissionCoordinator::for_test(slots, limits, move || Ok(capacity));
+        let admission = ResourceAdmissionCoordinator::for_test(
+            slots,
+            limits,
+            move || Ok(capacity),
+            |_| Ok(ResourceUsage::default()),
+        );
         let start = Arc::new(Barrier::new(3));
         let release = Arc::new(Barrier::new(2));
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -240,11 +350,15 @@ mod tests {
             let sender = sender.clone();
             workers.push(thread::spawn(move || {
                 start.wait();
-                match admit_and_claim(&admission, || {
-                    sender.send(true).unwrap();
-                    release.wait();
-                    Ok::<_, ()>(())
-                }) {
+                match admit_and_claim(
+                    &admission,
+                    || {
+                        sender.send(true).unwrap();
+                        release.wait();
+                        Ok::<_, ()>(())
+                    },
+                    |_| "container".to_string(),
+                ) {
                     Ok(Ok(admitted)) => {
                         drop(admitted);
                     }
@@ -265,25 +379,48 @@ mod tests {
     }
 
     #[test]
-    fn claim_failure_and_completed_run_release_their_reservations() {
+    fn claim_failure_and_panicked_run_release_their_reservations() {
         let slots = RunnerMaxConcurrentJobs::new(1).unwrap();
         let limits = limits();
         let capacity = ResourceCapacity::exactly_provisioned(&limits, slots.get());
-        let admission = ResourceAdmissionCoordinator::for_test(slots, limits, move || Ok(capacity));
+        let admission = ResourceAdmissionCoordinator::for_test(
+            slots,
+            limits,
+            move || Ok(capacity),
+            |_| Ok(ResourceUsage::default()),
+        );
 
-        let failed = admit_and_claim(&admission, || Err::<(), _>("claim failed")).unwrap();
+        let failed = admit_and_claim(
+            &admission,
+            || Err::<(), _>("claim failed"),
+            |_| unreachable!(),
+        )
+        .unwrap();
         assert!(matches!(failed, Err("claim failed")));
 
-        let completed = admit_and_claim(&admission, || Ok::<_, ()>("claim"))
+        let panicked = catch_unwind(AssertUnwindSafe(|| {
+            admit_and_claim(
+                &admission,
+                || Ok::<_, ()>("claim"),
+                |claim| claim.to_string(),
+            )
             .unwrap()
             .unwrap()
-            .run(|limits, claim| {
+            .run(|limits, claim| -> () {
                 assert_eq!(claim, "claim");
                 assert_eq!(limits.cpu_millis, 1000);
-                Ok::<_, ()>(())
-            });
-        assert!(completed.is_ok());
+                panic!("run panic");
+            })
+        }));
+        assert!(panicked.is_err());
 
-        assert!(admit_and_claim(&admission, || Ok::<_, ()>("next")).is_ok());
+        assert!(
+            admit_and_claim(
+                &admission,
+                || Ok::<_, ()>("next"),
+                |claim| claim.to_string()
+            )
+            .is_ok()
+        );
     }
 }

@@ -1,9 +1,10 @@
-use super::resources::{ResourceCapacity, ResourceLimits};
+use super::resources::{ResourceCapacity, ResourceLimits, ResourceUsage, scope_container_usage};
 use anyhow::bail;
 use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use std::sync::{Arc, Mutex};
 
 type CapacityDetector = dyn Fn() -> anyhow::Result<ResourceCapacity> + Send + Sync;
+type UsageDetector = dyn Fn(&str) -> anyhow::Result<ResourceUsage> + Send + Sync;
 
 #[derive(Clone)]
 pub(super) struct ResourceAdmissionCoordinator {
@@ -14,13 +15,20 @@ struct CoordinatorInner {
     max_concurrent_jobs: RunnerMaxConcurrentJobs,
     limits: ResourceLimits,
     detector: Box<CapacityDetector>,
+    usage_detector: Box<UsageDetector>,
     state: Mutex<AdmissionState>,
 }
 
 #[derive(Default)]
 struct AdmissionState {
-    active: u8,
+    active: Vec<ActiveReservation>,
     pending: u8,
+    next_reservation_id: u64,
+}
+
+struct ActiveReservation {
+    id: u64,
+    container_name: String,
 }
 
 #[derive(Clone, Copy)]
@@ -31,6 +39,7 @@ enum ReservationState {
 
 pub(super) struct ResourceAdmissionReservation {
     inner: Arc<CoordinatorInner>,
+    id: u64,
     state: ReservationState,
 }
 
@@ -39,37 +48,47 @@ impl ResourceAdmissionCoordinator {
         max_concurrent_jobs: RunnerMaxConcurrentJobs,
         limits: ResourceLimits,
     ) -> Self {
-        Self::with_detector(max_concurrent_jobs, limits, ResourceCapacity::detect)
+        Self::with_detectors(
+            max_concurrent_jobs,
+            limits,
+            ResourceCapacity::detect,
+            scope_container_usage,
+        )
     }
 
-    fn with_detector<D>(
+    fn with_detectors<D, U>(
         max_concurrent_jobs: RunnerMaxConcurrentJobs,
         limits: ResourceLimits,
         detector: D,
+        usage_detector: U,
     ) -> Self
     where
         D: Fn() -> anyhow::Result<ResourceCapacity> + Send + Sync + 'static,
+        U: Fn(&str) -> anyhow::Result<ResourceUsage> + Send + Sync + 'static,
     {
         Self {
             inner: Arc::new(CoordinatorInner {
                 max_concurrent_jobs,
                 limits,
                 detector: Box::new(detector),
+                usage_detector: Box::new(usage_detector),
                 state: Mutex::new(AdmissionState::default()),
             }),
         }
     }
 
     #[cfg(test)]
-    pub(super) fn for_test<D>(
+    pub(super) fn for_test<D, U>(
         max_concurrent_jobs: RunnerMaxConcurrentJobs,
         limits: ResourceLimits,
         detector: D,
+        usage_detector: U,
     ) -> Self
     where
         D: Fn() -> anyhow::Result<ResourceCapacity> + Send + Sync + 'static,
+        U: Fn(&str) -> anyhow::Result<ResourceUsage> + Send + Sync + 'static,
     {
-        Self::with_detector(max_concurrent_jobs, limits, detector)
+        Self::with_detectors(max_concurrent_jobs, limits, detector, usage_detector)
     }
 
     pub(super) fn reserve(&self) -> anyhow::Result<ResourceAdmissionReservation> {
@@ -79,27 +98,41 @@ impl ResourceAdmissionCoordinator {
             .lock()
             .map_err(|_| anyhow::anyhow!("runner resource admission state is poisoned"))?;
         debug_assert!(
-            state.active + state.pending <= self.inner.max_concurrent_jobs.get(),
+            state.active.len() + usize::from(state.pending)
+                <= usize::from(self.inner.max_concurrent_jobs.get()),
             "runner resource admission count exceeds configured slots"
         );
-        if state.active + state.pending >= self.inner.max_concurrent_jobs.get() {
+        if state.active.len() + usize::from(state.pending)
+            >= usize::from(self.inner.max_concurrent_jobs.get())
+        {
             bail!("all runner resource slots are reserved");
         }
+        let active_usage = state
+            .active
+            .iter()
+            .map(|reservation| (self.inner.usage_detector)(&reservation.container_name))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         (self.inner.detector)()?.ensure_admission(
             &self.inner.limits,
-            state.active,
+            &active_usage,
             state.pending,
         )?;
+        let id = state.next_reservation_id;
+        state.next_reservation_id = state
+            .next_reservation_id
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("runner resource reservation identity overflow"))?;
         state.pending += 1;
         Ok(ResourceAdmissionReservation {
             inner: Arc::clone(&self.inner),
+            id,
             state: ReservationState::Pending,
         })
     }
 }
 
 impl ResourceAdmissionReservation {
-    pub(super) fn activate(&mut self) {
+    pub(super) fn activate(&mut self, container_name: String) {
         if matches!(self.state, ReservationState::Active) {
             return;
         }
@@ -113,7 +146,10 @@ impl ResourceAdmissionReservation {
             "runner resource admission pending count is inconsistent"
         );
         state.pending -= 1;
-        state.active += 1;
+        state.active.push(ActiveReservation {
+            id: self.id,
+            container_name,
+        });
         self.state = ReservationState::Active;
     }
 
@@ -133,8 +169,12 @@ impl Drop for ResourceAdmissionReservation {
                 state.pending -= 1;
             }
             ReservationState::Active => {
-                assert!(state.active > 0);
-                state.active -= 1;
+                let index = state
+                    .active
+                    .iter()
+                    .position(|reservation| reservation.id == self.id)
+                    .expect("active runner resource reservation must be registered");
+                state.active.swap_remove(index);
             }
         }
     }

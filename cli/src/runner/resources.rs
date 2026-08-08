@@ -34,6 +34,13 @@ pub(super) struct ResourceCapacity {
     transient: TransientCapacity,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct ResourceUsage {
+    pub(super) memory_bytes: u64,
+    pub(super) pids: u64,
+    pub(super) storage_bytes: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ResourceLimits {
     pub(super) memory_bytes: u64,
@@ -139,19 +146,27 @@ impl ResourceCapacity {
     pub(super) fn ensure_admission(
         self,
         limits: &ResourceLimits,
-        active: u8,
+        active: &[ResourceUsage],
         pending: u8,
     ) -> anyhow::Result<()> {
-        // Live memory, PID, and disk headroom already reflects active jobs.
-        // Pending claims do not consume resources yet, so reserve their full
-        // stable budget. CPU is a fixed capacity rather than a headroom metric
-        // and therefore accounts for every active and pending slot.
+        // Live headroom reflects current active usage, but Docker limits are
+        // ceilings. Reserve every active job's unconsumed budget plus pending
+        // and newly offered slots so that later growth cannot overcommit.
         let pending = u64::from(pending) + 1;
-        let occupied = u64::from(active) + pending;
+        let active_memory = active.iter().fold(0_u64, |reserved, usage| {
+            reserved.saturating_add(limits.memory_bytes.saturating_sub(usage.memory_bytes))
+        });
+        let active_pids = active.iter().fold(0_u64, |reserved, usage| {
+            reserved.saturating_add(limits.pids.saturating_sub(usage.pids))
+        });
+        let active_storage = active.iter().fold(0_u64, |reserved, usage| {
+            reserved.saturating_add(limits.storage_bytes.saturating_sub(usage.storage_bytes))
+        });
+        let occupied = active.len() as u64 + pending;
         require_capacity(
             "memory",
             self.memory_headroom,
-            DAEMON_MEMORY_RESERVE + limits.memory_bytes.saturating_mul(pending),
+            DAEMON_MEMORY_RESERVE + active_memory + limits.memory_bytes.saturating_mul(pending),
         )?;
         require_capacity(
             "CPU",
@@ -161,12 +176,12 @@ impl ResourceCapacity {
         require_capacity(
             "PIDs",
             self.pid_headroom,
-            PID_RESERVE + limits.pids.saturating_mul(pending),
+            PID_RESERVE + active_pids + limits.pids.saturating_mul(pending),
         )?;
         require_capacity(
             "transient storage",
             self.transient.available_bytes,
-            TRANSIENT_DISK_RESERVE + limits.storage_bytes.saturating_mul(pending),
+            TRANSIENT_DISK_RESERVE + active_storage + limits.storage_bytes.saturating_mul(pending),
         )?;
         if let Some(available) = self.transient.available_inodes
             && available < EMERGENCY_INODE_FLOOR
@@ -209,12 +224,77 @@ impl ResourceCapacity {
     }
 
     #[cfg(test)]
-    pub(super) fn shrink_memory_by(self, bytes: u64) -> Self {
+    pub(super) fn shrink_cpu_by(self, millis: u64) -> Self {
         Self {
-            memory_headroom: self.memory_headroom.saturating_sub(bytes),
+            cpu_millis: self.cpu_millis.saturating_sub(millis),
             ..self
         }
     }
+}
+
+pub(super) fn scope_container_usage(container_name: &str) -> anyhow::Result<ResourceUsage> {
+    let output = Command::new("docker")
+        .args([
+            "inspect",
+            "--size",
+            "--format={{.State.Pid}} {{.SizeRw}}",
+            container_name,
+        ])
+        .output()
+        .context("inspect active Scope container usage")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("No such object") {
+            return Ok(ResourceUsage::default());
+        }
+        bail!("inspect active Scope container usage: {}", stderr.trim());
+    }
+    let (pid, storage_bytes) =
+        parse_container_inspection(&String::from_utf8_lossy(&output.stdout))?;
+    if pid == 0 {
+        return Ok(ResourceUsage {
+            storage_bytes,
+            ..ResourceUsage::default()
+        });
+    }
+    let cgroup_path = unified_cgroup_path(
+        &fs::read_to_string(format!("/proc/{pid}/cgroup"))
+            .context("read active Scope container cgroup")?,
+    )?;
+    let cgroup = Path::new("/sys/fs/cgroup").join(cgroup_path);
+    Ok(ResourceUsage {
+        memory_bytes: read_usage_value(&cgroup.join("memory.current"))?,
+        pids: read_usage_value(&cgroup.join("pids.current"))?,
+        storage_bytes,
+    })
+}
+
+fn parse_container_inspection(output: &str) -> anyhow::Result<(u32, u64)> {
+    let mut fields = output.split_whitespace();
+    let pid = fields
+        .next()
+        .context("active Scope container PID is missing")?
+        .parse()
+        .context("parse active Scope container PID")?;
+    let storage = fields
+        .next()
+        .context("active Scope container writable size is missing")?
+        .parse::<i64>()
+        .context("parse active Scope container writable size")?;
+    if fields.next().is_some() {
+        bail!("active Scope container inspection has extra fields");
+    }
+    let storage = u64::try_from(storage)
+        .context("active Scope container writable size cannot be negative")?;
+    Ok((pid, storage))
+}
+
+fn read_usage_value(path: &Path) -> anyhow::Result<u64> {
+    fs::read_to_string(path)
+        .with_context(|| format!("read active Scope container usage from {}", path.display()))?
+        .trim()
+        .parse()
+        .with_context(|| format!("parse active Scope container usage from {}", path.display()))
 }
 
 fn require_capacity(name: &str, available: u64, required: u64) -> anyhow::Result<()> {
@@ -538,6 +618,15 @@ mod tests {
         assert_eq!(cpu_quota_millis("max 100000").unwrap(), None);
         assert_eq!(cpuset_count("0-2,5,8-9").unwrap(), 6);
         assert_eq!(cpuset_count("").unwrap(), 0);
+    }
+
+    #[test]
+    fn parses_active_container_inspection() {
+        assert_eq!(parse_container_inspection("123 456\n").unwrap(), (123, 456));
+        assert!(parse_container_inspection("").is_err());
+        assert!(parse_container_inspection("123").is_err());
+        assert!(parse_container_inspection("123 -1").is_err());
+        assert!(parse_container_inspection("123 456 extra").is_err());
     }
 
     #[test]

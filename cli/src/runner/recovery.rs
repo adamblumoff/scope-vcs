@@ -1,5 +1,6 @@
 use super::{
-    AttemptConclusionRequest, ClaimRunResponse, RunnerConfig, runner_client, runner_work_root,
+    AttemptConclusionRequest, ClaimRunResponse, RunnerConfig, job_container_name, runner_client,
+    runner_work_root,
 };
 use crate::api::abandon_attempt;
 use anyhow::{Context, bail};
@@ -431,7 +432,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
             ),
         };
         if !entry.path().join(RECOVERY_PROGRESS_FILE).is_file() {
-            let container_name = container_name(&claim.attempt_id);
+            let container_name = job_container_name(&claim.attempt_id);
             if !super::supervisor::terminate_container(&container_name) {
                 bail!("could not confirm incomplete Scope container {container_name} was removed");
             }
@@ -440,7 +441,7 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
             continue;
         }
         let recovery = load_recovery_progress(&claim_path, claim)?;
-        let container_name = container_name(&recovery.claim.attempt_id);
+        let container_name = job_container_name(&recovery.claim.attempt_id);
         let state = container_state(&container_name)?;
         match state {
             ContainerState::Running | ContainerState::Exited => {
@@ -597,7 +598,7 @@ fn retire_incompatible_recovery_state_with(
         .file_name()
         .and_then(|name| name.to_str())
         .context("incompatible runner recovery directory name must be UTF-8")?;
-    let container_name = container_name(attempt_id);
+    let container_name = job_container_name(attempt_id);
     if !terminate_container(&container_name) {
         bail!("could not confirm incompatible Scope container {container_name} was removed");
     }
@@ -631,10 +632,6 @@ fn abandon_claim(
         &claim.attempt_token,
         &claim.attempt_id,
     )
-}
-
-fn container_name(attempt_id: &str) -> String {
-    format!("scope-{attempt_id}")
 }
 
 fn container_state(container_name: &str) -> anyhow::Result<ContainerState> {

@@ -9,6 +9,10 @@ pub(super) struct DockerCapabilities {
     pub(super) storage_quota_supported: bool,
 }
 
+pub(super) fn job_container_name(attempt_id: &str) -> String {
+    format!("scope-{attempt_id}")
+}
+
 pub(super) fn doctor_local(
     run_container: bool,
     max_concurrent_jobs: scope_domain::runs::runner::RunnerMaxConcurrentJobs,

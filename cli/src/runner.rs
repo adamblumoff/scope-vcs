@@ -39,8 +39,8 @@ use config::{RunnerConfig, load_runner_config, load_runner_config_from, scope_co
 use container::apply_container_limits;
 use container::{
     ContainerGuard, DockerCapabilities, JobContainerSpec, configure_job_container_creation,
-    configure_source_copy, container_started_at_unix, doctor_local, probe_storage_quota_support,
-    require_root_image, stop_container,
+    configure_source_copy, container_started_at_unix, doctor_local, job_container_name,
+    probe_storage_quota_support, require_root_image, stop_container,
 };
 use image::resolve_container_image;
 #[cfg(test)]
@@ -243,7 +243,7 @@ fn execute_claim(
     let mut caches = cache::PreparedCaches::prepare(config, claim, &container_image)?;
     mark_recovery_caches_attached(&work.path, claim, &caches.volume_names())?;
     log_phase(&claim.attempt_id, "cache_prepare", phase);
-    let container_name = format!("scope-{}", claim.attempt_id);
+    let container_name = job_container_name(&claim.attempt_id);
     let mut create = Command::new("docker");
     let phase = Instant::now();
     configure_job_container_creation(
@@ -405,7 +405,7 @@ fn resume_claim_execution(
         work.preserve();
     }
     let mut progress = recovery.progress;
-    let container_name = format!("scope-{}", claim.attempt_id);
+    let container_name = job_container_name(&claim.attempt_id);
     let mut container = ContainerGuard::new(container_name.clone());
     let has_pending_stop =
         progress.pending_attempt_abandon || progress.pending_attempt_conclusion.is_some();
