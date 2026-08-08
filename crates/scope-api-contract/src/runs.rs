@@ -334,6 +334,7 @@ mod tests {
                     "runner": { "kind": "any" },
                     "container": { "image": "image" },
                     "timeout_seconds": 60,
+                    "environment": {},
                     "caches": [],
                     "steps": [{ "name": "Test", "run": "true" }]
                 }
