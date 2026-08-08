@@ -28,6 +28,11 @@ use std::collections::BTreeSet;
 mod job_scheduler;
 mod retention;
 pub(crate) use job_scheduler::parallel_revision;
+mod runner_fixtures;
+use runner_fixtures::runner;
+pub(super) use runner_fixtures::{
+    register_runner, register_runner_with_capacity, runner_with_capacity,
+};
 pub(super) mod workflow_fixtures;
 
 #[tokio::test]
@@ -729,53 +734,6 @@ fn catalog_with_repo() -> CatalogFixture {
         .repositories
         .insert(other_repository.record.id.clone(), other_repository);
     catalog
-}
-
-pub(super) async fn register_runner(store: &MetadataStore, id: &str, name: &str) {
-    register_runner_with_capacity(store, id, name, 1).await;
-}
-
-pub(super) async fn register_runner_with_capacity(
-    store: &MetadataStore,
-    id: &str,
-    name: &str,
-    max_concurrent_jobs: u8,
-) {
-    let runner = runner_with_capacity(id, max_concurrent_jobs);
-    store.runs().register_runner(runner.clone()).await.unwrap();
-    store
-        .runs()
-        .grant_runner(
-            RunnerGrant::new(
-                "owner/repo",
-                runner.id,
-                RunnerName::parse(name).unwrap(),
-                "user_owner",
-                10,
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-}
-
-fn runner(id: &str) -> Runner {
-    runner_with_capacity(id, 1)
-}
-
-pub(super) fn runner_with_capacity(id: &str, max_concurrent_jobs: u8) -> Runner {
-    let hash_byte = if id.ends_with('1') { '1' } else { '2' };
-    Runner::new(
-        id,
-        "user_owner",
-        hash_byte.to_string().repeat(64),
-        "1.0.0",
-        RUNNER_PROTOCOL_VERSION,
-        RunnerCapabilities::v1(),
-        RunnerMaxConcurrentJobs::new(max_concurrent_jobs).unwrap(),
-        10,
-    )
-    .unwrap()
 }
 
 pub(super) fn revision() -> WorkflowRevision {
