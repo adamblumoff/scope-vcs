@@ -9,6 +9,12 @@ fn record(state: CacheState) -> CacheRecord {
     record_for("runner-1", state)
 }
 
+fn ready_state() -> CacheState {
+    CacheState::Ready {
+        attempt_id: "attempt-ready".to_string(),
+    }
+}
+
 fn record_for(runner_id: &str, state: CacheState) -> CacheRecord {
     let namespace = CacheNamespace::workflow(
         &WorkflowPath::parse("/.scope/runs/test.yml").unwrap(),
@@ -51,7 +57,7 @@ fn volume(record: &CacheRecord, backing: &Path) -> VolumeInspection {
         volume_type: Some("none".to_string()),
         options: Some("bind".to_string()),
         labels: [
-            ("scope.cache-format", "4"),
+            ("scope.cache-format", "5"),
             ("scope.cache-key", record.identity_digest.as_str()),
             ("scope.repository-id", record.repository_id.as_str()),
             ("scope.cache-namespace", record.namespace.kind()),
@@ -78,7 +84,7 @@ fn physical_locations_are_stable_bounded_and_runner_namespaced() {
     assert_ne!(first.volume_name, colocated.volume_name);
     assert_ne!(first.record_path, colocated.record_path);
     assert_ne!(first.backing_path, colocated.backing_path);
-    assert!(first.volume_name.starts_with("scope-cache-v4-"));
+    assert!(first.volume_name.starts_with("scope-cache-v5-"));
     assert!(first.volume_name.len() < 64);
     assert_eq!(first.identity_digest, digest);
     assert_eq!(colocated.identity_digest, digest);
@@ -146,10 +152,10 @@ fn only_ready_semantically_identical_metadata_is_warm() {
     let desired = record(CacheState::Tainted {
         attempt_id: "new-attempt".to_string(),
     });
-    let ready = record(CacheState::Ready);
+    let ready = record(ready_state());
     assert!(metadata_allows_warm(&ready, &desired));
 
-    let foreign_runner = record_for("runner-2", CacheState::Ready);
+    let foreign_runner = record_for("runner-2", ready_state());
     assert!(!metadata_allows_warm(&foreign_runner, &desired));
 
     let tainted = record(CacheState::Tainted {
@@ -164,7 +170,7 @@ fn only_ready_semantically_identical_metadata_is_warm() {
 
 #[test]
 fn physical_volume_must_match_backing_and_all_identity_labels() {
-    let record = record(CacheState::Ready);
+    let record = record(ready_state());
     let backing = Path::new("/cache/data/identity");
     let exact = volume(&record, backing);
     assert!(volume_matches(&exact, &record, backing, &record.runner_id));
@@ -191,8 +197,8 @@ fn record_lookup_and_cleanup_candidates_are_runner_scoped() {
     let parent = TestDir::new("runner-cache-registration-isolation");
     let root = parent.path().join("scope/runner");
     initialize(&root).unwrap();
-    let first = record_for("runner-1", CacheState::Ready);
-    let second = record_for("runner-2", CacheState::Ready);
+    let first = record_for("runner-1", ready_state());
+    let second = record_for("runner-2", ready_state());
     write_record(&root, &first).unwrap();
     write_record(&root, &second).unwrap();
 
@@ -204,9 +210,15 @@ fn record_lookup_and_cleanup_candidates_are_runner_scoped() {
         load_runner_records(&root, "runner-2").unwrap(),
         vec![second.clone()]
     );
-    assert!(read_record_for_volume(&root, &second.volume_name, "runner-1").is_err());
+    assert!(
+        find_record_for_volume(&root, &second.volume_name, "runner-1")
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
-        read_record_for_volume(&root, &first.volume_name, "runner-1").unwrap(),
+        find_record_for_volume(&root, &first.volume_name, "runner-1")
+            .unwrap()
+            .unwrap(),
         first.clone()
     );
 
@@ -223,7 +235,7 @@ fn cold_discard_accepts_an_unmaterialized_runner_namespace() {
     let parent = TestDir::new("runner-cache-new-registration-discard");
     let root = parent.path().join("scope/runner");
     initialize(&root).unwrap();
-    let record = record(CacheState::Ready);
+    let record = record(ready_state());
     let location = record_location(&root, &record);
 
     assert!(!location.record_path.parent().unwrap().exists());
@@ -262,7 +274,7 @@ fn interrupted_store_initialization_is_repaired_on_restart() {
     let parent = TestDir::new("runner-cache-interrupted-initialize");
     let root = parent.path().join("scope/runner");
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("store.json"), br#"{"format":4}"#).unwrap();
+    fs::write(root.join("store.json"), br#"{"format":5}"#).unwrap();
 
     ensure_usable_root(&root, false).unwrap();
 
@@ -270,7 +282,7 @@ fn interrupted_store_initialization_is_repaired_on_restart() {
     assert!(root.join("metadata").is_dir());
     assert!(root.join("data").is_dir());
     assert!(root.join("locks").is_dir());
-    let record = record(CacheState::Ready);
+    let record = record(ready_state());
     let location = record_location(&root, &record);
     write_record(&root, &record).unwrap();
     create_backing_directory(&root, &location.backing_path).unwrap();
@@ -294,7 +306,7 @@ fn runner_cache_namespaces_reject_symlinks() {
     let parent = TestDir::new("runner-cache-namespace-symlinks");
     let root = parent.path().join("scope/runner");
     initialize(&root).unwrap();
-    let record = record(CacheState::Ready);
+    let record = record(ready_state());
     let location = record_location(&root, &record);
 
     let foreign_metadata = parent.path().join("foreign-metadata");
@@ -526,13 +538,37 @@ fn recovered_finalization_reacquires_the_recorded_identity_lock() {
 }
 
 #[test]
-fn finalization_rejects_a_cache_retagged_to_another_attempt() {
-    let owned = record(CacheState::Tainted {
+fn finalization_is_crash_idempotent_without_weakening_attempt_ownership() {
+    let tainted = record(CacheState::Tainted {
         attempt_id: "attempt-1".to_string(),
     });
-    assert!(ensure_cache_record_owned_by_attempt(&owned, "attempt-1").is_ok());
-    assert!(ensure_cache_record_owned_by_attempt(&owned, "attempt-2").is_err());
-    assert!(ensure_cache_record_owned_by_attempt(&record(CacheState::Ready), "attempt-1").is_err());
+    let ready = record(CacheState::Ready {
+        attempt_id: "attempt-1".to_string(),
+    });
+
+    assert!(matches!(
+        cache_finalization_action(Some(&tainted), "attempt-1", true, true).unwrap(),
+        CacheFinalizationAction::Publish
+    ));
+    assert_eq!(
+        cache_finalization_action(Some(&ready), "attempt-1", true, true).unwrap(),
+        CacheFinalizationAction::Complete
+    );
+    assert_eq!(
+        cache_finalization_action(Some(&tainted), "attempt-1", false, true).unwrap(),
+        CacheFinalizationAction::Evict
+    );
+    assert_eq!(
+        cache_finalization_action(Some(&ready), "attempt-1", false, true).unwrap(),
+        CacheFinalizationAction::Evict
+    );
+    assert_eq!(
+        cache_finalization_action(None, "attempt-1", false, false).unwrap(),
+        CacheFinalizationAction::Complete
+    );
+    assert!(cache_finalization_action(None, "attempt-1", false, true).is_err());
+    assert!(cache_finalization_action(None, "attempt-1", true, false).is_err());
+    assert!(cache_finalization_action(Some(&tainted), "attempt-2", true, true).is_err());
 }
 
 #[test]
@@ -552,7 +588,7 @@ fn obsolete_cache_store_format_is_rejected() {
     let parent = TestDir::new("runner-cache-old-format");
     let root = parent.path().join("scope/runner");
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("store.json"), br#"{"format":3}"#).unwrap();
+    fs::write(root.join("store.json"), br#"{"format":4}"#).unwrap();
 
     let error = validate_store(&root, false).unwrap_err();
     assert!(error.to_string().contains("schema is unsupported"));

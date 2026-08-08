@@ -32,7 +32,7 @@ pub(super) struct CacheRecord {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub(super) enum CacheState {
-    Ready,
+    Ready { attempt_id: String },
     Tainted { attempt_id: String },
 }
 
@@ -80,7 +80,7 @@ pub(super) fn read_record_candidate(
 }
 
 pub(super) fn metadata_allows_warm(existing: &CacheRecord, desired: &CacheRecord) -> bool {
-    matches!(&existing.state, CacheState::Ready)
+    matches!(&existing.state, CacheState::Ready { .. })
         && existing.format == desired.format
         && existing.runner_id == desired.runner_id
         && existing.runner_namespace == desired.runner_namespace
@@ -155,13 +155,12 @@ pub(super) fn load_runner_records(
     Ok(records)
 }
 
-pub(super) fn read_record_for_volume(
+pub(super) fn find_record_for_volume(
     root: &Path,
     volume: &str,
     runner_id: &str,
-) -> anyhow::Result<CacheRecord> {
-    load_runner_records(root, runner_id)?
+) -> anyhow::Result<Option<CacheRecord>> {
+    Ok(load_runner_records(root, runner_id)?
         .into_iter()
-        .find(|record| record.volume_name == volume)
-        .with_context(|| format!("cache metadata for {volume} is missing"))
+        .find(|record| record.volume_name == volume))
 }

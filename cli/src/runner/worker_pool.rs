@@ -61,7 +61,7 @@ fn runner_slot(
                     &offer.run_id,
                     &offer.job_key,
                 ) {
-                    Ok(claim) => run_claim(&config, capabilities, &limits, claim),
+                    Ok(claim) => run_claim(&config, capabilities, &limits, claim)?,
                     Err(error) => {
                         eprintln!(
                             "Runner slot {slot} could not claim {}: {error}",

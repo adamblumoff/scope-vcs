@@ -17,7 +17,7 @@ const RECOVERY_CLAIM_FILE: &str = "claim.json";
 const RECOVERY_CLAIM_TEMP_FILE: &str = ".claim.json.tmp";
 const RECOVERY_PROGRESS_FILE: &str = "progress.json";
 const RECOVERY_PROGRESS_TEMP_FILE: &str = ".progress.json.tmp";
-const RECOVERY_SCHEMA_VERSION: u8 = 6;
+const RECOVERY_SCHEMA_VERSION: u8 = 7;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RecoveryEnvelope {
@@ -792,13 +792,13 @@ mod tests {
 
     #[test]
     fn older_recovery_is_retired_before_current_schema_decoding() {
-        let root = TestDir::new("runner-v5-recovery");
-        let work_dir = root.path().join("attempt-v5");
+        let root = TestDir::new("runner-v6-recovery");
+        let work_dir = root.path().join("attempt-v6");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
         fs::write(
             &claim_path,
-            br#"{"schema_version":5,"claim":{"attempt_id":"attempt-v5","attempt_token":"secret"}}"#,
+            br#"{"schema_version":6,"claim":{"attempt_id":"attempt-v6","attempt_token":"secret"}}"#,
         )
         .unwrap();
         fs::write(work_dir.join(RECOVERY_PROGRESS_FILE), b"{}").unwrap();
@@ -808,7 +808,7 @@ mod tests {
         else {
             panic!("older claim unexpectedly decoded as current recovery state");
         };
-        assert_eq!(schema_version, Some(5));
+        assert_eq!(schema_version, Some(6));
 
         let mut terminated = None;
         retire_incompatible_recovery_state_with(&work_dir, schema_version, |name| {
@@ -816,7 +816,7 @@ mod tests {
             true
         })
         .unwrap();
-        assert_eq!(terminated.as_deref(), Some("scope-attempt-v5"));
+        assert_eq!(terminated.as_deref(), Some("scope-attempt-v6"));
         assert!(!work_dir.exists());
     }
 
@@ -826,7 +826,7 @@ mod tests {
         let work_dir = root.path().join("attempt-newer");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
-        fs::write(&claim_path, br#"{"schema_version":7}"#).unwrap();
+        fs::write(&claim_path, br#"{"schema_version":8}"#).unwrap();
 
         let StoredRecoveryEnvelope::Newer { schema_version } =
             load_recovery_envelope(&claim_path).unwrap()
@@ -834,7 +834,7 @@ mod tests {
             panic!("newer recovery schema was not preserved");
         };
 
-        assert_eq!(schema_version, 7);
+        assert_eq!(schema_version, 8);
         assert!(claim_path.exists());
     }
 }

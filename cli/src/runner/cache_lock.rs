@@ -1,4 +1,4 @@
-use super::{lifecycle_lock, read_record_for_volume, require_real_directory, runner_namespace};
+use super::{find_record_for_volume, lifecycle_lock, require_real_directory, runner_namespace};
 use anyhow::{Context, bail};
 use std::{
     fs::{self, File},
@@ -101,15 +101,21 @@ pub(super) fn lock_recorded_volume_identities(
     runner_id: &str,
     volumes: &[String],
 ) -> anyhow::Result<CacheIdentityLocks> {
-    let digests = {
+    let digests: Vec<String> = {
         // Read the volume-to-identity mapping consistently, then release lifecycle
         // before blocking on identity locks. Ownership is checked again under both
         // lock layers by the finalizer.
         let _lifecycle_lock = lifecycle_lock(root)?;
         volumes
             .iter()
-            .map(|volume| Ok(read_record_for_volume(root, volume, runner_id)?.identity_digest))
+            .map(|volume| {
+                Ok(find_record_for_volume(root, volume, runner_id)?
+                    .map(|record| record.identity_digest))
+            })
             .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect()
     };
     lock_cache_identities(root, runner_id, digests)
 }

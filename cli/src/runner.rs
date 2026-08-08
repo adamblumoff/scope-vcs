@@ -93,12 +93,14 @@ impl ExecutionOutcome {
 }
 
 fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
+    let mut restart_required = false;
     for recovery in recover_runner_state(config)? {
         let attempt_id = recovery.recovery.claim.attempt_id.clone();
         let attempt_token = recovery.recovery.claim.attempt_token.clone();
         if let Err(error) = resume_claim(config, recovery) {
             eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
-            if is_conclusion_report_pending(&error) {
+            if requires_recovery_restart(&error) {
+                restart_required = true;
                 continue;
             }
             if let Ok(client) = runner_client() {
@@ -106,7 +108,11 @@ fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
             }
         }
     }
-    Ok(())
+    if restart_required {
+        Err(RecoveryRestartRequired.into())
+    } else {
+        Ok(())
+    }
 }
 
 fn run_claim(
@@ -114,20 +120,20 @@ fn run_claim(
     capabilities: DockerCapabilities,
     limits: &ResourceLimits,
     claim: ClaimRunResponse,
-) {
+) -> anyhow::Result<()> {
     if let Err(error) = execute_claim(config, capabilities, limits, &claim) {
         eprintln!(
             "Run {} failed before completion: {error:#}",
             claim.job.run_id
         );
-        if is_conclusion_report_pending(&error) {
-            return;
+        if requires_recovery_restart(&error) {
+            return Err(error).context("restart runner to reconcile preserved attempt state");
         }
         let client = match runner_client() {
             Ok(client) => client,
             Err(client_error) => {
                 eprintln!("Could not report failure: {client_error}");
-                return;
+                return Ok(());
             }
         };
         if let Err(report_error) = complete_attempt(
@@ -151,6 +157,7 @@ fn run_claim(
             );
         }
     }
+    Ok(())
 }
 
 fn bounded_setup_failure_message(error: &anyhow::Error) -> String {
@@ -319,6 +326,7 @@ fn execute_claim(
         Err(error) => {
             if !work.cleanup_on_drop {
                 caches.preserve();
+                return Err(error.context(RecoveryRestartRequired));
             }
             Err(error)
         }
@@ -707,6 +715,24 @@ fn is_conclusion_report_pending(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<ConclusionReportPending>())
+}
+
+#[derive(Debug)]
+struct RecoveryRestartRequired;
+
+impl std::fmt::Display for RecoveryRestartRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("preserved attempt state requires runner restart")
+    }
+}
+
+impl std::error::Error for RecoveryRestartRequired {}
+
+fn requires_recovery_restart(error: &anyhow::Error) -> bool {
+    is_conclusion_report_pending(error)
+        || error
+            .chain()
+            .any(|cause| cause.is::<RecoveryRestartRequired>())
 }
 
 fn report_pending_conclusion(

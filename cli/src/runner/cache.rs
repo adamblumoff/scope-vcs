@@ -34,8 +34,8 @@ use store::{ensure_capacity, has_capacity, validate_store};
 #[path = "cache_record.rs"]
 mod record;
 use record::{
-    CacheRecord, CacheState, load_runner_records, metadata_allows_warm, read_record_candidate,
-    read_record_for_volume, record_location, write_record,
+    CacheRecord, CacheState, find_record_for_volume, load_runner_records, metadata_allows_warm,
+    read_record_candidate, record_location, write_record,
 };
 
 #[path = "cache_lock.rs"]
@@ -44,6 +44,13 @@ mod identity_lock;
 use identity_lock::canonical_identity_lock_digests;
 use identity_lock::{CacheFileLock, CacheIdentityLocks};
 use identity_lock::{lock_cache_identities, lock_recorded_volume_identities};
+
+#[path = "cache_finalization.rs"]
+mod finalization;
+pub(super) use finalization::finalize_volume_names;
+use finalization::finalize_volume_names_while_identity_locked;
+#[cfg(test)]
+use finalization::{CacheFinalizationAction, cache_finalization_action};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CacheMount {
@@ -253,80 +260,6 @@ impl Drop for PreparedCaches {
     }
 }
 
-pub(super) fn finalize_volume_names(
-    config: &RunnerConfig,
-    volumes: &[String],
-    attempt_id: &str,
-    success: bool,
-) -> anyhow::Result<()> {
-    if volumes.is_empty() {
-        return Ok(());
-    }
-    let root = usable_root(config)?;
-    let _identity_locks = lock_recorded_volume_identities(&root, &config.runner_id, volumes)?;
-    finalize_volume_names_at_root(config, &root, volumes, attempt_id, success)
-}
-
-fn finalize_volume_names_while_identity_locked(
-    config: &RunnerConfig,
-    volumes: &[String],
-    attempt_id: &str,
-    success: bool,
-) -> anyhow::Result<()> {
-    if volumes.is_empty() {
-        return Ok(());
-    }
-    let root = usable_root(config)?;
-    finalize_volume_names_at_root(config, &root, volumes, attempt_id, success)
-}
-
-fn finalize_volume_names_at_root(
-    config: &RunnerConfig,
-    root: &Path,
-    volumes: &[String],
-    attempt_id: &str,
-    success: bool,
-) -> anyhow::Result<()> {
-    let _lock = lifecycle_lock(root)?;
-    for volume in volumes {
-        if volume_is_referenced(volume)? {
-            bail!("cache volume {volume} is still referenced by a container");
-        }
-        let mut record = read_record_for_volume(root, volume, &config.runner_id)?;
-        ensure_cache_record_owned_by_attempt(&record, attempt_id)?;
-        if success {
-            let backing = record_location(root, &record).backing_path;
-            super::command_success(
-                Command::new("sync").args(["-f"]).arg(&backing),
-                "flush successful cache contents",
-            )?;
-            record.state = CacheState::Ready;
-            record.last_used_at_unix = unix_now();
-            write_record(root, &record)?;
-        } else {
-            remove_cache(root, volume, &config.runner_id)?;
-        }
-    }
-    Ok(())
-}
-
-fn ensure_cache_record_owned_by_attempt(
-    record: &CacheRecord,
-    attempt_id: &str,
-) -> anyhow::Result<()> {
-    if matches!(
-        &record.state,
-        CacheState::Tainted { attempt_id: owner } if owner == attempt_id
-    ) {
-        Ok(())
-    } else {
-        bail!(
-            "cache volume {} is not owned by attempt {attempt_id}",
-            record.volume_name
-        )
-    }
-}
-
 pub(super) fn is_reusable_after_execution(
     canary_phase: Option<RunnerProtocolCanaryPhase>,
     outcome: ExecutionOutcome,
@@ -389,7 +322,7 @@ pub(super) fn list(config: &RunnerConfig) -> anyhow::Result<()> {
     }
     for record in records {
         let state = match record.state {
-            CacheState::Ready => "ready".to_string(),
+            CacheState::Ready { .. } => "ready".to_string(),
             CacheState::Tainted { attempt_id } => format!("tainted:{attempt_id}"),
         };
         println!(

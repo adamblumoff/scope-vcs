@@ -190,7 +190,7 @@ async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
 #[tokio::test]
 async fn open_v5_hot_paths_do_not_take_the_cutover_row_lock() {
     let store = runs_tests::postgres_store();
-    runs_tests::register_runner(&store, "runner-1", "linux-box").await;
+    runs_tests::register_runner_with_capacity(&store, "runner-1", "linux-box", 2).await;
     let revision = runs_tests::revision();
     runs_tests::enqueue(
         &store,
