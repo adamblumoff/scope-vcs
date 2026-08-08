@@ -31,6 +31,7 @@ import {
   useRepositoryRunDetailController,
 } from './repository-run-detail-controller'
 import { RunStatusDot } from './repository-runs-page'
+import { RunJobGraph } from './run-job-graph'
 import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
 
 export function RepositoryRunDetailPage({
@@ -106,30 +107,34 @@ export function RepositoryRunDetailPage({
               {jobSummary(detail.jobs)}
             </p>
           </div>
-          <div className="mt-3 divide-y divide-border border-y border-border">
-            {detail.jobs.map((jobDetail) => (
-              <JobRow
-                expanded={expandedJobs.has(jobDetail.job.key)}
-                expandedAttempts={expandedAttempts}
-                jobDetail={jobDetail}
-                key={jobDetail.job.key}
-                logState={selectedLogState}
-                onLogRetry={() => {
-                  if (selection) void refreshLogs(selection)
-                }}
-                onSelectStep={(attemptId, stepIndex) =>
-                  toggleStep(jobDetail.job.key, attemptId, stepIndex)}
-                onToggleAttempt={(attempt) =>
-                  toggleAttempt(jobDetail.job.key, attempt)}
-                onToggleJob={() => toggleJob(jobDetail)}
-                selection={selection}
-              />
-            ))}
+          <div className="mt-3">
+            <RunJobGraph
+              expandedJobs={expandedJobs}
+              jobs={detail.jobs}
+              onToggleJob={toggleJob}
+            />
           </div>
-          {detail.jobs.length === 0 ? (
-            <p className="border-b border-border px-2 py-6 text-sm text-muted-foreground">
-              This workflow has no jobs.
-            </p>
+          {expandedJobs.size > 0 ? (
+            <div className="mt-6 divide-y divide-border border-y border-border">
+              {detail.jobs
+                .map((jobDetail) => (
+                  expandedJobs.has(jobDetail.job.key) ? (
+                    <JobDetailsPanel
+                      expandedAttempts={expandedAttempts}
+                      jobDetail={jobDetail}
+                      key={jobDetail.job.key}
+                      logState={selectedLogState}
+                      onLogRetry={() => {
+                        if (selection) void refreshLogs(selection)
+                      }}
+                      onSelectStep={(attemptId, stepIndex) =>
+                        toggleStep(jobDetail.job.key, attemptId, stepIndex)}
+                      onToggleAttempt={toggleAttempt}
+                      selection={selection}
+                    />
+                  ) : null
+                ))}
+            </div>
           ) : null}
         </section>
       </main>
@@ -137,46 +142,32 @@ export function RepositoryRunDetailPage({
   )
 }
 
-function JobRow({
-  expanded,
+function JobDetailsPanel({
   expandedAttempts,
   jobDetail,
   logState,
   onLogRetry,
   onSelectStep,
   onToggleAttempt,
-  onToggleJob,
   selection,
 }: {
-  expanded: boolean
   expandedAttempts: ReadonlySet<string>
   jobDetail: RepoRunJobDetail
   logState: StepLogState
   onLogRetry: () => void
   onSelectStep: (attemptId: string, stepIndex: number) => void
   onToggleAttempt: (attempt: RepoRunAttempt) => void
-  onToggleJob: () => void
   selection: StepSelection | null
 }) {
   const { job, attempts } = jobDetail
-  const panelId = `run-job-${safeId(job.key)}`
   const metadata = [
     job.desired_runner ?? 'any runner',
     `${attempts.length} ${attempts.length === 1 ? 'attempt' : 'attempts'}`,
     `updated ${formatRunUnixTime(job.updated_at_unix)}`,
   ].join(' · ')
   return (
-    <article>
-      <button
-        aria-controls={panelId}
-        aria-expanded={expanded}
-        className="grid min-h-16 w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-2 py-4 text-left outline-none hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[auto_minmax(0,1fr)_auto]"
-        onClick={onToggleJob}
-        type="button"
-      >
-        {expanded
-          ? <ChevronDown className="size-4 text-muted-foreground" />
-          : <ChevronRight className="size-4 text-muted-foreground" />}
+    <article id={`run-job-${safeId(job.key)}`}>
+      <div className="grid min-h-16 grid-cols-[minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-2 py-4 sm:grid-cols-[minmax(0,1fr)_auto]">
         <span className="flex min-w-0 items-center gap-2">
           <RunStatusDot state={job.state} />
           <span className="truncate font-medium">{job.key}</span>
@@ -184,42 +175,40 @@ function JobRow({
             {job.state}
           </span>
         </span>
-        <span className="col-start-2 truncate text-xs text-muted-foreground sm:col-start-3 sm:text-right">
+        <span className="truncate text-xs text-muted-foreground sm:text-right">
           {metadata}
         </span>
-      </button>
-      {expanded ? (
-        <div className="border-t border-border/70 pl-5 sm:pl-9" id={panelId}>
-          <div className="divide-y divide-border">
-            {attempts.map((attempt) => (
-              <AttemptRow
-                attempt={attempt}
-                expanded={expandedAttempts.has(attempt.id)}
-                key={attempt.id}
-                logState={logState}
-                onLogRetry={onLogRetry}
-                onSelectStep={(stepIndex) => onSelectStep(attempt.id, stepIndex)}
-                onToggle={() => onToggleAttempt(attempt)}
-                selectedStepIndex={
-                  selection?.jobKey === job.key &&
-                    selection.attemptId === attempt.id
-                    ? selection.stepIndex
-                    : null
-                }
-              />
-            ))}
-          </div>
-          {attempts.length === 0 ? (
-            <p className="border-t border-border px-3 py-5 text-sm text-muted-foreground">
-              {job.state === 'blocked'
-                ? 'Waiting for required jobs to finish.'
-                : job.state === 'queued'
-                  ? 'Waiting for a runner to claim this job.'
-                  : 'No attempts were created for this job.'}
-            </p>
-          ) : null}
+      </div>
+      <div className="border-t border-border/70 pl-5 sm:pl-9">
+        <div className="divide-y divide-border">
+          {attempts.map((attempt) => (
+            <AttemptRow
+              attempt={attempt}
+              expanded={expandedAttempts.has(attempt.id)}
+              key={attempt.id}
+              logState={logState}
+              onLogRetry={onLogRetry}
+              onSelectStep={(stepIndex) => onSelectStep(attempt.id, stepIndex)}
+              onToggle={() => onToggleAttempt(attempt)}
+              selectedStepIndex={
+                selection?.jobKey === job.key &&
+                  selection.attemptId === attempt.id
+                  ? selection.stepIndex
+                  : null
+              }
+            />
+          ))}
         </div>
-      ) : null}
+        {attempts.length === 0 ? (
+          <p className="border-t border-border px-3 py-5 text-sm text-muted-foreground">
+            {job.state === 'blocked'
+              ? 'Waiting for required jobs to finish.'
+              : job.state === 'queued'
+                ? 'Waiting for a runner to claim this job.'
+                : 'No attempts were created for this job.'}
+          </p>
+        ) : null}
+      </div>
     </article>
   )
 }

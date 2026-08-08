@@ -14,11 +14,7 @@ import {
   useRef,
 } from 'react'
 import {
-  defaultSelectedStep,
-  defaultSelectedJob,
   mergeStepLogs,
-  newlySelectableAttempt,
-  reconcileAutomaticStepSelection,
   reconcileExpandedAttempts,
   reconcileExpandedJobs,
   runAttempts,
@@ -50,10 +46,8 @@ type DetailViewState = {
   logStates: Record<string, StepLogState>
   metadataError: string | null
   pendingAction: 'cancel' | 'retry' | null
-  pendingAutomaticSelection: StepSelection | null
   reconciliationGeneration: number | null
   selection: StepSelection | null
-  selectionIsAutomatic: boolean
 }
 
 type DetailViewUpdate = (state: DetailViewState) => DetailViewState
@@ -67,33 +61,16 @@ const EMPTY_LOG_STATE: StepLogState = {
 }
 
 function createDetailViewState(detail: RepoRunDetail): DetailViewState {
-  const attempts = runAttempts(detail.jobs)
-  const attemptIds = attempts.map((attempt) => attempt.id)
-  const initialJob = defaultSelectedJob(detail.jobs)
-  const initialAttempt = initialJob?.attempts[0]
-  const initialStepIndex = initialAttempt
-    ? defaultSelectedStep(initialAttempt.steps)
-    : null
   return {
     actionError: null,
     detail,
-    expandedAttempts: initialAttempt
-      ? new Set([initialAttempt.id])
-      : reconcileExpandedAttempts(new Set(), [], attemptIds),
-    expandedJobs: initialJob ? new Set([initialJob.job.key]) : new Set(),
+    expandedAttempts: new Set(),
+    expandedJobs: new Set(),
     logStates: {},
     metadataError: null,
     pendingAction: null,
-    pendingAutomaticSelection: null,
     reconciliationGeneration: null,
-    selection: initialAttempt && initialStepIndex !== null
-      ? {
-          attemptId: initialAttempt.id,
-          jobKey: initialJob.job.key,
-          stepIndex: initialStepIndex,
-        }
-      : null,
-    selectionIsAutomatic: true,
+    selection: null,
   }
 }
 
@@ -122,12 +99,6 @@ export function useRepositoryRunDetailController({
   )
   const detailInFlightRef = useRef<Promise<void> | null>(null)
   const detailGenerationRef = useRef(0)
-  const knownAttemptIdsRef = useRef<string[] | null>(null)
-  if (knownAttemptIdsRef.current === null) {
-    knownAttemptIdsRef.current = runAttempts(initialDetail.jobs).map(
-      (attempt) => attempt.id,
-    )
-  }
   const logInFlightRef = useRef<Map<string, Promise<boolean>> | null>(null)
   if (logInFlightRef.current === null) {
     logInFlightRef.current = new Map()
@@ -155,116 +126,29 @@ export function useRepositoryRunDetailController({
         if (!mountedRef.current) return
         const nextAttempts = runAttempts(nextDetail.jobs)
         const nextIds = nextAttempts.map((attempt) => attempt.id)
-        const previousIds = knownAttemptIdsRef.current ?? []
-        const newAttempts = nextAttempts.filter(
-          (attempt) => !previousIds.includes(attempt.id),
-        )
-        knownAttemptIdsRef.current = nextIds
         updateView((current) => {
-          let nextSelection = current.selection
-          let pendingAutomaticSelection = current.pendingAutomaticSelection
-          let selectionIsAutomatic = current.selectionIsAutomatic
-          const currentAttempts = runAttempts(current.detail.jobs)
-          const automaticAttempt = newlySelectableAttempt(
-            currentAttempts,
-            nextAttempts,
-          )
-          if (
-            current.selectionIsAutomatic &&
-            automaticAttempt
-          ) {
-            const stepIndex = defaultSelectedStep(automaticAttempt.steps)
-            if (stepIndex !== null) {
-              const jobKey = attemptJobKey(nextDetail.jobs, automaticAttempt.id)
-              if (!jobKey) return current
-              const candidate = {
-                attemptId: automaticAttempt.id,
-                jobKey,
-                stepIndex,
-              }
-              if (sameSelection(current.selection, candidate)) {
-                pendingAutomaticSelection = null
-              } else if (
-                current.selection &&
-                current.selectionIsAutomatic
-              ) {
-                pendingAutomaticSelection = candidate
-              } else {
-                nextSelection = candidate
-                pendingAutomaticSelection = null
-              }
-              selectionIsAutomatic = true
-            }
-          } else if (selectionIsAutomatic) {
-            if (
-              pendingAutomaticSelection &&
-              selectionExists(
-                pendingAutomaticSelection,
-                nextDetail.jobs,
-              )
-            ) {
-              // Keep draining the prior selection before the pending handoff.
-            } else {
-              const candidate = reconcileAutomaticStepSelection(
-                current.selection,
-                nextAttempts,
-              )
-              if (
-                candidate &&
-                current.selection &&
-                !sameSelection(candidate, current.selection)
-              ) {
-                pendingAutomaticSelection = sameSelection(
-                    pendingAutomaticSelection,
-                    candidate,
-                  )
-                  ? pendingAutomaticSelection
-                  : candidate
-              } else {
-                nextSelection = candidate
-                pendingAutomaticSelection = null
-              }
-            }
-          }
-          if (
-            !selectionIsAutomatic &&
-            nextSelection &&
-            !selectionExists(nextSelection, nextDetail.jobs)
-          ) {
-            nextSelection = null
-            pendingAutomaticSelection = null
-          }
           const reconciledAction = current.reconciliationGeneration !== null &&
             generation >= current.reconciliationGeneration
-          const expandedJobs = reconcileExpandedJobs(
-            current.expandedJobs,
-            nextDetail.jobs,
-          )
-          const expandedAttempts = reconcileExpandedAttempts(
-            current.expandedAttempts,
-            previousIds,
-            nextIds,
-          )
-          if (current.selectionIsAutomatic) {
-            for (const attempt of newAttempts) {
-              const jobKey = attemptJobKey(nextDetail.jobs, attempt.id)
-              if (jobKey) expandedJobs.add(jobKey)
-            }
-            if (automaticAttempt) expandedAttempts.add(automaticAttempt.id)
-          }
           return {
             ...current,
             detail: nextDetail,
-            expandedAttempts,
-            expandedJobs,
+            expandedAttempts: reconcileExpandedAttempts(
+              current.expandedAttempts,
+              nextIds,
+            ),
+            expandedJobs: reconcileExpandedJobs(
+              current.expandedJobs,
+              nextDetail.jobs,
+            ),
             metadataError: null,
             pendingAction: reconciledAction ? null : current.pendingAction,
-            pendingAutomaticSelection,
             reconciliationGeneration: reconciledAction
               ? null
               : current.reconciliationGeneration,
-            selection: nextSelection,
-            selectionIsAutomatic,
+            selection: current.selection &&
+                selectionExists(current.selection, nextDetail.jobs)
+              ? current.selection
+              : null,
           }
         })
       })
@@ -427,42 +311,6 @@ export function useRepositoryRunDetailController({
     view.selection,
   ])
 
-  useEffect(() => {
-    const currentSelection = view.selection
-    const pendingSelection = view.pendingAutomaticSelection
-    if (!currentSelection || !pendingSelection) return
-    let active = true
-    const finishAutomaticSelection = async () => {
-      if (!await refreshLogsAfterInFlight(currentSelection)) return
-      if (active && mountedRef.current) {
-        updateView((current) => {
-          if (
-            !sameSelection(current.selection, currentSelection) ||
-            !sameSelection(current.pendingAutomaticSelection, pendingSelection)
-          ) return current
-          return {
-            ...current,
-            pendingAutomaticSelection: null,
-            selection: pendingSelection,
-          }
-        })
-      }
-    }
-    void finishAutomaticSelection()
-    const timer = window.setInterval(
-      () => void finishAutomaticSelection(),
-      REFRESH_INTERVAL_MS,
-    )
-    return () => {
-      active = false
-      window.clearInterval(timer)
-    }
-  }, [
-    refreshLogsAfterInFlight,
-    view.pendingAutomaticSelection,
-    view.selection,
-  ])
-
   const performAction = useCallback(async (
     kind: 'cancel' | 'retry',
     action: () => Promise<void>,
@@ -503,60 +351,28 @@ export function useRepositoryRunDetailController({
       const expanding = !nextJobs.has(jobDetail.job.key)
       if (expanding) nextJobs.add(jobDetail.job.key)
       else nextJobs.delete(jobDetail.job.key)
-      const firstAttempt = jobDetail.attempts[0]
-      const stepIndex = firstAttempt
-        ? defaultSelectedStep(firstAttempt.steps)
-        : null
-      let nextSelection = current.selection
-      let selectionIsAutomatic = current.selectionIsAutomatic
-      if (expanding && firstAttempt && stepIndex !== null) {
-        nextSelection = {
-          attemptId: firstAttempt.id,
-          jobKey: jobDetail.job.key,
-          stepIndex,
-        }
-        selectionIsAutomatic = true
-      } else if (!expanding && nextSelection?.jobKey === jobDetail.job.key) {
-        nextSelection = null
-        selectionIsAutomatic = false
-      }
       return {
         ...current,
-        expandedAttempts: expanding && firstAttempt
-          ? new Set(current.expandedAttempts).add(firstAttempt.id)
-          : current.expandedAttempts,
         expandedJobs: nextJobs,
-        pendingAutomaticSelection: null,
-        selection: nextSelection,
-        selectionIsAutomatic,
+        selection: !expanding && current.selection?.jobKey === jobDetail.job.key
+          ? null
+          : current.selection,
       }
     })
   }
 
-  function toggleAttempt(jobKey: string, attempt: RepoRunAttempt) {
+  function toggleAttempt(attempt: RepoRunAttempt) {
     updateView((current) => {
       const next = new Set(current.expandedAttempts)
       const expanding = !next.has(attempt.id)
       if (next.has(attempt.id)) next.delete(attempt.id)
       else next.add(attempt.id)
-      let nextSelection = current.selection
-      let selectionIsAutomatic = current.selectionIsAutomatic
-      if (expanding) {
-        const stepIndex = defaultSelectedStep(attempt.steps)
-        if (stepIndex !== null) {
-          nextSelection = { attemptId: attempt.id, jobKey, stepIndex }
-          selectionIsAutomatic = true
-        }
-      } else if (nextSelection?.attemptId === attempt.id) {
-        nextSelection = null
-        selectionIsAutomatic = false
-      }
       return {
         ...current,
         expandedAttempts: next,
-        pendingAutomaticSelection: null,
-        selection: nextSelection,
-        selectionIsAutomatic,
+        selection: !expanding && current.selection?.attemptId === attempt.id
+          ? null
+          : current.selection,
       }
     })
   }
@@ -564,13 +380,11 @@ export function useRepositoryRunDetailController({
   function toggleStep(jobKey: string, attemptId: string, stepIndex: number) {
     updateView((current) => ({
       ...current,
-      pendingAutomaticSelection: null,
       selection: current.selection?.jobKey === jobKey &&
         current.selection.attemptId === attemptId &&
         current.selection.stepIndex === stepIndex
         ? null
         : { attemptId, jobKey, stepIndex },
-      selectionIsAutomatic: false,
     }))
   }
 
@@ -594,15 +408,6 @@ function stepKey(selection: StepSelection) {
   return `${selection.jobKey}:${selection.attemptId}:${selection.stepIndex}`
 }
 
-function sameSelection(
-  left: StepSelection | null,
-  right: StepSelection | null,
-) {
-  return left?.attemptId === right?.attemptId &&
-    left?.jobKey === right?.jobKey &&
-    left?.stepIndex === right?.stepIndex
-}
-
 function selectionExists(
   selection: StepSelection,
   jobs: readonly RepoRunJobDetail[],
@@ -614,15 +419,6 @@ function selectionExists(
       attempt.steps.some((step) => step.index === selection.stepIndex)
     )
   )
-}
-
-function attemptJobKey(
-  jobs: readonly RepoRunJobDetail[],
-  attemptId: string,
-) {
-  return jobs.find(({ attempts }) =>
-    attempts.some((attempt) => attempt.id === attemptId)
-  )?.job.key ?? null
 }
 
 function withBoundedLogStates(
