@@ -1,5 +1,8 @@
 import { HttpError } from '@/api/client'
-import { loadRepoOperationsForRequest } from '@/api/runs'
+import {
+  loadRepoRunHistoryForRequest,
+  loadRepoRunnersForRequest,
+} from '@/api/runs'
 import { parseRepoParams } from '@/api/repos'
 import type { RepoParams } from '@/api/types'
 import {
@@ -11,11 +14,15 @@ import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useCallback } from 'react'
 
-const loadRepoOperations = createServerFn({ method: 'GET' })
+const loadRepoRunResources = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
   .handler(async ({ data }) => {
     try {
-      return await loadRepoOperationsForRequest(data)
+      const [history, runners] = await Promise.all([
+        loadRepoRunHistoryForRequest(data),
+        loadRepoRunnersForRequest(data),
+      ])
+      return { history, runners }
     } catch (error) {
       if (error instanceof HttpError && [401, 403, 404].includes(error.status)) {
         return null
@@ -25,25 +32,25 @@ const loadRepoOperations = createServerFn({ method: 'GET' })
   })
 
 export const Route = createFileRoute('/$owner/$repo/runs/')({
-  loader: ({ params }) => loadRepoOperations({ data: params }),
+  loader: ({ params }) => loadRepoRunResources({ data: params }),
   errorComponent: RunsPageError,
   pendingComponent: RunsPagePending,
   component: RepoRunsRoute,
 })
 
 function RepoRunsRoute() {
-  const initialOperations = Route.useLoaderData()
+  const initialResources = Route.useLoaderData()
   const params = Route.useParams()
-  const loadOperations = useCallback(
-    (input: RepoParams) => loadRepoOperations({ data: input }),
+  const loadResources = useCallback(
+    (input: RepoParams) => loadRepoRunResources({ data: input }),
     [],
   )
 
   return (
     <RepositoryRunsPage
-      initialOperations={initialOperations}
-      key={`${params.owner}/${params.repo}/${initialOperations ? 'member' : 'denied'}`}
-      loadOperations={loadOperations}
+      initialResources={initialResources}
+      key={`${params.owner}/${params.repo}/${initialResources ? 'member' : 'denied'}`}
+      loadResources={loadResources}
       params={params}
     />
   )

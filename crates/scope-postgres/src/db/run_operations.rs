@@ -17,12 +17,6 @@ pub struct RepositoryRunner {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RepositoryRun {
-    pub run: Run,
-    pub jobs: Vec<RunJob>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunSnapshot {
     pub run: Run,
     pub jobs: Vec<RunJob>,
@@ -60,60 +54,6 @@ impl RunStore {
             jobs,
             logs_truncated,
         }))
-    }
-
-    pub async fn repository_operations_runs(
-        &self,
-        repository_id: &str,
-        recent_limit: u64,
-    ) -> Result<Vec<RepositoryRun>, PostgresError> {
-        let tx = super::begin_metadata_read_snapshot(self.db.as_ref()).await?;
-        let mut models = entities::run::Entity::find()
-            .filter(entities::run::Column::RepoId.eq(repository_id))
-            .filter(entities::run::Column::CompletedAtUnix.is_null())
-            .order_by_desc(entities::run::Column::UpdatedAtUnix)
-            .order_by_desc(entities::run::Column::Id)
-            .all(&tx)
-            .await
-            .map_err(PostgresError::internal)?;
-        let terminal_limit = recent_limit.saturating_sub(models.len() as u64);
-        if terminal_limit > 0 {
-            let active_run_ids = models.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
-            let mut terminal_query = entities::run::Entity::find()
-                .filter(entities::run::Column::RepoId.eq(repository_id))
-                .filter(entities::run::Column::CompletedAtUnix.is_not_null())
-                .order_by_desc(entities::run::Column::UpdatedAtUnix)
-                .order_by_desc(entities::run::Column::Id)
-                .limit(terminal_limit);
-            if !active_run_ids.is_empty() {
-                terminal_query =
-                    terminal_query.filter(entities::run::Column::Id.is_not_in(active_run_ids));
-            }
-            models.extend(
-                terminal_query
-                    .all(&tx)
-                    .await
-                    .map_err(PostgresError::internal)?,
-            );
-        }
-        let run_ids = models.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
-        let mut jobs = run_jobs_by_ids(&tx, &run_ids).await?;
-        let runs = models
-            .into_iter()
-            .map(entities::run::Model::try_into_domain)
-            .map(|run| {
-                let run = run?;
-                let jobs = jobs
-                    .remove(&run.id)
-                    .filter(|jobs| !jobs.is_empty())
-                    .ok_or_else(|| {
-                        PostgresError::internal_message("run is missing its persisted jobs")
-                    })?;
-                Ok(RepositoryRun { jobs, run })
-            })
-            .collect();
-        tx.commit().await.map_err(PostgresError::internal)?;
-        runs
     }
 
     pub async fn run_jobs(&self, run_id: &str) -> Result<Vec<RunJob>, PostgresError> {
@@ -276,7 +216,7 @@ where
         .is_some())
 }
 
-async fn run_jobs_by_ids<C>(
+pub(super) async fn run_jobs_by_ids<C>(
     conn: &C,
     run_ids: &[String],
 ) -> Result<BTreeMap<String, Vec<RunJob>>, PostgresError>

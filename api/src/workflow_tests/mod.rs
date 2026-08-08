@@ -64,6 +64,7 @@ mod repo_lifecycle;
 mod repo_visibility;
 mod request_discussions;
 mod requests;
+mod run_resources;
 mod runs;
 mod runtime_budgets;
 

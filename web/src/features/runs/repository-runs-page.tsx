@@ -1,4 +1,8 @@
-import type { RepoOperations, RepoParams } from '@/api/types'
+import type {
+  RepoParams,
+  RepoRunHistoryPage,
+  RepoRunners,
+} from '@/api/types'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { RouteErrorContent } from '@/components/route-error-page'
 import { Button } from '@/components/ui/button'
@@ -16,28 +20,33 @@ import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
 
 const RUNS_REFRESH_INTERVAL_MS = 2_000
 
+type RunResources = {
+  history: RepoRunHistoryPage
+  runners: RepoRunners
+}
+
 export function RepositoryRunsPage({
-  initialOperations,
-  loadOperations,
+  initialResources,
+  loadResources,
   params,
 }: {
-  initialOperations: RepoOperations | null
-  loadOperations: (input: RepoParams) => Promise<RepoOperations | null>
+  initialResources: RunResources | null
+  loadResources: (input: RepoParams) => Promise<RunResources | null>
   params: RepoParams
 }) {
-  const [operations, setOperations] = useState(initialOperations)
+  const [resources, setResources] = useState(initialResources)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const mountedRef = useRef(false)
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const { owner, repo } = params
-  const canRefresh = operations !== null
+  const canRefresh = resources !== null
 
   const refresh = useCallback(() => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current
-    const request = loadOperations({ owner, repo })
+    const request = loadResources({ owner, repo })
       .then((next) => {
         if (!mountedRef.current) return
-        setOperations(next)
+        setResources(next)
         setRefreshError(null)
       })
       .catch((error: unknown) => {
@@ -50,7 +59,7 @@ export function RepositoryRunsPage({
       })
     refreshInFlightRef.current = request
     return request
-  }, [loadOperations, owner, repo])
+  }, [loadResources, owner, repo])
 
   useEffect(() => {
     mountedRef.current = true
@@ -69,7 +78,7 @@ export function RepositoryRunsPage({
     }
   }, [canRefresh, refresh])
 
-  if (!operations) {
+  if (!resources) {
     return (
       <>
         <RunsHeader />
@@ -85,7 +94,7 @@ export function RepositoryRunsPage({
 
   return (
     <>
-      <RunsHeader runCount={operations.runs.length} />
+      <RunsHeader runCount={resources.history.runs.length} />
       <div className="px-4 pb-12 sm:px-6 lg:px-8">
         {refreshError ? (
           <PageErrorAlert title="Runs could not refresh">
@@ -97,8 +106,8 @@ export function RepositoryRunsPage({
             </div>
           </PageErrorAlert>
         ) : null}
-        <RecentRuns params={params} runs={operations.runs} />
-        <Runners owner={owner} repo={repo} runners={operations.runners} />
+        <RecentRuns params={params} runs={resources.history.runs} />
+        <Runners owner={owner} repo={repo} runners={resources.runners.runners} />
       </div>
     </>
   )
@@ -109,7 +118,7 @@ function RecentRuns({
   runs,
 }: {
   params: RepoParams
-  runs: RepoOperations['runs']
+  runs: RepoRunHistoryPage['runs']
 }) {
   return (
     <section aria-labelledby="recent-runs-heading" className="pt-7 lg:pt-10">
@@ -167,7 +176,7 @@ function Runners({
 }: {
   owner: string
   repo: string
-  runners: RepoOperations['runners']
+  runners: RepoRunners['runners']
 }) {
   return (
     <section aria-labelledby="runners-heading" className="pt-9">

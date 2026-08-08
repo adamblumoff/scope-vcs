@@ -1,18 +1,40 @@
 import { createApiClient } from '@/api/client'
 import type {
-  RepoOperations,
   RepoParams,
   RepoRunDetail,
+  RepoRunHistoryInput,
+  RepoRunHistoryPage,
   RepoRunStepLogPage,
+  RepoRunWorkflowList,
+  RepoRunners,
   RunActionInput,
   RunStepLogsInput,
 } from '@/api/types'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
 
-export async function loadRepoOperationsForRequest(data: RepoParams) {
-  return createApiClient().get<RepoOperations>(
-    repoPath(ApiRouteTemplates.repoOperations, data),
-    { auth: 'optional' },
+export async function loadRepoRunWorkflowsForRequest(data: RepoParams) {
+  return createApiClient().get<RepoRunWorkflowList>(
+    repoPath(ApiRouteTemplates.repoRunWorkflows, data),
+    { auth: 'required' },
+  )
+}
+
+export async function loadRepoRunHistoryForRequest(data: RepoRunHistoryInput) {
+  const query = new URLSearchParams()
+  if (data.workflow) query.set('workflow', data.workflow)
+  if (data.after) query.set('after', data.after)
+  if (data.limit !== undefined) query.set('limit', data.limit.toString())
+  const suffix = query.size ? `?${query}` : ''
+  return createApiClient().get<RepoRunHistoryPage>(
+    `${repoPath(ApiRouteTemplates.repoRuns, data)}${suffix}`,
+    { auth: 'required' },
+  )
+}
+
+export async function loadRepoRunnersForRequest(data: RepoParams) {
+  return createApiClient().get<RepoRunners>(
+    repoPath(ApiRouteTemplates.repoRunners, data),
+    { auth: 'required' },
   )
 }
 

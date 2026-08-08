@@ -268,9 +268,32 @@ pub(crate) struct RepositoryRunnerResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct RepositoryOperationsResponse {
-    pub(crate) runs: Vec<RepositoryRunSummaryResponse>,
+pub(crate) struct RepositoryRunnersResponse {
     pub(crate) runners: Vec<RepositoryRunnerResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunWorkflowResponse {
+    pub(crate) key: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) manual: bool,
+    pub(crate) push_main: bool,
+    pub(crate) job_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunWorkflowListResponse {
+    pub(crate) workflows: Vec<RepositoryRunWorkflowResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct RepositoryRunHistoryPageResponse {
+    pub(crate) runs: Vec<RepositoryRunSummaryResponse>,
+    pub(crate) next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
