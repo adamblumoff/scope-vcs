@@ -19,7 +19,13 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
         Some(path) => load_runner_config_from(path)?,
         None => load_runner_config()?,
     };
-    let (capabilities, limits) = super::doctor_local(false, config.max_concurrent_jobs)?;
+    let (capabilities, limits) = initialize_after_recovery(
+        {
+            let config = config.clone();
+            move || resume_interrupted_attempts(&config)
+        },
+        || super::doctor_local(false, config.max_concurrent_jobs),
+    )?;
     eprintln!(
         "Scope runner {} is polling {} with {} job slot(s)",
         config.name,
@@ -28,12 +34,8 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
     );
     let slots = config.max_concurrent_jobs;
     let admission = ResourceAdmissionCoordinator::new(slots, limits);
-    run_after_recovery(
+    run_slot_workers(
         slots,
-        {
-            let config = config.clone();
-            move || resume_interrupted_attempts(&config)
-        },
         move |slot| runner_slot(config.clone(), capabilities, admission.clone(), slot),
     )
 }
@@ -123,16 +125,21 @@ where
     Ok(Ok(AdmittedClaim { claim, reservation }))
 }
 
-pub(super) fn run_after_recovery<R, W>(
+pub(super) fn initialize_after_recovery<T>(
+    recover: impl FnOnce() -> anyhow::Result<()>,
+    initialize: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    recover()?;
+    initialize()
+}
+
+pub(super) fn run_slot_workers<W>(
     slots: RunnerMaxConcurrentJobs,
-    recover: R,
     worker: W,
 ) -> anyhow::Result<()>
 where
-    R: FnOnce() -> anyhow::Result<()>,
     W: Fn(u8) -> anyhow::Result<()> + Send + Sync + 'static,
 {
-    recover()?;
     let worker = Arc::new(worker);
     let (result_sender, result_receiver) = mpsc::channel();
     for slot in 1..=slots.get() {
