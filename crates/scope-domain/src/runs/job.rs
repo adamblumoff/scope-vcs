@@ -454,8 +454,7 @@ fn derive_run_state(run: &mut Run, jobs: &mut [RunJob], now_unix: u64) -> Result
             "run jobs do not form one non-empty run",
         ));
     }
-    let has_canceled_job = jobs.iter().any(|job| job.state == RunJobState::Canceled);
-    if has_canceled_job {
+    if jobs.iter().any(|job| job.state == RunJobState::Canceled) {
         run.cancellation_requested = true;
     }
     if run.cancellation_requested {
@@ -473,9 +472,10 @@ fn derive_run_state(run: &mut Run, jobs: &mut [RunJob], now_unix: u64) -> Result
             job.completed_at_unix = Some(transition_time);
         }
     }
+    let cancellation_took_effect = jobs.iter().any(|job| job.state == RunJobState::Canceled);
     let all_terminal = jobs.iter().all(|job| job.state.is_terminal());
     let next = if all_terminal {
-        if run.cancellation_requested {
+        if cancellation_took_effect {
             RunState::Canceled
         } else if jobs.iter().any(|job| job.state == RunJobState::Failed) {
             RunState::Failed
@@ -499,6 +499,9 @@ fn derive_run_state(run: &mut Run, jobs: &mut [RunJob], now_unix: u64) -> Result
             latest.max(job.updated_at_unix)
         });
     run.state = next;
+    if all_terminal && !cancellation_took_effect {
+        run.cancellation_requested = false;
+    }
     run.updated_at_unix = aggregate_time;
     run.completed_at_unix = next.is_terminal().then_some(aggregate_time);
     Ok(())

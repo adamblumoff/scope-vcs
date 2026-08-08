@@ -322,6 +322,33 @@ fn cancellation_uses_each_mutated_entitys_monotonic_time() {
 }
 
 #[test]
+fn unacknowledged_cancellation_does_not_mask_terminal_job_outcomes() {
+    let revision = workflow(&[("checks", &[])]);
+    for (job_state, expected_run_state) in [
+        (RunJobState::Succeeded, RunState::Succeeded),
+        (RunJobState::Failed, RunState::Failed),
+        (RunJobState::Lost, RunState::Lost),
+    ] {
+        let mut run = run(&revision);
+        let mut jobs = create_run_jobs(&run, &revision).unwrap();
+        run.state = RunState::Running;
+        jobs[0].state = RunJobState::Running;
+
+        assert!(request_run_cancellation(&mut run, &mut jobs, 20).unwrap());
+        assert!(run.cancellation_requested);
+        assert_eq!(jobs[0].state, RunJobState::Running);
+
+        jobs[0].state = job_state;
+        jobs[0].updated_at_unix = 30;
+        jobs[0].completed_at_unix = Some(30);
+        reconcile_run(&mut run, &mut jobs, &revision, 30).unwrap();
+
+        assert_eq!(run.state, expected_run_state);
+        assert!(!run.cancellation_requested);
+    }
+}
+
+#[test]
 fn identical_terminal_completion_is_idempotent_after_current_attempt_is_cleared() {
     let revision = workflow(&[("checks", &[])]);
     let run = run(&revision);
