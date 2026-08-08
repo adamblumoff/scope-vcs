@@ -376,9 +376,30 @@ async fn workflow_runtime_migration_resets_the_protocol_authority_to_v6_fenced()
     .await
     .unwrap();
 
-    migrations::Migrator::up(db.as_ref(), Some(14))
+    migrations::Migrator::up(db.as_ref(), Some(1))
         .await
         .unwrap();
+    db.execute_unprepared(
+        "UPDATE scope_runs
+         SET state = 'queued', cancellation_requested = FALSE,
+             updated_at_unix = 3, completed_at_unix = NULL
+         WHERE id = 'run_canary';
+         UPDATE scope_run_jobs
+         SET state = 'queued', updated_at_unix = 3, completed_at_unix = NULL
+         WHERE run_id = 'run_canary';
+         UPDATE scope_runner_protocol_cutover
+         SET state = 'v5-fenced', canary_generation = 7
+         WHERE key = 'current';
+         INSERT INTO scope_runner_protocol_canaries (
+             generation, phase, runner_id, run_id, status,
+             created_at_unix, updated_at_unix
+         ) VALUES (
+             7, 'cold-write', 'runner_canary', 'run_canary', 'pending', 3, 3
+         )",
+    )
+    .await
+    .unwrap();
+    migrations::Migrator::up(db.as_ref(), None).await.unwrap();
 
     let cutover = db
         .query_one(Statement::from_string(

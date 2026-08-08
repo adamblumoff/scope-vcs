@@ -97,7 +97,7 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
         db.execute_unprepared(
-            "LOCK TABLE scope_outbox_jobs, scope_run_attempts, scope_runs,
+            "LOCK TABLE scope_outbox_jobs, scope_run_attempts, scope_run_jobs, scope_runs,
                         scope_workflow_revisions, scope_runners,
                         scope_runner_protocol_cutover, scope_runner_protocol_canaries
              IN ACCESS EXCLUSIVE MODE",
@@ -118,6 +118,18 @@ impl MigrationTrait for Migration {
                  DROP CONSTRAINT scope_runner_protocol_cutover_values;
              ALTER TABLE scope_runners
                  DROP CONSTRAINT scope_runners_v5_cutover;
+             WITH cutover_time AS (
+                 SELECT extract(epoch FROM clock_timestamp())::bigint AS now_unix
+             )
+             UPDATE scope_run_jobs AS job
+             SET state = 'canceled',
+                 updated_at_unix = GREATEST(job.updated_at_unix, cutover_time.now_unix),
+                 completed_at_unix = GREATEST(job.updated_at_unix, cutover_time.now_unix)
+             FROM scope_runner_protocol_canaries AS canary, scope_runs AS run, cutover_time
+             WHERE canary.run_id = run.id
+               AND job.run_id = run.id
+               AND run.state = 'queued'
+               AND job.state IN ('blocked', 'queued');
              WITH cutover_time AS (
                  SELECT extract(epoch FROM clock_timestamp())::bigint AS now_unix
              )
