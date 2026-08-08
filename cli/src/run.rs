@@ -150,8 +150,14 @@ fn watch_run(
                 &target.owner,
                 &target.repo,
                 run_id,
-            )?;
-            print_terminal(&run, &jobs);
+            );
+            match jobs {
+                Ok(jobs) => print_terminal(&run, Some(&jobs)),
+                Err(error) => {
+                    print_terminal(&run, None);
+                    eprintln!("Warning: job summary could not be loaded: {error:#}");
+                }
+            }
             return if run.state == RunState::Succeeded {
                 Ok(())
             } else {
@@ -170,7 +176,7 @@ fn advance_log_cursor(cursor: &mut u64, position: u64) -> bool {
     true
 }
 
-fn print_terminal(run: &RunResponse, jobs: &[crate::api::WatchedRunJob]) {
+fn print_terminal(run: &RunResponse, jobs: Option<&[crate::api::WatchedRunJob]>) {
     println!(
         "\nRun {} · {} · {}",
         state_label(run.state),
@@ -180,9 +186,11 @@ fn print_terminal(run: &RunResponse, jobs: &[crate::api::WatchedRunJob]) {
     if run.logs_truncated {
         eprintln!("Warning: this run exceeded the stored log limit; earlier output was truncated.");
     }
-    println!("Jobs:");
-    for job in jobs {
-        println!("  {} · {}", job.key, job_state_label(job.state));
+    if let Some(jobs) = jobs {
+        println!("Jobs:");
+        for job in jobs {
+            println!("  {} · {}", job.key, job_state_label(job.state));
+        }
     }
 }
 
