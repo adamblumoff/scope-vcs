@@ -18,7 +18,7 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
         Some(path) => load_runner_config_from(path)?,
         None => load_runner_config()?,
     };
-    let (capabilities, limits) = super::doctor_local(false, config.max_concurrent_jobs)?;
+    let (capabilities, _) = super::doctor_local(false, config.max_concurrent_jobs)?;
     eprintln!(
         "Scope runner {} is polling {} with {} job slot(s)",
         config.name,
@@ -32,14 +32,13 @@ pub fn daemon(config_path: Option<&Path>) -> anyhow::Result<()> {
             let config = config.clone();
             move || resume_interrupted_attempts(&config)
         },
-        move |slot| runner_slot(config.clone(), capabilities, limits.clone(), slot),
+        move |slot| runner_slot(config.clone(), capabilities, slot),
     )
 }
 
 fn runner_slot(
     config: RunnerConfig,
     capabilities: DockerCapabilities,
-    limits: ResourceLimits,
     slot: u8,
 ) -> anyhow::Result<()> {
     let client = runner_client()?;
@@ -54,13 +53,27 @@ fn runner_slot(
                 let Some(offer) = response.run else {
                     continue;
                 };
-                match runner_claim(
-                    &client,
-                    &config.api_url,
-                    &config.secret,
-                    &offer.run_id,
-                    &offer.job_key,
+                let (limits, claim) = match claim_with_fresh_limits(
+                    config.max_concurrent_jobs,
+                    ResourceLimits::detect,
+                    || {
+                        runner_claim(
+                            &client,
+                            &config.api_url,
+                            &config.secret,
+                            &offer.run_id,
+                            &offer.job_key,
+                        )
+                    },
                 ) {
+                    Ok(admitted) => admitted,
+                    Err(error) => {
+                        eprintln!("Runner slot {slot} resource admission paused: {error:#}");
+                        thread::sleep(Duration::from_secs(5));
+                        continue;
+                    }
+                };
+                match claim {
                     Ok(claim) => run_claim(&config, capabilities, &limits, claim)?,
                     Err(error) => {
                         eprintln!(
@@ -76,6 +89,19 @@ fn runner_slot(
             }
         }
     }
+}
+
+pub(super) fn claim_with_fresh_limits<T, E, D, C>(
+    max_concurrent_jobs: RunnerMaxConcurrentJobs,
+    detect: D,
+    claim: C,
+) -> anyhow::Result<(ResourceLimits, Result<T, E>)>
+where
+    D: FnOnce(RunnerMaxConcurrentJobs) -> anyhow::Result<ResourceLimits>,
+    C: FnOnce() -> Result<T, E>,
+{
+    let limits = detect(max_concurrent_jobs)?;
+    Ok((limits, claim()))
 }
 
 pub(super) fn run_after_recovery<R, W>(

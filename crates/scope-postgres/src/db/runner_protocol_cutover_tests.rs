@@ -59,7 +59,7 @@ async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 18)
             .await
             .unwrap()
             .is_none()
@@ -127,7 +127,7 @@ async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
         assert_eq!(
             store
                 .runs()
-                .next_dispatchable_job("runner-1")
+                .next_dispatchable_job("runner-1", 20)
                 .await
                 .unwrap()
                 .unwrap()
@@ -177,7 +177,7 @@ async fn fenced_v5_dispatches_only_the_canary_suite_then_opens() {
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 50)
             .await
             .unwrap()
             .unwrap()

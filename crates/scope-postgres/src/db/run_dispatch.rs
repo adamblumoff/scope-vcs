@@ -24,14 +24,21 @@ struct DispatchCandidate {
 async fn runner_has_capacity(
     tx: &DatabaseTransaction,
     runner: &Runner,
+    now_unix: u64,
 ) -> Result<bool, PostgresError> {
+    let now_unix = entities::u64_to_i64(now_unix, "runner capacity time")?;
+    // A lease stops consuming capacity at the same deadline accepted by
+    // RunAttempt::expire. Recovery persists requeue/lost/canary side effects,
+    // but dispatch must not depend on that asynchronous pass running first.
     let active_attempts = tx
         .query_one(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
             "SELECT count(*) AS count
              FROM scope_run_attempts
-             WHERE runner_id = $1 AND state IN ('leased', 'running')",
-            [runner.id.clone().into()],
+             WHERE runner_id = $1
+               AND state IN ('leased', 'running')
+               AND lease_expires_at_unix > $2",
+            [runner.id.clone().into(), now_unix.into()],
         ))
         .await
         .map_err(PostgresError::internal)?
@@ -105,6 +112,7 @@ impl RunStore {
     pub async fn next_dispatchable_job(
         &self,
         runner_id: &str,
+        now_unix: u64,
     ) -> Result<Option<DispatchOffer>, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         // Polling is advisory. Do not lock the runner row here: claims and attempt
@@ -121,7 +129,7 @@ impl RunStore {
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(None);
         }
-        if !runner_has_capacity(&tx, &runner).await? {
+        if !runner_has_capacity(&tx, &runner, now_unix).await? {
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(None);
         }
@@ -183,7 +191,7 @@ impl RunStore {
             .try_into_domain()?;
         let mut job = locked_job(&tx, run_id, job_key).await?;
         let mut runner = runner_by_id(&tx, runner_id).await?;
-        if !runner_has_capacity(&tx, &runner).await? {
+        if !runner_has_capacity(&tx, &runner, now_unix).await? {
             return Err(PostgresError::resource_exhausted(format!(
                 "runner has reached its capacity of {} concurrent job(s)",
                 runner.max_concurrent_jobs.get()

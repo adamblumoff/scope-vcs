@@ -43,7 +43,7 @@ pub(crate) async fn poll(
         if let Some(offer) = state
             .metadata
             .runs()
-            .next_dispatchable_job(&runner.id)
+            .next_dispatchable_job(&runner.id, unix_now()?)
             .await?
         {
             return Ok(Json(RunnerPollResponse {

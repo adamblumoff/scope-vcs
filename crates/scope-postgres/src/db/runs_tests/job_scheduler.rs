@@ -4,7 +4,9 @@ use super::{
 };
 use crate::error::PostgresErrorKind;
 use scope_domain::runs::{
-    run::{AttemptConclusion, AttemptState, PinnedContainerImage, RunState, RunTrigger},
+    run::{
+        AttemptConclusion, AttemptState, PinnedContainerImage, RunJobState, RunState, RunTrigger,
+    },
     workflow::{
         CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId,
         WorkflowRevision, WorkflowStep, WorkflowTriggers,
@@ -42,7 +44,7 @@ async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_j
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 10)
             .await
             .unwrap()
             .is_none()
@@ -66,7 +68,7 @@ async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_j
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 10)
             .await
             .unwrap()
             .unwrap()
@@ -77,7 +79,7 @@ async fn dispatch_query_ignores_unmaterializable_rows_and_selects_named_or_any_j
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-2")
+            .next_dispatchable_job("runner-2", 10)
             .await
             .unwrap()
             .unwrap()
@@ -175,7 +177,7 @@ async fn runner_capacity_is_authoritative_across_concurrent_job_claims() {
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 20)
             .await
             .unwrap()
             .is_none()
@@ -301,6 +303,97 @@ async fn run_detail_preserves_attempt_history_bounded_per_job() {
             51
         );
     }
+}
+
+#[tokio::test]
+async fn expired_attempts_release_capacity_at_the_lease_deadline() {
+    let store = postgres_store();
+    register_runner(&store, "runner-1", "linux-box").await;
+    let revision = capacity_revision();
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-expired-capacity",
+            "manual:expired-capacity",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+
+    store
+        .runs()
+        .claim_job(
+            "run-expired-capacity",
+            "build",
+            "runner-1",
+            "attempt-expired",
+            &"a".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        store
+            .runs()
+            .next_dispatchable_job("runner-1", 79)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let live_capacity = store
+        .runs()
+        .claim_job(
+            "run-expired-capacity",
+            "lint",
+            "runner-1",
+            "attempt-live-blocked",
+            &"b".repeat(64),
+            79,
+            139,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(live_capacity.kind, PostgresErrorKind::ResourceExhausted);
+
+    let offer = store
+        .runs()
+        .next_dispatchable_job("runner-1", 80)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(offer.job.key.as_str(), "lint");
+    let next = store
+        .runs()
+        .claim_job(
+            "run-expired-capacity",
+            "lint",
+            "runner-1",
+            "attempt-next",
+            &"c".repeat(64),
+            80,
+            140,
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.attempt.id, "attempt-next");
+
+    assert_eq!(
+        store.runs().expired_attempt_ids(80, 10).await.unwrap(),
+        vec!["attempt-expired"]
+    );
+    let recovered = store
+        .runs()
+        .expire_attempt("attempt-expired", 80)
+        .await
+        .unwrap();
+    assert_eq!(recovered.attempt.state, AttemptState::Lost);
+    assert_eq!(recovered.job.state, RunJobState::Queued);
 }
 
 #[tokio::test]

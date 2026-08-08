@@ -316,7 +316,7 @@ async fn names_are_repository_scoped_revisions_are_idempotent_and_revocation_sto
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-2")
+            .next_dispatchable_job("runner-2", 83)
             .await
             .unwrap()
             .unwrap()
@@ -379,7 +379,7 @@ async fn removing_repository_member_revokes_that_members_runner_grants_atomicall
     assert!(
         store
             .runs()
-            .next_dispatchable_job(&member_runner.id)
+            .next_dispatchable_job(&member_runner.id, 20)
             .await
             .unwrap()
             .is_none()
@@ -612,7 +612,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-1")
+            .next_dispatchable_job("runner-1", 10)
             .await
             .unwrap()
             .is_none()
@@ -620,7 +620,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert_eq!(
         store
             .runs()
-            .next_dispatchable_job("runner-2")
+            .next_dispatchable_job("runner-2", 10)
             .await
             .unwrap()
             .unwrap()
@@ -637,7 +637,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
     assert!(
         store
             .runs()
-            .next_dispatchable_job("runner-2")
+            .next_dispatchable_job("runner-2", 10)
             .await
             .unwrap()
             .is_none()
