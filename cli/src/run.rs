@@ -120,7 +120,7 @@ fn watch_run(
     let mut line_buffers = JobLineBuffers::default();
     loop {
         let mut terminal = None;
-        stream_run_events(
+        let stream_result = stream_run_events(
             client,
             api_url,
             session_token,
@@ -140,7 +140,8 @@ fn watch_run(
                 }
                 Ok(terminal.is_none())
             },
-        )?;
+        );
+        flush_partial_lines_on_stream_error(stream_result, &mut line_buffers)?;
         if let Some(run) = terminal {
             print_job_lines(line_buffers.finish());
             let jobs = run_jobs(
@@ -224,6 +225,17 @@ fn print_job_lines(lines: Vec<String>) {
     for line in lines {
         print!("{line}");
     }
+}
+
+fn flush_partial_lines_on_stream_error(
+    result: anyhow::Result<()>,
+    line_buffers: &mut JobLineBuffers,
+) -> anyhow::Result<()> {
+    if let Err(error) = result {
+        print_job_lines(line_buffers.finish());
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn scope_target(
@@ -383,6 +395,21 @@ mod tests {
             ["[backend] compiling complete\n"],
         );
         assert_eq!(buffers.finish(), ["[backend] next\n"]);
+    }
+
+    #[test]
+    fn run_watch_flushes_partial_lines_before_returning_a_stream_error() {
+        let mut buffers = JobLineBuffers::default();
+        assert!(buffers.push("backend", "partial diagnostic").is_empty());
+
+        let error = flush_partial_lines_on_stream_error(
+            Err(anyhow::anyhow!("stream failed")),
+            &mut buffers,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "stream failed");
+        assert!(buffers.finish().is_empty());
     }
 
     #[test]
