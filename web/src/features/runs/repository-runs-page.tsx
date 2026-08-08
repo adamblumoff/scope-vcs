@@ -12,7 +12,7 @@ import {
   TerminalSquare,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { formatRunUnixTime } from './run-formatting'
+import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
 
 const RUNS_REFRESH_INTERVAL_MS = 2_000
 
@@ -141,7 +141,7 @@ function RecentRuns({
                     {run.workflow_name}
                   </span>
                   <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">
-                    {run.git_oid.slice(0, 12)} · {run.desired_runner ?? 'any runner'}
+                    {run.git_oid.slice(0, 12)} · {formatRunRunnerSelection(run.runner_selection)}
                   </span>
                 </span>
                 <span className="shrink-0 text-right text-xs text-muted-foreground">

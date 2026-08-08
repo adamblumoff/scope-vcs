@@ -260,9 +260,11 @@ export type MarkRequestDiscussionReadRequest = { through_position: number, };
 
 export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestTimelineChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } };
 
+export type RunRunnerSelection = { "kind": "any" } | { "kind": "named", name: string, } | { "kind": "mixed" };
+
 export type RepositoryRunState = "queued" | "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
-export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, desired_runner: string | null, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
+export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, runner_selection: RunRunnerSelection, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
 
 export type RepositoryRunAttemptState = "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 

@@ -2,7 +2,10 @@ use super::*;
 use crate::{
     content_ref::ContentRef,
     runs::{
-        job::{create_run_jobs, reconcile_run, request_run_cancellation, retry_run},
+        job::{
+            RunRunnerSummary, create_run_jobs, reconcile_run, request_run_cancellation, retry_run,
+            summarize_run_runners,
+        },
         runner::{RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant, RunnerName},
         workflow::{
             CompiledWorkflow, ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowPath,
@@ -113,6 +116,60 @@ fn roots_queue_and_dependents_promote_in_deterministic_topological_order() {
     reconcile_run(&mut run, &mut jobs, &revision, 21).unwrap();
     assert_eq!(jobs[2].state, RunJobState::Queued);
     assert_eq!(run.state, RunState::Queued);
+}
+
+#[test]
+fn completed_upstream_keeps_run_running_while_dependent_waits() {
+    let revision = workflow(&[("build", &[]), ("package", &["build"])]);
+    let mut run = run(&revision);
+    let mut jobs = create_run_jobs(&run, &revision).unwrap();
+    run.state = RunState::Running;
+    run.updated_at_unix = 20;
+    jobs[0].state = RunJobState::Succeeded;
+    jobs[0].updated_at_unix = 20;
+    jobs[0].completed_at_unix = Some(20);
+
+    reconcile_run(&mut run, &mut jobs, &revision, 20).unwrap();
+
+    assert_eq!(jobs[1].state, RunJobState::Queued);
+    assert_eq!(run.state, RunState::Running);
+    assert_eq!(run.completed_at_unix, None);
+}
+
+#[test]
+fn effective_runner_summary_distinguishes_any_named_and_mixed_jobs() {
+    let revision = workflow(&[("build", &[]), ("lint", &[])]);
+    let run = run(&revision);
+    let mut jobs = create_run_jobs(&run, &revision).unwrap();
+    assert_eq!(
+        summarize_run_runners(&run, &jobs).unwrap(),
+        RunRunnerSummary::Any
+    );
+
+    let named = RunnerSelector::named("linux-one").unwrap();
+    jobs[0].desired_runner = named.clone();
+    jobs[1].desired_runner = named;
+    assert_eq!(
+        summarize_run_runners(&run, &jobs).unwrap(),
+        RunRunnerSummary::Named("linux-one".to_string())
+    );
+
+    jobs[1].desired_runner = RunnerSelector::named("linux-two").unwrap();
+    assert_eq!(
+        summarize_run_runners(&run, &jobs).unwrap(),
+        RunRunnerSummary::Mixed
+    );
+}
+
+#[test]
+fn effective_runner_summary_rejects_missing_or_foreign_jobs() {
+    let revision = workflow(&[("build", &[])]);
+    let run = run(&revision);
+    assert!(summarize_run_runners(&run, &[]).is_err());
+
+    let mut jobs = create_run_jobs(&run, &revision).unwrap();
+    jobs[0].run_id = "run-2".to_string();
+    assert!(summarize_run_runners(&run, &jobs).is_err());
 }
 
 #[test]

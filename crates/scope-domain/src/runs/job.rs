@@ -21,6 +21,35 @@ pub struct RunJob {
     pub completed_at_unix: Option<u64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunRunnerSummary {
+    Any,
+    Named(String),
+    Mixed,
+}
+
+pub fn summarize_run_runners(run: &Run, jobs: &[RunJob]) -> Result<RunRunnerSummary, DomainError> {
+    let first = jobs.first().ok_or_else(|| {
+        DomainError::invariant_violation("run runner summary requires persisted jobs")
+    })?;
+    if jobs.iter().any(|job| job.run_id != run.id) {
+        return Err(DomainError::invariant_violation(
+            "run runner summary contains a job from another run",
+        ));
+    }
+    if jobs
+        .iter()
+        .skip(1)
+        .any(|job| job.desired_runner != first.desired_runner)
+    {
+        return Ok(RunRunnerSummary::Mixed);
+    }
+    Ok(match &first.desired_runner {
+        RunnerSelector::Any => RunRunnerSummary::Any,
+        RunnerSelector::Named(name) => RunRunnerSummary::Named(name.clone()),
+    })
+}
+
 impl RunJob {
     pub fn new(run: &Run, definition: &WorkflowJob) -> Result<Self, DomainError> {
         let desired_runner = run
@@ -455,7 +484,9 @@ fn derive_run_state(run: &mut Run, jobs: &mut [RunJob], now_unix: u64) -> Result
         } else {
             RunState::Succeeded
         }
-    } else if jobs.iter().any(|job| job.state == RunJobState::Running) {
+    } else if run.state == RunState::Running
+        || jobs.iter().any(|job| job.state == RunJobState::Running)
+    {
         RunState::Running
     } else if jobs.iter().any(|job| job.state == RunJobState::Leased) {
         RunState::Leased

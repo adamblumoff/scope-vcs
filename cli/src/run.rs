@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
-use scope_api_contract::{CreateManualRunQuery, RunResponse};
+use scope_api_contract::{CreateManualRunQuery, RunResponse, RunRunnerSelection};
 use scope_domain::runs::run::RunState;
 use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
 
@@ -46,7 +46,7 @@ pub fn start(
     println!(
         "Queued {} on {}",
         run.workflow_name,
-        run.desired_runner.as_deref().unwrap_or("any runner")
+        runner_selection_label(&run.runner_selection)
     );
     println!("Run ID: {}", run.id);
     if no_watch {
@@ -163,7 +163,7 @@ fn print_terminal(run: &RunResponse) {
         "\nRun {} · {} · {}",
         state_label(run.state),
         short_oid(&run.git_oid),
-        run.desired_runner.as_deref().unwrap_or("any runner")
+        runner_selection_label(&run.runner_selection)
     );
     if run.logs_truncated {
         eprintln!("Warning: this run exceeded the stored log limit; earlier output was truncated.");
@@ -234,6 +234,14 @@ fn state_label(state: RunState) -> &'static str {
     }
 }
 
+fn runner_selection_label(selection: &RunRunnerSelection) -> &str {
+    match selection {
+        RunRunnerSelection::Any => "any runner",
+        RunRunnerSelection::Named { name } => name,
+        RunRunnerSelection::Mixed => "multiple runners",
+    }
+}
+
 fn short_oid(oid: &str) -> &str {
     oid.get(..7).unwrap_or(oid)
 }
@@ -272,6 +280,16 @@ mod tests {
     #[test]
     fn run_labels_and_oids_are_stable() {
         assert_eq!(state_label(RunState::Canceled), "canceled");
+        assert_eq!(
+            runner_selection_label(&RunRunnerSelection::Named {
+                name: "linux-one".to_string()
+            }),
+            "linux-one"
+        );
+        assert_eq!(
+            runner_selection_label(&RunRunnerSelection::Mixed),
+            "multiple runners"
+        );
         assert_eq!(short_oid("1234567890"), "1234567");
         assert_eq!(short_oid("short"), "short");
     }

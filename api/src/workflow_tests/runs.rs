@@ -12,7 +12,7 @@ const WORKFLOW: &str = r#"
 name: Test
 on:
   manual: true
-runs-on: any
+runs-on: linux-box
 caches: []
 container:
   image: alpine:3.20
@@ -234,7 +234,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     .unwrap();
     let bundle = fs::read(bundle_path).unwrap();
     let create_uri = format!(
-        "{}?workflow=test&git_oid={git_oid}&request_id=11111111111111111111111111111111&runner=linux-box",
+        "{}?workflow=test&git_oid={git_oid}&request_id=11111111111111111111111111111111",
         scope_api_contract::routes::repo_runs(TEST_REPO_OWNER, TEST_REPO_NAME)
     );
     let created = app
@@ -250,12 +250,10 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        created.status(),
-        StatusCode::OK,
-        "{:?}",
-        response_json(created).await
-    );
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    assert_eq!(created["runner_selection"]["kind"], "named");
+    assert_eq!(created["runner_selection"]["name"], "linux-box");
 
     let polled = app
         .clone()
@@ -437,6 +435,11 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     let operations = response_json(operations).await;
     assert_eq!(operations["runs"][0]["id"], run_id);
     assert_eq!(operations["runs"][0]["state"], "succeeded");
+    assert_eq!(operations["runs"][0]["runner_selection"]["kind"], "named");
+    assert_eq!(
+        operations["runs"][0]["runner_selection"]["name"],
+        "linux-box"
+    );
     assert_eq!(operations["runs"][0]["can_retry"], true);
     assert_eq!(operations["runners"][0]["name"], "linux-box");
     assert_eq!(operations["runners"][0]["state"], "online");
@@ -470,6 +473,8 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     assert_eq!(detail.status(), StatusCode::OK);
     let detail = response_json(detail).await;
     assert_eq!(detail["run"]["id"], run_id);
+    assert_eq!(detail["run"]["runner_selection"]["kind"], "named");
+    assert_eq!(detail["run"]["runner_selection"]["name"], "linux-box");
     assert!(detail["run"].get("attempt_number").is_none());
     assert_eq!(detail["attempts"].as_array().unwrap().len(), 1);
     assert_eq!(detail["attempts"][0]["id"], attempt_id);

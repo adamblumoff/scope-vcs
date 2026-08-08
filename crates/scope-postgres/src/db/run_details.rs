@@ -3,7 +3,7 @@ use crate::error::PostgresError;
 use scope_domain::runs::{
     job::RunJob,
     run::{MAX_RUN_ATTEMPTS, Run, RunAttempt, RunAttemptStep},
-    workflow::WorkflowRevision,
+    workflow::{MAX_WORKFLOW_JOBS, WorkflowRevision},
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::HashMap;
@@ -171,11 +171,16 @@ async fn run_attempt_details_with<C>(
 where
     C: ConnectionTrait,
 {
+    let max_attempts = u64::from(MAX_RUN_ATTEMPTS)
+        .checked_mul(u64::try_from(MAX_WORKFLOW_JOBS).map_err(|_| {
+            PostgresError::internal_message("workflow job limit does not fit the database query")
+        })?)
+        .ok_or_else(|| PostgresError::internal_message("run attempt query limit overflow"))?;
     let attempts = entities::run_attempt::Entity::find()
         .filter(entities::run_attempt::Column::RunId.eq(run_id))
         .order_by_desc(entities::run_attempt::Column::CreatedAtUnix)
         .order_by_desc(entities::run_attempt::Column::Number)
-        .limit(u64::from(MAX_RUN_ATTEMPTS))
+        .limit(max_attempts)
         .all(conn)
         .await
         .map_err(PostgresError::internal)?;

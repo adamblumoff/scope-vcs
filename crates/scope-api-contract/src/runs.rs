@@ -101,13 +101,23 @@ pub struct RunResponse {
     pub repository_id: String,
     pub workflow_name: String,
     pub git_oid: String,
-    pub desired_runner: Option<String>,
+    pub runner_selection: RunRunnerSelection,
     pub state: RunState,
     pub cancellation_requested: bool,
     pub logs_truncated: bool,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub completed_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(tag = "kind", rename_all = "kebab-case"))]
+pub enum RunRunnerSelection {
+    Any,
+    Named { name: String },
+    Mixed,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

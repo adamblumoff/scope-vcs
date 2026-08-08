@@ -5,7 +5,7 @@ use scope_domain::runs::{
     run::Run,
     runner::{Runner, RunnerGrant},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::StoredRunLog;
@@ -64,25 +64,7 @@ impl RunStore {
             );
         }
         let run_ids = models.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
-        let mut jobs = if run_ids.is_empty() {
-            BTreeMap::new()
-        } else {
-            entities::run_job::Entity::find()
-                .filter(entities::run_job::Column::RunId.is_in(run_ids))
-                .order_by_asc(entities::run_job::Column::RunId)
-                .order_by_asc(entities::run_job::Column::JobKey)
-                .all(&tx)
-                .await
-                .map_err(PostgresError::internal)?
-                .into_iter()
-                .map(entities::run_job::Model::try_into_domain)
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .fold(BTreeMap::<String, Vec<RunJob>>::new(), |mut jobs, job| {
-                    jobs.entry(job.run_id.clone()).or_default().push(job);
-                    jobs
-                })
-        };
+        let mut jobs = run_jobs_by_ids(&tx, &run_ids).await?;
         let runs = models
             .into_iter()
             .map(entities::run::Model::try_into_domain)
@@ -99,6 +81,20 @@ impl RunStore {
             .collect();
         tx.commit().await.map_err(PostgresError::internal)?;
         runs
+    }
+
+    pub async fn run_jobs(&self, run_id: &str) -> Result<Vec<RunJob>, PostgresError> {
+        let mut jobs = run_jobs_by_ids(self.db.as_ref(), &[run_id.to_string()]).await?;
+        jobs.remove(run_id)
+            .filter(|jobs| !jobs.is_empty())
+            .ok_or_else(|| PostgresError::internal_message("run is missing its persisted jobs"))
+    }
+
+    pub async fn run_jobs_by_ids(
+        &self,
+        run_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<RunJob>>, PostgresError> {
+        run_jobs_by_ids(self.db.as_ref(), run_ids).await
     }
 
     pub async fn repository_runners(
@@ -212,4 +208,31 @@ impl RunStore {
             .map_err(PostgresError::internal)
             .map(|ids| ids.into_iter().collect())
     }
+}
+
+async fn run_jobs_by_ids<C>(
+    conn: &C,
+    run_ids: &[String],
+) -> Result<BTreeMap<String, Vec<RunJob>>, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    if run_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    Ok(entities::run_job::Entity::find()
+        .filter(entities::run_job::Column::RunId.is_in(run_ids.to_vec()))
+        .order_by_asc(entities::run_job::Column::RunId)
+        .order_by_asc(entities::run_job::Column::JobKey)
+        .all(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(entities::run_job::Model::try_into_domain)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .fold(BTreeMap::new(), |mut jobs, job| {
+            jobs.entry(job.run_id.clone()).or_default().push(job);
+            jobs
+        }))
 }

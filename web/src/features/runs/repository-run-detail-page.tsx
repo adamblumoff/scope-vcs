@@ -29,7 +29,7 @@ import {
   useRepositoryRunDetailController,
 } from './repository-run-detail-controller'
 import { RunStatusDot } from './repository-runs-page'
-import { formatRunUnixTime } from './run-formatting'
+import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
 
 export function RepositoryRunDetailPage({
   cancelRun,
@@ -189,7 +189,7 @@ function RunHeader({
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <code>{run.git_oid.slice(0, 12)}</code>
             <span aria-hidden="true">·</span>
-            <span>{run.desired_runner ?? 'any runner'}</span>
+            <span>{formatRunRunnerSelection(run.runner_selection)}</span>
             <span aria-hidden="true">·</span>
             <span>Updated {formatRunUnixTime(run.updated_at_unix)}</span>
           </span>

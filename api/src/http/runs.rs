@@ -4,9 +4,9 @@ use crate::{
     http::responses::{
         RepositoryOperationsResponse, RepositoryRunAttemptResponse, RepositoryRunDetailResponse,
         RepositoryRunLogResponse, RepositoryRunStepLogPageResponse, RepositoryRunStepResponse,
-        RepositoryRunSummaryResponse, RepositoryRunnerResponse, RepositoryRunnerState,
-        git_oid_request,
+        RepositoryRunnerResponse, RepositoryRunnerState, git_oid_request,
     },
+    http::run_response::{repository_run_summary, run_response},
     persistence::unix_now,
     repo_access::find_repo,
     repo_cleanup::best_effort_cleanup_rollback_source_blobs,
@@ -28,7 +28,6 @@ use scope_api_contract::{
 };
 use scope_domain::{
     runs::{
-        job::{RunJob, can_retry_run},
         run::{Run, RunSource, RunTrigger},
         workflow::{RunnerSelector, WorkflowPath},
     },
@@ -123,7 +122,8 @@ pub(crate) async fn create_manual_run(
             return Err(error.into());
         }
     };
-    Ok(Json(run_response(&run, false)))
+    let jobs = state.metadata.runs().run_jobs(&run.id).await?;
+    Ok(Json(run_response(&run, &jobs, false)?))
 }
 
 pub(crate) async fn get_run(
@@ -137,7 +137,8 @@ pub(crate) async fn get_run(
         .runs()
         .run_has_truncated_logs(&run_id)
         .await?;
-    Ok(Json(run_response(&run, logs_truncated)))
+    let jobs = state.metadata.runs().run_jobs(&run.id).await?;
+    Ok(Json(run_response(&run, &jobs, logs_truncated)?))
 }
 
 pub(crate) async fn get_repository_operations(
@@ -154,11 +155,12 @@ pub(crate) async fn get_repository_operations(
     )?;
     let now_unix = unix_now()?;
 
+    let runs = runs
+        .iter()
+        .map(|entry| repository_run_summary(&entry.run, &entry.jobs))
+        .collect::<Result<Vec<_>, ApiError>>()?;
     Ok(Json(RepositoryOperationsResponse {
-        runs: runs
-            .iter()
-            .map(|entry| repository_run_summary(&entry.run, &entry.jobs))
-            .collect(),
+        runs,
         runners: runners
             .into_iter()
             .map(|entry| {
@@ -247,7 +249,7 @@ pub(crate) async fn get_repository_run_detail(
         .collect::<Result<Vec<_>, ApiError>>()?;
 
     Ok(Json(RepositoryRunDetailResponse {
-        run: repository_run_summary(&detail.run, &detail.jobs),
+        run: repository_run_summary(&detail.run, &detail.jobs)?,
         attempts,
     }))
 }
@@ -323,8 +325,9 @@ pub(crate) async fn get_push_trigger_evaluation(
         .map(|check| check.run_id.clone())
         .collect::<Vec<_>>();
     let runs_store = state.metadata.runs();
-    let (runs, truncated_run_ids) = tokio::try_join!(
+    let (runs, mut jobs, truncated_run_ids) = tokio::try_join!(
         runs_store.runs_by_ids(&run_ids),
+        runs_store.run_jobs_by_ids(&run_ids),
         runs_store.run_ids_with_truncated_logs(&run_ids),
     )?;
     let mut runs = runs
@@ -343,10 +346,18 @@ pub(crate) async fn get_push_trigger_evaluation(
             let run = runs
                 .remove(&check.run_id)
                 .ok_or_else(|| ApiError::internal_message("push trigger check run is missing"))?;
+            let run_jobs = jobs
+                .remove(&run.id)
+                .filter(|jobs| !jobs.is_empty())
+                .ok_or_else(|| {
+                    ApiError::internal_message(
+                        "push trigger check run is missing its persisted jobs",
+                    )
+                })?;
             Ok(PushTriggerCheckResponse {
                 workflow_path: check.workflow_path,
                 workflow_name: check.workflow_name,
-                run: run_response(&run, truncated_run_ids.contains(&run.id)),
+                run: run_response(&run, &run_jobs, truncated_run_ids.contains(&run.id))?,
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
@@ -375,7 +386,8 @@ pub(crate) async fn cancel_run(
         .runs()
         .run_has_truncated_logs(&run_id)
         .await?;
-    Ok(Json(run_response(&run, logs_truncated)))
+    let jobs = state.metadata.runs().run_jobs(&run.id).await?;
+    Ok(Json(run_response(&run, &jobs, logs_truncated)?))
 }
 
 pub(crate) async fn retry_run(
@@ -394,7 +406,8 @@ pub(crate) async fn retry_run(
         .runs()
         .run_has_truncated_logs(&run_id)
         .await?;
-    Ok(Json(run_response(&run, logs_truncated)))
+    let jobs = state.metadata.runs().run_jobs(&run.id).await?;
+    Ok(Json(run_response(&run, &jobs, logs_truncated)?))
 }
 
 pub(crate) async fn run_events(
@@ -553,10 +566,21 @@ async fn stream_run_events(
                     return;
                 }
             };
-            let event = match Event::default()
-                .event("status")
-                .json_data(run_response(&run, logs_truncated))
-            {
+            let jobs = match context.state.metadata.runs().run_jobs(&run.id).await {
+                Ok(jobs) => jobs,
+                Err(error) => {
+                    send_stream_error(&sender, error.into()).await;
+                    return;
+                }
+            };
+            let response = match run_response(&run, &jobs, logs_truncated) {
+                Ok(response) => response,
+                Err(error) => {
+                    send_stream_error(&sender, error).await;
+                    return;
+                }
+            };
+            let event = match Event::default().event("status").json_data(response) {
                 Ok(event) => event,
                 Err(error) => {
                     send_stream_error(&sender, ApiError::internal(error)).await;
@@ -626,50 +650,6 @@ async fn require_repo_member(
         return Err(ApiError::forbidden("repo membership required"));
     }
     Ok(repo)
-}
-
-pub(crate) fn run_response(run: &Run, logs_truncated: bool) -> RunResponse {
-    RunResponse {
-        id: run.id.clone(),
-        repository_id: run.workflow.repository_id().to_string(),
-        workflow_name: run.workflow.path().name().to_string(),
-        git_oid: run.source.git_oid().to_string(),
-        desired_runner: run
-            .runner_override
-            .as_ref()
-            .and_then(|runner| match runner {
-                RunnerSelector::Any => None,
-                RunnerSelector::Named(name) => Some(name.clone()),
-            }),
-        state: run.state,
-        cancellation_requested: run.cancellation_requested,
-        logs_truncated,
-        created_at_unix: run.created_at_unix,
-        updated_at_unix: run.updated_at_unix,
-        completed_at_unix: run.completed_at_unix,
-    }
-}
-
-fn repository_run_summary(run: &Run, jobs: &[RunJob]) -> RepositoryRunSummaryResponse {
-    RepositoryRunSummaryResponse {
-        id: run.id.clone(),
-        workflow_name: run.workflow.path().name().to_string(),
-        git_oid: run.source.git_oid().to_string(),
-        desired_runner: run
-            .runner_override
-            .as_ref()
-            .and_then(|runner| match runner {
-                RunnerSelector::Any => None,
-                RunnerSelector::Named(name) => Some(name.clone()),
-            }),
-        state: run.state.into(),
-        cancellation_requested: run.cancellation_requested,
-        created_at_unix: run.created_at_unix,
-        updated_at_unix: run.updated_at_unix,
-        completed_at_unix: run.completed_at_unix,
-        can_cancel: run.can_request_cancellation(),
-        can_retry: can_retry_run(run, jobs),
-    }
 }
 
 fn validate_request_id(request_id: &str) -> Result<(), ApiError> {
@@ -886,6 +866,7 @@ impl Drop for RunTempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scope_api_contract::RunRunnerSelection;
     use scope_domain::{
         content_ref::ContentRef,
         runs::{
@@ -912,14 +893,47 @@ mod tests {
     fn run_summary_allows_retry_when_every_job_has_capacity() {
         let run = terminal_run();
         let available = terminal_job(1);
-        assert!(repository_run_summary(&run, &[available]).can_retry);
+        assert!(
+            repository_run_summary(&run, &[available])
+                .unwrap()
+                .can_retry
+        );
     }
 
     #[test]
     fn run_summary_hides_retry_when_any_job_is_exhausted() {
         let run = terminal_run();
         let exhausted = terminal_job(MAX_RUN_ATTEMPTS);
-        assert!(!repository_run_summary(&run, &[exhausted]).can_retry);
+        assert!(
+            !repository_run_summary(&run, &[exhausted])
+                .unwrap()
+                .can_retry
+        );
+    }
+
+    #[test]
+    fn run_responses_report_effective_named_and_mixed_runner_selection() {
+        let run = terminal_run();
+        let mut linux_one = terminal_job(1);
+        linux_one.desired_runner = RunnerSelector::named("linux-one").unwrap();
+        assert_eq!(
+            run_response(&run, &[linux_one.clone()], false)
+                .unwrap()
+                .runner_selection,
+            RunRunnerSelection::Named {
+                name: "linux-one".to_string()
+            }
+        );
+
+        let mut linux_two = terminal_job(1);
+        linux_two.key = WorkflowJobId::parse("lint").unwrap();
+        linux_two.desired_runner = RunnerSelector::named("linux-two").unwrap();
+        assert_eq!(
+            repository_run_summary(&run, &[linux_one, linux_two])
+                .unwrap()
+                .runner_selection,
+            RunRunnerSelection::Mixed
+        );
     }
 
     fn terminal_run() -> Run {

@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 mod job_scheduler;
+pub(crate) use job_scheduler::parallel_revision;
 
 #[tokio::test]
 async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempts() {

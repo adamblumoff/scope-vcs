@@ -9,7 +9,7 @@ use scope_api_contract::{
     DeviceLoginStatus, FileChangeKind, FirstPushTokenResponse, GitOid, GitPushTokenResponse,
     RepoInitResponse, RepoLifecycleState, RepoRequestPermissionsResponse, RepoSummaryResponse,
     RepositoryAccessResponse, RequestActorSummaryResponse, RequestRevisionCommitResponse,
-    SessionIdentity, UserResponse, Visibility,
+    RunRunnerSelection, SessionIdentity, UserResponse, Visibility,
 };
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
@@ -70,7 +70,7 @@ pub(crate) struct RepositoryRunSummaryResponse {
     pub(crate) id: String,
     pub(crate) workflow_name: String,
     pub(crate) git_oid: String,
-    pub(crate) desired_runner: Option<String>,
+    pub(crate) runner_selection: RunRunnerSelection,
     pub(crate) state: RepositoryRunState,
     pub(crate) cancellation_requested: bool,
     pub(crate) created_at_unix: u64,

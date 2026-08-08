@@ -1,8 +1,12 @@
-use super::runs_tests::{enqueue, postgres_store, register_runner, revision, run};
+use super::runs_tests::{
+    enqueue, parallel_revision, postgres_store, register_runner, revision, run, run_for_revision,
+};
 use crate::error::PostgresErrorKind;
 use scope_domain::runs::run::{
-    AttemptConclusion, PinnedContainerImage, RunJobState, RunState, StepState,
+    AttemptConclusion, PinnedContainerImage, RunJobState, RunState, RunTrigger, StepConclusion,
+    StepState,
 };
+use scope_domain::runs::workflow::RunnerSelector;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Barrier, task::JoinSet, time::timeout};
@@ -53,6 +57,97 @@ async fn concurrent_claims_create_exactly_one_active_attempt() {
     assert_eq!(
         claims[0].job.current_attempt_id.as_deref(),
         Some(claims[0].attempt.id.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn completed_sibling_cannot_regress_running_run_while_another_job_is_leased() {
+    let store = Arc::new(postgres_store());
+    register_runner(&store, "runner-1", "linux-one").await;
+    register_runner(&store, "runner-2", "linux-two").await;
+    let revision = parallel_revision();
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-state-order",
+            "manual:state-order",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+    let build = store
+        .runs()
+        .claim_job(
+            "run-state-order",
+            "build",
+            "runner-1",
+            "attempt-build",
+            &"a".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .claim_job(
+            "run-state-order",
+            "lint",
+            "runner-2",
+            "attempt-lint",
+            &"b".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .pin_attempt_container_image(
+            &build.attempt.id,
+            "runner-1",
+            &"a".repeat(64),
+            PinnedContainerImage::parse(format!("alpine@sha256:{}", "c".repeat(64))).unwrap(),
+            21,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .start_attempt_step(&build.attempt.id, "runner-1", &"a".repeat(64), 0, 22)
+        .await
+        .unwrap();
+    let completed = store
+        .runs()
+        .complete_attempt_step(
+            &build.attempt.id,
+            "runner-1",
+            &"a".repeat(64),
+            0,
+            StepConclusion::Succeeded,
+            23,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(completed.run.state, RunState::Running);
+    assert_eq!(completed.job.state, RunJobState::Succeeded);
+    let detail = store
+        .runs()
+        .run_detail("run-state-order")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.run.state, RunState::Running);
+    assert!(
+        detail
+            .jobs
+            .iter()
+            .any(|job| job.state == RunJobState::Leased)
     );
 }
 

@@ -138,6 +138,74 @@ async fn independent_jobs_claim_concurrently_with_job_scoped_attempt_ordinals() 
 }
 
 #[tokio::test]
+async fn run_detail_preserves_attempt_history_bounded_per_job() {
+    let store = postgres_store();
+    register_runner(&store, "runner-history", "linux-box").await;
+    let revision = parallel_revision();
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-history",
+            "manual:history",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+    store
+        .db
+        .execute_unprepared(
+            "INSERT INTO scope_run_attempts (
+                 id, run_id, job_key, number, runner_id, runner_name, token_hash,
+                 token_expires_at_unix, state, lease_expires_at_unix,
+                 last_heartbeat_at_unix, created_at_unix, started_at_unix,
+                 completed_at_unix, terminal_reason, log_bytes, logs_truncated
+             )
+             SELECT 'attempt-' || job_key || '-' || number,
+                    'run-history', job_key, number, 'runner-history', 'linux-box',
+                    lpad(to_hex(row_number() OVER ()), 64, '0'),
+                    1000, 'failed', 1000, number, number, NULL, number,
+                    jsonb_build_object(
+                        'kind', 'runner-setup-failed',
+                        'exit_code', 1,
+                        'message', 'setup failed'
+                    ),
+                    0, FALSE
+             FROM unnest(ARRAY['build', 'lint']) AS job_key
+             CROSS JOIN generate_series(1, 51) AS number;
+             INSERT INTO scope_run_attempt_steps (
+                 attempt_id, step_index, state, started_at_unix,
+                 completed_at_unix, exit_code
+             )
+             SELECT id, 0, 'skipped', NULL, completed_at_unix, NULL
+             FROM scope_run_attempts
+             WHERE run_id = 'run-history'",
+        )
+        .await
+        .unwrap();
+
+    let details = store
+        .runs()
+        .run_attempt_details("run-history")
+        .await
+        .unwrap();
+
+    assert_eq!(details.len(), 102);
+    for job_key in ["build", "lint"] {
+        assert_eq!(
+            details
+                .iter()
+                .filter(|detail| detail.attempt.job_key.as_str() == job_key)
+                .count(),
+            51
+        );
+    }
+}
+
+#[tokio::test]
 async fn independent_claim_with_older_timestamp_does_not_regress_the_aggregate() {
     let store = postgres_store();
     register_runner(&store, "runner-1", "linux-one").await;
@@ -328,7 +396,7 @@ async fn retry_persists_the_jobs_pinned_container_image() {
     assert_eq!(detail.jobs[0].pinned_container_image, Some(image));
 }
 
-fn parallel_revision() -> WorkflowRevision {
+pub(crate) fn parallel_revision() -> WorkflowRevision {
     let job = |id: &str| {
         WorkflowJob::new(
             WorkflowJobId::parse(id).unwrap(),
