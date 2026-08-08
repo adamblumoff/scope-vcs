@@ -5,13 +5,15 @@ use super::{
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::{Component, Path};
 use thiserror::Error;
 
 pub const MAX_WORKFLOW_CACHE_NAME_BYTES: usize = 64;
-pub const CACHE_IDENTITY_FORMAT: &str = "scope-cache-v2";
+pub const MAX_WORKFLOW_CACHE_PATH_BYTES: usize = 1024;
+pub const CACHE_IDENTITY_FORMAT: &str = "scope-cache-v3";
 
-const CACHE_MOUNT_ROOT: &str = "/scope/cache";
 const RESERVED_CACHE_NAME_PREFIX: &str = "scope-";
+const RESERVED_CACHE_PATHS: &[&str] = &["/scope-steps", "/scope-step.log", "/scope-active-step"];
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum CacheError {
@@ -21,14 +23,20 @@ pub enum CacheError {
     InvalidName,
     #[error("workflow cache names beginning with {RESERVED_CACHE_NAME_PREFIX:?} are reserved")]
     ReservedName,
+    #[error(
+        "workflow cache path must be a normalized absolute path between 1 and {MAX_WORKFLOW_CACHE_PATH_BYTES} bytes"
+    )]
+    InvalidPath,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
-pub struct WorkflowCache(String);
+pub struct WorkflowCache {
+    name: String,
+    path: String,
+}
 
 impl WorkflowCache {
-    pub fn parse(name: impl Into<String>) -> Result<Self, CacheError> {
+    pub fn new(name: impl Into<String>, path: impl Into<String>) -> Result<Self, CacheError> {
         let name = name.into();
         if name.is_empty()
             || name.len() > MAX_WORKFLOW_CACHE_NAME_BYTES
@@ -44,15 +52,36 @@ impl WorkflowCache {
         if name.starts_with(RESERVED_CACHE_NAME_PREFIX) {
             return Err(CacheError::ReservedName);
         }
-        Ok(Self(name))
+        let path = path.into();
+        let parsed = Path::new(&path);
+        if path.is_empty()
+            || path.len() > MAX_WORKFLOW_CACHE_PATH_BYTES
+            || path == "/"
+            || !parsed.is_absolute()
+            || path
+                .split('/')
+                .skip(1)
+                .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+            || parsed
+                .components()
+                .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+            || parsed == Path::new("/workspace")
+            || RESERVED_CACHE_PATHS.iter().any(|reserved| {
+                let reserved = Path::new(reserved);
+                parsed.starts_with(reserved) || reserved.starts_with(parsed)
+            })
+        {
+            return Err(CacheError::InvalidPath);
+        }
+        Ok(Self { name, path })
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.name
     }
 
-    pub fn mount_path(&self) -> String {
-        format!("{CACHE_MOUNT_ROOT}/{}", self.0)
+    pub fn mount_path(&self) -> &str {
+        &self.path
     }
 }
 
@@ -179,6 +208,7 @@ impl CacheIdentity {
             .chain(self.namespace.digest_components())
             .chain([
                 self.cache.as_str(),
+                self.cache.mount_path(),
                 self.image_digest.as_str(),
                 self.platform.as_str(),
             ]);
@@ -213,11 +243,15 @@ mod tests {
         )
     }
 
+    fn cache(name: &str) -> WorkflowCache {
+        WorkflowCache::new(name, format!("/scope/cache/{name}")).unwrap()
+    }
+
     #[test]
-    fn workflow_cache_names_have_one_canonical_mount() {
-        let cache = WorkflowCache::parse("cargo-target").unwrap();
+    fn workflow_cache_names_and_mount_paths_are_validated() {
+        let cache = WorkflowCache::new("cargo-target", "/workspace/target").unwrap();
         assert_eq!(cache.as_str(), "cargo-target");
-        assert_eq!(cache.mount_path(), "/scope/cache/cargo-target");
+        assert_eq!(cache.mount_path(), "/workspace/target");
 
         for invalid in [
             "",
@@ -228,17 +262,23 @@ mod tests {
             "cargo--target",
             "scope-internal",
         ] {
-            assert!(WorkflowCache::parse(invalid).is_err(), "{invalid}");
+            assert!(
+                WorkflowCache::new(invalid, "/scope/cache/valid").is_err(),
+                "{invalid}"
+            );
+        }
+        for invalid in ["", "relative", "/", "/cache/../escape", "/cache/./same"] {
+            assert!(WorkflowCache::new("cargo", invalid).is_err(), "{invalid}");
         }
     }
 
     #[test]
     fn identity_is_partitioned_by_every_semantic_component() {
-        let cache = WorkflowCache::parse("cargo").unwrap();
+        let workflow_cache = cache("cargo");
         let base = CacheIdentity::new(
             "repo-1",
             workflow_namespace("/.scope/runs/test.yml", "checks"),
-            cache.clone(),
+            workflow_cache.clone(),
             &image('a'),
             CachePlatform::LinuxAmd64,
         )
@@ -246,7 +286,7 @@ mod tests {
         let other_repo = CacheIdentity::new(
             "repo-2",
             workflow_namespace("/.scope/runs/test.yml", "checks"),
-            cache.clone(),
+            workflow_cache.clone(),
             &image('a'),
             CachePlatform::LinuxAmd64,
         )
@@ -254,7 +294,7 @@ mod tests {
         let other_cache = CacheIdentity::new(
             "repo-1",
             workflow_namespace("/.scope/runs/test.yml", "checks"),
-            WorkflowCache::parse("cargo-target").unwrap(),
+            cache("cargo-target"),
             &image('a'),
             CachePlatform::LinuxAmd64,
         )
@@ -262,7 +302,7 @@ mod tests {
         let other_image = CacheIdentity::new(
             "repo-1",
             workflow_namespace("/.scope/runs/test.yml", "checks"),
-            cache,
+            workflow_cache.clone(),
             &image('b'),
             CachePlatform::LinuxAmd64,
         )
@@ -270,7 +310,7 @@ mod tests {
         let other_workflow = CacheIdentity::new(
             "repo-1",
             workflow_namespace("/.scope/runs/release.yml", "checks"),
-            WorkflowCache::parse("cargo").unwrap(),
+            cache("cargo"),
             &image('a'),
             CachePlatform::LinuxAmd64,
         )
@@ -278,7 +318,7 @@ mod tests {
         let other_job = CacheIdentity::new(
             "repo-1",
             workflow_namespace("/.scope/runs/test.yml", "release"),
-            WorkflowCache::parse("cargo").unwrap(),
+            cache("cargo"),
             &image('a'),
             CachePlatform::LinuxAmd64,
         )
@@ -286,7 +326,15 @@ mod tests {
         let canary = CacheIdentity::new(
             "repo-1",
             CacheNamespace::RunnerProtocolCanary,
-            WorkflowCache::parse("cargo").unwrap(),
+            cache("cargo"),
+            &image('a'),
+            CachePlatform::LinuxAmd64,
+        )
+        .unwrap();
+        let other_path = CacheIdentity::new(
+            "repo-1",
+            workflow_namespace("/.scope/runs/test.yml", "checks"),
+            WorkflowCache::new("cargo", "/different/cache").unwrap(),
             &image('a'),
             CachePlatform::LinuxAmd64,
         )
@@ -300,11 +348,12 @@ mod tests {
         assert_ne!(base.digest(), other_workflow.digest());
         assert_ne!(base.digest(), other_job.digest());
         assert_ne!(base.digest(), canary.digest());
+        assert_ne!(base.digest(), other_path.digest());
         assert!(
             CacheIdentity::new(
                 " ",
                 workflow_namespace("/.scope/runs/test.yml", "checks"),
-                WorkflowCache::parse("cargo").unwrap(),
+                cache("cargo"),
                 &image('a'),
                 CachePlatform::LinuxAmd64,
             )

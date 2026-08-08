@@ -153,6 +153,7 @@ impl PreparedCaches {
                 repository_id: identity.repository_id().to_string(),
                 namespace: identity.namespace().clone(),
                 cache_name: identity.cache().as_str().to_string(),
+                cache_path: identity.cache().mount_path().to_string(),
                 image: identity.image_digest().to_string(),
                 container_image: pinned_image.as_str().to_string(),
                 platform: identity.platform().as_str().to_string(),
@@ -554,6 +555,8 @@ fn create_volume(record: &CacheRecord, backing: &Path, runner_id: &str) -> anyho
         "--label",
         &format!("scope.cache-name={}", record.cache_name),
         "--label",
+        &format!("scope.cache-path={}", record.cache_path),
+        "--label",
         &format!("scope.image={}", record.image),
         "--label",
         &format!("scope.platform={}", record.platform),
@@ -653,6 +656,8 @@ fn volume_matches(
             == Some(record.namespace.kind())
         && volume.labels.get("scope.cache-name").map(String::as_str)
             == Some(record.cache_name.as_str())
+        && volume.labels.get("scope.cache-path").map(String::as_str)
+            == Some(record.cache_path.as_str())
         && volume.labels.get("scope.image").map(String::as_str) == Some(record.image.as_str())
         && volume.labels.get("scope.platform").map(String::as_str) == Some(record.platform.as_str())
 }

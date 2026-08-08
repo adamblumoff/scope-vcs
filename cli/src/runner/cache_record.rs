@@ -21,6 +21,7 @@ pub(super) struct CacheRecord {
     pub(super) repository_id: String,
     pub(super) namespace: CacheNamespace,
     pub(super) cache_name: String,
+    pub(super) cache_path: String,
     pub(super) image: String,
     pub(super) container_image: String,
     pub(super) platform: String,
@@ -88,6 +89,7 @@ pub(super) fn metadata_allows_warm(existing: &CacheRecord, desired: &CacheRecord
         && existing.repository_id == desired.repository_id
         && existing.namespace == desired.namespace
         && existing.cache_name == desired.cache_name
+        && existing.cache_path == desired.cache_path
         && existing.image == desired.image
         && existing.container_image == desired.container_image
         && existing.platform == desired.platform
@@ -96,7 +98,8 @@ pub(super) fn metadata_allows_warm(existing: &CacheRecord, desired: &CacheRecord
 
 fn valid_record(record: &CacheRecord, expected_digest: &str) -> bool {
     let identity_matches = || {
-        let cache = WorkflowCache::parse(record.cache_name.clone()).ok()?;
+        let cache =
+            WorkflowCache::new(record.cache_name.clone(), record.cache_path.clone()).ok()?;
         let image = PinnedContainerImage::parse(record.container_image.clone()).ok()?;
         let identity = CacheIdentity::new(
             record.repository_id.clone(),

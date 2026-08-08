@@ -798,7 +798,13 @@ fn canary_revision(
                     RunnerSelector::named(runner_name).unwrap(),
                     ContainerSpec::new(image).unwrap(),
                     RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS,
-                    vec![WorkflowCache::parse(RUNNER_PROTOCOL_CANARY_CACHE_NAME).unwrap()],
+                    vec![
+                        WorkflowCache::new(
+                            RUNNER_PROTOCOL_CANARY_CACHE_NAME,
+                            scope_domain::runs::cutover::RUNNER_PROTOCOL_CANARY_CACHE_PATH,
+                        )
+                        .unwrap(),
+                    ],
                     vec![WorkflowStep::new(phase.step_name(), phase.step_command()).unwrap()],
                 )
                 .unwrap(),

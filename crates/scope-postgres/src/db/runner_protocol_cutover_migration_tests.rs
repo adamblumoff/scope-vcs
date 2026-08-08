@@ -345,7 +345,7 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
             .await
             .last()
             .map(String::as_str),
-        Some("m0015_runner_capacity")
+        Some("m0016_workflow_runtime_contract")
     );
 
     let old_producer_insert = db
@@ -371,7 +371,7 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
          ) VALUES (
              'outbox_push_jobs_new_after', 'push_main_trigger_evaluation:repo_push_jobs:3',
              'push_main_trigger_evaluation', 'repo_push_jobs', 3,
-             '{\"workflow_schema_version\": 3}'::jsonb,
+             '{\"workflow_schema_version\": 4}'::jsonb,
              'ready', 0, 3, NULL, NULL, NULL, 3, 3, NULL
          )",
     )

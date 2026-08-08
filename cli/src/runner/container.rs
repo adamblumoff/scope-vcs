@@ -208,6 +208,9 @@ pub(super) fn configure_job_container_creation(command: &mut Command, spec: JobC
             ),
         ])
         .args(["--entrypoint", "sh"]);
+    for (key, value) in spec.claim.job.definition.environment() {
+        command.arg("--env").arg(format!("{key}={value}"));
+    }
     for cache in spec.caches {
         command.args([
             "--mount",

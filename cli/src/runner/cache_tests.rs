@@ -25,7 +25,7 @@ fn record_for(runner_id: &str, state: CacheState) -> CacheRecord {
     let identity_digest = CacheIdentity::new(
         "repo-1",
         namespace.clone(),
-        WorkflowCache::parse("build").unwrap(),
+        WorkflowCache::new("build", "/scope/cache/build").unwrap(),
         &image,
         CachePlatform::LinuxAmd64,
     )
@@ -41,6 +41,7 @@ fn record_for(runner_id: &str, state: CacheState) -> CacheRecord {
         repository_id: "repo-1".to_string(),
         namespace,
         cache_name: "build".to_string(),
+        cache_path: "/scope/cache/build".to_string(),
         image: "a".repeat(64),
         container_image,
         platform: "linux/amd64".to_string(),
@@ -57,11 +58,12 @@ fn volume(record: &CacheRecord, backing: &Path) -> VolumeInspection {
         volume_type: Some("none".to_string()),
         options: Some("bind".to_string()),
         labels: [
-            ("scope.cache-format", "5"),
+            ("scope.cache-format", "6"),
             ("scope.cache-key", record.identity_digest.as_str()),
             ("scope.repository-id", record.repository_id.as_str()),
             ("scope.cache-namespace", record.namespace.kind()),
             ("scope.cache-name", record.cache_name.as_str()),
+            ("scope.cache-path", record.cache_path.as_str()),
             ("scope.image", record.image.as_str()),
             ("scope.platform", record.platform.as_str()),
             ("scope.runner-id", record.runner_id.as_str()),
@@ -84,7 +86,7 @@ fn physical_locations_are_stable_bounded_and_runner_namespaced() {
     assert_ne!(first.volume_name, colocated.volume_name);
     assert_ne!(first.record_path, colocated.record_path);
     assert_ne!(first.backing_path, colocated.backing_path);
-    assert!(first.volume_name.starts_with("scope-cache-v5-"));
+    assert!(first.volume_name.starts_with("scope-cache-v6-"));
     assert!(first.volume_name.len() < 64);
     assert_eq!(first.identity_digest, digest);
     assert_eq!(colocated.identity_digest, digest);
@@ -274,7 +276,7 @@ fn interrupted_store_initialization_is_repaired_on_restart() {
     let parent = TestDir::new("runner-cache-interrupted-initialize");
     let root = parent.path().join("scope/runner");
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("store.json"), br#"{"format":5}"#).unwrap();
+    fs::write(root.join("store.json"), br#"{"format":6}"#).unwrap();
 
     ensure_usable_root(&root, false).unwrap();
 

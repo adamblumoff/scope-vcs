@@ -10,6 +10,7 @@ use scope_domain::runs::workflow::{
     ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
 };
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::Path,
     sync::{Arc, Mutex, mpsc},
@@ -238,7 +239,7 @@ fn docker_limits_are_always_applied() {
 }
 
 #[test]
-fn job_container_receives_only_copied_source_and_step_programs() {
+fn job_container_receives_only_declared_workflow_environment() {
     use scope_api_contract::RunJobResponse;
 
     let config = RunnerConfig {
@@ -268,9 +269,15 @@ fn job_container_receives_only_copied_source_and_step_programs() {
                 RunnerSelector::Any,
                 ContainerSpec::new("alpine:3.20").unwrap(),
                 60,
-                vec![WorkflowCache::parse("cargo").unwrap()],
+                vec![WorkflowCache::new("cargo", "/scope/cache/cargo").unwrap()],
                 vec![WorkflowStep::new("Test", "true").unwrap()],
             )
+            .and_then(|job| {
+                job.with_environment(BTreeMap::from([
+                    ("CARGO_HOME".to_string(), "/scope/cache/cargo".to_string()),
+                    ("TEST_MODE".to_string(), "strict".to_string()),
+                ]))
+            })
             .unwrap(),
         },
     };
@@ -308,7 +315,6 @@ fn job_container_receives_only_copied_source_and_step_programs() {
 
     assert_eq!(arguments[0], "create");
     for forbidden in [
-        "--env",
         "-e",
         "-v",
         "/var/run/docker.sock",
@@ -328,6 +334,16 @@ fn job_container_receives_only_copied_source_and_step_programs() {
     }
     assert!(!joined.contains(&config.secret));
     assert!(!joined.contains(&claim.attempt_token));
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["--env", "CARGO_HOME=/scope/cache/cargo"])
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["--env", "TEST_MODE=strict"])
+    );
     assert!(joined.contains("scope.runner-id=runner-1"));
     assert!(joined.contains("scope.attempt-id=attempt-1"));
     assert!(joined.contains("type=bind,source=/runner/private/steps,target=/scope-steps,readonly"));

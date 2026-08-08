@@ -8,6 +8,7 @@ use super::{
 };
 
 pub const RUNNER_PROTOCOL_CANARY_CACHE_NAME: &str = "runner-protocol";
+pub const RUNNER_PROTOCOL_CANARY_CACHE_PATH: &str = "/scope/cache/runner-protocol";
 pub const RUNNER_PROTOCOL_CANARY_SENTINEL_PATH: &str =
     "/scope/cache/runner-protocol/v5-canary-sentinel";
 pub const RUNNER_PROTOCOL_CANARY_SENTINEL_VALUE: &str = "scope-runner-protocol-v5";
@@ -200,7 +201,10 @@ pub fn validate_runner_protocol_canary_workflow(
     if job.timeout_seconds() != RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS {
         return Err(invalid("timeout does not match the canary timeout"));
     }
-    if job.caches().len() != 1 || job.caches()[0].as_str() != RUNNER_PROTOCOL_CANARY_CACHE_NAME {
+    if job.caches().len() != 1
+        || job.caches()[0].as_str() != RUNNER_PROTOCOL_CANARY_CACHE_NAME
+        || job.caches()[0].mount_path() != RUNNER_PROTOCOL_CANARY_CACHE_PATH
+    {
         return Err(invalid("the runner-protocol cache must be the only cache"));
     }
     if job.steps().len() != 1
@@ -392,6 +396,14 @@ mod tests {
         format!("registry.example/canary@sha256:{}", "a".repeat(64))
     }
 
+    fn canary_cache() -> WorkflowCache {
+        WorkflowCache::new(
+            RUNNER_PROTOCOL_CANARY_CACHE_NAME,
+            RUNNER_PROTOCOL_CANARY_CACHE_PATH,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn cutover_only_moves_forward_one_state_at_a_time() {
         let mut cutover = RunnerProtocolCutover::new();
@@ -487,7 +499,6 @@ mod tests {
 
     #[test]
     fn canonical_canary_workflows_are_exact_for_each_phase() {
-        let cache = || WorkflowCache::parse(RUNNER_PROTOCOL_CANARY_CACHE_NAME).unwrap();
         for phase in [
             RunnerProtocolCanaryPhase::ColdWrite,
             RunnerProtocolCanaryPhase::WarmRead,
@@ -495,7 +506,7 @@ mod tests {
         ] {
             let workflow = canary_workflow(
                 phase,
-                vec![cache()],
+                vec![canary_cache()],
                 vec![WorkflowStep::new(phase.step_name(), phase.step_command()).unwrap()],
                 &pinned_image(),
                 WorkflowTriggers::new(true, false).unwrap(),
@@ -524,7 +535,7 @@ mod tests {
                 WorkflowTriggers::new(true, false).unwrap(),
             ),
             build(
-                vec![WorkflowCache::parse(RUNNER_PROTOCOL_CANARY_CACHE_NAME).unwrap()],
+                vec![canary_cache()],
                 vec![
                     canonical_step(),
                     WorkflowStep::new("Arbitrary", "true").unwrap(),
@@ -533,13 +544,13 @@ mod tests {
                 WorkflowTriggers::new(true, false).unwrap(),
             ),
             build(
-                vec![WorkflowCache::parse(RUNNER_PROTOCOL_CANARY_CACHE_NAME).unwrap()],
+                vec![canary_cache()],
                 vec![canonical_step()],
                 "registry.example/canary:latest",
                 WorkflowTriggers::new(true, false).unwrap(),
             ),
             build(
-                vec![WorkflowCache::parse(RUNNER_PROTOCOL_CANARY_CACHE_NAME).unwrap()],
+                vec![canary_cache()],
                 vec![canonical_step()],
                 &pinned_image(),
                 WorkflowTriggers::new(true, true).unwrap(),
@@ -549,7 +560,7 @@ mod tests {
         }
 
         let wrong_step = build(
-            vec![WorkflowCache::parse(RUNNER_PROTOCOL_CANARY_CACHE_NAME).unwrap()],
+            vec![canary_cache()],
             vec![WorkflowStep::new(phase.step_name(), "true").unwrap()],
             &pinned_image(),
             WorkflowTriggers::new(true, false).unwrap(),
