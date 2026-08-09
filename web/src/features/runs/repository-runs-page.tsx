@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
-import { mergeRunHistory, refreshRunHistoryPage } from './run-history-model'
+import { mergeRunHistory, refreshRunHistoryPages } from './run-history-model'
 
 const RUNS_REFRESH_INTERVAL_MS = 2_000
 
@@ -43,7 +43,6 @@ export function RepositoryRunsPage({
   const [loadingMore, setLoadingMore] = useState(false)
   const mountedRef = useRef(false)
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
-  const loadedMoreRef = useRef(false)
   const { owner, repo } = params
   const input = useMemo(
     () => ({ owner, repo, workflow }),
@@ -53,7 +52,11 @@ export function RepositoryRunsPage({
 
   const refresh = useCallback(() => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current
-    const request = loadHistory(input)
+    if (!history || loadingMore) return
+    const request = refreshRunHistoryPages(
+      history,
+      (after) => loadHistory({ ...input, after }),
+    )
       .then((next) => {
         if (!mountedRef.current) return
         if (!next) {
@@ -61,11 +64,7 @@ export function RepositoryRunsPage({
           setRefreshError(null)
           return
         }
-        setHistory((current) => refreshRunHistoryPage(
-          current,
-          next,
-          loadedMoreRef.current,
-        ))
+        setHistory(next)
         setRefreshError(null)
       })
       .catch((error: unknown) => {
@@ -78,10 +77,10 @@ export function RepositoryRunsPage({
       })
     refreshInFlightRef.current = request
     return request
-  }, [input, loadHistory])
+  }, [history, input, loadHistory, loadingMore])
 
   const loadMore = useCallback(() => {
-    if (!history?.next_cursor || loadingMore) return
+    if (!history?.next_cursor || loadingMore || refreshInFlightRef.current) return
     setLoadingMore(true)
     return loadHistory({
         ...input,
@@ -94,7 +93,6 @@ export function RepositoryRunsPage({
           setRefreshError(null)
           return
         }
-        loadedMoreRef.current = true
         setHistory((current) => current
           ? {
               next_cursor: next.next_cursor,
