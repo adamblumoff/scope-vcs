@@ -79,10 +79,7 @@ pub fn create_runner_protocol_canary(
 ) -> anyhow::Result<RunnerProtocolCutoverResponse> {
     parse_json(
         client
-            .post(format!(
-                "{api_url}{}",
-                routes::ADMIN_RUNNER_CUTOVER_CANARY
-            ))
+            .post(format!("{api_url}{}", routes::ADMIN_RUNNER_CUTOVER_CANARY))
             .bearer_auth(operator_token)
             .json(request)
             .send()
@@ -99,10 +96,7 @@ pub fn advance_runner_protocol_cutover(
 ) -> anyhow::Result<RunnerProtocolCutoverResponse> {
     parse_json(
         client
-            .post(format!(
-                "{api_url}{}",
-                routes::ADMIN_RUNNER_CUTOVER_ADVANCE
-            ))
+            .post(format!("{api_url}{}", routes::ADMIN_RUNNER_CUTOVER_ADVANCE))
             .bearer_auth(operator_token)
             .json(request)
             .send()

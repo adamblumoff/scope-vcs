@@ -58,10 +58,7 @@ fn command_success_until(
         {
             let _ = child.kill();
             let _ = child.wait();
-            bail!(
-                "{context}: timed out after {} seconds",
-                timeout.as_secs()
-            );
+            bail!("{context}: timed out after {} seconds", timeout.as_secs());
         }
         thread::sleep(Duration::from_millis(100));
     }

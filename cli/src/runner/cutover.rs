@@ -1,8 +1,7 @@
 use super::{load_runner_config, management, runner_client};
 use crate::{
     api::{
-        advance_runner_protocol_cutover, create_runner_protocol_canary,
-        get_runner_protocol_cutover,
+        advance_runner_protocol_cutover, create_runner_protocol_canary, get_runner_protocol_cutover,
     },
     run,
 };
@@ -29,8 +28,7 @@ pub fn recover(
     let client = runner_client()?;
 
     loop {
-        let snapshot =
-            get_runner_protocol_cutover(&client, &config.api_url, &operator_token)?;
+        let snapshot = get_runner_protocol_cutover(&client, &config.api_url, &operator_token)?;
         if snapshot.state == RunnerProtocolCutoverState::V6Open {
             println!("✓ Runner protocol V6 is open");
             return Ok(());

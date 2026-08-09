@@ -43,13 +43,13 @@ use container::{
     configure_source_copy, container_started_at_unix, doctor_local, job_container_name,
     probe_storage_quota_support, require_root_image, stop_container,
 };
+pub use cutover::recover as recover_cutover;
 use image::resolve_container_image;
 #[cfg(test)]
 use management::parse_repository;
 pub use management::{
     add_repository, doctor, install, list_caches, prune_caches, remove_repository, status,
 };
-pub use cutover::recover as recover_cutover;
 pub use worker_pool::daemon;
 #[cfg(test)]
 use worker_pool::{initialize_after_recovery, run_slot_workers};
