@@ -232,6 +232,7 @@ pub(crate) struct RepositoryRunAttemptResponse {
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryRunJobResponse {
     pub(crate) key: String,
+    pub(crate) needs: Vec<String>,
     pub(crate) desired_runner: Option<String>,
     pub(crate) state: RepositoryRunJobState,
     pub(crate) created_at_unix: u64,

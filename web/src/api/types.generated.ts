@@ -268,7 +268,7 @@ export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, 
 
 export type RepositoryRunJobState = "blocked" | "queued" | "leased" | "running" | "succeeded" | "failed" | "skipped" | "canceled" | "lost";
 
-export type RepositoryRunJobResponse = { key: string, desired_runner: string | null, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
+export type RepositoryRunJobResponse = { key: string, needs: Array<string>, desired_runner: string | null, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
 
 export type RepositoryRunJobDetailResponse = { job: RepositoryRunJobResponse, attempts: Array<RepositoryRunAttemptResponse>, };
 
