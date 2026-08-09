@@ -13,6 +13,7 @@ use std::{
 };
 
 const CONTAINER_STEP_LOG: &str = "/scope-step.log";
+const CONTAINER_STEP_LOG_TRUNCATED: &str = "/scope-step-truncated";
 const RAW_LOG_CHUNK_BYTES: usize = LOG_CHUNK_BYTES / 4;
 
 #[derive(Default)]
@@ -111,6 +112,74 @@ fn read_step_log_range(path: &Path, start: u64, length: usize) -> anyhow::Result
     Ok(bytes)
 }
 
+fn read_container_step_log_range(
+    container_name: &str,
+    snapshot: &Path,
+    start: u64,
+    length: usize,
+) -> anyhow::Result<Vec<u8>> {
+    let output = Command::new("docker")
+        .args([
+            "exec",
+            container_name,
+            "sh",
+            "-c",
+            &format!(
+                "tail -c +{} {CONTAINER_STEP_LOG} | head -c {length}",
+                start.saturating_add(1)
+            ),
+        ])
+        .output()
+        .context("read incremental workflow step log")?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+    if !stderr.contains("not running") && !stderr.contains("is not running") {
+        bail!(
+            "read incremental workflow step log: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let Some(log_len) = copy_step_log(container_name, snapshot)? else {
+        return Ok(Vec::new());
+    };
+    if start > log_len {
+        bail!("workflow step log became shorter during execution");
+    }
+    read_step_log_range(snapshot, start, length)
+}
+
+pub(super) fn step_log_was_truncated(
+    container_name: &str,
+    work_dir: &Path,
+) -> anyhow::Result<bool> {
+    let marker = work_dir.join("step-log-truncated");
+    let _ = fs::remove_file(&marker);
+    let output = Command::new("docker")
+        .args([
+            "cp",
+            &format!("{container_name}:{CONTAINER_STEP_LOG_TRUNCATED}"),
+        ])
+        .arg(&marker)
+        .output()
+        .context("inspect workflow step log truncation marker")?;
+    if output.status.success() {
+        return Ok(true);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+    if stderr.contains("could not find")
+        || stderr.contains("no such file")
+        || stderr.contains("no such container")
+    {
+        return Ok(false);
+    }
+    bail!(
+        "inspect workflow step log truncation marker: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn drain_step_logs(
     client: &Client,
@@ -141,21 +210,37 @@ pub(super) fn drain_step_logs(
     if *logs_exhausted && !step_finished {
         return Ok(());
     }
-    let Some(log_len) = copy_step_log(container_name, snapshot)? else {
-        return Ok(());
+    let final_log_len = if step_finished {
+        copy_step_log(container_name, snapshot)?
+    } else {
+        None
     };
-    if *step_log_bytes > log_len {
+    if step_finished && final_log_len.is_none() {
+        return Ok(());
+    }
+    if final_log_len.is_some_and(|log_len| *step_log_bytes > log_len) {
         bail!("workflow step log became shorter during execution");
     }
     let mut cursor = *step_log_bytes;
-    while cursor < log_len {
-        let remaining = log_len.saturating_sub(cursor);
-        let requested = remaining.min(RAW_LOG_CHUNK_BYTES as u64) as usize;
-        let bytes = read_step_log_range(snapshot, cursor, requested)?;
+    loop {
+        let requested = final_log_len.map_or(RAW_LOG_CHUNK_BYTES, |log_len| {
+            log_len
+                .saturating_sub(cursor)
+                .min(RAW_LOG_CHUNK_BYTES as u64) as usize
+        });
+        if requested == 0 {
+            break;
+        }
+        let bytes = if step_finished {
+            read_step_log_range(snapshot, cursor, requested)?
+        } else {
+            read_container_step_log_range(container_name, snapshot, cursor, requested)?
+        };
         if bytes.is_empty() {
             break;
         }
-        let final_chunk = step_finished && cursor.saturating_add(bytes.len() as u64) == log_len;
+        let final_chunk = final_log_len
+            .is_some_and(|log_len| cursor.saturating_add(bytes.len() as u64) == log_len);
         let (text, consumed) = stable_log_prefix(&bytes, final_chunk);
         if consumed == 0 {
             break;
@@ -201,6 +286,20 @@ pub(super) fn drain_step_logs(
             return Ok(());
         }
         cursor = *step_log_bytes;
+        if bytes.len() < RAW_LOG_CHUNK_BYTES {
+            break;
+        }
+    }
+    if step_finished && step_log_was_truncated(container_name, work_dir)? {
+        *logs_exhausted = true;
+        update_recovery_log_progress(
+            work_dir,
+            claim,
+            step_index,
+            *next_log_sequence,
+            *step_log_bytes,
+            true,
+        )?;
     }
     Ok(())
 }

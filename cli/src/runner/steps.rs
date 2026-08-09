@@ -5,9 +5,9 @@ use super::{
     recovery::{
         PendingLogChunk, mark_recovery_abandon_pending, mark_recovery_conclusion_pending,
         mark_recovery_step_completed, mark_recovery_step_conclusion_pending,
-        mark_recovery_step_started,
+        mark_recovery_step_started, update_recovery_log_progress,
     },
-    step_logs::{copy_step_log, drain_step_logs},
+    step_logs::{copy_step_log, drain_step_logs, step_log_was_truncated},
     supervisor::{AttemptStopReason, AttemptSupervisor},
 };
 use crate::api::{attempt_recovery_status, complete_attempt_step, start_attempt_step};
@@ -146,7 +146,7 @@ pub(super) fn run_steps(
         if reason != AttemptStopReason::None && !recovering_step {
             stage_stop_reason_or_preserve(work, claim, reason, &mut container)?;
             stop_attempt_container(work, &mut container)?;
-            return conclude_stopped_attempt(config, claim, work, reason)
+            return conclude_stopped_attempt(config, claim, work, reason, logs_exhausted)
                 .map(|()| ExecutionOutcome::Interrupted);
         }
         let nonce = match active_step_nonce.take() {
@@ -282,7 +282,7 @@ pub(super) fn run_steps(
                 reason => {
                     stage_stop_reason_or_preserve(work, claim, reason, &mut container)?;
                     stop_attempt_container(work, &mut container)?;
-                    return conclude_stopped_attempt(config, claim, work, reason)
+                    return conclude_stopped_attempt(config, claim, work, reason, logs_exhausted)
                         .map(|()| ExecutionOutcome::Interrupted);
                 }
             }
@@ -305,7 +305,7 @@ pub(super) fn run_steps(
                 true,
             );
             preserve_stopped_log_recovery(work, &mut container, drain_result)?;
-            return conclude_stopped_attempt(config, claim, work, reason)
+            return conclude_stopped_attempt(config, claim, work, reason, logs_exhausted)
                 .map(|()| ExecutionOutcome::Interrupted);
         }
         if let Err(error) = select_container_step(&programs, "run", step_index, &nonce) {
@@ -359,7 +359,7 @@ pub(super) fn run_steps(
                         true,
                     );
                     preserve_stopped_log_recovery(work, &mut container, drain_result)?;
-                    return conclude_stopped_attempt(config, claim, work, reason)
+                    return conclude_stopped_attempt(config, claim, work, reason, logs_exhausted)
                         .map(|()| ExecutionOutcome::Interrupted);
                 }
             }
@@ -397,7 +397,7 @@ pub(super) fn run_steps(
                         true,
                     );
                     preserve_stopped_log_recovery(work, &mut container, final_drain_result)?;
-                    return conclude_stopped_attempt(config, claim, work, reason)
+                    return conclude_stopped_attempt(config, claim, work, reason, logs_exhausted)
                         .map(|()| ExecutionOutcome::Interrupted);
                 }
                 return preserve_after_runner_failure(
@@ -437,8 +437,23 @@ pub(super) fn run_steps(
             }
             thread::sleep(Duration::from_millis(500));
         };
-        let final_drain_result = if supervisor.storage_pressure_triggered() {
-            Ok(())
+        let storage_pressure = supervisor.storage_pressure_triggered();
+        let final_drain_result = if storage_pressure {
+            match step_log_was_truncated(&container.name, &work.path) {
+                Ok(true) => {
+                    logs_exhausted = true;
+                    update_recovery_log_progress(
+                        &work.path,
+                        claim,
+                        step_index,
+                        next_log_sequence,
+                        step_log_bytes,
+                        true,
+                    )
+                }
+                Ok(false) => Ok(()),
+                Err(error) => Err(error),
+            }
         } else {
             drain_step_logs(
                 client,
@@ -463,7 +478,6 @@ pub(super) fn run_steps(
             );
             return Err(ConclusionReportPending.into());
         }
-        let storage_pressure = supervisor.storage_pressure_triggered();
         if storage_pressure {
             eprintln!(
                 "Attempt {} step {} was stopped after runner storage crossed its emergency floor",
@@ -476,9 +490,13 @@ pub(super) fn run_steps(
         } else {
             StepConclusionRequest::Failed { exit_code }
         };
-        if let Err(error) =
-            mark_recovery_step_conclusion_pending(&work.path, claim, step_index, conclusion.clone())
-        {
+        if let Err(error) = mark_recovery_step_conclusion_pending(
+            &work.path,
+            claim,
+            step_index,
+            conclusion.clone(),
+            logs_exhausted,
+        ) {
             work.preserve();
             container.preserve();
             eprintln!(
@@ -487,7 +505,14 @@ pub(super) fn run_steps(
             return Err(ConclusionReportPending.into());
         }
         if let Err(error) = report_step_conclusion_until_reconciled(
-            client, config, claim, work, step_index, conclusion, supervisor,
+            client,
+            config,
+            claim,
+            work,
+            step_index,
+            conclusion,
+            logs_exhausted,
+            supervisor,
         ) {
             container.preserve();
             return Err(error);
@@ -522,9 +547,11 @@ pub(super) fn report_step_conclusion(
     claim: &ClaimRunResponse,
     step_index: u32,
     conclusion: StepConclusionRequest,
+    logs_truncated: bool,
 ) -> anyhow::Result<()> {
     let request = CompleteAttemptStepRequest {
         conclusion: conclusion.clone(),
+        logs_truncated,
     };
     let mut last_error = None;
     for _ in 0..3 {
@@ -586,10 +613,18 @@ pub(super) fn report_step_conclusion_until_reconciled(
     work: &mut RunnerWorkDir,
     step_index: u32,
     conclusion: StepConclusionRequest,
+    logs_truncated: bool,
     supervisor: &AttemptSupervisor,
 ) -> anyhow::Result<()> {
     for _ in 0..3 {
-        match report_step_conclusion(client, config, claim, step_index, conclusion.clone()) {
+        match report_step_conclusion(
+            client,
+            config,
+            claim,
+            step_index,
+            conclusion.clone(),
+            logs_truncated,
+        ) {
             Ok(()) => return Ok(()),
             Err(error) => {
                 let reason = supervisor.reason();

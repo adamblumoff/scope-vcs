@@ -408,12 +408,20 @@ impl RunStore {
         attempt_id: &str,
         token_hash: &str,
         conclusion: AttemptConclusion,
+        logs_truncated: bool,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         self.mutate_attempt(attempt_id, |run, job, attempt, steps| {
             let runner_id = attempt.runner_id.clone();
             attempt.complete(
-                run, job, steps, &runner_id, token_hash, conclusion, now_unix,
+                run,
+                job,
+                steps,
+                &runner_id,
+                token_hash,
+                conclusion,
+                logs_truncated,
+                now_unix,
             )
         })
         .await
@@ -582,7 +590,7 @@ impl RunStore {
         attempt
             .authenticate_access(&job, token_hash, now_unix)
             .map_err(PostgresError::from)?;
-        if attempt.logs_truncated {
+        if attempt.first_truncated_step_index.is_some() {
             return Err(PostgresError::resource_exhausted(
                 "run attempt log limit reached",
             ));

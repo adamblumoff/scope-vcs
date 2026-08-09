@@ -40,7 +40,7 @@ use container::apply_container_limits;
 use container::{
     ContainerGuard, DockerCapabilities, JobContainerSpec, configure_job_container_creation,
     configure_source_copy, container_started_at_unix, doctor_local, job_container_name,
-    probe_storage_quota_support, require_root_image, stop_container,
+    probe_storage_quota_support, require_root_image, require_runner_image_tools, stop_container,
 };
 use image::resolve_container_image;
 #[cfg(test)]
@@ -166,6 +166,7 @@ fn run_claim(
                     exit_code: 1,
                     message: bounded_setup_failure_message(&error),
                 },
+                logs_truncated: false,
             },
         ) {
             eprintln!("Could not report failed attempt: {report_error}");
@@ -248,6 +249,7 @@ fn execute_claim(
         !supervisor.storage_pressure_triggered()
     })?;
     require_root_image(&container_image)?;
+    require_runner_image_tools(&container_image)?;
     log_phase(&claim.attempt_id, "image_resolution", phase);
     let step_programs = write_step_programs(&work.path, job)?;
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
@@ -446,6 +448,7 @@ fn resume_claim_execution(
             &claim,
             pending.step_index,
             pending.conclusion.clone(),
+            pending.logs_truncated,
         )
         .map_err(|error| {
             work.preserve();
@@ -464,8 +467,14 @@ fn resume_claim_execution(
             .map(|()| ExecutionOutcome::Interrupted);
     }
     if let Some(conclusion) = progress.pending_attempt_conclusion.take() {
-        return report_pending_conclusion(config, &claim, &mut work, conclusion)
-            .map(|()| ExecutionOutcome::Interrupted);
+        return report_pending_conclusion(
+            config,
+            &claim,
+            &mut work,
+            conclusion,
+            progress.logs_exhausted,
+        )
+        .map(|()| ExecutionOutcome::Interrupted);
     }
     let control_client = attempt_control_client()?;
     attempt_heartbeat(
@@ -509,6 +518,7 @@ fn resume_claim_execution(
             &mut work,
             pending.step_index,
             pending.conclusion.clone(),
+            pending.logs_truncated,
             &supervisor,
         ) {
             container.preserve();
@@ -670,6 +680,7 @@ fn conclude_stopped_attempt(
     claim: &ClaimRunResponse,
     work: &mut RunnerWorkDir,
     reason: AttemptStopReason,
+    logs_truncated: bool,
 ) -> anyhow::Result<()> {
     let conclusion = match reason {
         AttemptStopReason::Cancellation => AttemptConclusionRequest::Canceled,
@@ -681,7 +692,7 @@ fn conclude_stopped_attempt(
         AttemptStopReason::None => bail!("attempt stop conclusion requires a stop reason"),
     };
     mark_recovery_conclusion_pending(&work.path, claim, conclusion.clone())?;
-    report_pending_conclusion(config, claim, work, conclusion)
+    report_pending_conclusion(config, claim, work, conclusion, logs_truncated)
 }
 
 fn report_pending_abandon(
@@ -760,6 +771,7 @@ fn report_pending_conclusion(
     claim: &ClaimRunResponse,
     work: &mut RunnerWorkDir,
     conclusion: AttemptConclusionRequest,
+    logs_truncated: bool,
 ) -> anyhow::Result<()> {
     let client = match runner_client() {
         Ok(client) => client,
@@ -771,7 +783,10 @@ fn report_pending_conclusion(
             return Err(ConclusionReportPending.into());
         }
     };
-    let request = CompleteAttemptRequest { conclusion };
+    let request = CompleteAttemptRequest {
+        conclusion,
+        logs_truncated,
+    };
     let mut last_error = None;
     for _ in 0..3 {
         match complete_attempt(
@@ -873,6 +888,7 @@ fn complete_canceled(
         &claim.attempt_id,
         &CompleteAttemptRequest {
             conclusion: AttemptConclusionRequest::Canceled,
+            logs_truncated: false,
         },
     )?;
     Ok(())

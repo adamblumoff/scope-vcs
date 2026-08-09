@@ -131,7 +131,7 @@ impl RunJob {
         }
         if !runner.supports_dispatch() {
             return Err(DomainError::conflict(
-                "runner does not support the V6 dispatch protocol",
+                "runner does not support the V7 dispatch protocol",
             ));
         }
         if !grant.is_active()
@@ -176,7 +176,7 @@ impl RunJob {
             completed_at_unix: None,
             terminal_reason: None,
             log_bytes: 0,
-            logs_truncated: false,
+            first_truncated_step_index: None,
         };
         let steps = definition
             .steps()

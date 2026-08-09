@@ -1,8 +1,11 @@
 use super::{RunnerConfig, cache::CacheMount, command_success, resources::ResourceLimits};
 use anyhow::{Context, bail};
 use scope_api_contract::ClaimRunResponse;
+use scope_domain::runs::run::MAX_RUN_LOG_BYTES_PER_ATTEMPT;
 use std::{env, path::Path, process::Command, thread, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+const STEP_LOG_BLOCK_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct DockerCapabilities {
@@ -18,7 +21,7 @@ pub(super) fn doctor_local(
     max_concurrent_jobs: scope_domain::runs::runner::RunnerMaxConcurrentJobs,
 ) -> anyhow::Result<(DockerCapabilities, ResourceLimits)> {
     if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
-        bail!("V6 runners require Linux on amd64");
+        bail!("V7 runners require Linux on amd64");
     }
     command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
     let limits = ResourceLimits::detect(max_concurrent_jobs)?;
@@ -94,6 +97,26 @@ pub(super) fn probe_storage_quota_support(
     Ok(DockerCapabilities {
         storage_quota_supported: true,
     })
+}
+
+pub(super) fn require_runner_image_tools(image: &str) -> anyhow::Result<()> {
+    let mut probe = Command::new("docker");
+    configure_runner_image_tool_probe(&mut probe, image);
+    command_success(&mut probe, "validate Scope V7 workflow image tools")
+}
+
+fn configure_runner_image_tool_probe(command: &mut Command, image: &str) {
+    command.args([
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        "sh",
+        image,
+        "-c",
+        "for tool in sh rm mv sleep mkfifo dd cat tail head setsid; do command -v \"$tool\" >/dev/null || { echo \"missing required Scope V7 tool: $tool\" >&2; exit 1; }; done",
+    ]);
 }
 
 fn configure_storage_quota_probe(command: &mut Command, image: &str, limits: &ResourceLimits) {
@@ -175,6 +198,32 @@ mod quota_tests {
             ["container", "rm", "--force", "--volumes", "abc123"]
         );
     }
+
+    #[test]
+    fn tool_probe_validates_the_resolved_image_without_network_access() {
+        let mut command = Command::new("docker");
+        configure_runner_image_tool_probe(&mut command, "registry.example/workflow@sha256:abc");
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            &arguments[..8],
+            [
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "sh",
+                "registry.example/workflow@sha256:abc",
+                "-c",
+            ]
+        );
+        assert!(arguments[8].contains("mkfifo dd cat tail head setsid"));
+        assert!(!arguments.iter().any(|argument| argument == "pull"));
+    }
 }
 
 pub(super) struct JobContainerSpec<'a> {
@@ -189,6 +238,8 @@ pub(super) struct JobContainerSpec<'a> {
 }
 
 pub(super) fn configure_job_container_creation(command: &mut Command, spec: JobContainerSpec<'_>) {
+    debug_assert_eq!(MAX_RUN_LOG_BYTES_PER_ATTEMPT % STEP_LOG_BLOCK_BYTES, 0);
+    let step_log_blocks = MAX_RUN_LOG_BYTES_PER_ATTEMPT / STEP_LOG_BLOCK_BYTES;
     command.args(["create", "--name", spec.name]);
     apply_container_limits(command, spec.limits, spec.capabilities);
     command
@@ -220,14 +271,11 @@ pub(super) fn configure_job_container_creation(command: &mut Command, spec: JobC
             ),
         ]);
     }
-    command
-        .args([
-            spec.image,
-            "-c",
+    command.arg(spec.image).arg("-c").arg(format!(
             "set -eu\n\
              read -r phase step nonce < /scope-steps/current\n\
              [ \"$phase\" = prepare ]\n\
-             : > /scope-step.log\n\
+             rm -f /scope-step.log /scope-step.pipe /scope-step-overflow /scope-step-truncated\n\
              cd /workspace\n\
              printf '%s\\n' \"$nonce\" > /scope-active-step.tmp\n\
              mv /scope-active-step.tmp /scope-active-step\n\
@@ -238,8 +286,28 @@ pub(super) fn configure_job_container_creation(command: &mut Command, spec: JobC
                fi\n\
                sleep 0.05\n\
              done\n\
-             exec sh -e \"/scope-steps/step-$step.sh\" > /scope-step.log 2>&1",
-        ]);
+             mkfifo /scope-step.pipe\n\
+             (\n\
+               exec 3< /scope-step.pipe\n\
+               dd bs={STEP_LOG_BLOCK_BYTES} count={step_log_blocks} iflag=fullblock \
+                   <&3 > /scope-step.log 2>/dev/null\n\
+               dd bs=1 count=1 <&3 > /scope-step-overflow 2>/dev/null || true\n\
+               if [ -s /scope-step-overflow ]; then\n\
+                 : > /scope-step-truncated\n\
+                 cat <&3 > /dev/null\n\
+               fi\n\
+               exec 3<&-\n\
+             ) &\n\
+             collector_pid=$!\n\
+             setsid sh -e \"/scope-steps/step-$step.sh\" > /scope-step.pipe 2>&1 &\n\
+             step_pid=$!\n\
+             if wait \"$step_pid\"; then step_status=0; else step_status=$?; fi\n\
+             kill -TERM -\"$step_pid\" 2>/dev/null || true\n\
+             sleep 0.05\n\
+             kill -KILL -\"$step_pid\" 2>/dev/null || true\n\
+             wait \"$collector_pid\"\n\
+             exit \"$step_status\""
+        ));
 }
 
 pub(super) fn configure_source_copy(command: &mut Command, workspace: &Path, container: &str) {
@@ -268,7 +336,7 @@ pub(super) fn require_root_image(image: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         bail!(
-            "workflow image runs as {user:?}; Scope V6 images must run as root because the runner populates /workspace and manages step state inside the container"
+            "workflow image runs as {user:?}; Scope V7 images must run as root because the runner populates /workspace and manages step state inside the container"
         )
     }
 }

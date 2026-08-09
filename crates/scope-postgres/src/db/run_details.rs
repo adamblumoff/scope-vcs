@@ -117,7 +117,9 @@ impl RunStore {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(StoredAttemptStepLogs {
             logs,
-            logs_truncated: attempt.logs_truncated,
+            logs_truncated: attempt
+                .first_truncated_step_index
+                .is_some_and(|first| step_index >= first),
         })
     }
 

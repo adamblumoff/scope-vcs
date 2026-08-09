@@ -25,6 +25,7 @@ impl RunStore {
         token_hash: &str,
         step_index: u32,
         conclusion: StepConclusion,
+        logs_truncated: bool,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         let step_count = entities::run_attempt_step::Entity::find()
@@ -40,7 +41,14 @@ impl RunStore {
             self.mutate_attempt(attempt_id, |_, job, attempt, steps| {
                 let runner_id = attempt.runner_id.clone();
                 attempt.complete_step(
-                    job, steps, &runner_id, token_hash, step_index, conclusion, now_unix,
+                    job,
+                    steps,
+                    &runner_id,
+                    token_hash,
+                    step_index,
+                    conclusion,
+                    logs_truncated,
+                    now_unix,
                 )
             })
             .await
@@ -48,7 +56,14 @@ impl RunStore {
             self.mutate_active_attempt(attempt_id, |_, job, attempt, steps| {
                 let runner_id = attempt.runner_id.clone();
                 attempt.complete_step(
-                    job, steps, &runner_id, token_hash, step_index, conclusion, now_unix,
+                    job,
+                    steps,
+                    &runner_id,
+                    token_hash,
+                    step_index,
+                    conclusion,
+                    logs_truncated,
+                    now_unix,
                 )
             })
             .await

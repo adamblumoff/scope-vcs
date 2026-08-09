@@ -45,6 +45,73 @@ async fn migration_inventory_classifies_data_rewrite_and_contract_cutover_togeth
 }
 
 #[tokio::test]
+async fn truthful_log_truncation_cutover_requires_maintenance() {
+    let (_target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(17))
+        .await
+        .unwrap();
+
+    let plan = migrations::plan(db.as_ref()).await.unwrap();
+
+    assert_eq!(plan.pending.len(), 1);
+    assert_eq!(plan.pending[0].name, "m0018_truthful_run_log_truncation");
+    assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
+}
+
+#[tokio::test]
+async fn truthful_log_cutover_fences_protocol_six_runners() {
+    let (_target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(17))
+        .await
+        .unwrap();
+    db.execute_unprepared(
+        "INSERT INTO scope_users (id, handle, email, email_verified)
+         VALUES ('user_v7', 'v7-owner', 'v7@scope.test', TRUE);
+         INSERT INTO scope_runners (
+             id, owner_user_id, secret_hash, version, protocol_version,
+             capabilities, max_concurrent_jobs, enabled, created_at_unix,
+             last_seen_at_unix
+         ) VALUES (
+             'runner_v6', 'user_v7', repeat('a', 64), '0.1.0', 6,
+             '{\"operating_system\":\"linux\",\"architecture\":\"amd64\",\"container_engine\":\"docker\"}'::jsonb,
+             1, TRUE, 1, NULL
+         );",
+    )
+    .await
+    .unwrap();
+
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
+
+    let cutover = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT state FROM scope_runner_protocol_cutover WHERE key = 'current'".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "state")
+        .unwrap();
+    assert_eq!(cutover, "v7-open");
+    let enabled = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT enabled FROM scope_runners WHERE id = 'runner_v6'".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<bool>("", "enabled")
+        .unwrap();
+    assert!(!enabled);
+    assert!(
+        db.execute_unprepared("UPDATE scope_runners SET enabled = TRUE WHERE id = 'runner_v6'")
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn maintenance_cutover_refuses_a_writer_after_its_pool_reconnects() {
     let (target, db, _lease) = isolated_database().await;
     migrations::Migrator::up(db.as_ref(), Some(11))

@@ -36,6 +36,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0015_runner_capacity",
     "m0016_workflow_runtime_contract",
     "m0017_run_history_indexes",
+    "m0018_truthful_run_log_truncation",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -424,7 +425,7 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v6-fenced");
+    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v7-fenced");
     let run_digest = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,

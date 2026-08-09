@@ -435,7 +435,7 @@ async fn replace_catalog(
         "
             INSERT INTO scope_runner_protocol_cutover (
                 key, state, canary_generation, updated_at_unix
-            ) VALUES ('current', 'v6-open', 0, 0)
+            ) VALUES ('current', 'v7-open', 0, 0)
         ",
     )
     .await
@@ -716,7 +716,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v6-open");
+            assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v7-open");
             assert_eq!(cutover.try_get::<i64>("", "canary_generation").unwrap(), 0);
             let unrelated_sentinel = db
                 .query_one(Statement::from_string(

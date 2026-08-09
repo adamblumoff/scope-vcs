@@ -113,6 +113,7 @@ async fn lease_recovery_requeues_only_before_execution_and_rejects_stale_attempt
                 exit_code: 1,
                 message: "setup failed".to_string(),
             },
+            false,
             90,
         )
         .await
@@ -520,7 +521,7 @@ async fn machine_authentication_and_attempt_logs_are_narrow_and_idempotent() {
         .unwrap()
         .attempt;
     assert_eq!(attempt.log_bytes, 13);
-    assert!(!attempt.logs_truncated);
+    assert_eq!(attempt.first_truncated_step_index, None);
     let logs = store
         .runs()
         .run_logs_after("run-1", stored.position, 100)
