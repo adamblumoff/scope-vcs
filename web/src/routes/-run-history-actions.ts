@@ -23,10 +23,10 @@ export const loadRepoRunPage = createServerFn({ method: 'GET' })
           })),
       ])
       const latest = history.runs[0]
-        ? await loadRepoRunDetailForRequest(
-            { ...data, run_id: history.runs[0].id },
-            api,
-          )
+        ? await loadRepoRunDetailForRequest({
+            ...data,
+            run_id: history.runs[0].id,
+          }, api).catch(() => null)
         : null
       return {
         history,

@@ -33,7 +33,11 @@ import {
 import { RunStatusDot } from './run-status-dot'
 import { RunJobGraph } from './run-job-graph'
 import { runJobPanelId } from './run-job-ids'
-import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
+import {
+  formatRunRunnerSelection,
+  formatRunUnixTime,
+  runDisplayState,
+} from './run-formatting'
 
 export function RepositoryRunDetailPage({
   cancelRun,
@@ -230,7 +234,7 @@ function RunHeader({
   pendingAction: 'cancel' | 'retry' | null
 }) {
   const run = detail.run
-  const state = run.cancellation_requested ? 'canceling' : run.state
+  const state = runDisplayState(run)
   const eyebrow = useMemo(() => (
     <Link
       className="hover:text-foreground"

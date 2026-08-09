@@ -12,7 +12,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { reconcileExpandedJobs, runNeedsPolling } from './repository-run-detail-model'
 import { RunStatusDot } from './run-status-dot'
 import { RunJobGraph } from './run-job-graph'
-import { formatRunUnixTime } from './run-formatting'
+import { runJobPanelId } from './run-job-ids'
+import { formatRunUnixTime, runDisplayState } from './run-formatting'
 
 const LATEST_RUN_REFRESH_INTERVAL_MS = 2_000
 
@@ -85,18 +86,20 @@ export function WorkflowLatestRun({
   }, [detailState, input, refresh])
 
   if (!run) return null
+  const displayedRun = detail?.run ?? run
+  const displayedState = runDisplayState(displayedRun)
 
   return (
     <section aria-labelledby="latest-run-heading" className="pt-7 lg:pt-9">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <RunStatusDot state={detail?.run.state ?? run.state} />
+            <RunStatusDot state={displayedState} />
             <h2 className="text-sm font-semibold" id="latest-run-heading">
               Latest run
             </h2>
             <span className="text-xs capitalize text-muted-foreground">
-              {detail?.run.state ?? run.state}
+              {displayedState}
             </span>
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -160,7 +163,10 @@ export function WorkflowLatestRun({
 function LatestJobSummary({ jobDetail }: { jobDetail: RepoRunJobDetail }) {
   const { job, attempts } = jobDetail
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-3 text-sm">
+    <div
+      className="flex flex-wrap items-center justify-between gap-2 px-2 py-3 text-sm"
+      id={runJobPanelId(job.key)}
+    >
       <span className="flex items-center gap-2 font-medium">
         <RunStatusDot state={job.state} />
         {job.key}

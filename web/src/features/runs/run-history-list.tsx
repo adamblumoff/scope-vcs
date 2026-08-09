@@ -2,7 +2,11 @@ import type { RepoParams, RepoRunHistoryPage } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
 import { ArrowRight, LoaderCircle, TerminalSquare } from 'lucide-react'
-import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
+import {
+  formatRunRunnerSelection,
+  formatRunUnixTime,
+  runDisplayState,
+} from './run-formatting'
 import { RunStatusDot } from './run-status-dot'
 
 export function RunHistoryList({
@@ -42,7 +46,7 @@ export function RunHistoryList({
             </p>
           </div>
         ) : runs.map((run) => {
-          const state = run.cancellation_requested ? 'canceling' : run.state
+          const state = runDisplayState(run)
           return (
             <Link
               className="group flex min-h-16 min-w-0 items-center gap-3 px-2 py-4 outline-none hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
@@ -50,7 +54,7 @@ export function RunHistoryList({
               params={{ ...params, runId: run.id }}
               to="/$owner/$repo/runs/$runId"
             >
-              <RunStatusDot state={run.state} />
+              <RunStatusDot state={state} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">
                   {run.workflow_name}
