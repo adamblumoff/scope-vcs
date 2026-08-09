@@ -73,10 +73,13 @@ pub use request_rows::{RequestListPageQuery, RequestListRow};
 mod request_merge;
 mod request_submission_transactions;
 mod requests;
+mod run_attempt_mutations;
 mod run_attempt_persistence;
 mod run_details;
 mod run_dispatch;
 mod run_history;
+mod run_log_reads;
+mod run_log_writes;
 mod run_operations;
 mod run_retention;
 mod run_step_operations;
@@ -84,11 +87,12 @@ mod runner_protocol_cutover;
 #[cfg(test)]
 mod runner_protocol_cutover_tests;
 mod runs;
-pub use run_details::{RunAttemptDetail, RunDetail, StoredAttemptStepLogs};
+pub use run_details::{RunAttemptDetail, RunDetail};
 pub use run_history::{RepositoryRun, RunHistoryCursor, RunHistoryPageQuery};
-pub use run_operations::{RecentRunLogs, RepositoryRunner};
+pub use run_log_reads::{RecentRunLogs, StoredAttemptStepLogs, StoredRunLog};
+pub use run_operations::RepositoryRunner;
 pub use runner_protocol_cutover::RunnerProtocolCutoverSnapshot;
-pub use runs::{DispatchClaim, StoredRunLog, UpgradeRunnerRegistrationCommand};
+pub use runs::{DispatchClaim, UpgradeRunnerRegistrationCommand};
 #[cfg(test)]
 mod run_concurrency_tests;
 #[cfg(test)]

@@ -14,16 +14,14 @@ use super::{
 use crate::error::PostgresError;
 use scope_domain::runs::{
     job::{RunJob, create_run_jobs, reconcile_run, request_run_cancellation, retry_run},
-    run::{AttemptConclusion, PinnedContainerImage, Run, RunAttempt, RunAttemptStep, RunLogChunk},
+    run::{AttemptConclusion, PinnedContainerImage, Run, RunAttempt, RunAttemptStep},
     runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerMaxConcurrentJobs},
     workflow::WorkflowRevision,
 };
 use sea_orm::{
-    ActiveModelTrait,
-    ActiveValue::{NotSet, Set},
-    ColumnTrait, Condition, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, TransactionTrait, TryInsertResult,
-    sea_query::OnConflict,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect,
+    TransactionTrait, TryInsertResult, sea_query::OnConflict,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,14 +38,6 @@ pub struct DispatchClaim {
 pub struct DispatchOffer {
     pub run: Run,
     pub job: RunJob,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredRunLog {
-    pub position: u64,
-    pub run_id: String,
-    pub job_key: String,
-    pub chunk: RunLogChunk,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -548,224 +538,6 @@ impl RunStore {
             .map_err(PostgresError::internal)?
             .map(entities::run::Model::try_into_domain)
             .transpose()
-    }
-
-    pub async fn authenticate_attempt(
-        &self,
-        attempt_id: &str,
-        token_hash: &str,
-        now_unix: u64,
-    ) -> Result<DispatchClaim, PostgresError> {
-        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
-        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
-        let (run, job, attempt, steps) = locked_attempt_context(&tx, attempt_id).await?;
-        ensure_runner_authorized(&tx, &run, &attempt).await?;
-        attempt
-            .authenticate_access(&job, token_hash, now_unix)
-            .map_err(PostgresError::from)?;
-        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
-        tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(DispatchClaim {
-            run,
-            job,
-            attempt,
-            steps,
-            workflow_revision,
-            canary_phase: None,
-        })
-    }
-
-    pub async fn append_attempt_log(
-        &self,
-        chunk: RunLogChunk,
-        token_hash: &str,
-        now_unix: u64,
-    ) -> Result<StoredRunLog, PostgresError> {
-        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (guard_run_id, guard_runner_id) = attempt_target(&tx, &chunk.attempt_id).await?;
-        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
-        let (run, job, mut attempt, steps) = locked_attempt_context(&tx, &chunk.attempt_id).await?;
-        ensure_runner_authorized(&tx, &run, &attempt).await?;
-        attempt
-            .authenticate_access(&job, token_hash, now_unix)
-            .map_err(PostgresError::from)?;
-        if attempt.first_truncated_step_index.is_some() {
-            return Err(PostgresError::resource_exhausted(
-                "run attempt log limit reached",
-            ));
-        }
-
-        if let Some(existing) = entities::run_log::Entity::find()
-            .filter(entities::run_log::Column::AttemptId.eq(&chunk.attempt_id))
-            .filter(
-                entities::run_log::Column::Sequence.eq(i64::try_from(chunk.sequence)
-                    .map_err(|_| PostgresError::invalid_input("run log sequence is too large"))?),
-            )
-            .one(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-        {
-            let position = entities::i64_to_u64(existing.position, "run log position")?;
-            let existing_run_id = existing.run_id.clone();
-            let existing_chunk = existing.try_into_domain()?;
-            if existing_run_id != run.id
-                || existing_chunk.attempt_id != chunk.attempt_id
-                || existing_chunk.step_index != chunk.step_index
-                || existing_chunk.sequence != chunk.sequence
-                || existing_chunk.text != chunk.text
-            {
-                return Err(PostgresError::conflict(
-                    "run log sequence is already used by different content",
-                ));
-            }
-            tx.commit().await.map_err(PostgresError::internal)?;
-            return Ok(StoredRunLog {
-                position,
-                run_id: existing_run_id,
-                job_key: job.key.as_str().to_string(),
-                chunk: existing_chunk,
-            });
-        }
-
-        let expected_sequence = entities::run_log::Entity::find()
-            .filter(entities::run_log::Column::AttemptId.eq(&chunk.attempt_id))
-            .order_by_desc(entities::run_log::Column::Sequence)
-            .one(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .map_or(1, |last| last.sequence.saturating_add(1));
-        if i64::try_from(chunk.sequence).ok() != Some(expected_sequence) {
-            return Err(PostgresError::conflict(
-                "run log sequence must append without gaps",
-            ));
-        }
-        if !attempt
-            .accept_log_chunk(&steps, &chunk)
-            .map_err(PostgresError::from)?
-        {
-            save_attempt(&tx, &attempt).await?;
-            tx.commit().await.map_err(PostgresError::internal)?;
-            return Err(PostgresError::resource_exhausted(
-                "run attempt log limit reached",
-            ));
-        }
-
-        let mut model = entities::run_log::Model::from_domain(&run.id, &chunk)?.into_active_model();
-        model.position = NotSet;
-        let inserted = entities::run_log::Entity::insert(model)
-            .exec(&tx)
-            .await
-            .map_err(|error| unique_conflict(error, "run log sequence is already in use"))?;
-        let position = entities::i64_to_u64(inserted.last_insert_id, "run log position")?;
-        save_attempt(&tx, &attempt).await?;
-        tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(StoredRunLog {
-            position,
-            run_id: run.id,
-            job_key: job.key.as_str().to_string(),
-            chunk,
-        })
-    }
-
-    pub(super) async fn mutate_attempt(
-        &self,
-        attempt_id: &str,
-        mutate: impl FnOnce(
-            &Run,
-            &mut RunJob,
-            &mut RunAttempt,
-            &mut [RunAttemptStep],
-        ) -> Result<(), scope_domain::error::DomainError>,
-    ) -> Result<DispatchClaim, PostgresError> {
-        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
-        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
-        let mut jobs = locked_jobs(&tx, &guard_run_id).await?;
-        let mut run = locked_run(&tx, &guard_run_id).await?;
-        let mut attempt = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
-            .lock_exclusive()
-            .one(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .ok_or_else(|| PostgresError::not_found("run attempt not found"))?
-            .try_into_domain()?;
-        let mut steps = locked_attempt_steps(&tx, attempt_id).await?;
-        ensure_runner_authorized(&tx, &run, &attempt).await?;
-        let job = jobs
-            .iter_mut()
-            .find(|job| job.key == attempt.job_key)
-            .ok_or_else(|| PostgresError::internal_message("run attempt job is missing"))?;
-        mutate(&run, job, &mut attempt, &mut steps).map_err(PostgresError::from)?;
-        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
-        let transition_time = attempt.completed_at_unix.unwrap_or(job.updated_at_unix);
-        reconcile_run(&mut run, &mut jobs, &workflow_revision, transition_time)
-            .map_err(PostgresError::from)?;
-        save_attempt(&tx, &attempt).await?;
-        save_attempt_steps(&tx, &steps).await?;
-        save_jobs(&tx, &jobs).await?;
-        save_run(&tx, &run).await?;
-        record_canary_attempt_terminal(
-            &tx,
-            &attempt.runner_id,
-            &run.id,
-            attempt.state,
-            attempt.completed_at_unix.unwrap_or(run.updated_at_unix),
-        )
-        .await?;
-        tx.commit().await.map_err(PostgresError::internal)?;
-        let job = jobs
-            .into_iter()
-            .find(|job| job.key == attempt.job_key)
-            .ok_or_else(|| PostgresError::internal_message("run attempt job is missing"))?;
-        Ok(DispatchClaim {
-            run,
-            job,
-            attempt,
-            steps,
-            workflow_revision,
-            canary_phase: None,
-        })
-    }
-
-    pub(super) async fn mutate_active_attempt(
-        &self,
-        attempt_id: &str,
-        mutate: impl FnOnce(
-            &Run,
-            &mut RunJob,
-            &mut RunAttempt,
-            &mut [RunAttemptStep],
-        ) -> Result<(), scope_domain::error::DomainError>,
-    ) -> Result<DispatchClaim, PostgresError> {
-        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (guard_run_id, guard_runner_id) = attempt_target(&tx, attempt_id).await?;
-        guard_attempt_operation(&tx, &guard_runner_id, &guard_run_id).await?;
-        let (run_snapshot, mut job, mut attempt, mut steps) =
-            locked_attempt_context(&tx, attempt_id).await?;
-        ensure_runner_authorized(&tx, &run_snapshot, &attempt).await?;
-        let mut run = locked_run(&tx, &run_snapshot.id).await?;
-        mutate(&run, &mut job, &mut attempt, &mut steps).map_err(PostgresError::from)?;
-        save_job(&tx, &job).await?;
-        save_attempt(&tx, &attempt).await?;
-        save_attempt_steps(&tx, &steps).await?;
-        let workflow_revision = workflow_revision_for_run(&tx, &run).await?;
-        let mut jobs = jobs_for_run(&tx, &run.id).await?;
-        if let Some(stored) = jobs.iter_mut().find(|stored| stored.key == job.key) {
-            *stored = job.clone();
-        }
-        reconcile_run(&mut run, &mut jobs, &workflow_revision, job.updated_at_unix)
-            .map_err(PostgresError::from)?;
-        save_run(&tx, &run).await?;
-        tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(DispatchClaim {
-            run,
-            job,
-            attempt,
-            steps,
-            workflow_revision,
-            canary_phase: None,
-        })
     }
 }
 
