@@ -1,7 +1,7 @@
 use super::repo_io::{
     describe_refs, git_changed_tree_entries, git_refs, git_segment_manifest_from_repo,
     git_snapshot_from_ref, git_tree_entries_under, pushed_commit_message, queue_failed_segments,
-    run_git_output,
+    run_git_output, validate_pushed_commit_range,
 };
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
@@ -112,6 +112,7 @@ async fn reviewed_update_from_staging_repo_mode(
     }
     let message = pushed_commit_message(staging_repo, &head_oid)?;
     let base_head_oid = repo.git_head.as_ref().map(|head| head.head_oid.as_str());
+    validate_pushed_commit_range(staging_repo, base_head_oid, &head_oid)?;
     let diff_started = Instant::now();
     let pushed_entries = git_changed_tree_entries(staging_repo, base_head_oid, &head_oid)?;
     let diff_ms = diff_started.elapsed().as_millis();
