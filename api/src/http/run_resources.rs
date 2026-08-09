@@ -22,7 +22,7 @@ use axum::{
 use scope_domain::{
     repo_control::{RepoControlPath, classify_repo_control_path},
     runs::workflow::WorkflowRevision,
-    store::{RepositoryActor, StoredRepository},
+    store::StoredRepository,
 };
 use scope_postgres::db::{RunHistoryCursor, RunHistoryPageQuery};
 use serde::Deserialize;
@@ -44,7 +44,8 @@ pub(crate) async fn get_repository_run_workflows(
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<RepositoryRunWorkflowListResponse>, ApiError> {
     let repo = require_repository_member(&state, &headers, &owner, &repo_name).await?;
-    let workflows = current_workflows(&state, &repo)?
+    let workflows = current_workflows(&state, &repo)
+        .await?
         .into_iter()
         .map(|revision| RepositoryRunWorkflowResponse {
             key: revision.workflow().path().name().to_string(),
@@ -72,7 +73,8 @@ pub(crate) async fn get_repository_run_history(
         .filter(|key| !key.is_empty());
     let workflow_path = if let Some(key) = workflow {
         Some(
-            current_workflows(&state, &repo)?
+            current_workflows(&state, &repo)
+                .await?
                 .into_iter()
                 .find(|revision| revision.workflow().path().name() == key)
                 .map(|revision| revision.workflow().path().as_str().to_string())
@@ -150,7 +152,20 @@ pub(crate) async fn get_repository_runners(
     Ok(Json(RepositoryRunnersResponse { runners }))
 }
 
-fn current_workflows(
+async fn current_workflows(
+    state: &AppState,
+    repo: &StoredRepository,
+) -> Result<Vec<WorkflowRevision>, ApiError> {
+    let state = state.clone();
+    let repo = repo.clone();
+    tokio::task::spawn_blocking(move || current_workflows_blocking(&state, &repo))
+        .await
+        .map_err(|error| {
+            ApiError::internal_message(format!("workflow loading task failed: {error}"))
+        })?
+}
+
+fn current_workflows_blocking(
     state: &AppState,
     repo: &StoredRepository,
 ) -> Result<Vec<WorkflowRevision>, ApiError> {
@@ -183,7 +198,7 @@ async fn require_repository_member(
 ) -> Result<StoredRepository, ApiError> {
     let user = require_scope_user(state, headers).await?;
     let repo = find_repo(state, owner, repo_name).await?;
-    if repo.access_for_user_id(&user.id).actor == RepositoryActor::Public {
+    if !repo.is_maintainer_user_id(&user.id) {
         return Err(ApiError::forbidden("repo membership required"));
     }
     Ok(repo)
