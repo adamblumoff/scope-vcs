@@ -1,7 +1,9 @@
 import { createApiClient, HttpError } from '@/api/client'
 import {
+  loadRepoRunDetailForRequest,
   loadRepoRunHistoryForRequest,
   loadRepoRunWorkflowsForRequest,
+  parseRunActionInput,
   parseRepoRunHistoryInput,
 } from '@/api/runs'
 import { createServerFn } from '@tanstack/react-start'
@@ -20,8 +22,15 @@ export const loadRepoRunPage = createServerFn({ method: 'GET' })
             workflows: { workflows: [] },
           })),
       ])
+      const latest = history.runs[0]
+        ? await loadRepoRunDetailForRequest({
+            ...data,
+            run_id: history.runs[0].id,
+          }, api).catch(() => null)
+        : null
       return {
         history,
+        latest,
         workflows: workflowResource.workflows,
         workflowsError: workflowResource.error,
       }
@@ -49,3 +58,7 @@ export const loadRepoRunHistory = createServerFn({ method: 'GET' })
       throw error
     }
   })
+
+export const loadRepoRunDetail = createServerFn({ method: 'GET' })
+  .validator(parseRunActionInput)
+  .handler(({ data }) => loadRepoRunDetailForRequest(data))
