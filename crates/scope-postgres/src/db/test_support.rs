@@ -109,7 +109,7 @@ pub fn connect_postgres_test_store(target: &TestDatabaseTarget) -> anyhow::Resul
     let target = target.clone();
     let (db, test_schema) = run_test_future(async move {
         let (db, test_schema) = connect_isolated_test_database(&target).await?;
-        crate::migrations::apply(db.as_ref()).await?;
+        crate::migrations::apply_in_maintenance(db.as_ref()).await?;
         Ok::<_, anyhow::Error>((db, test_schema))
     })?;
 

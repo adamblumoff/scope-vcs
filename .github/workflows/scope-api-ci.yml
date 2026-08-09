@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/scripts/deploy-railway.sh"
+      - ".github/scripts/deploy-backend-railway.sh"
+      - ".github/scripts/test-deploy-backend-railway.sh"
       - ".github/workflows/scope-api-ci.yml"
       - ".github/workflows/rust-workspace-checks.yml"
       - "Cargo.lock"
@@ -18,6 +20,8 @@ on:
       - main
     paths:
       - ".github/scripts/deploy-railway.sh"
+      - ".github/scripts/deploy-backend-railway.sh"
+      - ".github/scripts/test-deploy-backend-railway.sh"
       - ".github/workflows/scope-api-ci.yml"
       - ".github/workflows/rust-workspace-checks.yml"
       - "Cargo.lock"
@@ -42,9 +46,24 @@ jobs:
     with:
       include_api: true
 
-  deploy-api:
-    name: Deploy scope-api
-    needs: checks
+  deployment-tests:
+    name: Check backend deployment cutover
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Test Railway cutover orchestration
+        run: bash .github/scripts/test-deploy-backend-railway.sh
+
+  deploy-backend:
+    name: Deploy backend
+    needs: [checks, deployment-tests]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     env:
@@ -58,56 +77,40 @@ jobs:
         with:
           node-version: 24
 
-      - name: Stage Railway upload root
-        shell: bash
-        run: |
-          rm -rf .railway-upload
-          mkdir -p .railway-upload
-          cp Cargo.toml Cargo.lock rust-toolchain.toml .railway-upload/
-          cp api/railpack.json .railway-upload/railpack.json
-          cp api/railway.json .railway-upload/railway.json
-          cp -a api .railway-upload/api
-          cp -a worker .railway-upload/worker
-          cp -a crates .railway-upload/crates
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli@5.23.1
-
-      - name: Deploy to Railway
-        shell: bash
-        env:
-          RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
-          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: bash .github/scripts/deploy-railway.sh scope-api .railway-upload
-
-  deploy-worker:
-    name: Deploy scope-worker
-    needs: deploy-api
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Node
-        uses: actions/setup-node@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
-          node-version: 24
+          toolchain: 1.94.0
 
-      - name: Stage Railway upload root
+      - name: Cache Rust build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-backend-deploy-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-backend-deploy-cargo-${{ hashFiles('Cargo.lock') }}
+            ${{ runner.os }}-backend-deploy-cargo-
+
+      - name: Build maintenance command
+        run: cargo build --release --locked -p api --bin scope-maintenance
+
+      - name: Stage Railway upload roots
         shell: bash
         run: |
           rm -rf .railway-upload
-          mkdir -p .railway-upload
-          cp Cargo.toml Cargo.lock rust-toolchain.toml .railway-upload/
-          cp worker/railpack.json .railway-upload/railpack.json
-          cp worker/railway.json .railway-upload/railway.json
-          cp -a api .railway-upload/api
-          cp -a worker .railway-upload/worker
-          cp -a crates .railway-upload/crates
+          for service in api worker; do
+            root=".railway-upload/$service"
+            mkdir -p "$root"
+            cp Cargo.toml Cargo.lock rust-toolchain.toml "$root/"
+            cp "$service/railpack.json" "$root/railpack.json"
+            cp "$service/railway.json" "$root/railway.json"
+            cp -a api "$root/api"
+            cp -a worker "$root/worker"
+            cp -a crates "$root/crates"
+          done
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli@5.23.1
@@ -118,4 +121,7 @@ jobs:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: bash .github/scripts/deploy-railway.sh scope-worker .railway-upload
+          SCOPE_API_TOPOLOGY: us-west=1
+          SCOPE_WORKER_TOPOLOGY: us-west=1
+          SCOPE_RECOVER_CLOSED_CUTOVER: ${{ github.run_attempt > 1 && '1' || '0' }}
+        run: bash .github/scripts/deploy-backend-railway.sh .railway-upload/api .railway-upload/worker

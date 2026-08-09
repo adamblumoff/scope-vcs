@@ -12,7 +12,6 @@ const DEFAULT_GIT_SEGMENT_MAX_DEPTH: usize = 2 * DEFAULT_GIT_COMPACTION_SEGMENTS
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
-const DEFAULT_SCHEMA_WAIT_SECS: u64 = 300;
 const DEFAULT_GIT_COMPACTION_TIMEOUT_SECS: u64 = 120;
 
 pub(crate) struct WorkerSettings {
@@ -21,7 +20,6 @@ pub(crate) struct WorkerSettings {
     pub(crate) worker_id: String,
     pub(crate) batch_size: usize,
     pub(crate) poll_interval: Duration,
-    pub(crate) schema_wait_timeout: Duration,
     pub(crate) git_compaction_segments: usize,
     pub(crate) git_compaction_timeout: Duration,
     pub(crate) git_storage_limits: GitStorageLimits,
@@ -44,8 +42,6 @@ impl WorkerSettings {
         let batch_size = parse_usize_env("SCOPE_WORKER_BATCH_SIZE", DEFAULT_BATCH_SIZE)?;
         let poll_interval_ms =
             parse_u64_env("SCOPE_WORKER_POLL_INTERVAL_MS", DEFAULT_POLL_INTERVAL_MS)?;
-        let schema_wait_secs =
-            parse_u64_env("SCOPE_WORKER_SCHEMA_WAIT_SECS", DEFAULT_SCHEMA_WAIT_SECS)?;
         let git_compaction_segments = parse_usize_env(
             "SCOPE_GIT_COMPACTION_SEGMENTS",
             DEFAULT_GIT_COMPACTION_SEGMENTS,
@@ -76,7 +72,6 @@ impl WorkerSettings {
             worker_id,
             batch_size: batch_size.max(1),
             poll_interval: Duration::from_millis(poll_interval_ms.max(100)),
-            schema_wait_timeout: Duration::from_secs(schema_wait_secs.max(1)),
             git_compaction_segments,
             git_compaction_timeout: Duration::from_secs(git_compaction_timeout_secs),
             git_storage_limits,

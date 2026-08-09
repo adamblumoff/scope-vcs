@@ -108,7 +108,7 @@ async fn terminal_run_attempts_migrate_as_history_without_active_job_pointers() 
     .await
     .unwrap();
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     let summary = db
         .query_one(Statement::from_string(
@@ -216,7 +216,7 @@ async fn migrated_manual_runner_targets_remain_idempotent_without_guessing_raw_o
     .await
     .unwrap();
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
     db.execute_unprepared(
         "UPDATE scope_runner_protocol_cutover
          SET state = 'v6-open'

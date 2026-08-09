@@ -98,6 +98,7 @@ mod test_support;
 mod visibility_changes;
 
 use crate::error::PostgresError;
+pub use crate::migrations::{MigrationImpact, MigrationPlan, PendingMigration};
 #[cfg(any(test, feature = "test-support"))]
 pub use clerk_users::scope_user_id_for_auth_identity;
 pub use fast_push::ApplyContentOnlyPushCommand;
@@ -115,11 +116,12 @@ pub use repo_reads::RepoSummaryRead;
 use repository_rows::load_repository_facts;
 use scope_domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, repo_id};
 use sea_orm::{
-    AccessMode, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction,
-    EntityTrait, IsolationLevel, QueryFilter, QueryOrder, TransactionTrait,
+    AccessMode, ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseBackend,
+    DatabaseConnection, DatabaseTransaction, EntityTrait, IsolationLevel, QueryFilter, QueryOrder,
+    SqlxPostgresConnector, Statement, TransactionTrait,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_support::TestDatabaseTarget;
 pub use visibility_changes::UpdateRepoFileVisibilityCommand;
@@ -216,13 +218,8 @@ impl MetadataStore {
         connect_postgres_store(database_url).await
     }
 
-    pub async fn connect_worker_with_schema_wait(
-        database_url: String,
-        wait_timeout: Duration,
-        retry_interval: Duration,
-    ) -> anyhow::Result<Self> {
-        connect_postgres_worker_store_with_schema_wait(database_url, wait_timeout, retry_interval)
-            .await
+    pub async fn connect_worker(database_url: String) -> anyhow::Result<Self> {
+        connect_postgres_worker_store(database_url).await
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -263,8 +260,11 @@ impl AdminStore {
 async fn connect_postgres_store(database_url: String) -> anyhow::Result<MetadataStore> {
     let database_url = Arc::<str>::from(database_url);
     let connect_database_url = database_url.to_string();
-    let db = Database::connect(&connect_database_url).await?;
-    crate::migrations::apply(&db).await?;
+    let setup_db = Database::connect(&connect_database_url).await?;
+    crate::migrations::apply_online(&setup_db).await?;
+    setup_db.close().await?;
+    let db = connect_writer_database(&connect_database_url).await?;
+    crate::migrations::assert_exact_state(&db).await?;
     Ok(MetadataStore {
         db: Arc::new(db),
         postgres_database_url: Some(database_url),
@@ -273,28 +273,14 @@ async fn connect_postgres_store(database_url: String) -> anyhow::Result<Metadata
     })
 }
 
-async fn connect_postgres_worker_store_with_schema_wait(
-    database_url: String,
-    wait_timeout: Duration,
-    retry_interval: Duration,
-) -> anyhow::Result<MetadataStore> {
+async fn connect_postgres_worker_store(database_url: String) -> anyhow::Result<MetadataStore> {
     let database_url = Arc::<str>::from(database_url);
     let connect_database_url = database_url.to_string();
-    let started = tokio::time::Instant::now();
-    let db = loop {
-        match connect_worker_database_once(&connect_database_url).await {
-            Ok(db) => break db,
-            Err(error) if started.elapsed() < wait_timeout => {
-                tracing::warn!(
-                    error = %error,
-                    retry_in_secs = retry_interval.as_secs_f64(),
-                    "metadata schema is not ready for worker; waiting for API migrations"
-                );
-                tokio::time::sleep(retry_interval).await;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    };
+    let setup_db = Database::connect(&connect_database_url).await?;
+    crate::migrations::assert_exact_state(&setup_db).await?;
+    setup_db.close().await?;
+    let db = connect_writer_database(&connect_database_url).await?;
+    crate::migrations::assert_exact_state(&db).await?;
 
     Ok(MetadataStore {
         db: Arc::new(db),
@@ -304,12 +290,80 @@ async fn connect_postgres_worker_store_with_schema_wait(
     })
 }
 
-async fn connect_worker_database_once(
-    database_url: &str,
-) -> Result<DatabaseConnection, sea_orm::DbErr> {
+const WRITER_FENCE_KEY: &str = "scope:metadata-writers";
+
+pub async fn migration_plan(database_url: String) -> anyhow::Result<MigrationPlan> {
+    let db = Database::connect(database_url).await?;
+    Ok(crate::migrations::plan(&db).await?)
+}
+
+pub async fn verify_schema(database_url: String) -> anyhow::Result<()> {
     let db = Database::connect(database_url).await?;
     crate::migrations::assert_exact_state(&db).await?;
-    Ok(db)
+    Ok(())
+}
+
+pub async fn apply_maintenance_migrations(database_url: String) -> anyhow::Result<()> {
+    let fence = connect_single_session(&database_url).await?;
+    let acquired = fence
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            writer_fence_statement("pg_try_advisory_lock"),
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("PostgreSQL did not report writer-fence state"))?
+        .try_get::<bool>("", "acquired")?;
+    if !acquired {
+        anyhow::bail!(
+            "maintenance migration refused: an API or worker writer still holds the database fence"
+        );
+    }
+
+    let db = Database::connect(database_url).await?;
+    let migration_result = crate::migrations::apply_in_maintenance(&db).await;
+    let release_result = fence
+        .execute_unprepared(&writer_fence_statement("pg_advisory_unlock"))
+        .await;
+    migration_result?;
+    release_result?;
+    Ok(())
+}
+
+async fn connect_writer_database(database_url: &str) -> anyhow::Result<DatabaseConnection> {
+    let mut options = ConnectOptions::new(database_url.to_string());
+    options.min_connections(1);
+    let fence_statement = writer_fence_statement("pg_advisory_lock_shared");
+    let pool = options
+        .sqlx_pool_options()
+        .after_connect(move |connection, _| {
+            let fence_statement = fence_statement.clone();
+            Box::pin(async move {
+                sqlx::query(&fence_statement)
+                    .execute(connection)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .connect(database_url)
+        .await?;
+    Ok(SqlxPostgresConnector::from_sqlx_postgres_pool(pool))
+}
+
+async fn connect_single_session(database_url: &str) -> anyhow::Result<DatabaseConnection> {
+    let mut options = ConnectOptions::new(database_url.to_string());
+    options.max_connections(1).min_connections(1);
+    Ok(Database::connect(options).await?)
+}
+
+fn writer_fence_statement(function: &str) -> String {
+    format!(
+        "SELECT {function}(
+            hashtextextended(
+                '{WRITER_FENCE_KEY}:' || current_database() || ':' || current_schema(),
+                0
+            )
+        ) AS acquired"
+    )
 }
 
 pub(super) async fn begin_metadata_read_snapshot(
