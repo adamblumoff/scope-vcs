@@ -17,6 +17,10 @@ name = "export-api-types"
 path = "src/bin/export_api_types.rs"
 required-features = ["type-export"]
 
+[[bin]]
+name = "scope-maintenance"
+path = "src/bin/scope_maintenance.rs"
+
 [[test]]
 name = "workflows"
 path = "tests/workflows.rs"

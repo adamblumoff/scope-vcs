@@ -24,6 +24,10 @@ use std::sync::Arc;
 
 pub use env::is_local_dev_env;
 
+pub fn local_maintenance_database_url() -> anyhow::Result<String> {
+    Ok(env::validate_local_dev_environment()?.database_url)
+}
+
 pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let settings = env::validate_local_dev_environment()?;
     let repo_root = git_repo_root();

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-service_name="${1:?usage: deploy-railway.sh <service-name> <upload-root>}"
-upload_root="${2:?usage: deploy-railway.sh <service-name> <upload-root>}"
+service_name="${1:?usage: deploy-railway.sh <service-name> <upload-root> [healthy|stopped]}"
+upload_root="${2:?usage: deploy-railway.sh <service-name> <upload-root> [healthy|stopped]}"
+expected_service_state="${3:-healthy}"
+if [[ "$expected_service_state" != "healthy" && "$expected_service_state" != "stopped" ]]; then
+  echo "Expected service state must be healthy or stopped." >&2
+  exit 2
+fi
 
 if [ -z "${RAILWAY_TOKEN:-}" ]; then
   echo "Set the RAILWAY_TOKEN repository secret before deploying ${service_name}."
@@ -136,11 +141,14 @@ wait_for_deployment() {
             health_line="$(service_health_line "$service_name" || true)"
             if [ -n "$health_line" ]; then
               IFS=$'\t' read -r service_status running_replicas crashed_replicas exited_replicas total_replicas <<< "$health_line"
+              if [[ "$expected_service_state" == "stopped" && "${running_replicas:-0}" == "0" && "${crashed_replicas:-0}" == "0" ]]; then
+                return 0
+              fi
               if [ "$service_status" = "SUCCESS" ] && [ "${running_replicas:-0}" -gt 0 ]; then
                 return 0
               fi
             fi
-            echo "Railway skipped deployment, but ${service_name} is not currently healthy."
+            echo "Railway skipped deployment, but ${service_name} did not reach ${expected_service_state} state."
             echo "Service status: ${service_status:-unknown}; replicas running=${running_replicas:-0}, crashed=${crashed_replicas:-0}, exited=${exited_replicas:-0}, total=${total_replicas:-0}."
             return 1
             ;;
