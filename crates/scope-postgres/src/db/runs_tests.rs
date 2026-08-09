@@ -655,7 +655,7 @@ async fn dispatch_candidates_respect_runner_names_and_enabled_state() {
 }
 
 #[tokio::test]
-async fn repository_operations_keep_all_active_runs_beyond_the_recent_limit() {
+async fn repository_run_history_uses_stable_cursor_pages() {
     let store = postgres_store();
     enqueue(&store, run("run-terminal", "manual:terminal"), revision()).await;
     store
@@ -675,13 +675,33 @@ async fn repository_operations_keep_all_active_runs_beyond_the_recent_limit() {
         .await;
     }
 
-    let runs = store
+    let first = store
         .runs()
-        .repository_operations_runs("owner/repo", 20)
+        .repository_run_history_page(super::RunHistoryPageQuery {
+            repository_id: "owner/repo",
+            workflow_path: None,
+            after: None,
+            limit: 5,
+        })
         .await
         .unwrap();
-    assert_eq!(runs.len(), 21);
-    assert!(runs.iter().all(|run| !run.run.state.is_terminal()));
+    assert_eq!(first.len(), 5);
+    let cursor = super::RunHistoryCursor {
+        created_at_unix: first.last().unwrap().run.created_at_unix,
+        run_id: first.last().unwrap().run.id.clone(),
+    };
+    let second = store
+        .runs()
+        .repository_run_history_page(super::RunHistoryPageQuery {
+            repository_id: "owner/repo",
+            workflow_path: Some("/.scope/runs/test.yml"),
+            after: Some(&cursor),
+            limit: 5,
+        })
+        .await
+        .unwrap();
+    assert_eq!(second.len(), 5);
+    let runs = first.into_iter().chain(second).collect::<Vec<_>>();
     assert_eq!(
         runs.iter()
             .map(|run| &run.run.id)

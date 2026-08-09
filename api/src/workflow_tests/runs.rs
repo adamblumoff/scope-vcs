@@ -107,8 +107,13 @@ async fn run_detail_exposes_jobs_in_workflow_order_with_independent_state() {
     let jobs = detail["jobs"].as_array().unwrap();
     assert_eq!(jobs.len(), 3);
     assert_eq!(jobs[0]["job"]["key"], "backend");
+    assert_eq!(jobs[0]["job"]["needs"], serde_json::json!([]));
     assert_eq!(jobs[0]["job"]["state"], "queued");
     assert_eq!(jobs[1]["job"]["key"], "integration");
+    assert_eq!(
+        jobs[1]["job"]["needs"],
+        serde_json::json!(["backend", "web"])
+    );
     assert_eq!(jobs[1]["job"]["state"], "blocked");
     assert_eq!(jobs[2]["job"]["key"], "web");
     assert_eq!(jobs[2]["job"]["state"], "queued");
@@ -518,11 +523,11 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .unwrap();
     assert_eq!(completed.status(), StatusCode::OK);
 
-    let operations = app
+    let history = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(scope_api_contract::routes::repo_operations(
+                .uri(scope_api_contract::routes::repo_runs(
                     TEST_REPO_OWNER,
                     TEST_REPO_NAME,
                 ))
@@ -532,20 +537,35 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         )
         .await
         .unwrap();
-    assert_eq!(operations.status(), StatusCode::OK);
-    let operations = response_json(operations).await;
-    assert_eq!(operations["runs"][0]["id"], run_id);
-    assert_eq!(operations["runs"][0]["state"], "succeeded");
-    assert_eq!(operations["runs"][0]["runner_selection"]["kind"], "named");
-    assert_eq!(
-        operations["runs"][0]["runner_selection"]["name"],
-        "linux-box"
-    );
-    assert_eq!(operations["runs"][0]["can_retry"], true);
-    assert_eq!(operations["runners"][0]["name"], "linux-box");
-    assert_eq!(operations["runners"][0]["state"], "online");
-    let operations_json = serde_json::to_string(&operations).unwrap();
-    assert!(!operations_json.contains(&runner_secret));
+    assert_eq!(history.status(), StatusCode::OK);
+    let history = response_json(history).await;
+    assert_eq!(history["runs"][0]["id"], run_id);
+    assert_eq!(history["runs"][0]["state"], "succeeded");
+    assert_eq!(history["runs"][0]["runner_selection"]["kind"], "named");
+    assert_eq!(history["runs"][0]["runner_selection"]["name"], "linux-box");
+    assert_eq!(history["runs"][0]["can_retry"], true);
+    assert!(history["next_cursor"].is_null());
+
+    let runners = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_runners(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(runners.status(), StatusCode::OK);
+    let runners = response_json(runners).await;
+    assert_eq!(runners["runners"][0]["name"], "linux-box");
+    assert_eq!(runners["runners"][0]["state"], "online");
+    let resources_json = serde_json::to_string(&(history, runners)).unwrap();
+    assert!(!resources_json.contains(&runner_secret));
     for forbidden_field in [
         "secret",
         "owner_user_id",
@@ -553,7 +573,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         "object_key",
         "token",
     ] {
-        assert!(!operations_json.contains(forbidden_field));
+        assert!(!resources_json.contains(forbidden_field));
     }
 
     let detail = app
@@ -664,11 +684,11 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .unwrap();
     assert_eq!(wrong_step.status(), StatusCode::NOT_FOUND);
 
-    let anonymous_operations = app
+    let anonymous_history = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(scope_api_contract::routes::repo_operations(
+                .uri(scope_api_contract::routes::repo_runs(
                     TEST_REPO_OWNER,
                     TEST_REPO_NAME,
                 ))
@@ -677,13 +697,13 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         )
         .await
         .unwrap();
-    assert_eq!(anonymous_operations.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(anonymous_history.status(), StatusCode::UNAUTHORIZED);
 
-    let unrelated_operations = app
+    let unrelated_history = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(scope_api_contract::routes::repo_operations(
+                .uri(scope_api_contract::routes::repo_runs(
                     TEST_REPO_OWNER,
                     TEST_REPO_NAME,
                 ))
@@ -696,7 +716,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         )
         .await
         .unwrap();
-    assert_eq!(unrelated_operations.status(), StatusCode::FORBIDDEN);
+    assert_eq!(unrelated_history.status(), StatusCode::FORBIDDEN);
 
     let terminal_events = app
         .clone()

@@ -144,10 +144,18 @@ pub fn router(state: AppState) -> Router {
         )
         .route(routes::REPO_CONFIG, get(http::repos::get_repo_config))
         .route(
-            routes::REPO_OPERATIONS,
-            get(http::runs::get_repository_operations),
+            routes::REPO_RUN_WORKFLOWS,
+            get(http::run_resources::get_repository_run_workflows),
         )
-        .route(routes::REPO_RUNS, post(http::runs::create_manual_run))
+        .route(
+            routes::REPO_RUNNERS,
+            get(http::run_resources::get_repository_runners),
+        )
+        .route(
+            routes::REPO_RUNS,
+            get(http::run_resources::get_repository_run_history)
+                .post(http::runs::create_manual_run),
+        )
         .route(routes::REPO_RUN, get(http::runs::get_run))
         .route(
             routes::REPO_RUN_DETAIL,

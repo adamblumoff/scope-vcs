@@ -14,6 +14,7 @@ mod m0013_workflow_jobs;
 mod m0014_run_jobs;
 mod m0015_runner_capacity;
 mod m0016_workflow_runtime_contract;
+mod m0017_run_history_indexes;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -45,6 +46,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0014_run_jobs::Migration),
             Box::new(m0015_runner_capacity::Migration),
             Box::new(m0016_workflow_runtime_contract::Migration),
+            Box::new(m0017_run_history_indexes::Migration),
         ]
     }
 }

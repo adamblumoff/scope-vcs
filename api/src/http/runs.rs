@@ -2,8 +2,7 @@ use crate::{
     auth::scope::require_scope_user,
     error::ApiError,
     http::responses::{
-        RepositoryOperationsResponse, RepositoryRunDetailResponse, RepositoryRunLogResponse,
-        RepositoryRunStepLogPageResponse, RepositoryRunnerResponse, RepositoryRunnerState,
+        RepositoryRunDetailResponse, RepositoryRunLogResponse, RepositoryRunStepLogPageResponse,
         git_oid_request,
     },
     http::run_detail_response::build_run_detail_response,
@@ -54,9 +53,7 @@ const RUN_LOG_STREAM_PAGE_SIZE: usize = 64;
 const RUN_LOG_STREAM_BUFFER: usize = 32;
 const RUN_LOG_STREAM_AUTH_RECHECK: Duration = Duration::from_secs(30);
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
-const REPOSITORY_RUN_LIMIT: u64 = 20;
 const REPOSITORY_STEP_LOG_LIMIT: u64 = 128;
-const RUNNER_ONLINE_WINDOW_SECONDS: u64 = 90;
 
 pub(crate) async fn create_manual_run(
     State(state): State<AppState>,
@@ -144,50 +141,6 @@ pub(crate) async fn get_run(
         &snapshot.jobs,
         snapshot.logs_truncated,
     )?))
-}
-
-pub(crate) async fn get_repository_operations(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<RepositoryOperationsResponse>, ApiError> {
-    let user = require_scope_user(&state, &headers).await?;
-    let repo = require_repo_member(&state, &user.id, &owner, &repo_name).await?;
-    let runs_store = state.metadata.runs();
-    let (runs, runners) = tokio::try_join!(
-        runs_store.repository_operations_runs(&repo.record.id, REPOSITORY_RUN_LIMIT),
-        runs_store.repository_runners(&repo.record.id),
-    )?;
-    let now_unix = unix_now()?;
-
-    let runs = runs
-        .iter()
-        .map(|entry| repository_run_summary(&entry.run, &entry.jobs))
-        .collect::<Result<Vec<_>, ApiError>>()?;
-    Ok(Json(RepositoryOperationsResponse {
-        runs,
-        runners: runners
-            .into_iter()
-            .map(|entry| {
-                let state = if !entry.runner.supports_dispatch() {
-                    RepositoryRunnerState::Disabled
-                } else if entry.runner.last_seen_at_unix.is_some_and(|last_seen| {
-                    last_seen >= now_unix.saturating_sub(RUNNER_ONLINE_WINDOW_SECONDS)
-                }) {
-                    RepositoryRunnerState::Online
-                } else {
-                    RepositoryRunnerState::Offline
-                };
-                RepositoryRunnerResponse {
-                    id: entry.runner.id,
-                    name: entry.grant.name.as_str().to_string(),
-                    version: entry.runner.version,
-                    state,
-                    last_seen_at_unix: entry.runner.last_seen_at_unix,
-                }
-            })
-            .collect(),
-    }))
 }
 
 pub(crate) async fn get_repository_run_detail(

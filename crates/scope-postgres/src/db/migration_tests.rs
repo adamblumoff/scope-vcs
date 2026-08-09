@@ -16,6 +16,25 @@ const RETIRED_V6_TABLES: &[&str] = &[
     "scope_repository_settings",
     "scope_source_blob_cleanup_jobs",
 ];
+const LATEST_MIGRATIONS: &[&str] = &[
+    "m0001_adopt_v6",
+    "m0002_retire_reset_schema",
+    "m0003_structured_run_attempts",
+    "m0004_runner_protocol_cutover",
+    "m0005_projection_head_oid",
+    "m0006_drop_request_credits",
+    "m0007_drop_review_ceremony",
+    "m0008_one_way_request_submission",
+    "m0009_request_ratings",
+    "m0010_file_visibility_source_of_truth",
+    "m0011_compact_request_started_events",
+    "m0012_request_revisions",
+    "m0013_workflow_jobs",
+    "m0014_run_jobs",
+    "m0015_runner_capacity",
+    "m0016_workflow_runtime_contract",
+    "m0017_run_history_indexes",
+];
 
 pub(super) async fn isolated_database() -> (
     TestDatabaseTarget,
@@ -168,27 +187,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
     migrations::apply(db.as_ref()).await.unwrap();
 
     migrations::assert_exact_state(db.as_ref()).await.unwrap();
-    assert_eq!(
-        applied_versions(db.as_ref()).await,
-        [
-            "m0001_adopt_v6",
-            "m0002_retire_reset_schema",
-            "m0003_structured_run_attempts",
-            "m0004_runner_protocol_cutover",
-            "m0005_projection_head_oid",
-            "m0006_drop_request_credits",
-            "m0007_drop_review_ceremony",
-            "m0008_one_way_request_submission",
-            "m0009_request_ratings",
-            "m0010_file_visibility_source_of_truth",
-            "m0011_compact_request_started_events",
-            "m0012_request_revisions",
-            "m0013_workflow_jobs",
-            "m0014_run_jobs",
-            "m0015_runner_capacity",
-            "m0016_workflow_runtime_contract",
-        ]
-    );
+    assert_eq!(applied_versions(db.as_ref()).await, LATEST_MIGRATIONS);
     assert!(!relation_exists(db.as_ref(), "scope_metadata_schema").await);
     assert!(!relation_exists(db.as_ref(), "scope_metadata_reset_events").await);
 
@@ -866,27 +865,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
     migrations::apply(db.as_ref()).await.unwrap();
 
     assert_eq!(representative_business_snapshot(db.as_ref()).await, before);
-    assert_eq!(
-        applied_versions(db.as_ref()).await,
-        [
-            "m0001_adopt_v6",
-            "m0002_retire_reset_schema",
-            "m0003_structured_run_attempts",
-            "m0004_runner_protocol_cutover",
-            "m0005_projection_head_oid",
-            "m0006_drop_request_credits",
-            "m0007_drop_review_ceremony",
-            "m0008_one_way_request_submission",
-            "m0009_request_ratings",
-            "m0010_file_visibility_source_of_truth",
-            "m0011_compact_request_started_events",
-            "m0012_request_revisions",
-            "m0013_workflow_jobs",
-            "m0014_run_jobs",
-            "m0015_runner_capacity",
-            "m0016_workflow_runtime_contract",
-        ]
-    );
+    assert_eq!(applied_versions(db.as_ref()).await, LATEST_MIGRATIONS);
 }
 
 #[tokio::test]
@@ -900,27 +879,7 @@ async fn concurrent_api_migration_attempts_serialize() {
 
     first.unwrap();
     second.unwrap();
-    assert_eq!(
-        applied_versions(db.as_ref()).await,
-        [
-            "m0001_adopt_v6",
-            "m0002_retire_reset_schema",
-            "m0003_structured_run_attempts",
-            "m0004_runner_protocol_cutover",
-            "m0005_projection_head_oid",
-            "m0006_drop_request_credits",
-            "m0007_drop_review_ceremony",
-            "m0008_one_way_request_submission",
-            "m0009_request_ratings",
-            "m0010_file_visibility_source_of_truth",
-            "m0011_compact_request_started_events",
-            "m0012_request_revisions",
-            "m0013_workflow_jobs",
-            "m0014_run_jobs",
-            "m0015_runner_capacity",
-            "m0016_workflow_runtime_contract",
-        ]
-    );
+    assert_eq!(applied_versions(db.as_ref()).await, LATEST_MIGRATIONS);
 }
 
 #[tokio::test]

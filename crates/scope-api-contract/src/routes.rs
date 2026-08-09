@@ -41,8 +41,9 @@ pub const ATTEMPT_STEP_START: &str =
 pub const ATTEMPT_STEP_COMPLETE: &str =
     "/v1/runner-protocol/attempts/{attempt_id}/steps/{step_index}/complete";
 pub const REPO: &str = "/v1/repos/{owner}/{repo}";
-pub const REPO_OPERATIONS: &str = "/v1/repos/{owner}/{repo}/operations";
 pub const REPO_RUNS: &str = "/v1/repos/{owner}/{repo}/runs";
+pub const REPO_RUN_WORKFLOWS: &str = "/v1/repos/{owner}/{repo}/run-workflows";
+pub const REPO_RUNNERS: &str = "/v1/repos/{owner}/{repo}/run-runners";
 pub const REPO_RUN: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}";
 pub const REPO_RUN_DETAIL: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/detail";
 pub const REPO_RUN_STEP_LOGS: &str =
@@ -206,8 +207,12 @@ pub fn repo_runs(owner: &str, repo: &str) -> String {
     format!("{}/runs", self::repo(owner, repo))
 }
 
-pub fn repo_operations(owner: &str, repo: &str) -> String {
-    format!("{}/operations", self::repo(owner, repo))
+pub fn repo_run_workflows(owner: &str, repo: &str) -> String {
+    format!("{}/run-workflows", self::repo(owner, repo))
+}
+
+pub fn repo_runners(owner: &str, repo: &str) -> String {
+    format!("{}/run-runners", self::repo(owner, repo))
 }
 
 pub fn repo_run(owner: &str, repo: &str, run_id: &str) -> String {

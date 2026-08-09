@@ -46,7 +46,9 @@ import type {
   RepositoryInviteResponse,
   RepositoryMemberPermissions,
   RepositoryMemberResponse,
-  RepositoryOperationsResponse,
+  RepositoryRunHistoryPageResponse,
+  RepositoryRunWorkflowListResponse,
+  RepositoryRunWorkflowResponse,
   RepositoryRunDetailResponse,
   RepositoryRunAttemptResponse,
   RepositoryRunJobDetailResponse,
@@ -59,6 +61,7 @@ import type {
   RepositoryRunSummaryResponse,
   RepositoryRunnerResponse,
   RepositoryRunnerState,
+  RepositoryRunnersResponse,
   SessionIdentity as GeneratedSessionIdentity,
   FileChangeKind as GeneratedFileChangeKind,
   UserResponse,
@@ -92,8 +95,10 @@ export type RepoInviteLookup = RepositoryInviteLookupResponse
 export type AcceptRepoInviteResponse = AcceptRepositoryInviteResponse
 export type RepoFile = RepoFileResponse
 export type RepoFileContent = RepoFileContentResponse
-export type RepoOperations = RepositoryOperationsResponse
 export type RepoRun = RepositoryRunSummaryResponse
+export type RepoRunHistoryPage = RepositoryRunHistoryPageResponse
+export type RepoRunWorkflowList = RepositoryRunWorkflowListResponse
+export type RepoRunWorkflow = RepositoryRunWorkflowResponse
 export type RepoRunState = RepositoryRunState
 export type RepoRunDetail = RepositoryRunDetailResponse
 export type RepoRunAttempt = RepositoryRunAttemptResponse
@@ -105,6 +110,7 @@ export type RepoRunStep = RepositoryRunStepResponse
 export type RepoRunStepLogPage = RepositoryRunStepLogPageResponse
 export type RepoRunner = RepositoryRunnerResponse
 export type RepoRunnerState = RepositoryRunnerState
+export type RepoRunners = RepositoryRunnersResponse
 export type FirstPushToken = FirstPushTokenResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
 export type CommitHistory = CommitHistoryResponse
@@ -148,6 +154,12 @@ export type RepoParams = {
 
 export type RunActionInput = RepoParams & {
   run_id: string
+}
+
+export type RepoRunHistoryInput = RepoParams & {
+  after?: string
+  limit?: number
+  workflow?: string
 }
 
 export type RunStepLogsInput = RunActionInput & {
