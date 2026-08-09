@@ -1,7 +1,11 @@
 use crate::{
     auth::scope::require_scope_user,
     error::ApiError,
-    http::{request_review::validate_request_discussion_anchor, requests::*, responses::*},
+    http::{
+        request_review::{RequestRevisionCommitVisibility, validate_request_discussion_anchor},
+        requests::*,
+        responses::*,
+    },
     persistence::unix_now,
     state::AppState,
 };
@@ -24,7 +28,7 @@ use scope_domain::requests::{
     ReopenAndReplyToRequestDiscussionInput, RequestViewer, request_policy,
 };
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const DEFAULT_DISCUSSION_LIMIT: usize = 25;
 const MAX_DISCUSSION_LIMIT: usize = 100;
@@ -132,10 +136,15 @@ pub(crate) async fn list_discussions(
             })
         })
         .flatten();
-    let discussions = discussions
-        .into_iter()
-        .map(|model| discussion_summary(model, &batch.users, &repo, access))
-        .collect::<Result<Vec<_>, _>>()?;
+    let projection = DiscussionProjection {
+        state: &state,
+        owner: &owner,
+        repo_name: &repo_name,
+        request: &request,
+        repo: &repo,
+        access,
+    };
+    let discussions = discussion_summaries(&projection, discussions, &batch.users).await?;
     Ok(Json(RequestDiscussionPageResponse {
         discussions,
         next_cursor,
@@ -178,15 +187,15 @@ pub(crate) async fn create_discussion(
         .await?;
     let through_position = mutation.discussion.last_activity_position;
     let discussion_id = mutation.discussion.id.clone();
-    let discussion = load_one_summary(
-        &state,
-        &repo,
+    let projection = DiscussionProjection {
+        state: &state,
+        owner: &owner,
+        repo_name: &repo_name,
+        request: &request,
+        repo: &repo,
         access,
-        &request.id,
-        &discussion_id,
-        Some(&actor_user_id),
-    )
-    .await?;
+    };
+    let discussion = load_one_summary(&projection, &discussion_id, Some(&actor_user_id)).await?;
     state
         .publish_request_timeline_change(
             &repo.record.id,
@@ -272,11 +281,16 @@ pub(crate) async fn create_reply(
             now_unix: unix_now()?,
         })
         .await?;
-    reply_mutation_response(
-        &state,
-        &repo,
+    let projection = DiscussionProjection {
+        state: &state,
+        owner: &owner,
+        repo_name: &repo_name,
+        request: &request,
+        repo: &repo,
         access,
-        &request,
+    };
+    reply_mutation_response(
+        &projection,
         mutation.discussion.id,
         mutation.reply,
         &actor_user_id,
@@ -346,11 +360,16 @@ pub(crate) async fn reopen_and_reply(
             now_unix: unix_now()?,
         })
         .await?;
-    reply_mutation_response(
-        &state,
-        &repo,
+    let projection = DiscussionProjection {
+        state: &state,
+        owner: &owner,
+        repo_name: &repo_name,
+        request: &request,
+        repo: &repo,
         access,
-        &request,
+    };
+    reply_mutation_response(
+        &projection,
         mutation.discussion.id,
         mutation.reply,
         &actor_user_id,
@@ -417,11 +436,15 @@ pub(crate) async fn changed_discussions(
         .last()
         .map(|model| model.discussion.last_activity_position)
         .unwrap_or(request.activity_version);
-    let discussions = batch
-        .discussions
-        .into_iter()
-        .map(|model| discussion_summary(model, &batch.users, &repo, access))
-        .collect::<Result<Vec<_>, _>>()?;
+    let projection = DiscussionProjection {
+        state: &state,
+        owner: &owner,
+        repo_name: &repo_name,
+        request: &request,
+        repo: &repo,
+        access,
+    };
+    let discussions = discussion_summaries(&projection, batch.discussions, &batch.users).await?;
     Ok(Json(RequestDiscussionChangesResponse {
         discussions,
         through_position,
@@ -546,15 +569,15 @@ async fn transition_discussion(
             .await?
     };
     let through_position = discussion.last_activity_position;
-    let discussion = load_one_summary(
-        &state,
-        &repo,
+    let projection = DiscussionProjection {
+        state: &state,
+        owner: &owner,
+        repo_name: &repo_name,
+        request: &request,
+        repo: &repo,
         access,
-        &request.id,
-        &discussion_id,
-        Some(&actor_user_id),
-    )
-    .await?;
+    };
+    let discussion = load_one_summary(&projection, &discussion_id, Some(&actor_user_id)).await?;
     state
         .publish_request_timeline_change(
             &repo.record.id,
@@ -568,41 +591,33 @@ async fn transition_discussion(
 }
 
 async fn reply_mutation_response(
-    state: &AppState,
-    repo: &scope_domain::store::StoredRepository,
-    access: scope_domain::store::RepositoryAccess,
-    request: &scope_domain::requests::Request,
+    projection: &DiscussionProjection<'_>,
     discussion_id: String,
     reply: scope_domain::requests::RequestDiscussionReply,
     actor_user_id: &str,
 ) -> Result<Json<RequestDiscussionReplyMutationResponse>, ApiError> {
-    let discussion = load_one_summary(
-        state,
-        repo,
-        access,
-        &request.id,
-        &discussion_id,
-        Some(actor_user_id),
-    )
-    .await?;
-    let users = state
+    let discussion = load_one_summary(projection, &discussion_id, Some(actor_user_id)).await?;
+    let users = projection
+        .state
         .metadata
         .requests()
         .users_by_ids([reply.author_user_id.clone()])
         .await?;
-    let child_reply_count = state
+    let child_reply_count = projection
+        .state
         .metadata
         .requests()
         .request_discussion_reply_child_count(&reply.id)
         .await?;
     let response = reply_response(reply.clone(), child_reply_count, &users)?;
-    state
+    projection
+        .state
         .publish_request_timeline_change(
-            &repo.record.id,
-            request.id.clone(),
+            &projection.repo.record.id,
+            projection.request.id.clone(),
             discussion_id,
             reply.position,
-            request.audience,
+            projection.request.audience,
         )
         .await;
     Ok(Json(RequestDiscussionReplyMutationResponse {
@@ -612,20 +627,24 @@ async fn reply_mutation_response(
 }
 
 async fn load_one_summary(
-    state: &AppState,
-    repo: &scope_domain::store::StoredRepository,
-    access: scope_domain::store::RepositoryAccess,
-    request_id: &str,
+    projection: &DiscussionProjection<'_>,
     discussion_id: &str,
     viewer_user_id: Option<&str>,
 ) -> Result<RequestDiscussionSummaryResponse, ApiError> {
-    let (model, users) = state
+    let (model, users) = projection
+        .state
         .metadata
         .requests()
-        .request_discussion(request_id, discussion_id, viewer_user_id)
+        .request_discussion(&projection.request.id, discussion_id, viewer_user_id)
         .await?
         .ok_or_else(|| ApiError::not_found("request discussion not found"))?;
-    discussion_summary(model, &users, repo, access)
+    let visibility = discussion_anchor_visibility(
+        projection,
+        std::iter::once(model.discussion.anchor.as_ref()),
+    )
+    .await;
+    let anchor = discussion_anchor_response(model.discussion.anchor.clone(), &visibility);
+    discussion_summary(model, &users, anchor)
 }
 
 async fn ensure_discussion_in_request(
@@ -645,8 +664,7 @@ async fn ensure_discussion_in_request(
 fn discussion_summary(
     model: scope_postgres::db::RequestDiscussionReadModel,
     users: &BTreeMap<String, scope_domain::store::UserAccount>,
-    repo: &scope_domain::store::StoredRepository,
-    access: scope_domain::store::RepositoryAccess,
+    anchor: Option<RequestDiscussionAnchor>,
 ) -> Result<RequestDiscussionSummaryResponse, ApiError> {
     Ok(RequestDiscussionSummaryResponse {
         id: model.discussion.id,
@@ -656,10 +674,7 @@ fn discussion_summary(
         last_activity_position: model.discussion.last_activity_position,
         author: request_actor_summary_response(&model.discussion.author_user_id, users)?,
         body_markdown: model.discussion.body_markdown,
-        anchor: model
-            .discussion
-            .anchor
-            .map(|anchor| discussion_anchor_response(anchor, repo, access)),
+        anchor,
         status: model.discussion.status.into(),
         reply_count: model.reply_count,
         unread_count: model.unread_count,
@@ -679,17 +694,86 @@ fn discussion_summary(
     })
 }
 
-fn discussion_anchor_response(
-    anchor: scope_domain::requests::RequestDiscussionAnchor,
-    repo: &scope_domain::store::StoredRepository,
+struct DiscussionProjection<'a> {
+    state: &'a AppState,
+    owner: &'a str,
+    repo_name: &'a str,
+    request: &'a scope_domain::requests::Request,
+    repo: &'a scope_domain::store::StoredRepository,
     access: scope_domain::store::RepositoryAccess,
+}
+
+async fn discussion_summaries(
+    projection: &DiscussionProjection<'_>,
+    models: Vec<scope_postgres::db::RequestDiscussionReadModel>,
+    users: &BTreeMap<String, scope_domain::store::UserAccount>,
+) -> Result<Vec<RequestDiscussionSummaryResponse>, ApiError> {
+    let visibility = discussion_anchor_visibility(
+        projection,
+        models.iter().map(|model| model.discussion.anchor.as_ref()),
+    )
+    .await;
+    let mut summaries = Vec::with_capacity(models.len());
+    for model in models {
+        let anchor = discussion_anchor_response(model.discussion.anchor.clone(), &visibility);
+        summaries.push(discussion_summary(model, users, anchor)?);
+    }
+    Ok(summaries)
+}
+
+async fn discussion_anchor_visibility<'a>(
+    projection: &DiscussionProjection<'_>,
+    anchors: impl Iterator<Item = Option<&'a scope_domain::requests::RequestDiscussionAnchor>>,
+) -> BTreeSet<(String, String)> {
+    let mut commits_by_revision = BTreeMap::<String, BTreeSet<String>>::new();
+    for anchor in anchors.flatten() {
+        if let Some(commit_oid) = &anchor.commit_oid {
+            commits_by_revision
+                .entry(anchor.revision_id.clone())
+                .or_default()
+                .insert(commit_oid.clone());
+        }
+    }
+    if projection.access.can_read_private_files {
+        return commits_by_revision
+            .into_iter()
+            .flat_map(|(revision_id, commit_oids)| {
+                commit_oids
+                    .into_iter()
+                    .map(move |commit_oid| (revision_id.clone(), commit_oid))
+            })
+            .collect();
+    }
+    RequestRevisionCommitVisibility::new(
+        projection.state,
+        projection.owner,
+        projection.repo_name,
+        projection.repo,
+        projection.access,
+        projection.request,
+    )
+    .visible_commits(&commits_by_revision)
+    .await
+}
+
+fn discussion_anchor_response(
+    anchor: Option<scope_domain::requests::RequestDiscussionAnchor>,
+    visible_commits: &BTreeSet<(String, String)>,
+) -> Option<RequestDiscussionAnchor> {
+    let anchor = anchor?;
+    let commit_context_is_visible = match anchor.commit_oid.as_deref() {
+        None => anchor.path.is_none(),
+        Some(commit_oid) => {
+            visible_commits.contains(&(anchor.revision_id.clone(), commit_oid.to_string()))
+        }
+    };
+    Some(project_discussion_anchor(anchor, commit_context_is_visible))
+}
+
+fn project_discussion_anchor(
+    anchor: scope_domain::requests::RequestDiscussionAnchor,
+    commit_context_is_visible: bool,
 ) -> RequestDiscussionAnchor {
-    let commit_context_is_visible = anchor
-        .path
-        .as_ref()
-        .map_or(access.can_read_private_files, |path| {
-            repo.policy.can_read(path, access.can_read_private_files)
-        });
     RequestDiscussionAnchor {
         revision_id: anchor.revision_id,
         commit_oid: commit_context_is_visible
@@ -764,32 +848,20 @@ fn encode_discussion_cursor(snapshot_version: u64, position: u64, id: &str) -> S
 mod tests {
     use super::*;
     use scope_domain::{
-        policy::{ScopePath, Visibility, VisibilityRule},
-        requests::RequestDiscussionAnchor as DomainDiscussionAnchor,
-        store::{RepositoryAccess, StoredRepository, UserAccount},
+        policy::ScopePath, requests::RequestDiscussionAnchor as DomainDiscussionAnchor,
     };
 
     #[test]
-    fn discussion_anchor_hides_private_commit_context_from_public_readers() {
-        let owner = UserAccount {
-            id: "owner".to_string(),
-            handle: "owner".to_string(),
-            email: "owner@example.test".to_string(),
-            email_verified: true,
-        };
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+    fn discussion_anchor_hides_whole_commit_context_when_policy_rejects_it() {
         let private_path = ScopePath::parse("/internal/plan.md").unwrap();
-        repo.policy
-            .add_rule(VisibilityRule::private(private_path.clone()))
-            .unwrap();
         let anchor = DomainDiscussionAnchor {
             revision_id: "revision".to_string(),
             commit_oid: Some("commit".to_string()),
             path: Some(private_path),
         };
 
-        let public = discussion_anchor_response(anchor.clone(), &repo, RepositoryAccess::public());
-        let private = discussion_anchor_response(anchor, &repo, repo.access_for_user_id(&owner.id));
+        let public = project_discussion_anchor(anchor.clone(), false);
+        let private = project_discussion_anchor(anchor, true);
 
         assert_eq!(public.path, None);
         assert_eq!(public.commit_oid, None);
@@ -799,20 +871,13 @@ mod tests {
 
     #[test]
     fn discussion_anchor_hides_commit_only_context_from_public_readers() {
-        let owner = UserAccount {
-            id: "owner".to_string(),
-            handle: "owner".to_string(),
-            email: "owner@example.test".to_string(),
-            email_verified: true,
-        };
-        let repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
         let anchor = DomainDiscussionAnchor {
             revision_id: "revision".to_string(),
             commit_oid: Some("commit".to_string()),
             path: None,
         };
 
-        let public = discussion_anchor_response(anchor, &repo, RepositoryAccess::public());
+        let public = project_discussion_anchor(anchor, false);
 
         assert_eq!(public.commit_oid, None);
         assert_eq!(public.path, None);

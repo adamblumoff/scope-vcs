@@ -116,6 +116,12 @@ export function RequestChangesWorkbench({
     ) : undefined,
     [discussionReferences, model.selectedRevision, params, references, revisions.has_earlier_revisions],
   )
+  const emptyDescription = model.commitState.status === 'failed'
+    ? model.commitState.error ?? 'Request changes are unavailable.'
+    : 'Changes appear here after the request branch is pushed.'
+  const emptyTitle = model.commitState.status === 'failed'
+    ? 'Request changes unavailable'
+    : 'No request changes yet'
 
   return (
     <HistoryWorkbench
@@ -123,8 +129,8 @@ export function RequestChangesWorkbench({
       commitState={model.commitState}
       commits={model.commits}
       diffIdentity={model.diffIdentity}
-      emptyDescription="Changes appear here after the request branch is pushed."
-      emptyTitle="No request changes yet"
+      emptyDescription={emptyDescription}
+      emptyTitle={emptyTitle}
       fileDiffState={model.fileDiffState}
       fileTabs={model.fileTabs}
       onActivateFileTab={model.activateFileTab}
@@ -278,15 +284,18 @@ function useRequestChangesModel({
     [orderedRevisions],
   )
   const selection = useMemo(
-    () => requestChangeSelection(orderedRevisions, search),
-    [orderedRevisions, search],
+    () => requestChangeSelection(
+      orderedRevisions,
+      revisions.review_revision_id,
+      search,
+    ),
+    [orderedRevisions, revisions.review_revision_id, search],
   )
   const selectedRevision = selection.revision
   const selectedCommitOid = selection.commit
   const selectedCommitId = selectedRevision && selectedCommitOid
     ? requestRevisionCommitId(selectedRevision.id, selectedCommitOid)
     : null
-  const selectionUnavailable = selection.unavailable
   const generation = `${orderedRevisions.at(-1)?.position ?? 0}`
   const viewKey = `request:${params.request_id}:${selectedRevision?.id ?? 'none'}`
   const commitIdentity = selectedCommitId && selectedRevision
@@ -373,8 +382,8 @@ function useRequestChangesModel({
     })),
     storageKey: `request-history:${repoId}:${selectedRevision?.id ?? 'none'}:${selectedCommitOid ?? 'none'}`,
   })
-  const commitState: CommitDetailState = selectionUnavailable
-    ? { commit: null, error: 'This revision or commit is not part of the request.', status: 'failed' }
+  const commitState: CommitDetailState = selection.error
+    ? { commit: null, error: selection.error, status: 'failed' }
     : resourceToCommitState(commitResource)
   const fileDiffState: CommitFileDiffState =
     selectedFilePath && selectedCommit && !selectedFile
@@ -411,7 +420,7 @@ function useRequestChangesModel({
     diffIdentity,
     fileDiffState,
     fileTabs: fileTabs.tabs,
-    retryCommit: selectionUnavailable ? undefined : commitResource.retry,
+    retryCommit: selection.error ? undefined : commitResource.retry,
     retryDiff: selectedFilePath && selectedCommit && !selectedFile
       ? undefined
       : diffResource.retry,
@@ -448,14 +457,21 @@ function RequestCommitContext({
       <div className="flex flex-wrap items-center gap-2">
         <GitCommit className="size-3.5" />
         <span>Revision {revision.position} by {revision.actor.handle}</span>
-        <span className="font-mono">
-          {shortOid(revision.old_head_oid)} → {shortOid(revision.new_head_oid)}
-        </span>
+        {revision.old_head_oid && revision.new_head_oid ? (
+          <span className="font-mono">
+            {shortOid(revision.old_head_oid)} → {shortOid(revision.new_head_oid)}
+          </span>
+        ) : null}
       </div>
-      {revision.commits_truncated || hasEarlierRevisions ? (
+      {revision.inspection !== 'Complete' || hasEarlierRevisions ? (
         <p className="mt-2">
           {[
-            revision.commits_truncated ? 'Only the latest commits in this revision are shown.' : null,
+            revision.inspection === 'Incomplete'
+              ? 'Commit inspection for this revision is incomplete.'
+              : null,
+            revision.inspection === 'Unavailable'
+              ? 'Commit inspection for this revision is unavailable.'
+              : null,
             hasEarlierRevisions ? 'Earlier request revisions are omitted.' : null,
           ].filter(Boolean).join(' ')}
         </p>

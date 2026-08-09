@@ -8,30 +8,48 @@ export type RequestChangeSelection = {
 
 export function requestChangeSelection(
   revisions: RequestRevisions['revisions'],
+  reviewRevisionId: RequestRevisions['review_revision_id'],
   search: RequestChangeSelection,
 ) {
-  const latestVisibleRevision = [...revisions]
-    .reverse()
-    .find(({ commits }) => commits.length > 0)
-  const revision = search.revision
-    ? revisions.find(({ id }) => id === search.revision) ?? null
-    : search.commit
-      ? revisions.find((item) =>
-          item.commits.some(({ oid }) => oid === search.commit)) ?? null
-      : latestVisibleRevision ?? revisions.at(-1) ?? null
+  const selectedRevisionId = search.revision ?? reviewRevisionId
+  const revision = selectedRevisionId
+    ? revisions.find(({ id }) => id === selectedRevisionId) ?? null
+    : null
   const commit = revision && (
     search.commit && revision.commits.some(({ oid }) => oid === search.commit)
       ? search.commit
       : revision.commits.at(-1)?.oid
   ) || null
+  const error = selectionError(revision, commit, search, selectedRevisionId)
   return {
     commit,
+    error,
     revision,
-    unavailable: Boolean(
-      (search.revision && !revision) ||
-      (search.commit && commit !== search.commit),
-    ),
   }
+}
+
+function selectionError(
+  revision: RequestRevisions['revisions'][number] | null,
+  commit: string | null,
+  search: RequestChangeSelection,
+  selectedRevisionId: string | null | undefined,
+) {
+  if (!revision) {
+    return selectedRevisionId
+      ? 'This revision or commit is not part of the request.'
+      : null
+  }
+  if (search.commit && commit !== search.commit) {
+    return 'This revision or commit is not part of the request.'
+  }
+  if (commit) return null
+  if (revision.inspection === 'Unavailable') {
+    return 'This revision could not be inspected within the request review limits.'
+  }
+  if (revision.inspection === 'Incomplete') {
+    return 'This revision’s commit inspection is incomplete.'
+  }
+  return 'No commits in this revision are visible to you.'
 }
 
 export function orderedRequestCommits(
@@ -46,6 +64,18 @@ export function orderedRequestCommits(
       parent_projected_id: commit.parent_oids[0] ?? null,
       projected_id: requestRevisionCommitId(revision.id, commit.oid),
     })))
+}
+
+export function requestRevisionPin(
+  revision: RequestRevisions['revisions'][number] | null,
+  commit: string | null,
+  pinnedRevisionId: string | undefined,
+): RequestChangeSelection | null {
+  if (pinnedRevisionId || !revision) return null
+  return {
+    commit: commit ?? undefined,
+    revision: revision.id,
+  }
 }
 
 export function requestRevisionCommitId(revisionId: string, commitOid: string) {

@@ -454,6 +454,7 @@ pub(crate) struct RequestFileDiffRequest {
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RequestRevisionCommitFilesResponse {
     pub(crate) revision_id: String,
+    pub(crate) inspection: scope_api_contract::RequestRevisionInspectionState,
     pub(crate) commit: RequestRevisionCommitResponse,
     pub(crate) files: Vec<CommitFileResponse>,
 }
