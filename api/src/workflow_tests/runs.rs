@@ -107,8 +107,13 @@ async fn run_detail_exposes_jobs_in_workflow_order_with_independent_state() {
     let jobs = detail["jobs"].as_array().unwrap();
     assert_eq!(jobs.len(), 3);
     assert_eq!(jobs[0]["job"]["key"], "backend");
+    assert_eq!(jobs[0]["job"]["needs"], serde_json::json!([]));
     assert_eq!(jobs[0]["job"]["state"], "queued");
     assert_eq!(jobs[1]["job"]["key"], "integration");
+    assert_eq!(
+        jobs[1]["job"]["needs"],
+        serde_json::json!(["backend", "web"])
+    );
     assert_eq!(jobs[1]["job"]["state"], "blocked");
     assert_eq!(jobs[2]["job"]["key"], "web");
     assert_eq!(jobs[2]["job"]["state"], "queued");

@@ -6,11 +6,21 @@ import type {
   RepoRunHistoryInput,
   RepoRunHistoryPage,
   RepoRunStepLogPage,
-  RepoRunners,
+  RepoRunWorkflowList,
   RunActionInput,
   RunStepLogsInput,
 } from '@/api/types'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
+
+export async function loadRepoRunWorkflowsForRequest(
+  data: RepoParams,
+  api: ApiClient = createApiClient(),
+) {
+  return api.get<RepoRunWorkflowList>(
+    repoPath(ApiRouteTemplates.repoRunWorkflows, data),
+    { auth: 'optional' },
+  )
+}
 
 export async function loadRepoRunHistoryForRequest(
   data: RepoRunHistoryInput,
@@ -23,16 +33,6 @@ export async function loadRepoRunHistoryForRequest(
   const suffix = query.size ? `?${query}` : ''
   return api.get<RepoRunHistoryPage>(
     `${repoPath(ApiRouteTemplates.repoRuns, data)}${suffix}`,
-    { auth: 'optional' },
-  )
-}
-
-export async function loadRepoRunnersForRequest(
-  data: RepoParams,
-  api: ApiClient = createApiClient(),
-) {
-  return api.get<RepoRunners>(
-    repoPath(ApiRouteTemplates.repoRunners, data),
     { auth: 'optional' },
   )
 }
@@ -82,6 +82,25 @@ export function parseRunActionInput(data: RunActionInput): RunActionInput {
   }
 }
 
+export function parseRepoRunHistoryInput(
+  data: RepoRunHistoryInput,
+): RepoRunHistoryInput {
+  const input = parseRepoParams(data)
+  const workflow = data.workflow === undefined
+    ? undefined
+    : requiredSegment('workflow', data.workflow)
+  const after = data.after === undefined
+    ? undefined
+    : requiredValue('after', data.after)
+  if (
+    data.limit !== undefined &&
+    (!Number.isSafeInteger(data.limit) || data.limit < 1 || data.limit > 100)
+  ) {
+    throw new Error('limit must be an integer between 1 and 100')
+  }
+  return { ...input, after, limit: data.limit, workflow }
+}
+
 export function parseRunStepLogsInput(data: RunStepLogsInput): RunStepLogsInput {
   const input = parseRunActionInput(data)
   const attemptId = requiredSegment('attempt_id', data.attempt_id)
@@ -111,6 +130,12 @@ function requiredSegment(label: string, value: string) {
   if (!parsed || parsed.includes('/')) {
     throw new Error(`${label} must be one path segment`)
   }
+  return parsed
+}
+
+function requiredValue(label: string, value: string) {
+  const parsed = value.trim()
+  if (!parsed) throw new Error(`${label} cannot be empty`)
   return parsed
 }
 

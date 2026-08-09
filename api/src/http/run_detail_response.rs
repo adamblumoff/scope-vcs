@@ -80,6 +80,11 @@ pub(super) fn build_run_detail_response(
             Ok(RepositoryRunJobDetailResponse {
                 job: RepositoryRunJobResponse {
                     key: key.to_string(),
+                    needs: definition
+                        .needs()
+                        .iter()
+                        .map(|dependency| dependency.as_str().to_string())
+                        .collect(),
                     desired_runner: match &job.desired_runner {
                         RunnerSelector::Any => None,
                         RunnerSelector::Named(name) => Some(name.clone()),
