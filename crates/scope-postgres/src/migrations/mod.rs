@@ -15,6 +15,7 @@ mod m0014_run_jobs;
 mod m0015_runner_capacity;
 mod m0016_workflow_runtime_contract;
 mod m0017_run_history_indexes;
+mod m0018_truthful_run_log_truncation;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -97,6 +98,10 @@ fn inventory() -> Vec<MigrationSpec> {
             MaintenanceRequired,
         ),
         spec(m0017_run_history_indexes::Migration, Online),
+        spec(
+            m0018_truthful_run_log_truncation::Migration,
+            MaintenanceRequired,
+        ),
     ]
 }
 

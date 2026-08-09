@@ -1,4 +1,4 @@
-name: Runner protocol V6 eviction canary
+name: Runner protocol V7 cold-write canary
 on:
   manual: true
 runs-on: remote-linux
@@ -9,7 +9,7 @@ caches:
   - name: runner-protocol
     path: /scope/cache/runner-protocol
 jobs:
-  evict:
+  cold-write:
     steps:
-      - name: Assert cache sentinel before eviction
-        run: test "$(cat /scope/cache/runner-protocol/v6-canary-sentinel)" = 'scope-runner-protocol-v6'
+      - name: Write cache sentinel
+        run: printf '%s' 'scope-runner-protocol-v7' > /scope/cache/runner-protocol/v7-canary-sentinel

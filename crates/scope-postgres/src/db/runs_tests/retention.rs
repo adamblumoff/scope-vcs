@@ -39,6 +39,7 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
             &"a".repeat(64),
             0,
             StepConclusion::Succeeded,
+            false,
             30,
         )
         .await
@@ -50,6 +51,7 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
             &"a".repeat(64),
             0,
             StepConclusion::Succeeded,
+            false,
             31,
         )
         .await
@@ -64,6 +66,7 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
                 &"b".repeat(64),
                 0,
                 StepConclusion::Succeeded,
+                false,
                 32,
             )
             .await
@@ -84,6 +87,7 @@ async fn terminal_run_retention_deletes_metadata_and_queues_its_source_atomicall
                 &"a".repeat(64),
                 0,
                 StepConclusion::Succeeded,
+                false,
                 34,
             )
             .await

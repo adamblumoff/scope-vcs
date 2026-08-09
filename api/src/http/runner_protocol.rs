@@ -295,6 +295,7 @@ pub(crate) async fn complete_step(
             &token_hash,
             step_index,
             conclusion,
+            input.logs_truncated,
             unix_now()?,
         )
         .await?;
@@ -318,7 +319,13 @@ pub(crate) async fn complete(
     let claim = state
         .metadata
         .runs()
-        .complete_attempt(&attempt_id, &token_hash, conclusion, unix_now()?)
+        .complete_attempt(
+            &attempt_id,
+            &token_hash,
+            conclusion,
+            input.logs_truncated,
+            unix_now()?,
+        )
         .await?;
     Ok(Json(attempt_status(&claim)))
 }

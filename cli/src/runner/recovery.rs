@@ -18,7 +18,7 @@ const RECOVERY_CLAIM_FILE: &str = "claim.json";
 const RECOVERY_CLAIM_TEMP_FILE: &str = ".claim.json.tmp";
 const RECOVERY_PROGRESS_FILE: &str = "progress.json";
 const RECOVERY_PROGRESS_TEMP_FILE: &str = ".progress.json.tmp";
-const RECOVERY_SCHEMA_VERSION: u8 = 7;
+const RECOVERY_SCHEMA_VERSION: u8 = 8;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RecoveryEnvelope {
@@ -58,6 +58,7 @@ pub(super) struct RecoveryProgress {
 pub(super) struct PendingStepConclusion {
     pub(super) step_index: u32,
     pub(super) conclusion: StepConclusionRequest,
+    pub(super) logs_truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -237,6 +238,7 @@ pub(super) fn mark_recovery_step_conclusion_pending(
     claim: &ClaimRunResponse,
     step_index: u32,
     conclusion: StepConclusionRequest,
+    logs_truncated: bool,
 ) -> anyhow::Result<()> {
     let stored = matching_recovery_claim(work_dir, claim)?;
     let mut progress = stored.progress;
@@ -249,6 +251,7 @@ pub(super) fn mark_recovery_step_conclusion_pending(
     let pending = PendingStepConclusion {
         step_index,
         conclusion,
+        logs_truncated,
     };
     match &progress.pending_step_conclusion {
         Some(existing) if existing != &pending => {
@@ -789,7 +792,7 @@ mod tests {
 
     #[test]
     fn older_recovery_is_retired_before_current_schema_decoding() {
-        let root = TestDir::new("runner-v6-recovery");
+        let root = TestDir::new("runner-v7-recovery");
         let work_dir = root.path().join("attempt-v6");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
@@ -823,7 +826,7 @@ mod tests {
         let work_dir = root.path().join("attempt-newer");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
-        fs::write(&claim_path, br#"{"schema_version":8}"#).unwrap();
+        fs::write(&claim_path, br#"{"schema_version":9}"#).unwrap();
 
         let StoredRecoveryEnvelope::Newer { schema_version } =
             load_recovery_envelope(&claim_path).unwrap()
@@ -831,7 +834,7 @@ mod tests {
             panic!("newer recovery schema was not preserved");
         };
 
-        assert_eq!(schema_version, 8);
+        assert_eq!(schema_version, 9);
         assert!(claim_path.exists());
     }
 }

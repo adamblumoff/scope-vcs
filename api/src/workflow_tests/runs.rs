@@ -517,6 +517,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
             Some(format!("Bearer {attempt_token}")),
             &CompleteAttemptStepRequest {
                 conclusion: StepConclusionRequest::Succeeded,
+                logs_truncated: false,
             },
         ))
         .await

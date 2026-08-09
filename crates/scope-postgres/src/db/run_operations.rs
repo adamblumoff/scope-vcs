@@ -194,7 +194,7 @@ impl RunStore {
             .select_only()
             .column(entities::run_attempt::Column::RunId)
             .filter(entities::run_attempt::Column::RunId.is_in(run_ids.to_vec()))
-            .filter(entities::run_attempt::Column::LogsTruncated.eq(true))
+            .filter(entities::run_attempt::Column::FirstTruncatedStepIndex.is_not_null())
             .into_tuple::<String>()
             .all(self.db.as_ref())
             .await
@@ -209,7 +209,7 @@ where
 {
     Ok(entities::run_attempt::Entity::find()
         .filter(entities::run_attempt::Column::RunId.eq(run_id))
-        .filter(entities::run_attempt::Column::LogsTruncated.eq(true))
+        .filter(entities::run_attempt::Column::FirstTruncatedStepIndex.is_not_null())
         .one(conn)
         .await
         .map_err(PostgresError::internal)?

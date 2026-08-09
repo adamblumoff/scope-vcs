@@ -382,6 +382,7 @@ fn identical_terminal_completion_is_idempotent_after_current_attempt_is_cleared(
             "runner-1",
             &"e".repeat(64),
             conclusion.clone(),
+            false,
             21,
         )
         .unwrap();
@@ -394,9 +395,145 @@ fn identical_terminal_completion_is_idempotent_after_current_attempt_is_cleared(
             "runner-1",
             &"e".repeat(64),
             conclusion,
+            false,
             22,
         )
         .unwrap();
+}
+
+#[test]
+fn truncation_records_the_step_that_exhausted_the_attempt_log_budget() {
+    let revision = workflow(&[("checks", &[])]);
+    let run = run(&revision);
+    let definition = &revision.definition().jobs()[0];
+    let mut job = create_run_jobs(&run, &revision).unwrap().remove(0);
+    let (mut attempt, mut steps) = job
+        .claim(
+            &run,
+            definition,
+            &runner(),
+            &grant(),
+            "attempt-1",
+            "e".repeat(64),
+            20,
+            80,
+        )
+        .unwrap();
+    steps.push(RunAttemptStep::pending("attempt-1", 1).unwrap());
+    job.pin_container_image(
+        PinnedContainerImage::parse(format!("alpine@sha256:{}", "a".repeat(64))).unwrap(),
+        21,
+    )
+    .unwrap();
+    attempt
+        .start_step(
+            &run,
+            &mut job,
+            &mut steps,
+            "runner-1",
+            &"e".repeat(64),
+            0,
+            22,
+        )
+        .unwrap();
+    attempt.log_bytes = MAX_RUN_LOG_BYTES_PER_ATTEMPT - 1;
+    let chunk = RunLogChunk::new("attempt-1", 0, 1, "too much", 22).unwrap();
+
+    assert!(!attempt.accept_log_chunk(&steps, &chunk).unwrap());
+    assert_eq!(attempt.first_truncated_step_index, Some(0));
+    attempt
+        .complete_step(
+            &mut job,
+            &mut steps,
+            "runner-1",
+            &"e".repeat(64),
+            0,
+            StepConclusion::Succeeded,
+            true,
+            23,
+        )
+        .unwrap();
+    attempt
+        .start_step(
+            &run,
+            &mut job,
+            &mut steps,
+            "runner-1",
+            &"e".repeat(64),
+            1,
+            24,
+        )
+        .unwrap();
+    attempt
+        .complete_step(
+            &mut job,
+            &mut steps,
+            "runner-1",
+            &"e".repeat(64),
+            1,
+            StepConclusion::Succeeded,
+            true,
+            25,
+        )
+        .unwrap();
+    assert_eq!(attempt.first_truncated_step_index, Some(0));
+}
+
+#[test]
+fn interrupted_attempt_persists_active_step_log_truncation_before_completion() {
+    let revision = workflow(&[("checks", &[])]);
+    let run = run(&revision);
+    let definition = &revision.definition().jobs()[0];
+    let mut job = create_run_jobs(&run, &revision).unwrap().remove(0);
+    let (mut attempt, mut steps) = job
+        .claim(
+            &run,
+            definition,
+            &runner(),
+            &grant(),
+            "attempt-1",
+            "e".repeat(64),
+            20,
+            80,
+        )
+        .unwrap();
+    job.pin_container_image(
+        PinnedContainerImage::parse(format!("alpine@sha256:{}", "a".repeat(64))).unwrap(),
+        21,
+    )
+    .unwrap();
+    attempt
+        .start_step(
+            &run,
+            &mut job,
+            &mut steps,
+            "runner-1",
+            &"e".repeat(64),
+            0,
+            22,
+        )
+        .unwrap();
+
+    attempt
+        .complete(
+            &run,
+            &mut job,
+            &mut steps,
+            "runner-1",
+            &"e".repeat(64),
+            AttemptConclusion::TimedOut,
+            true,
+            23,
+        )
+        .unwrap();
+
+    assert_eq!(attempt.first_truncated_step_index, Some(0));
+    assert_eq!(
+        attempt.terminal_reason,
+        Some(AttemptTerminalReason::TimedOut {
+            step_index: Some(0),
+        })
+    );
 }
 
 #[test]

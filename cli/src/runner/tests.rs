@@ -359,7 +359,11 @@ fn job_container_receives_only_declared_workflow_environment() {
     assert!(joined.contains("set -eu"));
     assert!(joined.contains("next_phase"));
     assert!(joined.contains("\"$next_phase\" = run"));
-    assert!(joined.contains("sh -e"));
+    assert!(joined.contains("setsid sh -e"));
+    assert!(joined.contains("collector_pid=$!"));
+    assert!(joined.contains("kill -TERM -\"$step_pid\""));
+    assert!(joined.contains("wait \"$collector_pid\""));
+    assert!(joined.contains("exit \"$step_status\""));
 }
 
 #[test]
@@ -388,6 +392,7 @@ fn replayed_step_conclusion_advances_local_recovery_to_the_next_step() {
         pending_step_conclusion: Some(recovery::PendingStepConclusion {
             step_index: 0,
             conclusion: StepConclusionRequest::Succeeded,
+            logs_truncated: false,
         }),
         pending_attempt_conclusion: None,
         pending_attempt_abandon: false,
@@ -474,11 +479,17 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         })
     );
     update_recovery_log_progress(&root, &claim, 0, 2, 4, false).unwrap();
-    mark_recovery_step_conclusion_pending(&root, &claim, 0, StepConclusionRequest::Succeeded)
-        .unwrap();
+    mark_recovery_step_conclusion_pending(
+        &root,
+        &claim,
+        0,
+        StepConclusionRequest::Succeeded,
+        false,
+    )
+    .unwrap();
     mark_recovery_execution_started(&root, &claim, 90).unwrap();
     let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    assert_eq!(stored["schema_version"], 7);
+    assert_eq!(stored["schema_version"], 8);
     let stored: ClaimRunResponse = serde_json::from_value(stored["claim"].clone()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);
@@ -495,6 +506,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
         Some(recovery::PendingStepConclusion {
             step_index: 0,
             conclusion: StepConclusionRequest::Succeeded,
+            logs_truncated: false,
         })
     );
     assert!(!root.join(".progress.json.tmp").exists());

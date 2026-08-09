@@ -203,6 +203,7 @@ async fn runner_capacity_is_authoritative_across_concurrent_job_claims() {
                 exit_code: 1,
                 message: "build setup failed".into(),
             },
+            false,
             21,
         )
         .await
@@ -258,7 +259,8 @@ async fn run_detail_preserves_attempt_history_bounded_per_job() {
                  id, run_id, job_key, number, runner_id, runner_name, token_hash,
                  token_expires_at_unix, state, lease_expires_at_unix,
                  last_heartbeat_at_unix, created_at_unix, started_at_unix,
-                 completed_at_unix, terminal_reason, log_bytes, logs_truncated
+                 completed_at_unix, terminal_reason, log_bytes,
+                 first_truncated_step_index
              )
              SELECT 'attempt-' || job_key || '-' || number,
                     'run-history', job_key, number, 'runner-history', 'linux-box',
@@ -269,7 +271,7 @@ async fn run_detail_preserves_attempt_history_bounded_per_job() {
                         'exit_code', 1,
                         'message', 'setup failed'
                     ),
-                    0, FALSE
+                    0, NULL
              FROM unnest(ARRAY['build', 'lint']) AS job_key
              CROSS JOIN generate_series(1, 51) AS number;
              INSERT INTO scope_run_attempt_steps (
@@ -503,6 +505,7 @@ async fn active_cancellation_is_intent_until_runner_acknowledges() {
             &claim.attempt.id,
             &"a".repeat(64),
             AttemptConclusion::Canceled,
+            false,
             50,
         )
         .await
@@ -565,6 +568,7 @@ async fn retry_persists_the_jobs_pinned_container_image() {
                 exit_code: 1,
                 message: "setup failed".into(),
             },
+            false,
             22,
         )
         .await

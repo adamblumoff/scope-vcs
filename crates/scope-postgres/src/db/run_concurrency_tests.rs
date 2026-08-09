@@ -131,6 +131,7 @@ async fn completed_sibling_cannot_regress_running_run_while_another_job_is_lease
             &"a".repeat(64),
             0,
             StepConclusion::Succeeded,
+            false,
             23,
         )
         .await
@@ -639,6 +640,7 @@ async fn attempt_details_are_newest_first_by_internal_ordinal_with_isolated_step
                 exit_code: 1,
                 message: "setup failed".to_string(),
             },
+            false,
             20,
         )
         .await
