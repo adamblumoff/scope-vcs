@@ -1,49 +1,42 @@
-import { HttpError } from '@/api/client'
-import { loadRepoOperationsForRequest } from '@/api/runs'
-import { parseRepoParams } from '@/api/repos'
-import type { RepoParams } from '@/api/types'
+import type { RepoRunHistoryInput, RunActionInput } from '@/api/types'
 import {
   RepositoryRunsPage,
-  RunsPageError,
-  RunsPagePending,
 } from '@/features/runs/repository-runs-page'
+import { RunsPageError } from '@/features/runs/runs-page-error'
+import { RunsPagePending } from '@/features/runs/runs-page-pending'
+import {
+  loadRepoRunHistory,
+  loadRepoRunDetail,
+  loadRepoRunPage,
+} from '@/routes/-run-history-actions'
 import { createFileRoute } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/react-start'
 import { useCallback } from 'react'
 
-const loadRepoOperations = createServerFn({ method: 'GET' })
-  .validator(parseRepoParams)
-  .handler(async ({ data }) => {
-    try {
-      return await loadRepoOperationsForRequest(data)
-    } catch (error) {
-      if (error instanceof HttpError && [401, 403, 404].includes(error.status)) {
-        return null
-      }
-      throw error
-    }
-  })
-
 export const Route = createFileRoute('/$owner/$repo/runs/')({
-  loader: ({ params }) => loadRepoOperations({ data: params }),
+  loader: ({ params }) => loadRepoRunPage({ data: params }),
   errorComponent: RunsPageError,
   pendingComponent: RunsPagePending,
   component: RepoRunsRoute,
 })
 
 function RepoRunsRoute() {
-  const initialOperations = Route.useLoaderData()
+  const initialResources = Route.useLoaderData()
   const params = Route.useParams()
-  const loadOperations = useCallback(
-    (input: RepoParams) => loadRepoOperations({ data: input }),
+  const loadHistory = useCallback(
+    (input: RepoRunHistoryInput) => loadRepoRunHistory({ data: input }),
+    [],
+  )
+  const loadDetail = useCallback(
+    (input: RunActionInput) => loadRepoRunDetail({ data: input }),
     [],
   )
 
   return (
     <RepositoryRunsPage
-      initialOperations={initialOperations}
-      key={`${params.owner}/${params.repo}/${initialOperations ? 'member' : 'denied'}`}
-      loadOperations={loadOperations}
+      initialResources={initialResources}
+      key={`${params.owner}/${params.repo}/all/${initialResources ? 'member' : 'denied'}`}
+      loadDetail={loadDetail}
+      loadHistory={loadHistory}
       params={params}
     />
   )

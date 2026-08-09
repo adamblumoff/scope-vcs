@@ -276,7 +276,7 @@ async fn workflow_jobs_rewrite_refuses_to_start_until_attempts_are_drained() {
     assert_eq!(
         row.try_get::<String>("", "workflow_revision_digest")
             .unwrap(),
-        "c1a831feffae11e2325937e5121f70cee2f0fb826d23cc800960031c2aab3bc0"
+        "8cdebe376f88f8bf41167103995e5bde523ed8a2fc28844f363621a9ce92ebc5"
     );
 }
 
@@ -345,7 +345,7 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
             .await
             .last()
             .map(String::as_str),
-        Some("m0015_runner_capacity")
+        Some("m0017_run_history_indexes")
     );
 
     let old_producer_insert = db
@@ -371,7 +371,7 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
          ) VALUES (
              'outbox_push_jobs_new_after', 'push_main_trigger_evaluation:repo_push_jobs:3',
              'push_main_trigger_evaluation', 'repo_push_jobs', 3,
-             '{\"workflow_schema_version\": 3}'::jsonb,
+             '{\"workflow_schema_version\": 4}'::jsonb,
              'ready', 0, 3, NULL, NULL, NULL, 3, 3, NULL
          )",
     )

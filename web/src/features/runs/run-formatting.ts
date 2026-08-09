@@ -1,4 +1,7 @@
-import type { RunRunnerSelection } from '@/api/types.generated'
+import type {
+  RepositoryRunState,
+  RunRunnerSelection,
+} from '@/api/types.generated'
 
 const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   dateStyle: 'medium',
@@ -19,4 +22,11 @@ export function formatRunRunnerSelection(selection: RunRunnerSelection) {
     case 'mixed':
       return 'multiple runners'
   }
+}
+
+export function runDisplayState(run: {
+  cancellation_requested: boolean
+  state: RepositoryRunState
+}): RepositoryRunState | 'canceling' {
+  return run.cancellation_requested ? 'canceling' : run.state
 }

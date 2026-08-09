@@ -268,7 +268,7 @@ export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, 
 
 export type RepositoryRunJobState = "blocked" | "queued" | "leased" | "running" | "succeeded" | "failed" | "skipped" | "canceled" | "lost";
 
-export type RepositoryRunJobResponse = { key: string, desired_runner: string | null, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
+export type RepositoryRunJobResponse = { key: string, needs: Array<string>, desired_runner: string | null, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
 
 export type RepositoryRunJobDetailResponse = { job: RepositoryRunJobResponse, attempts: Array<RepositoryRunAttemptResponse>, };
 
@@ -286,7 +286,13 @@ export type RepositoryRunnerState = "online" | "offline" | "disabled";
 
 export type RepositoryRunnerResponse = { id: string, name: string, version: string, state: RepositoryRunnerState, last_seen_at_unix: number | null, };
 
-export type RepositoryOperationsResponse = { runs: Array<RepositoryRunSummaryResponse>, runners: Array<RepositoryRunnerResponse>, };
+export type RepositoryRunnersResponse = { runners: Array<RepositoryRunnerResponse>, };
+
+export type RepositoryRunWorkflowResponse = { key: string, name: string, path: string, manual: boolean, push_main: boolean, job_count: number, };
+
+export type RepositoryRunWorkflowListResponse = { workflows: Array<RepositoryRunWorkflowResponse>, };
+
+export type RepositoryRunHistoryPageResponse = { runs: Array<RepositoryRunSummaryResponse>, next_cursor: string | null, };
 
 export type RepositoryRunLogResponse = { position: number, sequence: number, text: string, created_at_unix: number, };
 
@@ -305,7 +311,9 @@ export const ApiRouteTemplates = {
   ownerRepositories: "/v1/users/{handle}/repos",
   repo: "/v1/repos/{owner}/{repo}",
   repoConfig: "/v1/repos/{owner}/{repo}/config",
-  repoOperations: "/v1/repos/{owner}/{repo}/operations",
+  repoRunWorkflows: "/v1/repos/{owner}/{repo}/run-workflows",
+  repoRunners: "/v1/repos/{owner}/{repo}/run-runners",
+  repoRuns: "/v1/repos/{owner}/{repo}/runs",
   repoRunDetail: "/v1/repos/{owner}/{repo}/runs/{run_id}/detail",
   repoRunStepLogs: "/v1/repos/{owner}/{repo}/runs/{run_id}/attempts/{attempt_id}/steps/{step_index}/logs",
   repoRunCancel: "/v1/repos/{owner}/{repo}/runs/{run_id}/cancel",

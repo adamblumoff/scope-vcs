@@ -6,7 +6,10 @@ use scope_domain::runs::{
     },
 };
 use serde::{Deserialize, Deserializer, de::MapAccess, de::Visitor};
-use std::{collections::BTreeSet, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 use thiserror::Error;
 
 pub const MAX_WORKFLOW_DEFINITION_BYTES: usize = 64 * 1024;
@@ -79,8 +82,9 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
     let caches = raw
         .caches
         .into_iter()
-        .map(|name| WorkflowCache::parse(name).map_err(WorkflowError::from))
+        .map(|cache| WorkflowCache::new(cache.name, cache.path).map_err(WorkflowError::from))
         .collect::<Result<Vec<_>, _>>()?;
+    let environment = raw.environment;
     let jobs = raw
         .jobs
         .0
@@ -106,12 +110,16 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
                 None => timeout_seconds,
             };
             let job_caches = match job.caches {
-                Some(names) => names
+                Some(caches) => caches
                     .into_iter()
-                    .map(|name| WorkflowCache::parse(name).map_err(WorkflowError::from))
+                    .map(|cache| {
+                        WorkflowCache::new(cache.name, cache.path).map_err(WorkflowError::from)
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
                 None => caches.clone(),
             };
+            let mut job_environment = environment.clone();
+            job_environment.extend(job.environment);
             let steps = job
                 .steps
                 .into_iter()
@@ -126,6 +134,7 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
                 job_caches,
                 steps,
             )
+            .and_then(|job| job.with_environment(job_environment))
             .map_err(RunConfigError::from)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -182,8 +191,17 @@ struct RawWorkflow {
     container: RawContainer,
     timeout: String,
     #[serde(default)]
-    caches: Vec<String>,
+    caches: Vec<RawCache>,
+    #[serde(default, rename = "env")]
+    environment: BTreeMap<String, String>,
     jobs: RawJobs,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCache {
+    name: String,
+    path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,7 +244,9 @@ struct RawJob {
     #[serde(default)]
     timeout: Option<String>,
     #[serde(default)]
-    caches: Option<Vec<String>>,
+    caches: Option<Vec<RawCache>>,
+    #[serde(default, rename = "env")]
+    environment: BTreeMap<String, String>,
     steps: Vec<RawStep>,
 }
 
@@ -286,10 +306,16 @@ container:
   image: rust:1.90
 timeout: 20m
 caches:
-  - cargo-target
-  - cargo
+  - name: cargo-target
+    path: /workspace/target
+  - name: cargo
+    path: /scope/cache/cargo
+env:
+  RUSTUP_TOOLCHAIN: stable
 jobs:
   checks:
+    env:
+      TEST_MODE: strict
     steps:
       - name: Format
         run: cargo fmt --check
@@ -310,6 +336,8 @@ jobs:
         assert_eq!(job.id().as_str(), "checks");
         assert_eq!(job.timeout_seconds(), 20 * 60);
         assert_eq!(job.container().image(), "rust:1.90");
+        assert_eq!(job.environment()["RUSTUP_TOOLCHAIN"], "stable");
+        assert_eq!(job.environment()["TEST_MODE"], "strict");
         assert_eq!(
             job.caches()
                 .iter()
@@ -328,7 +356,10 @@ on: { push: true, manual: true }
 runs-on: any
 container: { image: "rust:1.90" }
 timeout: 1200s
-caches: [cargo, cargo-target]
+caches:
+  - { name: cargo, path: /scope/cache/cargo }
+  - { name: cargo-target, path: /workspace/target }
+env: { TEST_MODE: strict, RUSTUP_TOOLCHAIN: stable }
 jobs:
   checks:
     steps:
@@ -350,7 +381,10 @@ jobs:
     #[test]
     fn cache_yaml_order_does_not_change_the_revision_digest() {
         let reversed =
-            WORKFLOW.replace("  - cargo-target\n  - cargo", "  - cargo\n  - cargo-target");
+            WORKFLOW.replace(
+                "  - name: cargo-target\n    path: /workspace/target\n  - name: cargo\n    path: /scope/cache/cargo",
+                "  - name: cargo\n    path: /scope/cache/cargo\n  - name: cargo-target\n    path: /workspace/target",
+            );
         let first = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes())
             .unwrap()
             .into_revision("repo-1")
@@ -410,16 +444,16 @@ jobs:
                 include_bytes!("../../../.scope/runs/checks.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v5-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v5-canary-cold-write.yml").as_slice(),
+                "/.scope/runs/v6-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v6-canary-cold-write.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v5-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v5-canary-warm-read.yml").as_slice(),
+                "/.scope/runs/v6-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v6-canary-warm-read.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v5-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v5-canary-evict.yml").as_slice(),
+                "/.scope/runs/v6-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v6-canary-evict.yml").as_slice(),
             ),
         ] {
             parse_workflow(path, bytes).unwrap_or_else(|error| {
@@ -437,18 +471,18 @@ jobs:
         for (phase, path, bytes) in [
             (
                 RunnerProtocolCanaryPhase::ColdWrite,
-                "/.scope/runs/v5-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v5-canary-cold-write.yml").as_slice(),
+                "/.scope/runs/v6-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v6-canary-cold-write.yml").as_slice(),
             ),
             (
                 RunnerProtocolCanaryPhase::WarmRead,
-                "/.scope/runs/v5-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v5-canary-warm-read.yml").as_slice(),
+                "/.scope/runs/v6-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v6-canary-warm-read.yml").as_slice(),
             ),
             (
                 RunnerProtocolCanaryPhase::Evict,
-                "/.scope/runs/v5-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v5-canary-evict.yml").as_slice(),
+                "/.scope/runs/v6-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v6-canary-evict.yml").as_slice(),
             ),
         ] {
             let parsed = parse_workflow(path, bytes).unwrap();
@@ -458,8 +492,11 @@ jobs:
     }
 
     #[test]
-    fn caches_default_to_empty_and_reject_invalid_or_duplicate_names() {
-        let missing = WORKFLOW.replace("caches:\n  - cargo-target\n  - cargo\n", "");
+    fn caches_default_to_empty_and_reject_invalid_or_ambiguous_mounts() {
+        let missing = WORKFLOW.replace(
+            "caches:\n  - name: cargo-target\n    path: /workspace/target\n  - name: cargo\n    path: /scope/cache/cargo\n",
+            "",
+        );
         assert!(
             parse_workflow("/.scope/runs/test.yml", missing.as_bytes())
                 .unwrap()
@@ -470,7 +507,7 @@ jobs:
                 .is_empty()
         );
 
-        let invalid = WORKFLOW.replace("cargo-target", "Cargo_Target");
+        let invalid = WORKFLOW.replace("name: cargo-target", "name: Cargo_Target");
         assert!(matches!(
             parse_workflow("/.scope/runs/test.yml", invalid.as_bytes()),
             Err(RunConfigError::InvalidWorkflow(
@@ -478,13 +515,51 @@ jobs:
             ))
         ));
 
-        let duplicate = WORKFLOW.replace("  - cargo\n", "  - cargo-target\n");
+        let duplicate = WORKFLOW.replace("name: cargo\n", "name: cargo-target\n");
         assert!(matches!(
             parse_workflow("/.scope/runs/test.yml", duplicate.as_bytes()),
             Err(RunConfigError::InvalidWorkflow(
                 WorkflowError::DuplicateCacheName(name)
             )) if name == "cargo-target"
         ));
+
+        let old_list = WORKFLOW.replace(
+            "  - name: cargo-target\n    path: /workspace/target\n  - name: cargo\n    path: /scope/cache/cargo",
+            "  - cargo-target\n  - cargo",
+        );
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", old_list.as_bytes()),
+            Err(RunConfigError::InvalidYaml(_))
+        ));
+
+        let overlapping = WORKFLOW.replace(
+            "path: /scope/cache/cargo",
+            "path: /workspace/target/registry",
+        );
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", overlapping.as_bytes()),
+            Err(RunConfigError::InvalidWorkflow(
+                WorkflowError::OverlappingCachePath(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn environment_is_strict_and_job_values_override_workflow_values() {
+        let parsed = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes()).unwrap();
+        let environment = parsed.definition().only_job().unwrap().environment();
+        assert_eq!(environment["RUSTUP_TOOLCHAIN"], "stable");
+        assert_eq!(environment["TEST_MODE"], "strict");
+
+        for invalid in ["1INVALID", "WITH-DASH"] {
+            let workflow = WORKFLOW.replace("RUSTUP_TOOLCHAIN:", &format!("{invalid}:"));
+            assert!(matches!(
+                parse_workflow("/.scope/runs/test.yml", workflow.as_bytes()),
+                Err(RunConfigError::InvalidWorkflow(
+                    WorkflowError::InvalidEnvironmentKey
+                ))
+            ));
+        }
     }
 
     #[test]
@@ -495,9 +570,11 @@ on: { manual: true }
 runs-on: remote-linux
 container: { image: rust:1.90 }
 timeout: 20m
-caches: [cargo]
+caches: [{ name: cargo, path: /scope/cache/cargo }]
+env: { SHARED: workflow, WORKFLOW_ONLY: yes }
 jobs:
   backend:
+    env: { SHARED: backend }
     steps:
       - { name: Backend, run: cargo test }
   web:
@@ -521,6 +598,8 @@ jobs:
         assert_eq!(backend.container().image(), "rust:1.90");
         assert_eq!(backend.timeout_seconds(), 20 * 60);
         assert_eq!(backend.caches()[0].as_str(), "cargo");
+        assert_eq!(backend.environment()["SHARED"], "backend");
+        assert_eq!(backend.environment()["WORKFLOW_ONLY"], "yes");
 
         let web = definition
             .job(&WorkflowJobId::parse("web").unwrap())
@@ -533,6 +612,7 @@ jobs:
         assert_eq!(web.container().image(), "node:24");
         assert_eq!(web.timeout_seconds(), 5 * 60);
         assert!(web.caches().is_empty());
+        assert_eq!(web.environment()["SHARED"], "workflow");
     }
 
     #[test]

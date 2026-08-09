@@ -1,6 +1,5 @@
 import {
   cancelRepoRunForRequest,
-  loadRepoRunDetailForRequest,
   loadRepoRunStepLogsForRequest,
   parseRunActionInput,
   parseRunStepLogsInput,
@@ -15,10 +14,7 @@ import {
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useCallback, useMemo } from 'react'
-
-const loadRepoRunDetail = createServerFn({ method: 'GET' })
-  .validator(parseRunActionInput)
-  .handler(({ data }) => loadRepoRunDetailForRequest(data))
+import { loadRepoRunDetail } from '@/routes/-run-history-actions'
 
 const loadRepoRunStepLogs = createServerFn({ method: 'GET' })
   .validator(parseRunStepLogsInput)

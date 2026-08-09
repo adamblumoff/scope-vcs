@@ -219,7 +219,7 @@ async fn migrated_manual_runner_targets_remain_idempotent_without_guessing_raw_o
     migrations::apply(db.as_ref()).await.unwrap();
     db.execute_unprepared(
         "UPDATE scope_runner_protocol_cutover
-         SET state = 'v5-open'
+         SET state = 'v6-open'
          WHERE key = 'current'",
     )
     .await
@@ -305,7 +305,7 @@ async fn migrated_revision(db: &DatabaseConnection, run_id: &str) -> WorkflowRev
 }
 
 #[tokio::test]
-async fn run_job_migration_resets_the_protocol_authority_to_v5_fenced() {
+async fn workflow_runtime_migration_resets_the_protocol_authority_to_v6_fenced() {
     let (_target, db, _lease) = isolated_database().await;
     migrations::Migrator::up(db.as_ref(), Some(13))
         .await
@@ -330,7 +330,19 @@ async fn run_job_migration_resets_the_protocol_authority_to_v5_fenced() {
          INSERT INTO scope_workflow_revisions (digest, definition, created_at_unix)
          VALUES (
              repeat('a', 64),
-             jsonb_build_object('jobs', jsonb_build_array(jsonb_build_object('id', 'checks'))),
+             jsonb_build_object(
+                 'name', 'Canary',
+                 'triggers', jsonb_build_object('manual', true, 'push_main', false),
+                 'jobs', jsonb_build_array(jsonb_build_object(
+                     'id', 'checks',
+                     'needs', jsonb_build_array(),
+                     'runner', jsonb_build_object('kind', 'named', 'name', 'remote-linux'),
+                     'container', jsonb_build_object('image', 'alpine:3.20'),
+                     'timeout_seconds', 300,
+                     'caches', jsonb_build_array(),
+                     'steps', jsonb_build_array(jsonb_build_object('name', 'Test', 'run', 'true'))
+                 ))
+             ),
              1
          );
          INSERT INTO scope_runs (
@@ -364,9 +376,30 @@ async fn run_job_migration_resets_the_protocol_authority_to_v5_fenced() {
     .await
     .unwrap();
 
-    migrations::Migrator::up(db.as_ref(), Some(14))
+    migrations::Migrator::up(db.as_ref(), Some(1))
         .await
         .unwrap();
+    db.execute_unprepared(
+        "UPDATE scope_runs
+         SET state = 'queued', cancellation_requested = FALSE,
+             updated_at_unix = 3, completed_at_unix = NULL
+         WHERE id = 'run_canary';
+         UPDATE scope_run_jobs
+         SET state = 'queued', updated_at_unix = 3, completed_at_unix = NULL
+         WHERE run_id = 'run_canary';
+         UPDATE scope_runner_protocol_cutover
+         SET state = 'v5-fenced', canary_generation = 7
+         WHERE key = 'current';
+         INSERT INTO scope_runner_protocol_canaries (
+             generation, phase, runner_id, run_id, status,
+             created_at_unix, updated_at_unix
+         ) VALUES (
+             7, 'cold-write', 'runner_canary', 'run_canary', 'pending', 3, 3
+         )",
+    )
+    .await
+    .unwrap();
+    migrations::Migrator::up(db.as_ref(), None).await.unwrap();
 
     let cutover = db
         .query_one(Statement::from_string(
@@ -379,7 +412,7 @@ async fn run_job_migration_resets_the_protocol_authority_to_v5_fenced() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v5-fenced");
+    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v6-fenced");
     assert_eq!(cutover.try_get::<i64>("", "canary_generation").unwrap(), 0);
     let retired = db
         .query_one(Statement::from_string(

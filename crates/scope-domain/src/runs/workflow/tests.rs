@@ -1,5 +1,9 @@
 use super::*;
 
+fn cache(name: &str) -> WorkflowCache {
+    WorkflowCache::new(name, format!("/scope/cache/{name}")).unwrap()
+}
+
 fn job(
     id: &str,
     needs: &[&str],
@@ -28,10 +32,7 @@ fn compiled_workflow() -> CompiledWorkflow {
         vec![job(
             "checks",
             &[],
-            vec![
-                WorkflowCache::parse("cargo-target").unwrap(),
-                WorkflowCache::parse("cargo").unwrap(),
-            ],
+            vec![cache("cargo-target"), cache("cargo")],
             vec![
                 WorkflowStep::new("Format", "cargo fmt --check").unwrap(),
                 WorkflowStep::new("Test", "cargo test --workspace").unwrap(),
@@ -196,10 +197,46 @@ fn compiled_workflow_enforces_behavior_invariants() {
         ),
         Err(WorkflowError::DuplicateJobId(id)) if id == "checks"
     ));
+
+    let base = || {
+        job(
+            "environment",
+            &[],
+            vec![],
+            vec![WorkflowStep::new("Test", "true").unwrap()],
+        )
+    };
+    assert!(matches!(
+        base().with_environment(BTreeMap::from([(
+            "BAD-KEY".to_string(),
+            "value".to_string()
+        )])),
+        Err(WorkflowError::InvalidEnvironmentKey)
+    ));
+    assert!(matches!(
+        base().with_environment(BTreeMap::from([(
+            "VALID".to_string(),
+            "bad\0value".to_string()
+        )])),
+        Err(WorkflowError::InvalidEnvironmentValue)
+    ));
+    assert!(matches!(
+        base().with_environment(BTreeMap::from([
+            (
+                "FIRST".to_string(),
+                "a".repeat(MAX_WORKFLOW_ENVIRONMENT_BYTES / 2)
+            ),
+            (
+                "SECOND".to_string(),
+                "b".repeat(MAX_WORKFLOW_ENVIRONMENT_BYTES / 2)
+            ),
+        ])),
+        Err(WorkflowError::EnvironmentTooLarge)
+    ));
 }
 
 #[test]
-fn cache_and_job_order_are_canonical_in_the_v3_digest() {
+fn cache_and_job_order_are_canonical_in_the_v4_digest() {
     let identity = || {
         WorkflowIdentity::new(
             "repo-1",
@@ -220,8 +257,8 @@ fn cache_and_job_order_are_canonical_in_the_v3_digest() {
         )
         .unwrap()
     };
-    let cargo = WorkflowCache::parse("cargo").unwrap();
-    let target = WorkflowCache::parse("cargo-target").unwrap();
+    let cargo = cache("cargo");
+    let target = cache("cargo-target");
     let left =
         WorkflowRevision::new(identity(), definition(vec![target.clone(), cargo.clone()])).unwrap();
     let right = WorkflowRevision::new(identity(), definition(vec![cargo.clone(), target])).unwrap();
@@ -242,7 +279,7 @@ fn cache_and_job_order_are_canonical_in_the_v3_digest() {
         Err(WorkflowError::DuplicateCacheName(name)) if name == "cargo"
     ));
     let excessive = (0..=MAX_WORKFLOW_CACHES)
-        .map(|index| WorkflowCache::parse(format!("cache-{index}")))
+        .map(|index| WorkflowCache::new(format!("cache-{index}"), format!("/cache/{index}")))
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert!(matches!(

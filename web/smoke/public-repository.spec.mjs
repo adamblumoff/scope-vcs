@@ -44,7 +44,7 @@ test('public direct Runs access is explicit and exposes no operations', async ()
   await withPage(`${repoPath}/runs`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Runs' }).waitFor()
     await page.getByText(
-      'Sign in as the owner or a repository member to view runs and attached runners.',
+      'Sign in as the owner or a repository member to view runs.',
       { exact: true },
     ).waitFor()
     assert.equal(

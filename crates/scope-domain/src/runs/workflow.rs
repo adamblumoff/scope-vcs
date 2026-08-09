@@ -14,12 +14,16 @@ pub const MAX_WORKFLOW_JOBS: usize = 64;
 pub const MAX_CONTAINER_IMAGE_BYTES: usize = 512;
 pub const MAX_WORKFLOW_STEPS: usize = 64;
 pub const MAX_WORKFLOW_CACHES: usize = 16;
+pub const MAX_WORKFLOW_ENVIRONMENT_VARIABLES: usize = 64;
+pub const MAX_WORKFLOW_ENVIRONMENT_BYTES: usize = 64 * 1024;
+pub const MAX_ENVIRONMENT_KEY_BYTES: usize = 128;
+pub const MAX_ENVIRONMENT_VALUE_BYTES: usize = 64 * 1024;
 pub const MAX_STEP_NAME_BYTES: usize = 100;
 pub const MAX_STEP_COMMAND_BYTES: usize = 64 * 1024;
 pub const MAX_WORKFLOW_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
 
 const WORKFLOW_PATH_PREFIX: &str = "/.scope/runs/";
-const WORKFLOW_DIGEST_VERSION: u8 = 3;
+const WORKFLOW_DIGEST_VERSION: u8 = 4;
 
 #[derive(Debug, Error)]
 pub enum WorkflowError {
@@ -63,6 +67,24 @@ pub enum WorkflowError {
     TooManyCaches,
     #[error("workflow job cache name {0:?} is duplicated")]
     DuplicateCacheName(String),
+    #[error("workflow job cache path {0:?} overlaps another cache mount")]
+    OverlappingCachePath(String),
+    #[error(
+        "workflow job cannot define more than {MAX_WORKFLOW_ENVIRONMENT_VARIABLES} environment variables"
+    )]
+    TooManyEnvironmentVariables,
+    #[error(
+        "workflow environment key must be a shell variable name between 1 and {MAX_ENVIRONMENT_KEY_BYTES} bytes"
+    )]
+    InvalidEnvironmentKey,
+    #[error(
+        "workflow environment value cannot exceed {MAX_ENVIRONMENT_VALUE_BYTES} bytes or contain a null byte"
+    )]
+    InvalidEnvironmentValue,
+    #[error(
+        "workflow environment cannot exceed {MAX_WORKFLOW_ENVIRONMENT_BYTES} bytes in aggregate"
+    )]
+    EnvironmentTooLarge,
     #[error("workflow step name must contain between 1 and {MAX_STEP_NAME_BYTES} bytes")]
     InvalidStepName,
     #[error("workflow step name {0:?} is duplicated")]
@@ -277,6 +299,7 @@ pub struct WorkflowJob {
     container: ContainerSpec,
     timeout_seconds: u64,
     caches: Vec<WorkflowCache>,
+    environment: BTreeMap<String, String>,
     steps: Vec<WorkflowStep>,
 }
 
@@ -317,10 +340,21 @@ impl WorkflowJob {
         caches.sort();
         if let Some(duplicate) = caches
             .windows(2)
-            .find(|pair| pair[0] == pair[1])
+            .find(|pair| pair[0].as_str() == pair[1].as_str())
             .map(|pair| pair[0].as_str().to_string())
         {
             return Err(WorkflowError::DuplicateCacheName(duplicate));
+        }
+        for (index, cache) in caches.iter().enumerate() {
+            let path = std::path::Path::new(cache.mount_path());
+            if caches[..index].iter().any(|existing| {
+                let existing = std::path::Path::new(existing.mount_path());
+                path.starts_with(existing) || existing.starts_with(path)
+            }) {
+                return Err(WorkflowError::OverlappingCachePath(
+                    cache.mount_path().to_string(),
+                ));
+            }
         }
         if steps.is_empty() {
             return Err(WorkflowError::MissingSteps);
@@ -341,8 +375,18 @@ impl WorkflowJob {
             container,
             timeout_seconds,
             caches,
+            environment: BTreeMap::new(),
             steps,
         })
+    }
+
+    pub fn with_environment(
+        mut self,
+        environment: BTreeMap<String, String>,
+    ) -> Result<Self, WorkflowError> {
+        validate_environment(&environment)?;
+        self.environment = environment;
+        Ok(self)
     }
 
     pub fn id(&self) -> &WorkflowJobId {
@@ -367,6 +411,10 @@ impl WorkflowJob {
 
     pub fn caches(&self) -> &[WorkflowCache] {
         &self.caches
+    }
+
+    pub fn environment(&self) -> &BTreeMap<String, String> {
+        &self.environment
     }
 
     pub fn steps(&self) -> &[WorkflowStep] {
@@ -417,8 +465,16 @@ struct PersistedWorkflowJob {
     runner: PersistedRunnerSelector,
     container: PersistedContainerSpec,
     timeout_seconds: u64,
-    caches: Vec<String>,
+    caches: Vec<PersistedWorkflowCache>,
+    environment: BTreeMap<String, String>,
     steps: Vec<PersistedWorkflowStep>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedWorkflowCache {
+    name: String,
+    path: String,
 }
 
 impl<'de> Deserialize<'de> for WorkflowJob {
@@ -444,7 +500,7 @@ impl<'de> Deserialize<'de> for WorkflowJob {
         let caches = job
             .caches
             .into_iter()
-            .map(WorkflowCache::parse)
+            .map(|cache| WorkflowCache::new(cache.name, cache.path))
             .collect::<Result<Vec<_>, _>>()
             .map_err(D::Error::custom)?;
         let steps = job
@@ -453,6 +509,7 @@ impl<'de> Deserialize<'de> for WorkflowJob {
             .map(|step| WorkflowStep::new(step.name, step.run))
             .collect::<Result<Vec<_>, _>>()
             .map_err(D::Error::custom)?;
+        let environment = job.environment;
         WorkflowJob::new(
             id,
             needs,
@@ -462,6 +519,7 @@ impl<'de> Deserialize<'de> for WorkflowJob {
             caches,
             steps,
         )
+        .and_then(|job| job.with_environment(environment))
         .map_err(D::Error::custom)
     }
 }
@@ -500,13 +558,14 @@ impl<'de> Deserialize<'de> for CompiledWorkflow {
                 let caches = job
                     .caches
                     .into_iter()
-                    .map(WorkflowCache::parse)
+                    .map(|cache| WorkflowCache::new(cache.name, cache.path))
                     .collect::<Result<Vec<_>, _>>()?;
                 let steps = job
                     .steps
                     .into_iter()
                     .map(|step| WorkflowStep::new(step.name, step.run))
                     .collect::<Result<Vec<_>, _>>()?;
+                let environment = job.environment;
                 WorkflowJob::new(
                     id,
                     needs,
@@ -516,11 +575,38 @@ impl<'de> Deserialize<'de> for CompiledWorkflow {
                     caches,
                     steps,
                 )
+                .and_then(|job| job.with_environment(environment))
             })
             .collect::<Result<Vec<_>, WorkflowError>>()
             .map_err(D::Error::custom)?;
         Self::new(persisted.name, triggers, jobs).map_err(D::Error::custom)
     }
+}
+
+fn validate_environment(environment: &BTreeMap<String, String>) -> Result<(), WorkflowError> {
+    if environment.len() > MAX_WORKFLOW_ENVIRONMENT_VARIABLES {
+        return Err(WorkflowError::TooManyEnvironmentVariables);
+    }
+    let mut total_bytes = 0usize;
+    for (key, value) in environment {
+        let mut bytes = key.bytes();
+        if key.len() > MAX_ENVIRONMENT_KEY_BYTES
+            || !bytes
+                .next()
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+            || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(WorkflowError::InvalidEnvironmentKey);
+        }
+        if value.len() > MAX_ENVIRONMENT_VALUE_BYTES || value.as_bytes().contains(&0) {
+            return Err(WorkflowError::InvalidEnvironmentValue);
+        }
+        total_bytes = total_bytes.saturating_add(key.len() + 1 + value.len());
+    }
+    if total_bytes > MAX_WORKFLOW_ENVIRONMENT_BYTES {
+        return Err(WorkflowError::EnvironmentTooLarge);
+    }
+    Ok(())
 }
 
 impl CompiledWorkflow {
