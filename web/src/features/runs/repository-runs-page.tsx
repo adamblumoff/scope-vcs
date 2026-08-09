@@ -25,6 +25,7 @@ const RUNS_REFRESH_INTERVAL_MS = 2_000
 type RunPageResources = {
   history: RepoRunHistoryPage
   workflows: RepoRunWorkflowList
+  workflowsError: string | null
 }
 
 export function RepositoryRunsPage({
@@ -163,6 +164,16 @@ export function RepositoryRunsPage({
           workflows={initialResources.workflows.workflows}
         />
         <main className="min-w-0 px-4 pb-14 sm:px-6 lg:px-8">
+          {initialResources.workflowsError ? (
+            <div className="pt-5">
+              <PageErrorAlert title="Workflow navigation unavailable">
+                <div>
+                  <p>Run history is still available.</p>
+                  <p className="mt-1 text-xs">{initialResources.workflowsError}</p>
+                </div>
+              </PageErrorAlert>
+            </div>
+          ) : null}
           {refreshError ? (
             <div className="pt-5">
               <PageErrorAlert title="Runs could not refresh">

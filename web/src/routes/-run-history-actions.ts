@@ -11,11 +11,20 @@ export const loadRepoRunPage = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     try {
       const api = createApiClient()
-      const [history, workflows] = await Promise.all([
+      const [history, workflowResource] = await Promise.all([
         loadRepoRunHistoryForRequest(data, api),
-        loadRepoRunWorkflowsForRequest(data, api),
+        loadRepoRunWorkflowsForRequest(data, api)
+          .then((workflows) => ({ error: null, workflows }))
+          .catch((error: unknown) => ({
+            error: resourceErrorMessage(error),
+            workflows: { workflows: [] },
+          })),
       ])
-      return { history, workflows }
+      return {
+        history,
+        workflows: workflowResource.workflows,
+        workflowsError: workflowResource.error,
+      }
     } catch (error) {
       if (error instanceof HttpError && [401, 403, 404].includes(error.status)) {
         return null
@@ -23,6 +32,10 @@ export const loadRepoRunPage = createServerFn({ method: 'GET' })
       throw error
     }
   })
+
+function resourceErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : 'Workflow catalog unavailable.'
+}
 
 export const loadRepoRunHistory = createServerFn({ method: 'GET' })
   .validator(parseRepoRunHistoryInput)
