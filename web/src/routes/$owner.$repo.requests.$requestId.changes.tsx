@@ -9,9 +9,13 @@ import {
   loadRequestDiscussionsForRequest,
 } from '@/features/requests/request-discussion-api'
 import { RequestChangesView } from '@/features/requests/request-changes-view'
+import {
+  requestChangeSelection,
+  requestRevisionPin,
+} from '@/features/requests/request-changes-model'
 import { requestParamsForRoute } from '@/features/requests/request-route-data'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
-import { createFileRoute, getRouteApi } from '@tanstack/react-router'
+import { createFileRoute, getRouteApi, redirect } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
 const requestRoute = getRouteApi('/$owner/$repo/requests/$requestId')
@@ -47,15 +51,39 @@ export const Route = createFileRoute(
 )({
   loaderDeps: ({ search }) => ({
     commit: search.commit,
+    path: search.path,
     revision: search.revision,
   }),
-  loader: ({ deps, params }) => loadRevisions({
-    data: {
-      ...requestParamsForRoute(params),
-      commit_oid: deps.commit,
-      revision_id: deps.revision,
-    },
-  }),
+  loader: async ({ deps, params }) => {
+    const revisions = await loadRevisions({
+      data: {
+        ...requestParamsForRoute(params),
+        commit_oid: deps.commit,
+        revision_id: deps.revision,
+      },
+    })
+    if (!revisions) return null
+    const selection = requestChangeSelection(
+      revisions.revisions,
+      revisions.review_revision_id,
+      deps,
+    )
+    const pin = requestRevisionPin(
+      selection.revision,
+      selection.commit,
+      deps.revision,
+    )
+    if (pin) {
+      throw redirect({
+        params,
+        replace: true,
+        resetScroll: false,
+        search: { ...pin, path: deps.path },
+        to: '/$owner/$repo/requests/$requestId/changes',
+      })
+    }
+    return revisions
+  },
   component: RequestChangesRoute,
 })
 

@@ -14,6 +14,24 @@ pub struct RequestRevision {
     pub created_at_unix: u64,
 }
 
+pub fn select_request_review_revision<'a>(
+    revisions: &'a [RequestRevision],
+    pinned_revision_id: Option<&str>,
+) -> Result<Option<&'a RequestRevision>, DomainError> {
+    if let Some(pinned_revision_id) = pinned_revision_id {
+        return revisions
+            .iter()
+            .find(|revision| revision.id == pinned_revision_id)
+            .map(Some)
+            .ok_or_else(|| DomainError::not_found("request revision not found"));
+    }
+    Ok(revisions.iter().max_by(|left, right| {
+        left.position
+            .cmp(&right.position)
+            .then_with(|| left.id.cmp(&right.id))
+    }))
+}
+
 pub(super) fn revision(
     request: &Request,
     event: &RequestEvent,

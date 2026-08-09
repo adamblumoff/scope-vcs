@@ -528,22 +528,31 @@ pub struct RequestRevisionCommitResponse {
     pub change_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum RequestRevisionInspectionState {
+    Complete,
+    Incomplete,
+    Unavailable,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestRevisionResponse {
     pub id: String,
     pub position: u64,
     pub actor: RequestActorSummaryResponse,
-    pub old_head_oid: String,
-    pub new_head_oid: String,
+    pub old_head_oid: Option<String>,
+    pub new_head_oid: Option<String>,
     pub commits: Vec<RequestRevisionCommitResponse>,
-    pub commits_truncated: bool,
+    pub inspection: RequestRevisionInspectionState,
     pub created_at_unix: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestRevisionListResponse {
+    pub review_revision_id: Option<String>,
     pub revisions: Vec<RequestRevisionResponse>,
     pub has_earlier_revisions: bool,
 }

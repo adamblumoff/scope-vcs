@@ -8,7 +8,7 @@ pub use access::{
     request_list_predicate, request_mergeability, request_policy,
 };
 mod revisions;
-pub use revisions::RequestRevision;
+pub use revisions::{RequestRevision, select_request_review_revision};
 mod identity;
 pub use identity::{EditRequestIdentityInput, edit_request_identity, request_identity_audit_fact};
 mod discussions;

@@ -7,6 +7,7 @@ import {
   orderedRequestCommits,
   requestCommitForListId,
   requestChangeSelection,
+  requestRevisionPin,
 } from './request-changes-model'
 
 const revisions: RequestRevisions['revisions'] = [
@@ -15,37 +16,65 @@ const revisions: RequestRevisions['revisions'] = [
 ]
 
 test('defaults to the newest revision and its newest commit', () => {
-  const selection = requestChangeSelection(revisions, {})
+  const selection = requestChangeSelection(revisions, 'revision-2', {})
   assert.equal(selection.revision?.id, 'revision-2')
   assert.equal(selection.commit, 'commit-c')
-  assert.equal(selection.unavailable, false)
+  assert.equal(selection.error, null)
 })
 
-test('defaults to the newest revision with a visible commit', () => {
-  const hiddenLatest = revision('revision-3', 6, [])
-  const selection = requestChangeSelection([...revisions, hiddenLatest], {})
+test('keeps the newest revision selected when its inspection is unavailable', () => {
+  const hiddenLatest = revision('revision-3', 6, [], 'Unavailable')
+  const selection = requestChangeSelection(
+    [...revisions, hiddenLatest],
+    'revision-3',
+    {},
+  )
+  assert.equal(selection.revision?.id, 'revision-3')
+  assert.equal(selection.commit, null)
+  assert.match(selection.error ?? '', /could not be inspected/)
+})
+
+test('an explicit revision remains pinned when a newer revision arrives', () => {
+  const newer = revision('revision-3', 6, ['commit-d'])
+  const selection = requestChangeSelection(
+    [...revisions, newer],
+    'revision-3',
+    { revision: 'revision-2' },
+  )
   assert.equal(selection.revision?.id, 'revision-2')
   assert.equal(selection.commit, 'commit-c')
+})
+
+test('initial selection becomes an explicit revision pin before refreshes', () => {
+  const initial = requestChangeSelection(revisions, 'revision-2', {})
+  assert.deepEqual(
+    requestRevisionPin(initial.revision, initial.commit, undefined),
+    { commit: 'commit-c', revision: 'revision-2' },
+  )
+  assert.equal(
+    requestRevisionPin(initial.revision, initial.commit, 'revision-2'),
+    null,
+  )
 })
 
 test('keeps revision and commit selection consistent', () => {
   assert.deepEqual(
-    requestChangeSelection(revisions, {
+    requestChangeSelection(revisions, 'revision-2', {
       commit: 'commit-a',
       revision: 'revision-1',
     }),
     {
       commit: 'commit-a',
       revision: revisions[0],
-      unavailable: false,
+      error: null,
     },
   )
-  assert.equal(
-    requestChangeSelection(revisions, {
+  assert.match(
+    requestChangeSelection(revisions, 'revision-2', {
       commit: 'commit-c',
       revision: 'revision-1',
-    }).unavailable,
-    true,
+    }).error ?? '',
+    /not part of the request/,
   )
 })
 
@@ -88,7 +117,12 @@ test('orders matching commit and revision discussions chronologically', () => {
   )
 })
 
-function revision(id: string, position: number, commits: string[]) {
+function revision(
+  id: string,
+  position: number,
+  commits: string[],
+  inspection: RequestRevisions['revisions'][number]['inspection'] = 'Complete',
+) {
   return {
     actor: { handle: 'adam', id: 'user-1' },
     commits: commits.map((oid) => ({
@@ -99,9 +133,9 @@ function revision(id: string, position: number, commits: string[]) {
       oid,
       parent_oids: ['base'],
     })),
-    commits_truncated: false,
     created_at_unix: position,
     id,
+    inspection,
     new_head_oid: commits.at(-1) ?? 'base',
     old_head_oid: 'base',
     position,
