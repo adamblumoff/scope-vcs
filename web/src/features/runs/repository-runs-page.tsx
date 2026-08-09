@@ -41,6 +41,7 @@ export function RepositoryRunsPage({
   const [history, setHistory] = useState(initialResources?.history ?? null)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const loadedPageCountRef = useRef(1)
   const mountedRef = useRef(false)
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const { owner, repo } = params
@@ -54,7 +55,7 @@ export function RepositoryRunsPage({
     if (refreshInFlightRef.current) return refreshInFlightRef.current
     if (!history || loadingMore) return
     const request = refreshRunHistoryPages(
-      history,
+      loadedPageCountRef.current,
       (after) => loadHistory({ ...input, after }),
     )
       .then((next) => {
@@ -99,6 +100,7 @@ export function RepositoryRunsPage({
               runs: mergeRunHistory(current.runs, next.runs),
             }
           : next)
+        loadedPageCountRef.current += 1
         setRefreshError(null)
       })
       .catch((error: unknown) => {

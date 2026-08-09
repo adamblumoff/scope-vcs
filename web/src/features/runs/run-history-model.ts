@@ -1,18 +1,14 @@
 import type { RepoRunHistoryPage } from '@/api/types'
 
 export async function refreshRunHistoryPages(
-  current: RepoRunHistoryPage,
+  pageCount: number,
   loadPage: (after?: string) => Promise<RepoRunHistoryPage | null>,
 ) {
   let refreshed = await loadPage()
-  const tailId = current.runs[current.runs.length - 1]?.id
-  if (!refreshed || !tailId) return refreshed
+  if (!refreshed) return null
 
   const requestedCursors = new Set<string>()
-  while (
-    refreshed.next_cursor &&
-    !refreshed.runs.some((run) => run.id === tailId)
-  ) {
+  for (let page = 1; page < pageCount && refreshed.next_cursor; page += 1) {
     const after = refreshed.next_cursor
     if (requestedCursors.has(after)) {
       throw new Error('run history returned a repeated cursor')

@@ -4,12 +4,11 @@ import test from 'node:test'
 import { refreshRunHistoryPages } from './run-history-model'
 
 test('polling preserves an exhausted cursor after older runs are loaded', async () => {
-  const current = page(null, ['new', 'old'])
   const refreshed = page('first-page-cursor', ['new'])
   const older = page(null, ['old'])
 
   const result = await refreshRunHistoryPages(
-    current,
+    2,
     async (after) => after ? older : refreshed,
   )
 
@@ -17,26 +16,31 @@ test('polling preserves an exhausted cursor after older runs are loaded', async 
   assert.deepEqual(result?.runs.map((run) => run.id), ['new', 'old'])
 })
 
-test('polling refetches through the loaded tail when new pages arrive', async () => {
-  const current = page('old-tail-cursor', ['old-1', 'old-2', 'old-tail'])
+test('polling refreshes only the number of pages the user loaded', async () => {
   const pages = new Map([
     [undefined, page('new-page-2', ['new-1', 'new-2'])],
     ['new-page-2', page('new-page-3', ['new-3', 'old-1'])],
-    ['new-page-3', page('refreshed-tail-cursor', ['old-2', 'old-tail'])],
   ])
   const requested: Array<string | undefined> = []
 
-  const refreshed = await refreshRunHistoryPages(current, async (after) => {
+  const refreshed = await refreshRunHistoryPages(2, async (after) => {
     requested.push(after)
     return pages.get(after) ?? null
   })
 
-  assert.deepEqual(requested, [undefined, 'new-page-2', 'new-page-3'])
+  assert.deepEqual(requested, [undefined, 'new-page-2'])
   assert.deepEqual(
     refreshed?.runs.map((run) => run.id),
-    ['new-1', 'new-2', 'new-3', 'old-1', 'old-2', 'old-tail'],
+    ['new-1', 'new-2', 'new-3', 'old-1'],
   )
-  assert.equal(refreshed?.next_cursor, 'refreshed-tail-cursor')
+  assert.equal(refreshed?.next_cursor, 'new-page-3')
+})
+
+test('polling rejects repeated cursors across loaded pages', async () => {
+  await assert.rejects(
+    refreshRunHistoryPages(3, async () => page('repeated', ['run'])),
+    /repeated cursor/,
+  )
 })
 
 function page(
