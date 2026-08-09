@@ -41,7 +41,9 @@ export function RepositoryRunsPage({
   const [history, setHistory] = useState(initialResources?.history ?? null)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const historyRef = useRef(history)
   const loadedPageCountRef = useRef(1)
+  const loadingMoreRef = useRef(false)
   const mountedRef = useRef(false)
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const { owner, repo } = params
@@ -53,7 +55,7 @@ export function RepositoryRunsPage({
 
   const refresh = useCallback(() => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current
-    if (!history || loadingMore) return
+    if (!historyRef.current || loadingMoreRef.current) return
     const request = refreshRunHistoryPages(
       loadedPageCountRef.current,
       (after) => loadHistory({ ...input, after }),
@@ -78,10 +80,11 @@ export function RepositoryRunsPage({
       })
     refreshInFlightRef.current = request
     return request
-  }, [history, input, loadHistory, loadingMore])
+  }, [input, loadHistory])
 
   const loadMore = useCallback(() => {
-    if (!history?.next_cursor || loadingMore || refreshInFlightRef.current) return
+    if (!history?.next_cursor || loadingMoreRef.current || refreshInFlightRef.current) return
+    loadingMoreRef.current = true
     setLoadingMore(true)
     return loadHistory({
         ...input,
@@ -107,9 +110,14 @@ export function RepositoryRunsPage({
         if (mountedRef.current) setRefreshError(errorMessage(error))
       })
       .finally(() => {
+        loadingMoreRef.current = false
         if (mountedRef.current) setLoadingMore(false)
       })
-  }, [history?.next_cursor, input, loadHistory, loadingMore])
+  }, [history?.next_cursor, input, loadHistory])
+
+  useEffect(() => {
+    historyRef.current = history
+  }, [history])
 
   useEffect(() => {
     mountedRef.current = true
