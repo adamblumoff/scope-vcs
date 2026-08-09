@@ -15,6 +15,7 @@ pub const MAX_CONTAINER_IMAGE_BYTES: usize = 512;
 pub const MAX_WORKFLOW_STEPS: usize = 64;
 pub const MAX_WORKFLOW_CACHES: usize = 16;
 pub const MAX_WORKFLOW_ENVIRONMENT_VARIABLES: usize = 64;
+pub const MAX_WORKFLOW_ENVIRONMENT_BYTES: usize = 64 * 1024;
 pub const MAX_ENVIRONMENT_KEY_BYTES: usize = 128;
 pub const MAX_ENVIRONMENT_VALUE_BYTES: usize = 64 * 1024;
 pub const MAX_STEP_NAME_BYTES: usize = 100;
@@ -80,6 +81,10 @@ pub enum WorkflowError {
         "workflow environment value cannot exceed {MAX_ENVIRONMENT_VALUE_BYTES} bytes or contain a null byte"
     )]
     InvalidEnvironmentValue,
+    #[error(
+        "workflow environment cannot exceed {MAX_WORKFLOW_ENVIRONMENT_BYTES} bytes in aggregate"
+    )]
+    EnvironmentTooLarge,
     #[error("workflow step name must contain between 1 and {MAX_STEP_NAME_BYTES} bytes")]
     InvalidStepName,
     #[error("workflow step name {0:?} is duplicated")]
@@ -582,6 +587,7 @@ fn validate_environment(environment: &BTreeMap<String, String>) -> Result<(), Wo
     if environment.len() > MAX_WORKFLOW_ENVIRONMENT_VARIABLES {
         return Err(WorkflowError::TooManyEnvironmentVariables);
     }
+    let mut total_bytes = 0usize;
     for (key, value) in environment {
         let mut bytes = key.bytes();
         if key.len() > MAX_ENVIRONMENT_KEY_BYTES
@@ -595,6 +601,10 @@ fn validate_environment(environment: &BTreeMap<String, String>) -> Result<(), Wo
         if value.len() > MAX_ENVIRONMENT_VALUE_BYTES || value.as_bytes().contains(&0) {
             return Err(WorkflowError::InvalidEnvironmentValue);
         }
+        total_bytes = total_bytes.saturating_add(key.len() + 1 + value.len());
+    }
+    if total_bytes > MAX_WORKFLOW_ENVIRONMENT_BYTES {
+        return Err(WorkflowError::EnvironmentTooLarge);
     }
     Ok(())
 }

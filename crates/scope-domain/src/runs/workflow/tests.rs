@@ -220,6 +220,19 @@ fn compiled_workflow_enforces_behavior_invariants() {
         )])),
         Err(WorkflowError::InvalidEnvironmentValue)
     ));
+    assert!(matches!(
+        base().with_environment(BTreeMap::from([
+            (
+                "FIRST".to_string(),
+                "a".repeat(MAX_WORKFLOW_ENVIRONMENT_BYTES / 2)
+            ),
+            (
+                "SECOND".to_string(),
+                "b".repeat(MAX_WORKFLOW_ENVIRONMENT_BYTES / 2)
+            ),
+        ])),
+        Err(WorkflowError::EnvironmentTooLarge)
+    ));
 }
 
 #[test]
