@@ -7,7 +7,7 @@ use super::{
     outbox::ClaimedOutboxJob,
     runs::enqueue_run_in_transaction,
 };
-use crate::error::PostgresError;
+use crate::error::{PostgresError, PostgresErrorKind};
 use scope_domain::{
     projection::ProjectionViewKey,
     runs::{
@@ -146,6 +146,16 @@ where
         }
     };
     let mut checks = Vec::new();
+    if evaluation.state == PushTriggerEvaluationState::Pending
+        && let Err(error) = super::runner_protocol_cutover::guard_push_trigger_enqueue(&tx).await
+    {
+        if error.kind != PostgresErrorKind::Unavailable {
+            return Err(error);
+        }
+        evaluation
+            .fail(error.message, now_unix)
+            .map_err(PostgresError::from)?;
+    }
     if evaluation.state == PushTriggerEvaluationState::Pending {
         for revision in revisions
             .into_iter()
@@ -363,6 +373,7 @@ mod tests {
         runs::trigger::PushWorkflowFile,
         store::{DEFAULT_GIT_FILE_MODE, UserAccount},
     };
+    use sea_orm::{DatabaseBackend, Statement};
 
     #[tokio::test]
     async fn evaluation_uses_each_pinned_head_and_enqueues_once() {
@@ -572,6 +583,98 @@ jobs:
             .await
             .unwrap();
         assert_eq!(cleanup.pending.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn fenced_cutover_fails_multi_job_push_without_retrying() {
+        let target = crate::db::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let repo_id = seed_repo(&store).await;
+        store
+            .db
+            .execute(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "UPDATE scope_runner_protocol_cutover SET state = 'v6-fenced' WHERE key = 'current'"
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        let head_oid = "6666666666666666666666666666666666666666";
+        enqueue_push_main_trigger_evaluation(
+            store.db.as_ref(),
+            &repo_id,
+            &trigger_head(head_oid, 6),
+            &PushTriggerInput::new(
+                head_oid,
+                trigger_snapshot(head_oid, 'f'),
+                vec![
+                    PushWorkflowFile::new(
+                        "/.scope/runs/checks.yml",
+                        br#"
+name: Checks
+on: { push: true }
+runs-on: any
+container: { image: alpine:3.20 }
+timeout: 1m
+caches: []
+jobs:
+  backend:
+    steps:
+      - { name: Backend, run: "true" }
+  web:
+    needs: [backend]
+    steps:
+      - { name: Web, run: "true" }
+"#
+                        .to_vec(),
+                    )
+                    .unwrap(),
+                ],
+                None,
+            )
+            .unwrap(),
+            now(),
+            &crate::db::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+
+        let summary = store
+            .jobs()
+            .run_ready_outbox_jobs(
+                "push-worker",
+                10,
+                &|| Ok(now()),
+                &crate::db::generated_ids::test_generated_id,
+            )
+            .await
+            .unwrap();
+        assert!(summary.completed >= 1);
+        assert_eq!(summary.failed, 0);
+        let evaluation = store
+            .runs()
+            .push_trigger_evaluation(&repo_id, head_oid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(evaluation.state, PushTriggerEvaluationState::Failed);
+        assert_eq!(
+            evaluation.message.as_deref(),
+            Some(
+                "push-triggered workflows are blocked while runner protocol cutover is v6-fenced; upgrade a runner and complete the canary suite"
+            )
+        );
+        assert!(evaluation.checks.is_empty());
+        let push_job = entities::outbox_job::Entity::find()
+            .filter(entities::outbox_job::Column::RepoId.eq(repo_id))
+            .filter(entities::outbox_job::Column::RepoVersion.eq(6))
+            .filter(entities::outbox_job::Column::Kind.eq(JOB_KIND))
+            .one(store.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(push_job.state, "succeeded");
+        assert_eq!(push_job.attempts, 0);
     }
 
     #[tokio::test]

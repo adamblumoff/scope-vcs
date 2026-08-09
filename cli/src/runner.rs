@@ -22,6 +22,7 @@ mod cache;
 mod checkout;
 mod config;
 mod container;
+mod cutover;
 mod image;
 mod management;
 mod resource_admission;
@@ -48,6 +49,7 @@ use management::parse_repository;
 pub use management::{
     add_repository, doctor, install, list_caches, prune_caches, remove_repository, status,
 };
+pub use cutover::recover as recover_cutover;
 pub use worker_pool::daemon;
 #[cfg(test)]
 use worker_pool::{initialize_after_recovery, run_slot_workers};
@@ -70,8 +72,8 @@ use supervisor::{AttemptStopReason, AttemptSupervisor};
 #[cfg(test)]
 use systemd::systemd_quote_path;
 use workspace::{
-    RunnerWorkDir, command_stdout, command_success, command_success_while, runner_work_root,
-    unix_now,
+    RunnerWorkDir, command_stdout, command_success, command_success_while,
+    command_success_while_for, runner_work_root, unix_now,
 };
 
 const LOG_CHUNK_BYTES: usize = 16 * 1024;

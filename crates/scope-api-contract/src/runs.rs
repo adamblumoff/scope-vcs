@@ -54,6 +54,7 @@ pub struct CreateRunnerProtocolCanaryRequest {
 pub struct RunnerProtocolCutoverResponse {
     pub state: RunnerProtocolCutoverState,
     pub generation: u64,
+    pub enabled_runner_count: u64,
     pub canaries: Vec<RunnerProtocolCanaryResponse>,
 }
 
@@ -279,6 +280,7 @@ mod tests {
         let response = RunnerProtocolCutoverResponse {
             state: RunnerProtocolCutoverState::V6Fenced,
             generation: 2,
+            enabled_runner_count: 1,
             canaries: vec![RunnerProtocolCanaryResponse {
                 generation: 2,
                 phase: RunnerProtocolCanaryPhase::WarmRead,

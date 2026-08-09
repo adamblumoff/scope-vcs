@@ -21,6 +21,33 @@ pub fn start(
     remote: Option<&str>,
     no_watch: bool,
 ) -> anyhow::Result<()> {
+    let queued = queue(workflow, runner, remote)?;
+    print_queued(&queued.run);
+    if no_watch {
+        return Ok(());
+    }
+    watch_queued(&queued)
+}
+
+pub(crate) struct QueuedRun {
+    client: Client,
+    api_url: String,
+    session_token: String,
+    target: ScopeRemote,
+    run: RunResponse,
+}
+
+impl QueuedRun {
+    pub(crate) fn id(&self) -> &str {
+        &self.run.id
+    }
+}
+
+pub(crate) fn queue(
+    workflow: &str,
+    runner: Option<&str>,
+    remote: Option<&str>,
+) -> anyhow::Result<QueuedRun> {
     let repo = ensure_git_repo_ready("scope run")?;
     warn_if_dirty_working_tree(&repo)?;
     let api_url = api_url();
@@ -45,16 +72,32 @@ pub fn start(
         },
         bundle,
     )?;
+    Ok(QueuedRun {
+        client,
+        api_url,
+        session_token: session.token,
+        target,
+        run,
+    })
+}
+
+fn print_queued(run: &RunResponse) {
     println!(
         "Queued {} on {}",
         run.workflow_name,
         runner_selection_label(&run.runner_selection)
     );
     println!("Run ID: {}", run.id);
-    if no_watch {
-        return Ok(());
-    }
-    watch_run(&client, &api_url, &session.token, &target, &run.id)
+}
+
+pub(crate) fn watch_queued(queued: &QueuedRun) -> anyhow::Result<()> {
+    watch_run(
+        &queued.client,
+        &queued.api_url,
+        &queued.session_token,
+        &queued.target,
+        &queued.run.id,
+    )
 }
 
 pub fn watch(run_id: &str, remote: Option<&str>) -> anyhow::Result<()> {

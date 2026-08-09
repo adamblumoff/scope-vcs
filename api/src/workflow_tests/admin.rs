@@ -106,6 +106,7 @@ async fn runner_cutover_routes_require_operator_auth_and_serialize_state() {
     let body = response_json(response).await;
     assert_eq!(body["state"], "v6-open");
     assert_eq!(body["generation"], 0);
+    assert_eq!(body["enabled_runner_count"], 0);
     assert_eq!(body["canaries"], serde_json::json!([]));
 
     let response = admin_request(

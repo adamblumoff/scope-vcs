@@ -14,7 +14,7 @@ use scope_domain::runs::{
     },
     job::request_run_cancellation,
     run::{AttemptState, PinnedContainerImage, Run, RunTrigger},
-    runner::Runner,
+    runner::{RUNNER_PROTOCOL_VERSION, Runner},
     workflow::{WorkflowJob, WorkflowRevision},
 };
 use sea_orm::{
@@ -38,6 +38,7 @@ fn canary_job(revision: &WorkflowRevision) -> Result<&WorkflowJob, PostgresError
 pub struct RunnerProtocolCutoverSnapshot {
     pub cutover: RunnerProtocolCutover,
     pub canary_generation: u64,
+    pub enabled_runner_count: u64,
     pub canaries: Vec<RunnerProtocolCanary>,
 }
 
@@ -334,19 +335,40 @@ pub(super) async fn guard_enqueue(
     // This exception is also the bootstrap path after a populated database is
     // migrated into a new protocol fence: ordinary runs remain blocked while
     // an operator enqueues the canonical canary suite for the upgraded runner.
+    if !state.allows_canary()
+        || run.trigger != RunTrigger::Manual
+        || canary_candidate_phase(revision).is_none()
+    {
+        return Err(PostgresError::unavailable(format!(
+            "only canonical runner protocol canary runs may be created while cutover is {}",
+            cutover_state_name(state)
+        )));
+    }
     let canonical_runner = canary_job(revision)?.runner();
-    let canonical_target = run.trigger == RunTrigger::Manual
-        && run
-            .runner_override
-            .as_ref()
-            .is_none_or(|runner| runner == canonical_runner);
-    if !state.allows_canary() || canary_candidate_phase(revision).is_none() || !canonical_target {
+    if run
+        .runner_override
+        .as_ref()
+        .is_some_and(|runner| runner != canonical_runner)
+    {
         return Err(PostgresError::unavailable(format!(
             "only canonical runner protocol canary runs may be created while cutover is {}",
             cutover_state_name(state)
         )));
     }
     Ok(())
+}
+
+pub(super) async fn guard_push_trigger_enqueue(
+    tx: &DatabaseTransaction,
+) -> Result<(), PostgresError> {
+    let state = load_cutover(tx, false).await?.0.state();
+    if state.allows_enqueue() {
+        return Ok(());
+    }
+    Err(PostgresError::unavailable(format!(
+        "push-triggered workflows are blocked while runner protocol cutover is {}; upgrade a runner and complete the canary suite",
+        cutover_state_name(state)
+    )))
 }
 
 pub(super) async fn guard_general_run_write(tx: &DatabaseTransaction) -> Result<(), PostgresError> {
@@ -582,9 +604,23 @@ where
         .into_iter()
         .map(|row| canary_from_row(&row))
         .collect::<Result<_, _>>()?;
+    let enabled_runner_count = conn
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count FROM scope_runners
+             WHERE enabled = TRUE AND protocol_version = $1",
+            [i64::from(RUNNER_PROTOCOL_VERSION).into()],
+        ))
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::internal_message("runner count is missing"))?
+        .try_get::<i64>("", "count")
+        .map_err(PostgresError::internal)
+        .and_then(|count| i64_to_u64(count, "enabled runner count"))?;
     Ok(RunnerProtocolCutoverSnapshot {
         cutover,
         canary_generation,
+        enabled_runner_count,
         canaries,
     })
 }
