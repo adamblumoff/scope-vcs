@@ -54,6 +54,118 @@ fn pushed_tree_rejects_case_insensitive_dot_git_from_a_raw_tree_object() {
     assert!(error.public_message().contains("reserved .git component"));
 }
 
+#[tokio::test]
+async fn receive_pack_rejects_nested_windows_device_path_before_durable_side_effects() {
+    let state = test_state_with_repo();
+    let repo = temp_git_repo("reserved-windows-device-test");
+    commit_all(&repo, "initial");
+    let parent = git_stdout_text(&repo, &["rev-parse", "HEAD"], "read parent commit")
+        .unwrap()
+        .trim()
+        .to_string();
+    let malicious_blob = git_object_from_stdin(&repo, &["hash-object", "-w", "--stdin"], b"bad");
+    let nested_tree = git_object_from_stdin(
+        &repo,
+        &["mktree"],
+        format!("100644 blob {malicious_blob}\tCON.txt\n").as_bytes(),
+    );
+    let mut root_entries = git_stdout_text(&repo, &["ls-tree", "HEAD"], "read root tree")
+        .unwrap()
+        .into_bytes();
+    root_entries.extend_from_slice(format!("040000 tree {nested_tree}\tdocs\n").as_bytes());
+    let root_tree = git_object_from_stdin(&repo, &["mktree"], &root_entries);
+    let commit = git_command_output(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.as_ref())
+            .arg("commit-tree")
+            .arg(root_tree)
+            .arg("-p")
+            .arg(parent)
+            .env("GIT_AUTHOR_NAME", "Scope Test")
+            .env("GIT_AUTHOR_EMAIL", "scope-test@example.test")
+            .env("GIT_COMMITTER_NAME", "Scope Test")
+            .env("GIT_COMMITTER_EMAIL", "scope-test@example.test"),
+        Some(b"crafted Windows device path\n"),
+    )
+    .unwrap();
+    let commit = String::from_utf8(commit).unwrap().trim().to_string();
+    run_git(
+        Some(&repo),
+        &["update-ref", "refs/heads/main", &commit],
+        "install crafted commit",
+    )
+    .unwrap();
+    let object_count = state.test_object_store.object_count();
+    let refs = git_refs(&repo).unwrap();
+    let metadata = serde_json::to_value(
+        find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+
+    let error = receive_pack_update_from_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &repo,
+        &test_owner_id(),
+        repo_config(Visibility::Public),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        error
+            .public_message()
+            .contains("reserved Windows device name")
+    );
+    assert_eq!(state.test_object_store.object_count(), object_count);
+    assert_eq!(git_refs(&repo).unwrap(), refs);
+    assert_eq!(
+        serde_json::to_value(
+            find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+                .await
+                .unwrap()
+        )
+        .unwrap(),
+        metadata
+    );
+}
+
+#[tokio::test]
+async fn receive_pack_rejects_windows_device_path_removed_before_the_new_head() {
+    let state = test_state_with_repo();
+    let repo = temp_git_repo("intermediate-windows-device-test");
+    commit_all(&repo, "initial");
+    fs::write(repo.join("CON.txt"), "transient").unwrap();
+    run_git(Some(&repo), &["add", "CON.txt"], "stage reserved path").unwrap();
+    commit_all(&repo, "add reserved path");
+    run_git(Some(&repo), &["rm", "CON.txt"], "remove reserved path").unwrap();
+    commit_all(&repo, "remove reserved path");
+
+    let error = receive_pack_update_from_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &repo,
+        &test_owner_id(),
+        repo_config(Visibility::Public),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        error
+            .public_message()
+            .contains("reserved Windows device name")
+    );
+    assert_eq!(state.test_object_store.object_count(), 0);
+}
+
 #[test]
 fn pushed_tree_rejects_gitlinks_instead_of_dropping_them() {
     let repo = temp_git_repo("gitlink-test");
@@ -171,4 +283,13 @@ fn pushed_tree_requires_canonical_repo_rules() {
             .public_message()
             .contains("must contain .scope/RULES.md")
     );
+}
+
+fn git_object_from_stdin(repo: &FsPath, args: &[&str], stdin: &[u8]) -> String {
+    let output = git_command_output(
+        Command::new("git").arg("-C").arg(repo).args(args),
+        Some(stdin),
+    )
+    .unwrap();
+    String::from_utf8(output).unwrap().trim().to_string()
 }

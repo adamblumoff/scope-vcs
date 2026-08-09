@@ -4,7 +4,7 @@ use crate::{
     error::ApiError,
     git::{
         cache::GitRepoHandle,
-        import::{git_snapshot_from_ref, run_git, run_git_output, validate_pushed_tree},
+        import::{git_snapshot_from_ref, run_git, run_git_output, validate_pushed_commit_range},
         projection_repo::projection_bare_repo_for_state,
         request_ref_public_safety::ensure_public_request_ref_is_public_safe,
         storage::{
@@ -561,7 +561,6 @@ async fn persist_request_ref_to_store(
     update: &RequestRefUpdate,
 ) -> Result<PersistedRequestRef, ApiError> {
     ensure_request_ref_oid_is_commit(staging_repo, &update.new_head_oid)?;
-    validate_pushed_tree(staging_repo, &update.new_head_oid)?;
     ensure_request_ref_descends_from_base(
         staging_repo,
         &request.base_main_oid,
@@ -585,6 +584,7 @@ async fn persist_request_ref_to_store(
         .old_head_oid
         .as_deref()
         .or(Some(request.head_oid.as_str()));
+    validate_pushed_commit_range(staging_repo, logical_old_head, &update.new_head_oid)?;
     ensure_request_ref_store_head_matches_push(expected_stored_head, logical_old_head)?;
     ensure_request_ref_is_fast_forward(staging_repo, logical_old_head, &update.new_head_oid)?;
     let refspec = format!("+{}:{}", update.request_ref, update.request_ref);
