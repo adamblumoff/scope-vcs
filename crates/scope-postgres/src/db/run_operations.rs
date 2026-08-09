@@ -8,8 +8,6 @@ use scope_domain::runs::{
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::StoredRunLog;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepositoryRunner {
     pub runner: Runner,
@@ -21,12 +19,6 @@ pub struct RunSnapshot {
     pub run: Run,
     pub jobs: Vec<RunJob>,
     pub logs_truncated: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecentRunLogs {
-    pub logs: Vec<StoredRunLog>,
-    pub truncated_in_view: bool,
 }
 
 impl RunStore {
@@ -115,68 +107,6 @@ impl RunStore {
                 })
             })
             .collect()
-    }
-
-    pub async fn recent_run_logs(
-        &self,
-        run_id: &str,
-        limit: u64,
-    ) -> Result<RecentRunLogs, PostgresError> {
-        let fetch_limit = limit.saturating_add(1);
-        let mut logs = entities::run_log::Entity::find()
-            .filter(entities::run_log::Column::RunId.eq(run_id))
-            .order_by_desc(entities::run_log::Column::Position)
-            .limit(fetch_limit)
-            .all(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?;
-        let truncated_in_view = logs.len() as u64 > limit;
-        if truncated_in_view {
-            logs.pop();
-        }
-        logs.reverse();
-        let attempt_ids = logs
-            .iter()
-            .map(|model| model.attempt_id.clone())
-            .collect::<Vec<_>>();
-        let jobs_by_attempt = if attempt_ids.is_empty() {
-            BTreeMap::new()
-        } else {
-            entities::run_attempt::Entity::find()
-                .filter(entities::run_attempt::Column::Id.is_in(attempt_ids))
-                .all(self.db.as_ref())
-                .await
-                .map_err(PostgresError::internal)?
-                .into_iter()
-                .map(|attempt| (attempt.id, attempt.job_key))
-                .collect::<BTreeMap<_, _>>()
-        };
-
-        Ok(RecentRunLogs {
-            truncated_in_view,
-            logs: logs
-                .into_iter()
-                .map(|model| {
-                    let position = entities::i64_to_u64(model.position, "run log position")?;
-                    let run_id = model.run_id.clone();
-                    let job_key =
-                        jobs_by_attempt
-                            .get(&model.attempt_id)
-                            .cloned()
-                            .ok_or_else(|| {
-                                PostgresError::internal_message(
-                                    "run log references a missing attempt",
-                                )
-                            })?;
-                    Ok(StoredRunLog {
-                        position,
-                        run_id,
-                        job_key,
-                        chunk: model.try_into_domain()?,
-                    })
-                })
-                .collect::<Result<_, PostgresError>>()?,
-        })
     }
 
     pub async fn run_has_truncated_logs(&self, run_id: &str) -> Result<bool, PostgresError> {
