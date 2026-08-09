@@ -8,6 +8,7 @@ import {
   JOB_GRAPH_NODE_WIDTH,
   buildRunJobGraph,
 } from './run-job-graph-model'
+import { runJobPanelId } from './run-job-ids'
 import { RunStatusDot } from './repository-runs-page'
 
 export function RunJobGraph({
@@ -33,7 +34,7 @@ export function RunJobGraph({
   return (
     <div
       aria-label="Job dependency graph"
-      className="overflow-x-auto border-y border-border bg-muted/15 py-3"
+      className="max-h-[min(70vh,42rem)] overflow-auto border-y border-border bg-muted/15 py-3"
     >
       <div
         className="relative"
@@ -60,7 +61,7 @@ export function RunJobGraph({
             <path
               className="fill-none stroke-border"
               d={edge.path}
-              key={`${edge.from}-${edge.to}`}
+              key={edge.key}
               markerEnd="url(#run-job-edge-arrow)"
               strokeWidth="2"
             />
@@ -73,7 +74,7 @@ export function RunJobGraph({
           const expanded = expandedJobs.has(job.key)
           return (
             <button
-              aria-controls={`run-job-${safeId(job.key)}`}
+              aria-controls={runJobPanelId(job.key)}
               aria-expanded={expanded}
               className={cn(
                 'absolute flex flex-col justify-between border bg-background px-3 py-2.5 text-left shadow-sm outline-none transition-colors hover:border-foreground/35 hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-ring',
@@ -111,8 +112,4 @@ export function RunJobGraph({
       </div>
     </div>
   )
-}
-
-function safeId(value: string) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, '-')
 }

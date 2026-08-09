@@ -32,6 +32,7 @@ import {
 } from './repository-run-detail-controller'
 import { RunStatusDot } from './repository-runs-page'
 import { RunJobGraph } from './run-job-graph'
+import { runJobPanelId } from './run-job-ids'
 import { formatRunRunnerSelection, formatRunUnixTime } from './run-formatting'
 
 export function RepositoryRunDetailPage({
@@ -166,7 +167,7 @@ function JobDetailsPanel({
     `updated ${formatRunUnixTime(job.updated_at_unix)}`,
   ].join(' · ')
   return (
-    <article id={`run-job-${safeId(job.key)}`}>
+    <article id={runJobPanelId(job.key)}>
       <div className="grid min-h-16 grid-cols-[minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-2 py-4 sm:grid-cols-[minmax(0,1fr)_auto]">
         <span className="flex min-w-0 items-center gap-2">
           <RunStatusDot state={job.state} />
@@ -541,10 +542,6 @@ function jobSummary(jobs: readonly RepoRunJobDetail[]) {
   return [...counts.entries()]
     .map(([state, count]) => `${count} ${state}`)
     .join(' · ') || 'No jobs'
-}
-
-function safeId(value: string) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, '-')
 }
 
 export function RunDetailPagePending() {
