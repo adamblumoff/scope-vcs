@@ -533,39 +533,6 @@ fn preserved_recovery_keeps_the_identity_locked_until_process_exit() {
 }
 
 #[test]
-fn recovered_finalization_reacquires_the_recorded_identity_lock() {
-    let parent = TestDir::new("runner-cache-recovered-identity-lock");
-    let root = parent.path().join("scope/runner");
-    initialize(&root).unwrap();
-    let record = record(CacheState::Tainted {
-        attempt_id: "attempt-recovered".to_string(),
-    });
-    write_record(&root, &record).unwrap();
-
-    let locks = lock_recorded_volume_identities(
-        &root,
-        &record.runner_id,
-        std::slice::from_ref(&record.volume_name),
-    )
-    .unwrap();
-    let observer = File::options()
-        .read(true)
-        .write(true)
-        .open(
-            root.join("locks")
-                .join(&record.runner_namespace)
-                .join(format!("{}.lock", record.identity_digest)),
-        )
-        .unwrap();
-    assert!(matches!(
-        observer.try_lock().unwrap_err(),
-        std::fs::TryLockError::WouldBlock
-    ));
-    drop(locks);
-    observer.try_lock().unwrap();
-}
-
-#[test]
 fn recovered_eviction_keeps_its_identity_after_local_removal() {
     let parent = TestDir::new("runner-cache-recovered-eviction-identity");
     let root = parent.path().join("scope/runner");

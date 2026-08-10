@@ -53,10 +53,7 @@ mod identity_lock;
 #[cfg(test)]
 use identity_lock::canonical_identity_lock_digests;
 use identity_lock::{CacheFileLock, CacheIdentityLocks};
-use identity_lock::{
-    lock_cache_identities, lock_recorded_volume_identities,
-    try_lock_cache_identity_while_lifecycle_locked,
-};
+use identity_lock::{lock_cache_identities, try_lock_cache_identity_while_lifecycle_locked};
 
 #[path = "cache_finalization.rs"]
 mod finalization;
