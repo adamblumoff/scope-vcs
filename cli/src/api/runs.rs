@@ -76,16 +76,23 @@ pub fn create_runner_protocol_canary(
     api_url: &str,
     operator_token: &str,
     request: &CreateRunnerProtocolCanaryRequest,
-) -> anyhow::Result<RunnerProtocolCutoverResponse> {
-    parse_json(
-        client
-            .post(format!("{api_url}{}", routes::ADMIN_RUNNER_CUTOVER_CANARY))
-            .bearer_auth(operator_token)
-            .json(request)
-            .send()
-            .context("register runner protocol canary")?,
-        "register runner protocol canary",
-    )
+) -> anyhow::Result<RunnerProtocolCanaryRegistration> {
+    let response = client
+        .post(format!("{api_url}{}", routes::ADMIN_RUNNER_CUTOVER_CANARY))
+        .bearer_auth(operator_token)
+        .json(request)
+        .send()
+        .context("register runner protocol canary")?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(RunnerProtocolCanaryRegistration::RunMissing);
+    }
+    parse_json(response, "register runner protocol canary")
+        .map(RunnerProtocolCanaryRegistration::Registered)
+}
+
+pub enum RunnerProtocolCanaryRegistration {
+    Registered(RunnerProtocolCutoverResponse),
+    RunMissing,
 }
 
 pub fn advance_runner_protocol_cutover(

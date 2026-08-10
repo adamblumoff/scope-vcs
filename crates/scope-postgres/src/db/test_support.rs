@@ -109,7 +109,7 @@ pub fn connect_postgres_test_store(target: &TestDatabaseTarget) -> anyhow::Resul
     let target = target.clone();
     let (db, test_schema) = run_test_future(async move {
         let (db, test_schema) = connect_isolated_test_database(&target).await?;
-        crate::migrations::apply(db.as_ref()).await?;
+        crate::migrations::apply_in_maintenance(db.as_ref()).await?;
         Ok::<_, anyhow::Error>((db, test_schema))
     })?;
 
@@ -435,7 +435,7 @@ async fn replace_catalog(
         "
             INSERT INTO scope_runner_protocol_cutover (
                 key, state, canary_generation, updated_at_unix
-            ) VALUES ('current', 'v6-open', 0, 0)
+            ) VALUES ('current', 'v7-open', 0, 0)
         ",
     )
     .await
@@ -716,7 +716,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v6-open");
+            assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v7-open");
             assert_eq!(cutover.try_get::<i64>("", "canary_generation").unwrap(), 0);
             let unrelated_sentinel = db
                 .query_one(Statement::from_string(

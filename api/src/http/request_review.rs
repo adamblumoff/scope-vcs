@@ -23,22 +23,27 @@ use axum::{
 };
 use scope_api_contract::{
     GitOid, RequestDiscussionAnchor as RequestDiscussionAnchorRequest,
-    RequestRevisionCommitResponse, RequestRevisionListResponse, RequestRevisionResponse,
+    RequestRevisionCommitResponse, RequestRevisionInspectionState, RequestRevisionListResponse,
+    RequestRevisionResponse,
 };
 use scope_domain::{
     policy::ScopePath,
-    requests::{Request, RequestDiscussionAnchor, RequestRevision},
+    requests::{Request, RequestDiscussionAnchor, RequestRevision, select_request_review_revision},
     store::{FileChangeKind, RepositoryAccess, StoredRepository},
 };
 use serde::Deserialize;
 use std::path::Path as FsPath;
+
+mod inspection;
+
+pub(crate) use inspection::RequestRevisionCommitVisibility;
+use inspection::{inspect_request_commit, request_revision_commit_files};
 
 const MAX_LISTED_REQUEST_REVISIONS: usize = 50;
 const MAX_LISTED_COMMITS_PER_REVISION: usize = 100;
 const MAX_LISTED_REQUEST_COMMITS: usize = 100;
 const MAX_IMPORTED_REQUEST_REVISIONS: usize = 5;
 const MAX_IMPORTED_REQUEST_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_REQUEST_COMMIT_METADATA_BYTES: usize = 64 * 1024;
 
 #[derive(Deserialize)]
 pub(crate) struct RequestRevisionListRequest {
@@ -78,6 +83,8 @@ pub(crate) async fn list_request_revisions(
         .await?;
     let selected_commit = input.commit.map(canonical_commit_oid).transpose()?;
     let revisions = revision_window.revisions;
+    let review_revision_id = select_request_review_revision(&revisions, input.revision.as_deref())?
+        .map(|revision| revision.id.clone());
     let users = state
         .metadata
         .requests()
@@ -88,7 +95,7 @@ pub(crate) async fn list_request_revisions(
         )
         .await?;
     let mut responses = vec![None; revisions.len()];
-    let selected_revision_index = input.revision.as_deref().and_then(|revision_id| {
+    let selected_revision_index = review_revision_id.as_deref().and_then(|revision_id| {
         revisions
             .iter()
             .position(|revision| revision.id == revision_id)
@@ -103,41 +110,53 @@ pub(crate) async fn list_request_revisions(
     for index in processing_order {
         let revision = &revisions[index];
         let commit_limit = work_budget.claim_revision(revision.git_snapshot.size_bytes);
-        let (commits, commits_truncated, commits_inspected) =
-            if let Some(commit_limit) = commit_limit {
-                let (commits, commits_truncated) = with_request_revision_store_repo(
-                    &state,
-                    &owner,
-                    &repo_name,
-                    &request,
-                    revision,
-                    |raw_repo| {
-                        request_revision_commits(
-                            raw_repo,
-                            &repo,
-                            access,
-                            revision,
-                            (input.revision.as_deref() == Some(revision.id.as_str()))
-                                .then_some(selected_commit.as_deref())
-                                .flatten(),
-                            commit_limit,
-                        )
-                    },
-                )?;
-                let commits_inspected = commits.inspected;
-                (commits.visible, commits_truncated, commits_inspected)
-            } else {
-                (Vec::new(), true, 0)
-            };
+        let (commits, inspection, commits_inspected) = if let Some(commit_limit) = commit_limit {
+            let commits = with_request_revision_store_repo(
+                &state,
+                &owner,
+                &repo_name,
+                &request,
+                revision,
+                |raw_repo| {
+                    request_revision_commits(
+                        raw_repo,
+                        &repo,
+                        access,
+                        revision,
+                        (input.revision.as_deref() == Some(revision.id.as_str()))
+                            .then_some(selected_commit.as_deref())
+                            .flatten(),
+                        commit_limit,
+                    )
+                },
+            )?;
+            (commits.visible, commits.inspection, commits.inspected)
+        } else {
+            (Vec::new(), RequestRevisionInspectionState::Unavailable, 0)
+        };
         work_budget.record_inspected(commits_inspected);
+        let (old_head_oid, new_head_oid) = if access.can_read_private_files {
+            (
+                Some(revision.old_head_oid.clone()),
+                Some(revision.new_head_oid.clone()),
+            )
+        } else {
+            (
+                None,
+                commits
+                    .iter()
+                    .any(|commit| commit.oid == revision.new_head_oid)
+                    .then(|| revision.new_head_oid.clone()),
+            )
+        };
         responses[index] = Some(RequestRevisionResponse {
             id: revision.id.clone(),
             position: revision.position,
             actor: request_actor_summary_response(&revision.actor_user_id, &users)?,
-            old_head_oid: revision.old_head_oid.clone(),
-            new_head_oid: revision.new_head_oid.clone(),
+            old_head_oid,
+            new_head_oid,
             commits,
-            commits_truncated,
+            inspection,
             created_at_unix: revision.created_at_unix,
         });
     }
@@ -146,6 +165,7 @@ pub(crate) async fn list_request_revisions(
         .map(|response| response.expect("every request revision is processed once"))
         .collect();
     Ok(Json(RequestRevisionListResponse {
+        review_revision_id,
         revisions,
         has_earlier_revisions: revision_window.has_earlier_revisions,
     }))
@@ -212,7 +232,7 @@ pub(crate) async fn get_request_revision_commit(
         .await?
         .ok_or_else(|| ApiError::not_found("request revision not found"))?;
     let commit_oid = canonical_commit_oid(commit_oid)?;
-    let (commit, files) = with_request_revision_store_repo(
+    let inspected = with_request_revision_store_repo(
         &state,
         &owner,
         &repo_name,
@@ -222,8 +242,9 @@ pub(crate) async fn get_request_revision_commit(
     )?;
     Ok(Json(RequestRevisionCommitFilesResponse {
         revision_id: revision.id,
-        commit,
-        files,
+        inspection: inspected.inspection,
+        commit: inspected.commit,
+        files: inspected.files,
     }))
 }
 
@@ -264,9 +285,10 @@ pub(crate) async fn get_request_revision_commit_file_diff(
         &request,
         &revision,
         |raw_repo| {
-            let (_, files) =
+            let inspected =
                 request_revision_commit_files(raw_repo, &repo, access, &revision, &commit_oid)?;
-            let file = files
+            let file = inspected
+                .files
                 .into_iter()
                 .find(|file| file.path == path)
                 .ok_or_else(|| ApiError::not_found("request revision file not found"))?;
@@ -319,7 +341,7 @@ pub(crate) async fn validate_request_discussion_anchor(
         .transpose()?;
     let commit_oid = anchor.commit_oid.map(canonical_commit_oid).transpose()?;
     if let Some(commit_oid) = commit_oid.as_deref() {
-        let (_, files) = with_request_revision_store_repo(
+        let inspected = with_request_revision_store_repo(
             state,
             owner,
             repo_name,
@@ -328,7 +350,8 @@ pub(crate) async fn validate_request_discussion_anchor(
             |raw_repo| request_revision_commit_files(raw_repo, repo, access, &revision, commit_oid),
         )?;
         if let Some(path) = path.as_ref()
-            && !files
+            && !inspected
+                .files
                 .iter()
                 .any(|file| file.path == path.as_str().trim_start_matches('/'))
         {
@@ -351,10 +374,10 @@ fn request_revision_commits(
     revision: &RequestRevision,
     selected_commit: Option<&str>,
     limit: usize,
-) -> Result<(InspectedRequestCommits, bool), ApiError> {
+) -> Result<InspectedRequestCommits, ApiError> {
     let mut commit_oids = request_revision_commit_oids(raw_repo, revision, limit)?;
-    let mut commits_truncated = commit_oids.len() > limit;
-    if commits_truncated {
+    let mut inspection_incomplete = commit_oids.len() > limit;
+    if inspection_incomplete {
         commit_oids.drain(..commit_oids.len() - limit);
     }
     if let Some(selected_commit) = selected_commit
@@ -363,47 +386,35 @@ fn request_revision_commits(
     {
         if commit_oids.len() == limit {
             commit_oids.remove(0);
-            commits_truncated = true;
+            inspection_incomplete = true;
         }
         commit_oids.insert(0, selected_commit.to_string());
     }
     let inspected = commit_oids.len();
-    let visible = commit_oids
-        .into_iter()
-        .map(|commit_oid| request_commit_summary(raw_repo, repo, access, &commit_oid))
-        .collect::<Result<Vec<_>, ApiError>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    Ok((
-        InspectedRequestCommits { visible, inspected },
-        commits_truncated,
-    ))
+    let mut visible = Vec::new();
+    let mut metadata_incomplete = false;
+    for commit_oid in commit_oids {
+        let commit = inspect_request_commit(raw_repo, repo, access, &commit_oid)?;
+        metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
+        if let Some(summary) = commit.commit {
+            visible.push(summary);
+        }
+    }
+    Ok(InspectedRequestCommits {
+        visible,
+        inspected,
+        inspection: if inspection_incomplete || metadata_incomplete {
+            RequestRevisionInspectionState::Incomplete
+        } else {
+            RequestRevisionInspectionState::Complete
+        },
+    })
 }
 
 struct InspectedRequestCommits {
     visible: Vec<RequestRevisionCommitResponse>,
     inspected: usize,
-}
-
-fn request_revision_commit_files(
-    raw_repo: &FsPath,
-    repo: &StoredRepository,
-    access: RepositoryAccess,
-    revision: &RequestRevision,
-    commit_oid: &str,
-) -> Result<(RequestRevisionCommitResponse, Vec<CommitFileResponse>), ApiError> {
-    if !commit_belongs_to_revision(raw_repo, revision, commit_oid)? {
-        return Err(ApiError::not_found("request revision commit not found"));
-    }
-    let commit = request_commit_summary(raw_repo, repo, access, commit_oid)?
-        .ok_or_else(|| ApiError::not_found("request revision commit not found"))?;
-    let parent = commit
-        .parent_oids
-        .first()
-        .ok_or_else(|| ApiError::conflict("request revision commit must have a parent"))?;
-    let files = request_changes_from_repo(raw_repo, repo, access, parent, commit_oid, None)?;
-    Ok((commit, files))
+    inspection: RequestRevisionInspectionState,
 }
 
 fn request_revision_commit_oids(
@@ -490,121 +501,6 @@ fn git_is_ancestor(raw_repo: &FsPath, ancestor: &str, descendant: &str) -> Resul
             String::from_utf8_lossy(&output.stderr).trim()
         ))),
     }
-}
-
-fn request_commit_summary(
-    raw_repo: &FsPath,
-    repo: &StoredRepository,
-    access: RepositoryAccess,
-    commit_oid: &str,
-) -> Result<Option<RequestRevisionCommitResponse>, ApiError> {
-    let Some(output) = omit_oversized_commit_metadata(run_git_output_bounded(
-        Some(raw_repo),
-        &[
-            "show",
-            "-s",
-            "--format=%P%x00%an <%ae>%x00%at%x00%B",
-            commit_oid,
-        ],
-        "reading request commit metadata",
-        MAX_REQUEST_COMMIT_METADATA_BYTES,
-    ))?
-    else {
-        return Ok(None);
-    };
-    if !output.status.success() {
-        return Err(ApiError::infrastructure_unavailable(format!(
-            "reading request commit metadata: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    let metadata = request_commit_metadata(&output.stdout)?;
-    // Request-ref validation requires every revision head to descend from its recorded base,
-    // so commits introduced by a revision cannot be parentless roots.
-    let parent = metadata
-        .parent_oids
-        .first()
-        .ok_or_else(|| ApiError::conflict("request revision commit must have a parent"))?;
-    let changes = request_changes_from_repo_with_visibility(
-        raw_repo, repo, access, parent, commit_oid, None,
-    )?;
-    if !access.can_read_private_files && changes.hidden {
-        return Ok(None);
-    }
-    Ok(Some(RequestRevisionCommitResponse {
-        oid: commit_oid.to_string(),
-        parent_oids: metadata.parent_oids,
-        author: metadata.author,
-        authored_at_unix: metadata.authored_at_unix,
-        message: metadata.message,
-        change_count: changes.files.len(),
-    }))
-}
-
-fn omit_oversized_commit_metadata(
-    output: Result<std::process::Output, ApiError>,
-) -> Result<Option<std::process::Output>, ApiError> {
-    match output {
-        Ok(output) => Ok(Some(output)),
-        Err(error) if error.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
-struct RequestCommitMetadata {
-    parent_oids: Vec<String>,
-    author: Option<String>,
-    authored_at_unix: u64,
-    message: String,
-}
-
-fn request_commit_metadata(output: &[u8]) -> Result<RequestCommitMetadata, ApiError> {
-    let mut fields = output.splitn(4, |byte| *byte == 0);
-    let parent_oids = fields
-        .next()
-        .unwrap_or_default()
-        .split(|byte| byte.is_ascii_whitespace())
-        .filter(|value| !value.is_empty())
-        .map(|value| String::from_utf8_lossy(value).into_owned())
-        .collect::<Vec<_>>();
-    let author = fields
-        .next()
-        .map(String::from_utf8_lossy)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let authored_at_unix = std::str::from_utf8(fields.next().unwrap_or_default())
-        .map_err(ApiError::bad_request)?
-        .trim()
-        .parse::<u64>()
-        .map_err(ApiError::bad_request)?;
-    let message = String::from_utf8_lossy(fields.next().unwrap_or_default())
-        .trim()
-        .to_string();
-    Ok(RequestCommitMetadata {
-        parent_oids,
-        author,
-        authored_at_unix,
-        message,
-    })
-}
-
-fn request_changes_from_repo(
-    raw_repo: &FsPath,
-    repo: &StoredRepository,
-    access: RepositoryAccess,
-    old_head_oid: &str,
-    new_head_oid: &str,
-    path: Option<&str>,
-) -> Result<Vec<CommitFileResponse>, ApiError> {
-    Ok(request_changes_from_repo_with_visibility(
-        raw_repo,
-        repo,
-        access,
-        old_head_oid,
-        new_head_oid,
-        path,
-    )?
-    .files)
 }
 
 struct VisibleRequestChanges {
@@ -759,22 +655,9 @@ fn normalized_scope_path(path: &str) -> Result<ScopePath, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiError, MAX_IMPORTED_REQUEST_REVISIONS, MAX_IMPORTED_REQUEST_SNAPSHOT_BYTES,
-        RequestRevisionListWorkBudget, omit_oversized_commit_metadata, request_commit_metadata,
+        MAX_IMPORTED_REQUEST_REVISIONS, MAX_IMPORTED_REQUEST_SNAPSHOT_BYTES,
+        RequestRevisionListWorkBudget,
     };
-
-    #[test]
-    fn commit_metadata_decodes_non_utf8_display_fields_lossily() {
-        let metadata = request_commit_metadata(
-            b"0123456789012345678901234567890123456789\0Ada \xff <ada@example.com>\x001700000000\0Fix \xfe metadata\n",
-        )
-        .unwrap();
-
-        assert_eq!(metadata.parent_oids.len(), 1);
-        assert_eq!(metadata.author.as_deref(), Some("Ada � <ada@example.com>"));
-        assert_eq!(metadata.authored_at_unix, 1_700_000_000);
-        assert_eq!(metadata.message, "Fix � metadata");
-    }
 
     #[test]
     fn revision_listing_budget_caps_snapshot_count_bytes_and_commit_work() {
@@ -796,14 +679,5 @@ mod tests {
         let mut commit_budget = RequestRevisionListWorkBudget::new();
         commit_budget.record_inspected(usize::MAX);
         assert_eq!(commit_budget.claim_revision(1), None);
-    }
-
-    #[test]
-    fn oversized_commit_metadata_is_omitted_without_failing_the_listing() {
-        let result = omit_oversized_commit_metadata(Err(ApiError::payload_too_large(
-            "commit metadata too large",
-        )))
-        .unwrap();
-        assert!(result.is_none());
     }
 }

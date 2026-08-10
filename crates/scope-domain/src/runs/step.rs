@@ -237,6 +237,7 @@ impl RunAttempt {
         token_hash: &str,
         step_index: u32,
         conclusion: StepConclusion,
+        logs_truncated: bool,
         now_unix: u64,
     ) -> Result<(), DomainError> {
         let index = usize::try_from(step_index)
@@ -267,6 +268,9 @@ impl RunAttempt {
         }
         if step.state != StepState::Running {
             return Err(DomainError::conflict("step is not running"));
+        }
+        if logs_truncated {
+            self.mark_step_logs_truncated(steps, step_index)?;
         }
         self.ensure_time_not_before_heartbeat(now_unix)?;
         job.ensure_time_not_before_update(now_unix)?;

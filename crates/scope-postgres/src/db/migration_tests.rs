@@ -1,11 +1,13 @@
 use super::{
-    TestDatabaseTarget, connect_postgres_worker_store_with_schema_wait,
+    MigrationImpact, TestDatabaseTarget,
     test_support::{TestSchemaLease, connect_isolated_test_database},
 };
 use crate::migrations;
-use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
-use std::{sync::Arc, time::Duration};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm_migration::MigratorTrait;
+use std::sync::Arc;
 
+mod maintenance_cutover;
 mod request_revisions;
 mod run_jobs;
 
@@ -34,6 +36,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0015_runner_capacity",
     "m0016_workflow_runtime_contract",
     "m0017_run_history_indexes",
+    "m0018_truthful_run_log_truncation",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -184,7 +187,7 @@ fn without_removed_repo_visibility(snapshot: serde_json::Value) -> serde_json::V
 async fn fresh_database_reaches_exact_latest_schema() {
     let (_target, db, _lease) = isolated_database().await;
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     migrations::assert_exact_state(db.as_ref()).await.unwrap();
     assert_eq!(applied_versions(db.as_ref()).await, LATEST_MIGRATIONS);
@@ -369,7 +372,7 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
         representative_business_snapshot(db.as_ref()).await,
     ));
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     let after =
         without_migration_rewritten_state(representative_business_snapshot(db.as_ref()).await);
@@ -422,7 +425,7 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v6-fenced");
+    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v7-fenced");
     let run_digest = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -587,7 +590,7 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
     .await
     .unwrap();
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     let run = db
         .query_one(Statement::from_string(
@@ -700,7 +703,9 @@ async fn structurally_drifted_v6_is_refused_without_stamping_migration_state() {
         .await
         .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("column fingerprint"));
     assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
@@ -713,7 +718,7 @@ async fn production_v6_with_retired_tables_is_adopted_and_cleaned_up() {
     initialize_ready_v6(db.as_ref()).await;
     add_retired_v6_tables(db.as_ref()).await;
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     for table in RETIRED_V6_TABLES {
         assert!(
@@ -733,7 +738,9 @@ async fn rejected_v6_fingerprint_rolls_back_retired_table_cleanup() {
         .await
         .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("column fingerprint"));
     assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
@@ -776,7 +783,9 @@ async fn unknown_v6_table_is_refused_without_deleting_it() {
     .await
     .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("expected v6 table set"));
     assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
@@ -791,7 +800,9 @@ async fn invalid_v6_marker_is_refused_without_stamping_migration_state() {
         .await
         .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("expected current ready v6"));
     assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
@@ -812,7 +823,9 @@ async fn partial_schema_is_refused_without_deleting_existing_objects() {
     .await
     .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("expected v6 table set"));
     assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
@@ -842,7 +855,9 @@ async fn multiple_v6_markers_are_refused_without_stamping_migration_state() {
     .await
     .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("expected one v6 marker"));
     assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
@@ -851,7 +866,7 @@ async fn multiple_v6_markers_are_refused_without_stamping_migration_state() {
 #[tokio::test]
 async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
     let (_target, db, _lease) = isolated_database().await;
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
     db.execute_unprepared(
         "
             INSERT INTO scope_users (id, handle, email, email_verified)
@@ -862,7 +877,7 @@ async fn reapplying_latest_migrations_is_a_data_preserving_noop() {
     .unwrap();
     let before = representative_business_snapshot(db.as_ref()).await;
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     assert_eq!(representative_business_snapshot(db.as_ref()).await, before);
     assert_eq!(applied_versions(db.as_ref()).await, LATEST_MIGRATIONS);
@@ -873,8 +888,8 @@ async fn concurrent_api_migration_attempts_serialize() {
     let (_target, db, _lease) = isolated_database().await;
 
     let (first, second) = tokio::join!(
-        migrations::apply(db.as_ref()),
-        migrations::apply(db.as_ref())
+        migrations::apply_in_maintenance(db.as_ref()),
+        migrations::apply_in_maintenance(db.as_ref())
     );
 
     first.unwrap();
@@ -889,7 +904,7 @@ async fn exact_state_check_is_read_only_and_rejects_behind_and_ahead() {
     assert!(migrations::assert_exact_state(db.as_ref()).await.is_err());
     assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
     db.execute_unprepared(
         "DELETE FROM seaql_migrations WHERE version = 'm0002_retire_reset_schema'",
     )
@@ -906,52 +921,4 @@ async fn exact_state_check_is_read_only_and_rejects_behind_and_ahead() {
     .await
     .unwrap();
     assert!(migrations::assert_exact_state(db.as_ref()).await.is_err());
-}
-
-#[tokio::test]
-async fn worker_waits_for_api_migration_and_then_detects_ahead_state() {
-    let (target, db, _lease) = isolated_database().await;
-    let worker_url = target.schema_database_url();
-    let worker_probe = Database::connect(&worker_url).await.unwrap();
-    let worker_schema = worker_probe
-        .query_one(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "SELECT current_schema() AS schema".to_string(),
-        ))
-        .await
-        .unwrap()
-        .unwrap()
-        .try_get::<String>("", "schema")
-        .unwrap();
-    assert!(worker_schema.starts_with("scope_test_"));
-    worker_probe.close().await.unwrap();
-    let worker = tokio::spawn(async move {
-        connect_postgres_worker_store_with_schema_wait(
-            worker_url,
-            Duration::from_secs(10),
-            Duration::from_millis(20),
-        )
-        .await
-    });
-    tokio::time::sleep(Duration::from_millis(75)).await;
-    assert!(!worker.is_finished());
-
-    migrations::apply(db.as_ref()).await.unwrap();
-
-    let worker_store = tokio::time::timeout(Duration::from_secs(10), worker)
-        .await
-        .expect("worker should observe completed API migrations")
-        .unwrap()
-        .unwrap();
-    worker_store.admin().readiness_check().await.unwrap();
-
-    db.execute_unprepared(
-        "
-            INSERT INTO seaql_migrations (version, applied_at)
-            VALUES ('m9999_unknown', 0)
-        ",
-    )
-    .await
-    .unwrap();
-    assert!(worker_store.admin().readiness_check().await.is_err());
 }

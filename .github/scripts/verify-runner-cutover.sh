@@ -31,7 +31,7 @@ process.stdout.write(`${cutover.state}\t${cutover.enabled_runner_count}`);
 )"
 IFS=$'\t' read -r cutover_state enabled_runner_count <<< "$cutover_status"
 
-if [ "$cutover_state" != "v6-open" ]; then
+if [ "$cutover_state" != "v7-open" ]; then
   echo "Production runner protocol cutover is ${cutover_state:-unknown}."
   echo "On the runner host, run: scope runner cutover --name <runner-name> --repo <owner/repo>"
   exit 1
@@ -43,4 +43,4 @@ if [ "$enabled_runner_count" -lt 1 ]; then
   exit 1
 fi
 
-echo "Production runner protocol cutover is v6-open with ${enabled_runner_count} enabled runner(s)."
+echo "Production runner protocol cutover is v7-open with ${enabled_runner_count} enabled runner(s)."

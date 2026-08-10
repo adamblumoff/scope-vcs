@@ -108,7 +108,7 @@ async fn terminal_run_attempts_migrate_as_history_without_active_job_pointers() 
     .await
     .unwrap();
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     let summary = db
         .query_one(Statement::from_string(
@@ -216,10 +216,10 @@ async fn migrated_manual_runner_targets_remain_idempotent_without_guessing_raw_o
     .await
     .unwrap();
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
     db.execute_unprepared(
         "UPDATE scope_runner_protocol_cutover
-         SET state = 'v6-open'
+         SET state = 'v7-open'
          WHERE key = 'current'",
     )
     .await
@@ -305,7 +305,7 @@ async fn migrated_revision(db: &DatabaseConnection, run_id: &str) -> WorkflowRev
 }
 
 #[tokio::test]
-async fn workflow_runtime_migration_resets_the_protocol_authority_to_v6_fenced() {
+async fn workflow_runtime_migrations_reset_protocol_authority_to_v7_fenced() {
     let (_target, db, _lease) = isolated_database().await;
     migrations::Migrator::up(db.as_ref(), Some(13))
         .await
@@ -412,7 +412,7 @@ async fn workflow_runtime_migration_resets_the_protocol_authority_to_v6_fenced()
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v6-fenced");
+    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v7-fenced");
     assert_eq!(cutover.try_get::<i64>("", "canary_generation").unwrap(), 0);
     let retired = db
         .query_one(Statement::from_string(

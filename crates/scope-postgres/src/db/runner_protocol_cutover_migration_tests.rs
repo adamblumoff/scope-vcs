@@ -77,7 +77,9 @@ async fn v4_cutover_refuses_to_start_until_v3_attempts_are_drained() {
     .await
     .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
     assert!(
         error
             .to_string()
@@ -118,7 +120,7 @@ async fn v4_cutover_refuses_to_start_until_v3_attempts_are_drained() {
     )
     .await
     .unwrap();
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     let runner_enabled = db
         .query_one(Statement::from_string(
@@ -227,7 +229,9 @@ async fn workflow_jobs_rewrite_refuses_to_start_until_attempts_are_drained() {
     .await
     .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
     assert!(
         error
             .to_string()
@@ -255,7 +259,7 @@ async fn workflow_jobs_rewrite_refuses_to_start_until_attempts_are_drained() {
     )
     .await
     .unwrap();
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     let row = db
         .query_one(Statement::from_string(
@@ -319,7 +323,9 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
     .await
     .unwrap();
 
-    let error = migrations::apply(db.as_ref()).await.unwrap_err();
+    let error = migrations::apply_in_maintenance(db.as_ref())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains(
         "workflow jobs migration requires all pending push trigger evaluations to finish"
     ));
@@ -338,14 +344,14 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
     )
     .await
     .unwrap();
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
     assert_eq!(
         applied_versions(db.as_ref())
             .await
             .last()
             .map(String::as_str),
-        Some("m0017_run_history_indexes")
+        Some("m0018_truthful_run_log_truncation")
     );
 
     let old_producer_insert = db
@@ -416,7 +422,7 @@ async fn runner_capacity_migration_sets_and_enforces_the_domain_range() {
     .await
     .unwrap();
 
-    migrations::apply(db.as_ref()).await.unwrap();
+    migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
     let capacity = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,

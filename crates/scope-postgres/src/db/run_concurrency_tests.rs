@@ -5,8 +5,8 @@ use super::runs_tests::{
 use crate::error::PostgresErrorKind;
 use scope_domain::runs::{
     run::{
-        AttemptConclusion, PinnedContainerImage, RunJobState, RunState, RunTrigger, StepConclusion,
-        StepState,
+        AttemptConclusion, PinnedContainerImage, RunJobState, RunLogChunk, RunState, RunTrigger,
+        StepConclusion, StepState,
     },
     workflow::RunnerSelector,
 };
@@ -131,6 +131,7 @@ async fn completed_sibling_cannot_regress_running_run_while_another_job_is_lease
             &"a".repeat(64),
             0,
             StepConclusion::Succeeded,
+            false,
             23,
         )
         .await
@@ -536,6 +537,145 @@ async fn heartbeat_waiting_for_job_lock_observes_cancellation_committed_during_t
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn log_reads_are_coherent_when_terminal_retention_commits_between_component_lookups() {
+    let store = Arc::new(postgres_store());
+    register_runner(&store, "runner-logs", "linux-box").await;
+    enqueue(
+        &store,
+        run("run-log-retention", "manual:log-retention"),
+        revision(),
+    )
+    .await;
+    store
+        .runs()
+        .claim_job(
+            "run-log-retention",
+            "checks",
+            "runner-logs",
+            "attempt-log-retention",
+            &"a".repeat(64),
+            20,
+            80,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .pin_attempt_container_image(
+            "attempt-log-retention",
+            "runner-logs",
+            &"a".repeat(64),
+            PinnedContainerImage::parse(format!("alpine@sha256:{}", "c".repeat(64))).unwrap(),
+            21,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .start_attempt_step(
+            "attempt-log-retention",
+            "runner-logs",
+            &"a".repeat(64),
+            0,
+            22,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .append_attempt_log(
+            RunLogChunk::new("attempt-log-retention", 0, 1, "retained\n", 23).unwrap(),
+            &"a".repeat(64),
+            23,
+        )
+        .await
+        .unwrap();
+    store
+        .runs()
+        .complete_attempt_step(
+            "attempt-log-retention",
+            &"a".repeat(64),
+            0,
+            StepConclusion::Succeeded,
+            false,
+            30,
+        )
+        .await
+        .unwrap();
+
+    let retention = store.db.begin().await.unwrap();
+    retention
+        .execute_unprepared(
+            "DELETE FROM scope_run_logs WHERE run_id = 'run-log-retention';
+             LOCK TABLE scope_run_attempts IN ACCESS EXCLUSIVE MODE;
+             DELETE FROM scope_run_attempt_steps
+              WHERE attempt_id = 'attempt-log-retention';
+             DELETE FROM scope_run_attempts
+              WHERE id = 'attempt-log-retention';",
+        )
+        .await
+        .unwrap();
+    let retention_pid = retention
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT pg_backend_pid() AS pid".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i32>("", "pid")
+        .unwrap();
+    let page_store = Arc::clone(&store);
+    let page = tokio::spawn(async move {
+        page_store
+            .runs()
+            .run_logs_after("run-log-retention", 0, 10)
+            .await
+    });
+    let recent_store = Arc::clone(&store);
+    let recent = tokio::spawn(async move {
+        recent_store
+            .runs()
+            .recent_run_logs("run-log-retention", 10)
+            .await
+    });
+    let mut blocked_readers = 0;
+    for _ in 0..100 {
+        blocked_readers = store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT count(*) AS count
+                   FROM pg_stat_activity activity
+                  WHERE activity.pid <> $1
+                    AND $1 = ANY(pg_blocking_pids(activity.pid))
+                    AND activity.query LIKE '%scope_run_attempts%'",
+                [retention_pid.into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get::<i64>("", "count")
+            .unwrap();
+        if blocked_readers == 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        blocked_readers, 2,
+        "both log reads must reach their attempt lookup before retention commits"
+    );
+
+    retention.commit().await.unwrap();
+
+    let page = page.await.unwrap().unwrap();
+    let recent = recent.await.unwrap().unwrap();
+    assert!(page.is_empty());
+    assert!(recent.logs.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claim_reloads_parent_before_aggregate_save_and_cannot_regress_concurrent_state() {
     let store = Arc::new(postgres_store());
     register_runner(&store, "runner-1", "linux-box").await;
@@ -639,6 +779,7 @@ async fn attempt_details_are_newest_first_by_internal_ordinal_with_isolated_step
                 exit_code: 1,
                 message: "setup failed".to_string(),
             },
+            false,
             20,
         )
         .await

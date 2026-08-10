@@ -144,7 +144,7 @@ export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null
 
 export type RequestFileDiffRequest = { path: string, };
 
-export type RequestRevisionCommitFilesResponse = { revision_id: string, commit: RequestRevisionCommitResponse, files: Array<CommitFileResponse>, };
+export type RequestRevisionCommitFilesResponse = { revision_id: string, inspection: RequestRevisionInspectionState, commit: RequestRevisionCommitResponse, files: Array<CommitFileResponse>, };
 
 export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
 
@@ -224,9 +224,11 @@ export type RequestDiscussionAnchor = { revision_id: string, commit_oid: string 
 
 export type RequestRevisionCommitResponse = { oid: string, parent_oids: Array<string>, author: string | null, authored_at_unix: number, message: string, change_count: number, };
 
-export type RequestRevisionResponse = { id: string, position: number, actor: RequestActorSummaryResponse, old_head_oid: string, new_head_oid: string, commits: Array<RequestRevisionCommitResponse>, commits_truncated: boolean, created_at_unix: number, };
+export type RequestRevisionInspectionState = "Complete" | "Incomplete" | "Unavailable";
 
-export type RequestRevisionListResponse = { revisions: Array<RequestRevisionResponse>, has_earlier_revisions: boolean, };
+export type RequestRevisionResponse = { id: string, position: number, actor: RequestActorSummaryResponse, old_head_oid: string | null, new_head_oid: string | null, commits: Array<RequestRevisionCommitResponse>, inspection: RequestRevisionInspectionState, created_at_unix: number, };
+
+export type RequestRevisionListResponse = { review_revision_id: string | null, revisions: Array<RequestRevisionResponse>, has_earlier_revisions: boolean, };
 
 export type RequestDiscussionPageResponse = { discussions: Array<RequestDiscussionSummaryResponse>, next_cursor: string | null, snapshot_version: number, };
 

@@ -55,7 +55,6 @@ async fn run() -> anyhow::Result<()> {
         health_port = settings.health_port,
         batch_size = settings.batch_size,
         poll_interval_ms = settings.poll_interval.as_millis(),
-        schema_wait_secs = settings.schema_wait_timeout.as_secs(),
         git_compaction_segments = settings.git_compaction_segments,
         git_compaction_timeout_secs = settings.git_compaction_timeout.as_secs(),
         git_segment_max_depth = settings.git_storage_limits.max_chain_depth(),
@@ -71,12 +70,7 @@ async fn run() -> anyhow::Result<()> {
 }
 
 async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::Result<()> {
-    let metadata = MetadataStore::connect_worker_with_schema_wait(
-        settings.database_url.clone(),
-        settings.schema_wait_timeout,
-        Duration::from_secs(SCHEMA_WAIT_RETRY_SECS),
-    )
-    .await?;
+    let metadata = MetadataStore::connect_worker(settings.database_url.clone()).await?;
     let object_store = object_store_from_env(&settings.data_dir)?;
 
     let mut next_compaction_attempt = Instant::now();

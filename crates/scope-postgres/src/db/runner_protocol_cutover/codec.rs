@@ -34,8 +34,8 @@ pub(super) fn parse_cutover_state(
     value: &str,
 ) -> Result<RunnerProtocolCutoverState, PostgresError> {
     match value {
-        "v6-fenced" => Ok(RunnerProtocolCutoverState::V6Fenced),
-        "v6-open" => Ok(RunnerProtocolCutoverState::V6Open),
+        "v7-fenced" => Ok(RunnerProtocolCutoverState::V7Fenced),
+        "v7-open" => Ok(RunnerProtocolCutoverState::V7Open),
         _ => Err(PostgresError::internal_message(
             "invalid runner protocol cutover state",
         )),
@@ -44,8 +44,8 @@ pub(super) fn parse_cutover_state(
 
 pub(super) fn cutover_state_name(state: RunnerProtocolCutoverState) -> &'static str {
     match state {
-        RunnerProtocolCutoverState::V6Fenced => "v6-fenced",
-        RunnerProtocolCutoverState::V6Open => "v6-open",
+        RunnerProtocolCutoverState::V7Fenced => "v7-fenced",
+        RunnerProtocolCutoverState::V7Open => "v7-open",
     }
 }
 

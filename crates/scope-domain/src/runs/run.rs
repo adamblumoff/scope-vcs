@@ -280,7 +280,7 @@ pub struct RunAttempt {
     pub completed_at_unix: Option<u64>,
     pub terminal_reason: Option<AttemptTerminalReason>,
     pub log_bytes: u64,
-    pub logs_truncated: bool,
+    pub first_truncated_step_index: Option<u32>,
 }
 
 impl RunAttempt {
@@ -302,7 +302,7 @@ impl RunAttempt {
         completed_at_unix: Option<u64>,
         terminal_reason: Option<AttemptTerminalReason>,
         log_bytes: u64,
-        logs_truncated: bool,
+        first_truncated_step_index: Option<u32>,
     ) -> Result<Self, DomainError> {
         let token_hash = token_hash.into();
         validate_sha256_hash("attempt token hash", &token_hash)?;
@@ -323,7 +323,7 @@ impl RunAttempt {
             completed_at_unix,
             terminal_reason,
             log_bytes,
-            logs_truncated,
+            first_truncated_step_index,
         };
         attempt.validate_facts()?;
         Ok(attempt)
@@ -412,7 +412,7 @@ impl RunAttempt {
                 "logs can only be appended to the running step",
             ));
         }
-        if self.logs_truncated {
+        if self.first_truncated_step_index.is_some() {
             return Ok(false);
         }
         let next_bytes = self
@@ -420,11 +420,37 @@ impl RunAttempt {
             .checked_add(chunk.text.len() as u64)
             .ok_or_else(|| DomainError::conflict("run log byte count overflow"))?;
         if next_bytes > MAX_RUN_LOG_BYTES_PER_ATTEMPT {
-            self.logs_truncated = true;
+            self.first_truncated_step_index = Some(chunk.step_index);
             return Ok(false);
         }
         self.log_bytes = next_bytes;
         Ok(true)
+    }
+
+    pub fn mark_step_logs_truncated(
+        &mut self,
+        steps: &[RunAttemptStep],
+        step_index: u32,
+    ) -> Result<(), DomainError> {
+        self.validate_steps(steps)?;
+        let step = steps
+            .get(step_index as usize)
+            .ok_or_else(|| DomainError::invalid_input("workflow step does not exist"))?;
+        if step.state != StepState::Running {
+            return Err(DomainError::conflict(
+                "only the running step can report truncated logs",
+            ));
+        }
+        match self.first_truncated_step_index {
+            Some(existing) if existing <= step_index => Ok(()),
+            Some(_) => Err(DomainError::conflict(
+                "run attempt log truncation cannot move to an earlier step",
+            )),
+            None => {
+                self.first_truncated_step_index = Some(step_index);
+                Ok(())
+            }
+        }
     }
 
     pub fn authenticate_access(
@@ -445,6 +471,7 @@ impl RunAttempt {
         runner_id: &str,
         token_hash: &str,
         conclusion: AttemptConclusion,
+        logs_truncated: bool,
         now_unix: u64,
     ) -> Result<(), DomainError> {
         if self.state.is_terminal() || job.state.is_terminal() {
@@ -459,6 +486,17 @@ impl RunAttempt {
         }
         self.authenticate(job, runner_id, token_hash, now_unix)?;
         self.validate_steps(steps)?;
+        if logs_truncated && self.first_truncated_step_index.is_none() {
+            let step_index = steps
+                .iter()
+                .position(|step| step.state == StepState::Running)
+                .ok_or_else(|| {
+                    DomainError::conflict(
+                        "attempt log truncation requires an active or previously truncated step",
+                    )
+                })? as u32;
+            self.mark_step_logs_truncated(steps, step_index)?;
+        }
         self.ensure_time_not_before_heartbeat(now_unix)?;
         job.ensure_time_not_before_update(now_unix)?;
         let (attempt_state, job_state, terminal_reason) = match conclusion {

@@ -425,7 +425,7 @@ pub mod run_attempt {
         pub completed_at_unix: Option<i64>,
         pub terminal_reason: Option<Json>,
         pub log_bytes: i64,
-        pub logs_truncated: bool,
+        pub first_truncated_step_index: Option<i32>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -471,7 +471,10 @@ pub mod run_attempt {
                     .map(encode_json)
                     .transpose()?,
                 log_bytes: u64_to_i64(attempt.log_bytes, "attempt log byte count")?,
-                logs_truncated: attempt.logs_truncated,
+                first_truncated_step_index: attempt
+                    .first_truncated_step_index
+                    .map(|value| u32_to_i32(value, "first truncated step index"))
+                    .transpose()?,
             })
         }
 
@@ -499,7 +502,9 @@ pub mod run_attempt {
                     .map(decode_json::<AttemptTerminalReason>)
                     .transpose()?,
                 i64_to_u64(self.log_bytes, "attempt log byte count")?,
-                self.logs_truncated,
+                self.first_truncated_step_index
+                    .map(|value| i32_to_u32(value, "first truncated step index"))
+                    .transpose()?,
             )
             .map_err(PostgresError::invalid_input)
         }

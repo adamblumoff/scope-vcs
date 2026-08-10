@@ -232,6 +232,7 @@ pub struct AppendAttemptLogRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CompleteAttemptStepRequest {
     pub conclusion: StepConclusionRequest,
+    pub logs_truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -244,6 +245,7 @@ pub enum StepConclusionRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CompleteAttemptRequest {
     pub conclusion: AttemptConclusionRequest,
+    pub logs_truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -278,7 +280,7 @@ mod tests {
     #[test]
     fn cutover_contract_uses_stable_kebab_case_domain_values() {
         let response = RunnerProtocolCutoverResponse {
-            state: RunnerProtocolCutoverState::V6Fenced,
+            state: RunnerProtocolCutoverState::V7Fenced,
             generation: 2,
             enabled_runner_count: 1,
             canaries: vec![RunnerProtocolCanaryResponse {
@@ -290,7 +292,7 @@ mod tests {
             }],
         };
         let json = serde_json::to_value(&response).unwrap();
-        assert_eq!(json["state"], "v6-fenced");
+        assert_eq!(json["state"], "v7-fenced");
         assert_eq!(json["canaries"][0]["phase"], "warm-read");
         assert_eq!(json["canaries"][0]["status"], "running");
         assert_eq!(

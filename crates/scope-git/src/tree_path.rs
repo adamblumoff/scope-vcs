@@ -12,17 +12,22 @@ impl GitTreePath {
             || path.starts_with('/')
             || path.contains('\\')
             || path.chars().any(char::is_control)
-            || path
-                .split('/')
-                .any(|component| component.is_empty() || component == "." || component == "..")
         {
             return Err(GitTreePathError::Unrepresentable { path });
         }
-        if path.split('/').any(is_dot_git_filesystem_alias) {
-            return Err(GitTreePathError::ReservedDotGit { path });
-        }
-        if path.trim_end() != path {
-            return Err(GitTreePathError::Unrepresentable { path });
+        for component in path.split('/') {
+            if component.is_empty() || component == "." || component == ".." {
+                return Err(GitTreePathError::Unrepresentable { path });
+            }
+            if is_dot_git_filesystem_alias(component) {
+                return Err(GitTreePathError::ReservedDotGit { path });
+            }
+            if is_windows_reserved_device_name(component) {
+                return Err(GitTreePathError::ReservedWindowsDevice { path });
+            }
+            if component.contains(':') || component.ends_with([' ', '.']) {
+                return Err(GitTreePathError::Unrepresentable { path });
+            }
         }
         Ok(Self(path))
     }
@@ -91,6 +96,30 @@ fn is_hfs_ignored(character: char) -> bool {
     )
 }
 
+fn is_windows_reserved_device_name(component: &str) -> bool {
+    let basename = component.split(['.', ':']).next().unwrap_or(component);
+    if ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|reserved| basename.eq_ignore_ascii_case(reserved))
+    {
+        return true;
+    }
+
+    let uppercase = basename.to_ascii_uppercase();
+    ["COM", "LPT"].iter().any(|prefix| {
+        uppercase
+            .strip_prefix(prefix)
+            .is_some_and(is_windows_reserved_device_number)
+    })
+}
+
+fn is_windows_reserved_device_number(suffix: &str) -> bool {
+    matches!(
+        suffix,
+        "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+    )
+}
+
 impl fmt::Display for GitTreePath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
@@ -103,6 +132,8 @@ pub enum GitTreePathError {
     Unrepresentable { path: String },
     #[error("Git tree path {path:?} contains the reserved .git component")]
     ReservedDotGit { path: String },
+    #[error("Git tree path {path:?} contains a reserved Windows device name")]
+    ReservedWindowsDevice { path: String },
 }
 
 #[cfg(test)]
@@ -110,13 +141,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_canonical_repository_relative_file_paths() {
+    fn accepts_canonical_repository_relative_file_paths_and_device_name_near_misses() {
         for path in [
             "README.md",
             "docs/read me.md",
             " leading-space.txt",
             ".scope/RULES.md",
             "src/café.rs",
+            "docs/trailing\u{a0}",
+            "console.txt",
+            "auxiliary/data.txt",
+            "devices/COM0.txt",
+            "devices/com10.txt",
+            "devices/LPT0.txt",
+            "devices/lpt10.txt",
+            "devices/com1-port.txt",
+            "devices/readme.nul",
         ] {
             assert_eq!(GitTreePath::parse(path).unwrap().as_str(), path);
         }
@@ -128,15 +168,60 @@ mod tests {
             "",
             "/README.md",
             "README.md ",
+            "README.md.",
             "dir\\file.txt",
             "line\nbreak.txt",
             "./README.md",
             "docs/../README.md",
             "docs//README.md",
             "docs/",
+            "docs./README.md",
+            "docs /README.md",
+            "docs/file.txt:stream",
         ] {
             assert!(matches!(
                 GitTreePath::parse(path),
+                Err(GitTreePathError::Unrepresentable { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_windows_device_basenames_at_any_depth() {
+        for path in [
+            "CON",
+            "con.txt",
+            "PrN.tar.gz",
+            "docs/AUX/readme.md",
+            "vendor/nul.JSON",
+            "devices/COM1",
+            "devices/com9.log",
+            "devices/LPT1",
+            "devices/lpt9.log",
+            "devices/COM¹.txt",
+            "devices/com².txt",
+            "devices/LPT³.txt",
+            "devices/CON:stream",
+            "devices/COM1:$DATA",
+        ] {
+            assert!(matches!(
+                GitTreePath::parse(path),
+                Err(GitTreePathError::ReservedWindowsDevice { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_each_member_of_windows_filesystem_collision_pairs() {
+        for (canonical, alias) in [
+            ("docs/guide", "docs/guide."),
+            ("docs/guide", "docs/guide "),
+            ("docs/guide/readme.md", "docs./guide/readme.md"),
+            ("docs/guide/readme.md", "docs /guide/readme.md"),
+        ] {
+            assert!(GitTreePath::parse(canonical).is_ok());
+            assert!(matches!(
+                GitTreePath::parse(alias),
                 Err(GitTreePathError::Unrepresentable { .. })
             ));
         }

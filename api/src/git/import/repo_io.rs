@@ -134,7 +134,7 @@ fn git_tree_entries_for_path(
         let size = fields
             .next()
             .ok_or_else(|| ApiError::internal_message("tree entry is missing size"))?;
-        validate_pushed_file_path(path)?;
+        let path = validate_pushed_file_path(path)?;
         if !is_supported_git_file_mode(mode) {
             return Err(ApiError::bad_request(format!(
                 "unsupported Git file mode {path}: {mode}"
@@ -159,7 +159,7 @@ fn git_tree_entries_for_path(
             }
         }
         pending_files.push(GitTreeFile {
-            path: path.to_string(),
+            path,
             mode: mode.to_string(),
             oid: oid.to_string(),
             size_bytes: blob_size,
@@ -177,11 +177,7 @@ pub(super) fn git_changed_tree_entries(
     let Some(base_oid) = base_oid else {
         return git_tree_entries(staging_repo, head_oid)?
             .into_iter()
-            .map(|entry| {
-                let path =
-                    ScopePath::parse(format!("/{}", entry.path)).map_err(ApiError::bad_request)?;
-                Ok((path, Some(entry)))
-            })
+            .map(|entry| Ok((entry.path.to_scope_path(), Some(entry))))
             .collect();
     };
     let output = run_git_output(
@@ -237,7 +233,7 @@ pub(super) fn git_changed_tree_entries(
         pending.push((
             scope_path,
             Some(GitTreeFile {
-                path: path.to_string(),
+                path,
                 mode: new_mode.to_string(),
                 oid: new_oid.to_string(),
                 size_bytes: 0,
@@ -311,10 +307,30 @@ pub(crate) fn validate_pushed_tree(staging_repo: &FsPath, head_oid: &str) -> Res
     let entries = git_tree_entries(staging_repo, head_oid)?;
     // The server owns the canonical rules invariant. Agent-specific adapters depend on
     // repo-local tool signals and remain a `scope push` preflight concern.
-    if !entries.iter().any(|entry| entry.path == ".scope/RULES.md") {
+    if !entries
+        .iter()
+        .any(|entry| entry.path.as_str() == ".scope/RULES.md")
+    {
         return Err(ApiError::bad_request(
             "pushed main tree must contain .scope/RULES.md",
         ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_pushed_commit_range(
+    staging_repo: &FsPath,
+    base_oid: Option<&str>,
+    head_oid: &str,
+) -> Result<(), ApiError> {
+    let mut args = vec!["rev-list", "--reverse", head_oid];
+    let excluded_base = base_oid.map(|oid| format!("^{oid}"));
+    if let Some(excluded_base) = excluded_base.as_deref() {
+        args.push(excluded_base);
+    }
+    let commits = git_stdout_text(staging_repo, &args, "reading pushed commit range")?;
+    for commit_oid in commits.lines() {
+        validate_pushed_tree(staging_repo, commit_oid)?;
     }
     Ok(())
 }
@@ -446,7 +462,7 @@ fn random_bundle_id() -> Result<String, ApiError> {
 
 #[derive(Debug)]
 pub(crate) struct GitTreeFile {
-    pub(crate) path: String,
+    pub(crate) path: GitTreePath,
     pub(crate) mode: String,
     pub(crate) oid: String,
     pub(crate) size_bytes: usize,
@@ -601,7 +617,7 @@ mod tests {
         let entries = git_tree_entries_under(&root, &head, ".scope/runs").unwrap();
 
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].path, ".scope/runs/test.yml");
+        assert_eq!(entries[0].path.as_str(), ".scope/runs/test.yml");
         fs::remove_dir_all(root).unwrap();
     }
 }

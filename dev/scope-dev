@@ -233,6 +233,9 @@ EOF
     printf 'unset SCOPE_DEV_USER_HANDLE\n' >> "$runner"
   fi
   cat >> "$runner" <<'EOF'
+if [[ "${SCOPE_DEV_MAINTENANCE_ONLY:-0}" == "1" ]]; then
+  exec cargo run -p api --features local-dev --bin scope-maintenance -- apply
+fi
 exec cargo run -p api --features local-dev
 EOF
   chmod +x "$runner"
@@ -295,6 +298,16 @@ start_api() {
   write_api_runner "$issuer" "$dev_email" "$dev_handle" "$object_key"
   setsid "$STATE_DIR/api.sh" > "$API_OUT_LOG" 2> "$API_ERR_LOG" &
   echo "$!" > "$API_PID_FILE"
+}
+
+prepare_local_schema() {
+  local issuer dev_email dev_handle object_key
+  issuer="$(get_clerk_issuer)"
+  dev_email="$(get_dev_user_email)"
+  dev_handle="$(get_dev_user_handle)"
+  object_key="$(get_object_key)"
+  write_api_runner "$issuer" "$dev_email" "$dev_handle" "$object_key"
+  SCOPE_DEV_MAINTENANCE_ONLY=1 "$STATE_DIR/api.sh"
 }
 
 start_worker() {
@@ -438,6 +451,7 @@ up() {
   ensure_dir "$DATA_DIR"
   rm -f "$API_OUT_LOG" "$API_ERR_LOG" "$WEB_OUT_LOG" "$WEB_ERR_LOG"
   rm -f "$WORKER_OUT_LOG" "$WORKER_ERR_LOG"
+  prepare_local_schema
   start_api
   if ! wait_http "http://localhost:8080/readyz" 45; then
     echo "api did not become ready; see $API_ERR_LOG" >&2

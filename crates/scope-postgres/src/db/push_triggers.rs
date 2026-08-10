@@ -145,8 +145,13 @@ where
             }
         }
     };
+    let revisions = revisions
+        .into_iter()
+        .filter(|revision| revision.definition().triggers().push_main())
+        .collect::<Vec<_>>();
     let mut checks = Vec::new();
     if evaluation.state == PushTriggerEvaluationState::Pending
+        && !revisions.is_empty()
         && let Err(error) = super::runner_protocol_cutover::guard_push_trigger_enqueue(&tx).await
     {
         if error.kind != PostgresErrorKind::Unavailable {
@@ -157,10 +162,7 @@ where
             .map_err(PostgresError::from)?;
     }
     if evaluation.state == PushTriggerEvaluationState::Pending {
-        for revision in revisions
-            .into_iter()
-            .filter(|revision| revision.definition().triggers().push_main())
-        {
+        for revision in revisions {
             let path = revision.workflow().path().as_str().to_string();
             let idempotency_key = format!(
                 "push-main:{}:{}:{}",
@@ -594,7 +596,7 @@ jobs:
             .db
             .execute(Statement::from_string(
                 DatabaseBackend::Postgres,
-                "UPDATE scope_runner_protocol_cutover SET state = 'v6-fenced' WHERE key = 'current'"
+                "UPDATE scope_runner_protocol_cutover SET state = 'v7-fenced' WHERE key = 'current'"
                     .to_string(),
             ))
             .await
@@ -661,7 +663,7 @@ jobs:
         assert_eq!(
             evaluation.message.as_deref(),
             Some(
-                "push-triggered workflows are blocked while runner protocol cutover is v6-fenced; upgrade a runner and complete the canary suite"
+                "push-triggered workflows are blocked while runner protocol cutover is v7-fenced; upgrade a runner and complete the canary suite"
             )
         );
         assert!(evaluation.checks.is_empty());
@@ -675,6 +677,79 @@ jobs:
             .unwrap();
         assert_eq!(push_job.state, "succeeded");
         assert_eq!(push_job.attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn fenced_cutover_allows_push_without_matching_workflows() {
+        let target = crate::db::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let repo_id = seed_repo(&store).await;
+        store
+            .db
+            .execute(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "UPDATE scope_runner_protocol_cutover SET state = 'v7-fenced' WHERE key = 'current'"
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        let head_oid = "7777777777777777777777777777777777777777";
+        enqueue_push_main_trigger_evaluation(
+            store.db.as_ref(),
+            &repo_id,
+            &trigger_head(head_oid, 7),
+            &PushTriggerInput::new(
+                head_oid,
+                trigger_snapshot(head_oid, 'a'),
+                vec![
+                    PushWorkflowFile::new(
+                        "/.scope/runs/manual.yml",
+                        br#"
+name: Manual only
+on: { manual: true }
+runs-on: any
+container: { image: alpine:3.20 }
+timeout: 1m
+caches: []
+jobs:
+  checks:
+    steps:
+      - { name: Test, run: "true" }
+"#
+                        .to_vec(),
+                    )
+                    .unwrap(),
+                ],
+                None,
+            )
+            .unwrap(),
+            now(),
+            &crate::db::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+
+        let summary = store
+            .jobs()
+            .run_ready_outbox_jobs(
+                "push-worker",
+                10,
+                &|| Ok(now()),
+                &crate::db::generated_ids::test_generated_id,
+            )
+            .await
+            .unwrap();
+        assert!(summary.completed >= 1);
+        assert_eq!(summary.failed, 0);
+        let evaluation = store
+            .runs()
+            .push_trigger_evaluation(&repo_id, head_oid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(evaluation.state, PushTriggerEvaluationState::Succeeded);
+        assert!(evaluation.checks.is_empty());
+        assert!(evaluation.message.is_none());
     }
 
     #[tokio::test]

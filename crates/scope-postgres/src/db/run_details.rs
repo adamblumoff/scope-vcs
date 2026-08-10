@@ -1,4 +1,4 @@
-use super::{RunStore, StoredRunLog, entities};
+use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
     job::RunJob,
@@ -20,12 +20,6 @@ pub struct RunDetail {
     pub jobs: Vec<RunJob>,
     pub workflow_revision: WorkflowRevision,
     pub attempts: Vec<RunAttemptDetail>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredAttemptStepLogs {
-    pub logs: Vec<StoredRunLog>,
-    pub logs_truncated: bool,
 }
 
 impl RunStore {
@@ -63,129 +57,6 @@ impl RunStore {
         run_id: &str,
     ) -> Result<Vec<RunAttemptDetail>, PostgresError> {
         run_attempt_details_with(self.db.as_ref(), run_id).await
-    }
-
-    pub async fn attempt_step_logs_after(
-        &self,
-        run_id: &str,
-        attempt_id: &str,
-        step_index: u32,
-        after: u64,
-        limit: u64,
-    ) -> Result<StoredAttemptStepLogs, PostgresError> {
-        let attempt = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
-            .filter(entities::run_attempt::Column::RunId.eq(run_id))
-            .one(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .ok_or_else(|| PostgresError::not_found("run attempt not found"))?;
-        let job_key = attempt.job_key.clone();
-        let step_index = i32::try_from(step_index)
-            .map_err(|_| PostgresError::invalid_input("step index is too large"))?;
-        let step_exists =
-            entities::run_attempt_step::Entity::find_by_id((attempt_id.to_string(), step_index))
-                .one(self.db.as_ref())
-                .await
-                .map_err(PostgresError::internal)?
-                .is_some();
-        if !step_exists {
-            return Err(PostgresError::not_found("run attempt step not found"));
-        }
-        let after = i64::try_from(after)
-            .map_err(|_| PostgresError::invalid_input("run log cursor is too large"))?;
-        let logs = entities::run_log::Entity::find()
-            .filter(entities::run_log::Column::RunId.eq(run_id))
-            .filter(entities::run_log::Column::AttemptId.eq(attempt_id))
-            .filter(entities::run_log::Column::StepIndex.eq(step_index))
-            .filter(entities::run_log::Column::Position.gt(after))
-            .order_by_asc(entities::run_log::Column::Position)
-            .limit(limit)
-            .all(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(|model| -> Result<StoredRunLog, PostgresError> {
-                let position = entities::i64_to_u64(model.position, "run log position")?;
-                let run_id = model.run_id.clone();
-                Ok(StoredRunLog {
-                    position,
-                    run_id,
-                    job_key: job_key.clone(),
-                    chunk: model.try_into_domain()?,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(StoredAttemptStepLogs {
-            logs,
-            logs_truncated: attempt.logs_truncated,
-        })
-    }
-
-    pub async fn run_logs_after(
-        &self,
-        run_id: &str,
-        after: u64,
-        limit: u64,
-    ) -> Result<Vec<StoredRunLog>, PostgresError> {
-        let after = i64::try_from(after)
-            .map_err(|_| PostgresError::invalid_input("run log cursor is too large"))?;
-        let logs = entities::run_log::Entity::find()
-            .filter(entities::run_log::Column::RunId.eq(run_id))
-            .filter(entities::run_log::Column::Position.gt(after))
-            .order_by_asc(entities::run_log::Column::Position)
-            .limit(limit)
-            .all(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?;
-        let attempt_ids = logs
-            .iter()
-            .map(|model| model.attempt_id.clone())
-            .collect::<Vec<_>>();
-        let jobs_by_attempt = if attempt_ids.is_empty() {
-            HashMap::new()
-        } else {
-            entities::run_attempt::Entity::find()
-                .filter(entities::run_attempt::Column::Id.is_in(attempt_ids))
-                .all(self.db.as_ref())
-                .await
-                .map_err(PostgresError::internal)?
-                .into_iter()
-                .map(|attempt| (attempt.id, attempt.job_key))
-                .collect::<HashMap<_, _>>()
-        };
-        logs.into_iter()
-            .map(|model| {
-                let position = entities::i64_to_u64(model.position, "run log position")?;
-                let run_id = model.run_id.clone();
-                let job_key = jobs_by_attempt
-                    .get(&model.attempt_id)
-                    .cloned()
-                    .ok_or_else(|| {
-                        PostgresError::internal_message("run log references a missing attempt")
-                    })?;
-                Ok(StoredRunLog {
-                    position,
-                    run_id,
-                    job_key,
-                    chunk: model.try_into_domain()?,
-                })
-            })
-            .collect()
-    }
-
-    pub async fn next_attempt_log_sequence(&self, attempt_id: &str) -> Result<u64, PostgresError> {
-        let last = entities::run_log::Entity::find()
-            .filter(entities::run_log::Column::AttemptId.eq(attempt_id))
-            .order_by_desc(entities::run_log::Column::Sequence)
-            .one(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?;
-        match last {
-            Some(log) => entities::i64_to_u64(log.sequence, "run log sequence")?
-                .checked_add(1)
-                .ok_or_else(|| PostgresError::conflict("run log sequence overflow")),
-            None => Ok(1),
-        }
     }
 }
 

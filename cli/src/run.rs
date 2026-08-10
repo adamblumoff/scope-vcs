@@ -3,6 +3,7 @@ use crate::{
         RunStreamEvent, api_url, cancel_run, create_manual_run, http_client_builder, retry_run,
         run_jobs, stream_run_events,
     },
+    clone::parse_repo_spec,
     git_repo::{GitRepo, ensure_git_repo_ready, head_oid, warn_if_dirty_working_tree},
     git_transport::{ScopeRemote, select_scope_fetch_remote},
     login::session_from_cache_or_browser,
@@ -33,7 +34,8 @@ pub(crate) struct QueuedRun {
     client: Client,
     api_url: String,
     session_token: String,
-    target: ScopeRemote,
+    owner: String,
+    repo: String,
     run: RunResponse,
 }
 
@@ -52,9 +54,27 @@ pub(crate) fn queue(
     warn_if_dirty_working_tree(&repo)?;
     let api_url = api_url();
     let target = scope_target(&repo, &api_url, remote)?;
-    let git_oid = head_oid(&repo)?;
-    let request_id = random_request_id()?;
-    let bundle = create_bundle(&repo, &request_id)?;
+    queue_from_checkout(
+        workflow,
+        runner,
+        &repo,
+        &target.owner,
+        &target.repo,
+        &random_request_id()?,
+    )
+}
+
+pub(crate) fn queue_from_checkout(
+    workflow: &str,
+    runner: Option<&str>,
+    checkout: &GitRepo,
+    owner: &str,
+    repo: &str,
+    request_id: &str,
+) -> anyhow::Result<QueuedRun> {
+    let api_url = api_url();
+    let git_oid = head_oid(checkout)?;
+    let bundle = create_bundle(checkout, request_id)?;
     let client = run_client()?;
     let session = session_from_cache_or_browser(&client, &api_url)?;
     println!("Uploading first-push snapshot for {}", short_oid(&git_oid));
@@ -62,12 +82,12 @@ pub(crate) fn queue(
         &client,
         &api_url,
         &session.token,
-        &target.owner,
-        &target.repo,
+        owner,
+        repo,
         &CreateManualRunQuery {
             workflow: workflow.to_string(),
             git_oid,
-            request_id,
+            request_id: request_id.to_string(),
             runner: runner.map(str::to_string),
         },
         bundle,
@@ -76,7 +96,8 @@ pub(crate) fn queue(
         client,
         api_url,
         session_token: session.token,
-        target,
+        owner: owner.to_string(),
+        repo: repo.to_string(),
         run,
     })
 }
@@ -95,7 +116,8 @@ pub(crate) fn watch_queued(queued: &QueuedRun) -> anyhow::Result<()> {
         &queued.client,
         &queued.api_url,
         &queued.session_token,
-        &queued.target,
+        &queued.owner,
+        &queued.repo,
         &queued.run.id,
     )
 }
@@ -106,7 +128,29 @@ pub fn watch(run_id: &str, remote: Option<&str>) -> anyhow::Result<()> {
     let target = scope_target(&repo, &api_url, remote)?;
     let client = run_client()?;
     let session = session_from_cache_or_browser(&client, &api_url)?;
-    watch_run(&client, &api_url, &session.token, &target, run_id)
+    watch_run(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+        run_id,
+    )
+}
+
+pub(crate) fn watch_repository(run_id: &str, repository: &str) -> anyhow::Result<()> {
+    let target = parse_repo_spec(repository)?;
+    let api_url = api_url();
+    let client = run_client()?;
+    let session = session_from_cache_or_browser(&client, &api_url)?;
+    watch_run(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+        run_id,
+    )
 }
 
 pub fn cancel(run_id: &str, remote: Option<&str>) -> anyhow::Result<()> {
@@ -149,14 +193,22 @@ pub fn retry(run_id: &str, remote: Option<&str>, no_watch: bool) -> anyhow::Resu
     if no_watch {
         return Ok(());
     }
-    watch_run(&client, &api_url, &session.token, &target, run_id)
+    watch_run(
+        &client,
+        &api_url,
+        &session.token,
+        &target.owner,
+        &target.repo,
+        run_id,
+    )
 }
 
 fn watch_run(
     client: &Client,
     api_url: &str,
     session_token: &str,
-    target: &ScopeRemote,
+    owner: &str,
+    repo: &str,
     run_id: &str,
 ) -> anyhow::Result<()> {
     let mut cursor = 0;
@@ -167,8 +219,8 @@ fn watch_run(
             client,
             api_url,
             session_token,
-            &target.owner,
-            &target.repo,
+            owner,
+            repo,
             run_id,
             cursor,
             |event| {
@@ -192,8 +244,8 @@ fn watch_run(
                     &summary_client,
                     api_url,
                     session_token,
-                    &target.owner,
-                    &target.repo,
+                    owner,
+                    repo,
                     run_id,
                 )
             });

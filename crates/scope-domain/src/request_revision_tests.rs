@@ -59,6 +59,40 @@ fn revision_records_snapshot_without_manufacturing_a_discussion() {
     assert_eq!(mutation.revision.id, mutation.event.id);
 }
 
+#[test]
+fn review_revision_is_newest_unless_an_existing_revision_is_pinned() {
+    let revisions = vec![revision("revision-2", 2), revision("revision-1", 1)];
+
+    assert_eq!(
+        select_request_review_revision(&revisions, None)
+            .unwrap()
+            .unwrap()
+            .id,
+        "revision-2"
+    );
+    assert_eq!(
+        select_request_review_revision(&revisions, Some("revision-1"))
+            .unwrap()
+            .unwrap()
+            .id,
+        "revision-1"
+    );
+    assert!(select_request_review_revision(&revisions, Some("missing")).is_err());
+}
+
+fn revision(id: &str, position: u64) -> RequestRevision {
+    RequestRevision {
+        id: id.to_string(),
+        request_id: "request".to_string(),
+        position,
+        actor_user_id: "author".to_string(),
+        old_head_oid: "old".to_string(),
+        new_head_oid: "new".to_string(),
+        git_snapshot: source_blob(id),
+        created_at_unix: position,
+    }
+}
+
 fn source_blob(git_oid: &str) -> SourceBlob {
     SourceBlob {
         content_ref: crate::content_ref::ContentRef::blob_sha256(git_oid),
