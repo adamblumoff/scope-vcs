@@ -28,7 +28,7 @@ const loadIndex = createServerFn({ method: 'GET' }).handler(async () => {
   if (!handle) {
     throw new Error('Signed-in account is missing a Scope handle.')
   }
-  throw redirect({ href: `/${encodeURIComponent(handle)}` })
+  throw redirect({ params: { owner: handle }, to: '/$owner' })
 })
 
 export const Route = createFileRoute('/')({
