@@ -51,7 +51,16 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_RAILWAY_TRACE"
 
 if [[ "$1" == "run" ]]; then
-  while [[ "$1" != "--" ]]; do shift; done
+  service=""
+  while [[ "$1" != "--" ]]; do
+    if [[ "$1" == "--service" ]]; then
+      service="$2"
+      shift 2
+    else
+      shift
+    fi
+  done
+  [[ "$service" == "scope-postgres" ]]
   shift
   DATABASE_PUBLIC_URL="postgres://public-database.test/scope" "$@"
   exit $?
