@@ -1,8 +1,8 @@
-use super::{ClaimRunResponse, RunnerConfig, command_stdout, command_success_while};
+use super::{ClaimRunResponse, RunnerConfig, command_stdout, command_success_while_for};
 use crate::api::pin_attempt_container_image;
 use anyhow::Context;
 use reqwest::blocking::Client;
-use std::process::Command;
+use std::{process::Command, time::Duration};
 
 pub(super) fn resolve_container_image(
     client: &Client,
@@ -10,6 +10,7 @@ pub(super) fn resolve_container_image(
     claim: &ClaimRunResponse,
     should_continue: impl Fn() -> bool,
 ) -> anyhow::Result<String> {
+    let pull_timeout = Duration::from_secs(super::dispatch_job(claim)?.timeout_seconds());
     if let Some(image) = &claim.job.pinned_container_image {
         let present = Command::new("docker")
             .args(["image", "inspect", image])
@@ -18,9 +19,10 @@ pub(super) fn resolve_container_image(
             .status
             .success();
         if !present {
-            command_success_while(
+            command_success_while_for(
                 Command::new("docker").args(["pull", image]),
                 "pull pinned Docker image",
+                pull_timeout,
                 &should_continue,
             )?;
         }
@@ -28,9 +30,10 @@ pub(super) fn resolve_container_image(
     }
 
     let requested = super::dispatch_job(claim)?.container().image();
-    command_success_while(
+    command_success_while_for(
         Command::new("docker").args(["pull", requested]),
         "pull workflow Docker image",
+        pull_timeout,
         &should_continue,
     )?;
     let repo_digests = command_stdout(

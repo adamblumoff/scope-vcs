@@ -140,6 +140,7 @@ fn runner_protocol_cutover_response(
     RunnerProtocolCutoverResponse {
         state: snapshot.cutover.state(),
         generation: snapshot.canary_generation,
+        enabled_runner_count: snapshot.enabled_runner_count,
         canaries: snapshot
             .canaries
             .into_iter()

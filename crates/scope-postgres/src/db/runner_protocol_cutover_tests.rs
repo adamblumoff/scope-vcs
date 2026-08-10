@@ -1,4 +1,4 @@
-use super::{MetadataStore, runs_tests};
+use super::{MetadataStore, entities, runs_tests};
 use scope_domain::runs::{
     cache::WorkflowCache,
     cutover::{
@@ -7,12 +7,20 @@ use scope_domain::runs::{
     },
     run::{PinnedContainerImage, RunTrigger, StepConclusion},
     runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerMaxConcurrentJobs},
+    trigger::{PushTriggerEvaluationState, PushTriggerInput, PushWorkflowFile},
     workflow::{
         CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowIdentity, WorkflowJob,
         WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
     },
 };
-use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
+use scope_domain::{
+    content_ref::ContentRef,
+    store::{DEFAULT_GIT_FILE_MODE, GitHead, SourceBlob},
+};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, Statement,
+    TransactionTrait,
+};
 use sha2::{Digest, Sha256};
 
 const CANARY_IMAGE: &str = "registry.example/runner-canary@sha256:1111111111111111111111111111111111111111111111111111111111111111";
@@ -185,6 +193,90 @@ async fn fenced_v7_dispatches_only_the_canary_suite_then_opens() {
             .id,
         "run-general"
     );
+
+    let head_oid = "9999999999999999999999999999999999999999";
+    let manifest_digest = "8".repeat(64);
+    let snapshot_digest = "7".repeat(64);
+    super::push_triggers::enqueue_push_main_trigger_evaluation(
+        store.db.as_ref(),
+        "owner/repo",
+        &GitHead {
+            head_oid: head_oid.to_string(),
+            segment_sequence: 2,
+            change_version: 2,
+            manifest: SourceBlob {
+                content_ref: ContentRef::git_manifest_sha256(manifest_digest.clone()),
+                sha256: manifest_digest,
+                git_oid: head_oid.to_string(),
+                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+                size_bytes: 1,
+            },
+        },
+        &PushTriggerInput::new(
+            head_oid,
+            SourceBlob {
+                content_ref: ContentRef::git_bundle_sha256(snapshot_digest.clone()),
+                sha256: snapshot_digest,
+                git_oid: head_oid.to_string(),
+                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+                size_bytes: 1,
+            },
+            vec![
+                PushWorkflowFile::new(
+                    "/.scope/runs/checks.yml",
+                    br#"
+name: Checks
+on: { push: true }
+runs-on: any
+container: { image: alpine:3.20 }
+timeout: 1m
+caches: []
+jobs:
+  backend:
+    steps:
+      - { name: Backend, run: "true" }
+  web:
+    needs: [backend]
+    steps:
+      - { name: Web, run: "true" }
+"#
+                    .to_vec(),
+                )
+                .unwrap(),
+            ],
+            None,
+        )
+        .unwrap(),
+        60,
+        &super::generated_ids::test_generated_id,
+    )
+    .await
+    .unwrap();
+    let summary = store
+        .jobs()
+        .run_ready_outbox_jobs(
+            "push-worker",
+            10,
+            &|| Ok(61),
+            &super::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(summary.failed, 0);
+    let evaluation = store
+        .runs()
+        .push_trigger_evaluation("owner/repo", head_oid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(evaluation.state, PushTriggerEvaluationState::Succeeded);
+    assert_eq!(evaluation.checks.len(), 1);
+    let jobs = entities::run_job::Entity::find()
+        .filter(entities::run_job::Column::RunId.eq(&evaluation.checks[0].run_id))
+        .all(store.db.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 2);
 }
 
 #[tokio::test]

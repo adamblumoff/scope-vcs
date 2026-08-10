@@ -5,13 +5,14 @@ use reqwest::{
     blocking::{Client, Response},
 };
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttachRunnerRepositoryRequest, AttemptCacheFinalizationRequest,
-    AttemptHeartbeatRequest, AttemptRecoveryStatusResponse, AttemptStatusResponse,
-    ClaimRunResponse, CompleteAttemptRequest, CompleteAttemptStepRequest, CreateManualRunQuery,
-    PinAttemptContainerImageRequest, PinAttemptContainerImageResponse,
-    PushTriggerEvaluationResponse, RegisterRunnerRequest, RegisterRunnerResponse, RunEventsQuery,
-    RunLogResponse, RunResponse, RunnerPollResponse, RunnerResponse,
-    UpgradeRunnerRegistrationRequest, UpgradeRunnerRegistrationResponse,
+    AdvanceRunnerProtocolCutoverRequest, AppendAttemptLogRequest, AttachRunnerRepositoryRequest,
+    AttemptCacheFinalizationRequest, AttemptHeartbeatRequest, AttemptRecoveryStatusResponse,
+    AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest, CompleteAttemptStepRequest,
+    CreateManualRunQuery, CreateRunnerProtocolCanaryRequest, PinAttemptContainerImageRequest,
+    PinAttemptContainerImageResponse, PushTriggerEvaluationResponse, RegisterRunnerRequest,
+    RegisterRunnerResponse, RunEventsQuery, RunLogResponse, RunResponse, RunnerPollResponse,
+    RunnerProtocolCutoverResponse, RunnerResponse, UpgradeRunnerRegistrationRequest,
+    UpgradeRunnerRegistrationResponse,
 };
 use scope_domain::runs::run::RunJobState;
 use serde::Deserialize;
@@ -52,6 +53,62 @@ pub fn get_push_trigger_evaluation(
             .send()
             .context("load Scope push trigger evaluation")?,
         "load Scope push trigger evaluation",
+    )
+}
+
+pub fn get_runner_protocol_cutover(
+    client: &Client,
+    api_url: &str,
+    operator_token: &str,
+) -> anyhow::Result<RunnerProtocolCutoverResponse> {
+    parse_json(
+        client
+            .get(format!("{api_url}{}", routes::ADMIN_RUNNER_CUTOVER))
+            .bearer_auth(operator_token)
+            .send()
+            .context("load runner protocol cutover")?,
+        "load runner protocol cutover",
+    )
+}
+
+pub fn create_runner_protocol_canary(
+    client: &Client,
+    api_url: &str,
+    operator_token: &str,
+    request: &CreateRunnerProtocolCanaryRequest,
+) -> anyhow::Result<RunnerProtocolCanaryRegistration> {
+    let response = client
+        .post(format!("{api_url}{}", routes::ADMIN_RUNNER_CUTOVER_CANARY))
+        .bearer_auth(operator_token)
+        .json(request)
+        .send()
+        .context("register runner protocol canary")?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(RunnerProtocolCanaryRegistration::RunMissing);
+    }
+    parse_json(response, "register runner protocol canary")
+        .map(RunnerProtocolCanaryRegistration::Registered)
+}
+
+pub enum RunnerProtocolCanaryRegistration {
+    Registered(RunnerProtocolCutoverResponse),
+    RunMissing,
+}
+
+pub fn advance_runner_protocol_cutover(
+    client: &Client,
+    api_url: &str,
+    operator_token: &str,
+    request: &AdvanceRunnerProtocolCutoverRequest,
+) -> anyhow::Result<RunnerProtocolCutoverResponse> {
+    parse_json(
+        client
+            .post(format!("{api_url}{}", routes::ADMIN_RUNNER_CUTOVER_ADVANCE))
+            .bearer_auth(operator_token)
+            .json(request)
+            .send()
+            .context("advance runner protocol cutover")?,
+        "advance runner protocol cutover",
     )
 }
 

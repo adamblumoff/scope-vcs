@@ -137,6 +137,15 @@ enum RunnerCommand {
     },
     Status,
     Doctor,
+    #[command(about = "Upgrade this runner, verify the V7 canary suite, and open the cutover")]
+    Cutover {
+        #[arg(long)]
+        name: String,
+        #[arg(long, value_name = "OWNER/REPO")]
+        repo: String,
+        #[arg(long, value_name = "1-16")]
+        max_concurrent_jobs: Option<u8>,
+    },
     #[command(about = "Inspect or prune this runner's persistent caches")]
     Cache {
         #[command(subcommand)]
@@ -330,6 +339,11 @@ fn run_runner(command: RunnerCommand) -> anyhow::Result<()> {
         } => scope_cli::runner::install(&name, &repo, max_concurrent_jobs),
         RunnerCommand::Status => scope_cli::runner::status(),
         RunnerCommand::Doctor => scope_cli::runner::doctor(),
+        RunnerCommand::Cutover {
+            name,
+            repo,
+            max_concurrent_jobs,
+        } => scope_cli::runner::recover_cutover(&name, &repo, max_concurrent_jobs),
         RunnerCommand::Cache { command } => match command {
             RunnerCacheCommand::List => scope_cli::runner::list_caches(),
             RunnerCacheCommand::Prune { all } => scope_cli::runner::prune_caches(all),

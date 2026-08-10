@@ -1,5 +1,11 @@
 use anyhow::{Context, bail};
-use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
+use std::{
+    env, fs,
+    path::PathBuf,
+    process::Command,
+    thread,
+    time::{Duration, Instant},
+};
 
 pub(super) fn command_success(command: &mut Command, context: &str) -> anyhow::Result<()> {
     let output = command.output().with_context(|| context.to_string())?;
@@ -15,6 +21,25 @@ pub(super) fn command_success_while(
     context: &str,
     should_continue: impl Fn() -> bool,
 ) -> anyhow::Result<()> {
+    command_success_until(command, context, None, should_continue)
+}
+
+pub(super) fn command_success_while_for(
+    command: &mut Command,
+    context: &str,
+    timeout: Duration,
+    should_continue: impl Fn() -> bool,
+) -> anyhow::Result<()> {
+    command_success_until(command, context, Some(timeout), should_continue)
+}
+
+fn command_success_until(
+    command: &mut Command,
+    context: &str,
+    timeout: Option<Duration>,
+    should_continue: impl Fn() -> bool,
+) -> anyhow::Result<()> {
+    let started = timeout.map(|_| Instant::now());
     let mut child = command.spawn().with_context(|| context.to_string())?;
     loop {
         if !should_continue() {
@@ -27,6 +52,13 @@ pub(super) fn command_success_while(
                 return Ok(());
             }
             bail!("{context}: process exited with {status}");
+        }
+        if let (Some(timeout), Some(started)) = (timeout.as_ref(), started.as_ref())
+            && started.elapsed() >= *timeout
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{context}: timed out after {} seconds", timeout.as_secs());
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -113,5 +145,23 @@ impl Drop for RunnerWorkDir {
         if self.cleanup_on_drop {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_command_stops_a_hung_process() {
+        let error = command_success_while_for(
+            Command::new("sh").args(["-c", "sleep 10"]),
+            "bounded command",
+            Duration::from_millis(50),
+            || true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("timed out"));
     }
 }
