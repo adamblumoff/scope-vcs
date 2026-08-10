@@ -290,7 +290,7 @@ impl PreparedCaches {
     }
 
     pub(super) fn finish(
-        mut self,
+        &mut self,
         success: bool,
     ) -> anyhow::Result<Vec<AttemptCacheFinalizationReport>> {
         self.lifecycle_lock.take();
@@ -301,6 +301,7 @@ impl PreparedCaches {
             success,
         )?;
         self.finished = true;
+        self._identity_locks = CacheIdentityLocks::default();
         let final_state = if success {
             CacheFinalState::Ready
         } else {

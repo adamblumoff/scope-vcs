@@ -287,71 +287,64 @@ fn execute_claim(
     caches.confirm_container(&container.name)?;
     caches.report_preparations(&client, config, claim);
     log_phase(&claim.attempt_id, "container_create", phase);
-    if finish_before_execution(&mut supervisor, &client, config, claim)? {
-        return Ok(());
-    }
-    let mut copy_source = Command::new("docker");
-    configure_source_copy(&mut copy_source, &workspace, &container.name);
-    command_success_while(
-        &mut copy_source,
-        "copy run source into Docker job container",
-        || !supervisor.storage_pressure_triggered(),
-    )?;
-    if finish_before_execution(&mut supervisor, &client, config, claim)? {
-        return Ok(());
-    }
-    let execution_deadline_unix = unix_now().saturating_add(job.timeout_seconds());
-    mark_recovery_execution_started(&work.path, claim, execution_deadline_unix)?;
-    let phase = Instant::now();
-    let result = run_steps(
-        config,
-        claim,
-        &mut work,
-        &client,
-        0,
-        1,
-        0,
-        false,
-        None,
-        None,
-        execution_deadline_unix,
-        &mut supervisor,
-        container,
-    );
-    match result {
-        Ok(outcome) => {
+    let execution = (|| -> anyhow::Result<Option<(ExecutionOutcome, Instant)>> {
+        if finish_before_execution(&mut supervisor, &client, config, claim)? {
+            return Ok(None);
+        }
+        let mut copy_source = Command::new("docker");
+        configure_source_copy(&mut copy_source, &workspace, &container.name);
+        command_success_while(
+            &mut copy_source,
+            "copy run source into Docker job container",
+            || !supervisor.storage_pressure_triggered(),
+        )?;
+        if finish_before_execution(&mut supervisor, &client, config, claim)? {
+            return Ok(None);
+        }
+        let execution_deadline_unix = unix_now().saturating_add(job.timeout_seconds());
+        mark_recovery_execution_started(&work.path, claim, execution_deadline_unix)?;
+        let phase = Instant::now();
+        let outcome = run_steps(
+            config,
+            claim,
+            &mut work,
+            &client,
+            0,
+            1,
+            0,
+            false,
+            None,
+            None,
+            execution_deadline_unix,
+            &mut supervisor,
+            container,
+        )?;
+        Ok(Some((outcome, phase)))
+    })();
+    match execution {
+        Ok(Some((outcome, phase))) => {
             log_phase(&claim.attempt_id, "steps", phase);
             let cleanup = Instant::now();
             let reusable = cache::is_reusable_after_execution(claim.canary_phase, outcome);
-            match caches.finish(reusable) {
-                Err(error) => {
-                    eprintln!(
-                        "Could not finalize attempt caches; tainted caches were not reused: {error:#}"
-                    );
-                    if outcome.succeeded() && claim.canary_phase.is_some() {
-                        cache::finish_canary_ack(
-                            &client,
-                            config,
-                            claim,
-                            &mut work,
-                            AttemptCacheFinalizationOutcome::Failed,
-                        )?;
-                    }
-                }
-                Ok(finalizations) => {
-                    cache::report_finalizations(&client, config, claim, finalizations);
-                    if outcome.succeeded() && claim.canary_phase.is_some() {
-                        cache::finish_canary_ack(
-                            &client,
-                            config,
-                            claim,
-                            &mut work,
-                            AttemptCacheFinalizationOutcome::Succeeded,
-                        )?;
-                    }
-                }
+            let finalized = finish_attempt_caches(&mut caches, reusable, &client, config, claim);
+            if outcome.succeeded() && claim.canary_phase.is_some() {
+                cache::finish_canary_ack(
+                    &client,
+                    config,
+                    claim,
+                    &mut work,
+                    if finalized {
+                        AttemptCacheFinalizationOutcome::Succeeded
+                    } else {
+                        AttemptCacheFinalizationOutcome::Failed
+                    },
+                )?;
             }
             log_phase(&claim.attempt_id, "cleanup", cleanup);
+            Ok(())
+        }
+        Ok(None) => {
+            finish_attempt_caches(&mut caches, false, &client, config, claim);
             Ok(())
         }
         Err(error) => {
@@ -359,7 +352,29 @@ fn execute_claim(
                 caches.preserve();
                 return Err(error.context(RecoveryRestartRequired));
             }
+            finish_attempt_caches(&mut caches, false, &client, config, claim);
             Err(error)
+        }
+    }
+}
+
+fn finish_attempt_caches(
+    caches: &mut cache::PreparedCaches,
+    reusable: bool,
+    client: &Client,
+    config: &RunnerConfig,
+    claim: &ClaimRunResponse,
+) -> bool {
+    match caches.finish(reusable) {
+        Ok(finalizations) => {
+            cache::report_finalizations(client, config, claim, finalizations);
+            true
+        }
+        Err(error) => {
+            eprintln!(
+                "Could not finalize attempt caches; tainted caches were not reused: {error:#}"
+            );
+            false
         }
     }
 }

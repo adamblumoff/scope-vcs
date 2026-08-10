@@ -469,7 +469,12 @@ impl RunAttempt {
         now_unix: u64,
     ) -> Result<(), DomainError> {
         if self.state.is_terminal() {
-            self.authenticate_identity(job, &self.runner_id, token_hash)
+            if self.token_hash != token_hash {
+                return Err(DomainError::authentication_failed(
+                    "attempt credentials are invalid",
+                ));
+            }
+            Ok(())
         } else {
             self.authenticate_access(job, token_hash, now_unix)
         }

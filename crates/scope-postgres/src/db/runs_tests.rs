@@ -277,18 +277,22 @@ async fn cache_observation_reports_are_authenticated_and_exactly_idempotent() {
         PostgresErrorKind::Unauthenticated
     );
 
-    for _ in 0..2 {
-        store
-            .runs()
-            .report_attempt_cache_preparations(
-                "attempt-cache",
-                &token_hash,
-                vec![preparation.clone()],
-                22,
-            )
-            .await
-            .unwrap();
-    }
+    let runs = store.runs();
+    let first_retry = runs.report_attempt_cache_preparations(
+        "attempt-cache",
+        &token_hash,
+        vec![preparation.clone()],
+        22,
+    );
+    let second_retry = runs.report_attempt_cache_preparations(
+        "attempt-cache",
+        &token_hash,
+        vec![preparation.clone()],
+        22,
+    );
+    let (first_retry, second_retry) = tokio::join!(first_retry, second_retry);
+    first_retry.unwrap();
+    second_retry.unwrap();
     let mut conflicting_preparation = preparation;
     conflicting_preparation.prepare_ms = 13;
     assert_eq!(
@@ -307,24 +311,12 @@ async fn cache_observation_reports_are_authenticated_and_exactly_idempotent() {
     );
     store
         .runs()
-        .start_attempt_step("attempt-cache", "runner-1", &token_hash, 0, 23)
-        .await
-        .unwrap();
-    store
-        .runs()
-        .complete_attempt_step(
-            "attempt-cache",
-            &token_hash,
-            0,
-            scope_domain::runs::run::StepConclusion::Succeeded,
-            false,
-            24,
-        )
+        .abandon_attempt("attempt-cache", "runner-1", &token_hash, 23)
         .await
         .unwrap();
     let finalization = AttemptCacheFinalizationCommand {
         identity_digest: identity_digest.clone(),
-        final_state: CacheFinalState::Ready,
+        final_state: CacheFinalState::Evicted,
         finalize_ms: 8,
     };
     for _ in 0..2 {
@@ -334,7 +326,7 @@ async fn cache_observation_reports_are_authenticated_and_exactly_idempotent() {
                 "attempt-cache",
                 &token_hash,
                 vec![finalization.clone()],
-                25,
+                24,
             )
             .await
             .unwrap();
@@ -352,7 +344,7 @@ async fn cache_observation_reports_are_authenticated_and_exactly_idempotent() {
                 },
                 prepare_ms: 12,
             }],
-            25,
+            24,
         )
         .await
         .unwrap();
@@ -364,10 +356,10 @@ async fn cache_observation_reports_are_authenticated_and_exactly_idempotent() {
                 &token_hash,
                 vec![AttemptCacheFinalizationCommand {
                     identity_digest,
-                    final_state: CacheFinalState::Evicted,
+                    final_state: CacheFinalState::Ready,
                     finalize_ms: 8,
                 }],
-                25,
+                24,
             )
             .await
             .unwrap_err()

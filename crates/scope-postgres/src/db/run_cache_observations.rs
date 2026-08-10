@@ -50,6 +50,9 @@ impl RunStore {
             .ok_or_else(|| PostgresError::conflict("run job container image is not pinned"))?;
         let namespace = CacheNamespace::workflow(&workflow_path, &claim.job.key);
 
+        // authenticated_attempt holds the attempt row lock until this transaction
+        // commits, so concurrent exact retries serialize before checking this table.
+
         for report in reports {
             let cache = job_definition
                 .caches()
