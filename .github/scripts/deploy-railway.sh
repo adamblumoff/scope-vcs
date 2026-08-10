@@ -9,8 +9,13 @@ if [[ "$expected_service_state" != "healthy" && "$expected_service_state" != "st
   exit 2
 fi
 
-if [ -z "${RAILWAY_TOKEN:-}" ]; then
-  echo "Set the RAILWAY_TOKEN repository secret before deploying ${service_name}."
+if [[ -z "${RAILWAY_API_TOKEN:-}" && -z "${RAILWAY_TOKEN:-}" ]]; then
+  echo "Set RAILWAY_API_TOKEN or RAILWAY_TOKEN before deploying ${service_name}."
+  exit 1
+fi
+
+if [[ -n "${RAILWAY_API_TOKEN:-}" && -n "${RAILWAY_TOKEN:-}" ]]; then
+  echo "Set only one Railway token type before deploying ${service_name}."
   exit 1
 fi
 
@@ -18,6 +23,8 @@ if [ -z "${RAILWAY_PROJECT_ID:-}" ]; then
   echo "Set the RAILWAY_PROJECT_ID repository secret before deploying ${service_name}."
   exit 1
 fi
+
+railway_environment="${SCOPE_RAILWAY_ENVIRONMENT_ID:-production}"
 
 deploy_message_from_event() {
   local raw_message="${RAILWAY_DEPLOY_MESSAGE:-}"
@@ -43,12 +50,12 @@ ensure_service_exists() {
   services_json="$(
     railway service list \
       --project "$RAILWAY_PROJECT_ID" \
-      --environment production \
+      --environment "$railway_environment" \
       --json
   )"
 
   if ! SERVICES_JSON="$services_json" SERVICE_NAME="$service_name" node -e 'const services = JSON.parse(process.env.SERVICES_JSON || "[]"); const name = process.env.SERVICE_NAME || ""; process.exit(services.some((service) => service.name === name || service.id === name) ? 0 : 1);'; then
-    echo "Railway service '${service_name}' was not found in the production environment."
+    echo "Railway service '${service_name}' was not found in environment '${railway_environment}'."
     echo "Create the service in Railway, configure its variables, then rerun this workflow."
     return 1
   fi
@@ -62,7 +69,7 @@ print_deployment_logs() {
   railway logs "$deployment_id" \
     --project "$RAILWAY_PROJECT_ID" \
     --service "$service_name" \
-    --environment production \
+    --environment "$railway_environment" \
     --build \
     --lines 200 || true
   echo "::endgroup::"
@@ -71,7 +78,7 @@ print_deployment_logs() {
   railway logs "$deployment_id" \
     --project "$RAILWAY_PROJECT_ID" \
     --service "$service_name" \
-    --environment production \
+    --environment "$railway_environment" \
     --deployment \
     --lines 200 || true
   echo "::endgroup::"
@@ -84,7 +91,7 @@ service_health_line() {
   services_json="$(
     railway service list \
       --project "$RAILWAY_PROJECT_ID" \
-      --environment production \
+      --environment "$railway_environment" \
       --json
   )"
 
@@ -118,7 +125,7 @@ wait_for_deployment() {
       railway deployment list \
         --project "$RAILWAY_PROJECT_ID" \
         --service "$service_name" \
-        --environment production \
+        --environment "$railway_environment" \
         --limit 10 \
         --json
     )"; then
@@ -185,7 +192,7 @@ deploy_output="$(
   --no-gitignore \
   --project "$RAILWAY_PROJECT_ID" \
   --service "$service_name" \
-  --environment production \
+  --environment "$railway_environment" \
   --message "$deploy_message" \
   --detach \
   --json

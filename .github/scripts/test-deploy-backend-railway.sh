@@ -50,6 +50,13 @@ cat > "$test_dir/bin/railway" <<'FAKE'
 set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_RAILWAY_TRACE"
 
+if [[ "$1" == "status" ]]; then
+  cat <<'JSON'
+{"id":"project-test","workspaceId":"workspace-test","environments":{"edges":[{"node":{"id":"production","name":"production"}}]},"services":{"edges":[{"node":{"id":"scope-api","name":"scope-api"}},{"node":{"id":"scope-worker","name":"scope-worker"}},{"node":{"id":"scope-postgres","name":"scope-postgres"}}]}}
+JSON
+  exit 0
+fi
+
 if [[ "$1" == "run" ]]; then
   service=""
   while [[ "$1" != "--" ]]; do
@@ -101,6 +108,9 @@ if [[ "$1 $2" == "service scale" ]]; then
     [[ "$argument" == "scope-api" || "$argument" == "scope-worker" ]] && service="$argument"
     [[ "$argument" == *=0 ]] && stopped=1
   done
+  if [[ "${FAKE_DENY_SCALE_SERVICE:-}" == "$service" ]]; then
+    exit 1
+  fi
   if [[ "$stopped" == "0" && "${FAKE_FAIL_SCALE_SERVICE:-}" == "$service" ]]; then
     exit 1
   fi
@@ -145,6 +155,7 @@ run_cutover() {
   local no_history="${8:-0}"
   local fail_scale_service="${9:-}"
   local fail_first_plan="${10:-0}"
+  local deny_scale_service="${11:-}"
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
   mkdir -p "$state"
@@ -165,8 +176,14 @@ run_cutover() {
     FAKE_FAIL_RECOVERY_PLAN="$fail_recovery_plan" \
     FAKE_FAIL_SCALE_SERVICE="$fail_scale_service" \
     FAKE_FAIL_FIRST_PLAN="$fail_first_plan" \
+    FAKE_DENY_SCALE_SERVICE="$deny_scale_service" \
     RAILWAY_PROJECT_ID="project-test" \
-    RAILWAY_TOKEN="token-test" \
+    RAILWAY_API_TOKEN="token-test" \
+    SCOPE_RAILWAY_WORKSPACE_ID="workspace-test" \
+    SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
+    SCOPE_RAILWAY_API_SERVICE_ID="scope-api" \
+    SCOPE_RAILWAY_WORKER_SERVICE_ID="scope-worker" \
+    SCOPE_RAILWAY_DATABASE_SERVICE_ID="scope-postgres" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
     SCOPE_API_TOPOLOGY="us-west=1" \
     SCOPE_WORKER_TOPOLOGY="us-west=1" \
@@ -285,7 +302,26 @@ run_cutover partial-reopen 0 0 "" 0 0 0 0 scope-api
 assert_in_order "$test_dir/partial-reopen-trace" \
   "service scale --project project-test --environment production --service scope-worker --json us-west=1" \
   "service scale --project project-test --environment production --service scope-api --json us-west=1" \
-  "service scale --project project-test --environment production --service scope-api --json us-west=0" \
   "service scale --project project-test --environment production --service scope-worker --json us-west=0"
+[[ "$(grep -F -c "service scale --project project-test --environment production --service scope-api --json us-west=0" "$test_dir/partial-reopen-trace")" == "1" ]]
+
+run_cutover denied-api 0 0 "" 0 0 0 0 "" 0 scope-api
+[[ "$(cat "$test_dir/denied-api-result")" != "0" ]]
+[[ "$(grep -F -c "service scale" "$test_dir/denied-api-trace")" == "1" ]]
+if grep -F "$test_dir/maintenance apply" "$test_dir/denied-api-trace"; then
+  echo "a denied API scale must fail before migration without attempting rollback mutations" >&2
+  exit 1
+fi
+
+run_cutover denied-worker 0 0 "" 0 0 0 0 "" 0 scope-worker
+[[ "$(cat "$test_dir/denied-worker-result")" != "0" ]]
+assert_in_order "$test_dir/denied-worker-trace" \
+  "service scale --project project-test --environment production --service scope-api --json us-west=0" \
+  "service scale --project project-test --environment production --service scope-worker --json us-west=0" \
+  "service scale --project project-test --environment production --service scope-api --json us-west=1"
+if grep -F "service scale --project project-test --environment production --service scope-worker --json us-west=1" "$test_dir/denied-worker-trace"; then
+  echo "a worker scale denial must not restore a worker that was never closed" >&2
+  exit 1
+fi
 
 echo "backend deployment cutover tests passed"
