@@ -27,6 +27,8 @@ runs-on: linux-box
 caches:
   - name: cargo
     path: /scope/cache/cargo
+  - name: target
+    path: /workspace/target
 container:
   image: alpine:3.20
 timeout: 5m
@@ -346,7 +348,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
             &WorkflowJobId::parse("checks").unwrap(),
         ),
         WorkflowCache::new("cargo", "/scope/cache/cargo").unwrap(),
-        &PinnedContainerImage::parse(pinned_image).unwrap(),
+        &PinnedContainerImage::parse(pinned_image.clone()).unwrap(),
         CachePlatform::LinuxAmd64,
     )
     .unwrap()
@@ -477,7 +479,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
             Some(format!("Bearer {attempt_token}")),
             &ReportAttemptCacheFinalizationsRequest {
                 caches: vec![AttemptCacheFinalizationReport {
-                    identity_digest,
+                    identity_digest: identity_digest.clone(),
                     final_state: CacheFinalState::Ready,
                     finalize_ms: 8,
                 }],
@@ -564,10 +566,31 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     assert_eq!(detail["jobs"].as_array().unwrap().len(), 1);
     assert_eq!(detail["jobs"][0]["job"]["key"], "checks");
     assert_eq!(detail["jobs"][0]["job"]["state"], "succeeded");
+    assert_eq!(
+        detail["jobs"][0]["job"]["pinned_container_image"],
+        pinned_image
+    );
     assert_eq!(detail["jobs"][0]["attempts"].as_array().unwrap().len(), 1);
     assert_eq!(detail["jobs"][0]["attempts"][0]["id"], attempt_id);
     assert_eq!(detail["jobs"][0]["attempts"][0]["runner_name"], "linux-box");
     assert_eq!(detail["jobs"][0]["attempts"][0]["state"], "succeeded");
+    let caches = detail["jobs"][0]["attempts"][0]["caches"]
+        .as_array()
+        .unwrap();
+    assert_eq!(caches.len(), 2);
+    assert_eq!(caches[0]["name"], "cargo");
+    assert_eq!(caches[0]["path"], "/scope/cache/cargo");
+    assert_eq!(caches[0]["observation"]["identity_digest"], identity_digest);
+    assert_eq!(caches[0]["observation"]["preparation"]["kind"], "cold");
+    assert_eq!(
+        caches[0]["observation"]["preparation"]["reason"],
+        "metadata-missing"
+    );
+    assert_eq!(caches[0]["observation"]["prepare_ms"], 12);
+    assert_eq!(caches[0]["observation"]["final_state"], "ready");
+    assert_eq!(caches[0]["observation"]["finalize_ms"], 8);
+    assert_eq!(caches[1]["name"], "target");
+    assert!(caches[1]["observation"].is_null());
     assert_eq!(detail["jobs"][0]["attempts"][0]["steps"][0]["name"], "Test");
     assert_eq!(
         detail["jobs"][0]["attempts"][0]["steps"][0]["state"],

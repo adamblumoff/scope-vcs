@@ -270,7 +270,7 @@ export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, 
 
 export type RepositoryRunJobState = "blocked" | "queued" | "leased" | "running" | "succeeded" | "failed" | "skipped" | "canceled" | "lost";
 
-export type RepositoryRunJobResponse = { key: string, needs: Array<string>, desired_runner: string | null, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
+export type RepositoryRunJobResponse = { key: string, needs: Array<string>, desired_runner: string | null, pinned_container_image: string | null, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
 
 export type RepositoryRunJobDetailResponse = { job: RepositoryRunJobResponse, attempts: Array<RepositoryRunAttemptResponse>, };
 
@@ -280,9 +280,19 @@ export type RepositoryRunStepState = "pending" | "running" | "succeeded" | "fail
 
 export type RepositoryRunTerminalReason = { "kind": "step-failed", step_index: number, exit_code: number, } | { "kind": "timed-out", step_index: number | null, } | { "kind": "canceled", step_index: number | null, } | { "kind": "runner-lost", step_index: number | null, } | { "kind": "runner-setup-failed", exit_code: number, message: string, };
 
+export type RepositoryRunCacheColdReason = "metadata-missing" | "metadata-invalid" | "metadata-not-ready" | "volume-missing" | "volume-invalid" | "backing-directory-missing";
+
+export type RepositoryRunCachePreparation = { "kind": "warm" } | { "kind": "cold", reason: RepositoryRunCacheColdReason, };
+
+export type RepositoryRunCacheFinalState = "pending" | "ready" | "evicted";
+
+export type RepositoryRunCacheObservationResponse = { workflow_path: string, job_key: string, identity_digest: string, preparation: RepositoryRunCachePreparation, prepare_ms: number, final_state: RepositoryRunCacheFinalState, finalize_ms: number | null, };
+
+export type RepositoryRunCacheResponse = { name: string, path: string, observation: RepositoryRunCacheObservationResponse | null, };
+
 export type RepositoryRunStepResponse = { index: number, name: string, command: string, state: RepositoryRunStepState, started_at_unix: number | null, completed_at_unix: number | null, exit_code: number | null, };
 
-export type RepositoryRunAttemptResponse = { id: string, runner_id: string, runner_name: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, steps: Array<RepositoryRunStepResponse>, };
+export type RepositoryRunAttemptResponse = { id: string, runner_id: string, runner_name: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, caches: Array<RepositoryRunCacheResponse>, steps: Array<RepositoryRunStepResponse>, };
 
 export type RepositoryRunnerState = "online" | "offline" | "disabled";
 
