@@ -53,9 +53,11 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 1);
+    assert_eq!(plan.pending.len(), 2);
     assert_eq!(plan.pending[0].name, "m0018_truthful_run_log_truncation");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
+    assert_eq!(plan.pending[1].name, "m0019_run_attempt_cache_observations");
+    assert_eq!(plan.pending[1].impact, MigrationImpact::Online);
 }
 
 #[tokio::test]
