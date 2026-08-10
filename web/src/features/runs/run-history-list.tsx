@@ -4,10 +4,10 @@ import { Link } from '@tanstack/react-router'
 import { ArrowRight, LoaderCircle, TerminalSquare } from 'lucide-react'
 import {
   formatRunRunnerSelection,
-  formatRunUnixTime,
   runDisplayState,
 } from './run-formatting'
 import { RunStatusDot } from './run-status-dot'
+import { RunTimestamp } from './run-timestamp'
 
 export function RunHistoryList({
   loadMore,
@@ -65,7 +65,9 @@ export function RunHistoryList({
               </span>
               <span className="shrink-0 text-right text-xs text-muted-foreground">
                 <span className="block capitalize text-foreground">{state}</span>
-                <span className="block">{formatRunUnixTime(run.updated_at_unix)}</span>
+                <span className="block">
+                  <RunTimestamp value={run.updated_at_unix} />
+                </span>
               </span>
               <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
             </Link>

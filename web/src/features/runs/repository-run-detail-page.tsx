@@ -35,9 +35,9 @@ import { RunJobGraph } from './run-job-graph'
 import { runJobPanelId } from './run-job-ids'
 import {
   formatRunRunnerSelection,
-  formatRunUnixTime,
   runDisplayState,
 } from './run-formatting'
+import { RunTimestamp } from './run-timestamp'
 
 export function RepositoryRunDetailPage({
   cancelRun,
@@ -165,11 +165,7 @@ function JobDetailsPanel({
   selection: StepSelection | null
 }) {
   const { job, attempts } = jobDetail
-  const metadata = [
-    job.desired_runner ?? 'any runner',
-    `${attempts.length} ${attempts.length === 1 ? 'attempt' : 'attempts'}`,
-    `updated ${formatRunUnixTime(job.updated_at_unix)}`,
-  ].join(' · ')
+  const attemptCount = `${attempts.length} ${attempts.length === 1 ? 'attempt' : 'attempts'}`
   return (
     <article id={runJobPanelId(job.key)}>
       <div className="grid min-h-16 grid-cols-[minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-2 py-4 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -181,7 +177,8 @@ function JobDetailsPanel({
           </span>
         </span>
         <span className="truncate text-xs text-muted-foreground sm:text-right">
-          {metadata}
+          {job.desired_runner ?? 'any runner'} · {attemptCount} · updated{' '}
+          <RunTimestamp value={job.updated_at_unix} />
         </span>
       </div>
       <div className="border-t border-border/70 pl-5 sm:pl-9">
@@ -281,7 +278,9 @@ function RunHeader({
             <span aria-hidden="true">·</span>
             <span>{formatRunRunnerSelection(run.runner_selection)}</span>
             <span aria-hidden="true">·</span>
-            <span>Updated {formatRunUnixTime(run.updated_at_unix)}</span>
+            <span>
+              Updated <RunTimestamp value={run.updated_at_unix} />
+            </span>
           </span>
         )}
         eyebrow={eyebrow}
@@ -344,7 +343,7 @@ function AttemptRow({
           <RunStatusDot state={attempt.state} />
           <span className="font-medium capitalize">{stateLabel}</span>
           <span className="truncate text-xs text-muted-foreground">
-            {formatRunUnixTime(attempt.created_at_unix)}
+            <RunTimestamp value={attempt.created_at_unix} />
           </span>
         </span>
         <span className="col-start-2 truncate text-xs text-muted-foreground sm:col-start-3 sm:text-right">
