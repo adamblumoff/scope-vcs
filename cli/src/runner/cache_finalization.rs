@@ -1,23 +1,67 @@
 use super::{
     CacheRecord, CacheState, RunnerConfig, find_record_for_volume, inspect_volume, lifecycle_lock,
-    lock_recorded_volume_identities, record_location, remove_cache, unix_now, volume_is_referenced,
+    lock_cache_identities, record_location, remove_cache, unix_now, volume_is_referenced,
     write_record,
 };
+use crate::runner::recovery::RecoveryCache;
 use anyhow::bail;
-use std::{path::Path, process::Command};
+use scope_api_contract::AttemptCacheFinalizationReport;
+use scope_domain::runs::cache::CacheFinalState;
+use std::{path::Path, process::Command, time::Instant};
 
-pub(in crate::runner) fn finalize_volume_names(
+pub(super) struct CacheFinalizationTiming {
+    pub(super) volume_name: String,
+    pub(super) identity_digest: Option<String>,
+    pub(super) finalize_ms: u64,
+}
+
+pub(in crate::runner) fn finalize_recovery_caches(
     config: &RunnerConfig,
-    volumes: &[String],
+    caches: &[RecoveryCache],
     attempt_id: &str,
     success: bool,
-) -> anyhow::Result<()> {
-    if volumes.is_empty() {
-        return Ok(());
+) -> anyhow::Result<Vec<AttemptCacheFinalizationReport>> {
+    if caches.is_empty() {
+        return Ok(Vec::new());
     }
     let root = super::usable_root(config)?;
-    let _identity_locks = lock_recorded_volume_identities(&root, &config.runner_id, volumes)?;
-    finalize_volume_names_at_root(config, &root, volumes, attempt_id, success)
+    let _identity_locks = lock_cache_identities(
+        &root,
+        &config.runner_id,
+        caches.iter().map(|cache| cache.identity_digest.clone()),
+    )?;
+    let volumes = caches
+        .iter()
+        .map(|cache| cache.volume_name.clone())
+        .collect::<Vec<_>>();
+    finalize_volume_names_at_root(config, &root, &volumes, attempt_id, success)?
+        .into_iter()
+        .map(|timing| {
+            let cache = caches
+                .iter()
+                .find(|cache| cache.volume_name == timing.volume_name)
+                .expect("finalized recovery volume must be recorded");
+            if timing
+                .identity_digest
+                .as_ref()
+                .is_some_and(|digest| digest != &cache.identity_digest)
+            {
+                bail!(
+                    "recovered cache volume {} changed identity",
+                    timing.volume_name
+                );
+            }
+            Ok(AttemptCacheFinalizationReport {
+                identity_digest: cache.identity_digest.clone(),
+                final_state: if success {
+                    CacheFinalState::Ready
+                } else {
+                    CacheFinalState::Evicted
+                },
+                finalize_ms: timing.finalize_ms,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn finalize_volume_names_while_identity_locked(
@@ -25,9 +69,9 @@ pub(super) fn finalize_volume_names_while_identity_locked(
     volumes: &[String],
     attempt_id: &str,
     success: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<CacheFinalizationTiming>> {
     if volumes.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let root = super::usable_root(config)?;
     finalize_volume_names_at_root(config, &root, volumes, attempt_id, success)
@@ -39,13 +83,16 @@ fn finalize_volume_names_at_root(
     volumes: &[String],
     attempt_id: &str,
     success: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<CacheFinalizationTiming>> {
     let _lock = lifecycle_lock(root)?;
+    let mut timings = Vec::with_capacity(volumes.len());
     for volume in volumes {
+        let started = Instant::now();
         if volume_is_referenced(volume)? {
             bail!("cache volume {volume} is still referenced by a container");
         }
         let record = find_record_for_volume(root, volume, &config.runner_id)?;
+        let identity_digest = record.as_ref().map(|record| record.identity_digest.clone());
         let volume_exists = inspect_volume(volume)?.is_some();
         match cache_finalization_action(record.as_ref(), attempt_id, success, volume_exists)? {
             CacheFinalizationAction::Publish => {
@@ -66,8 +113,13 @@ fn finalize_volume_names_at_root(
             }
             CacheFinalizationAction::Complete => {}
         }
+        timings.push(CacheFinalizationTiming {
+            volume_name: volume.clone(),
+            identity_digest,
+            finalize_ms: super::elapsed_millis(started),
+        });
     }
-    Ok(())
+    Ok(timings)
 }
 
 #[derive(Debug, Eq, PartialEq)]

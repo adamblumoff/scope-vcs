@@ -1,8 +1,13 @@
+use super::{AttemptCacheFinalizationCommand, AttemptCachePreparationCommand};
 use super::{CatalogFixture, MetadataStore, TestDatabaseTarget, entities};
 use crate::error::PostgresErrorKind;
 use scope_domain::{
     policy::Visibility,
     runs::{
+        cache::{
+            CacheColdReason, CacheFinalState, CacheIdentity, CacheNamespace, CachePlatform,
+            CachePreparation, WorkflowCache,
+        },
         run::{
             AttemptConclusion, AttemptState, PinnedContainerImage, Run, RunLogChunk, RunSource,
             RunState, RunTrigger, StepState,
@@ -25,6 +30,7 @@ use sea_orm::EntityTrait;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+mod cache_observations;
 mod job_scheduler;
 mod retention;
 pub(crate) use job_scheduler::parallel_revision;

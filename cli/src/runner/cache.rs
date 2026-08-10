@@ -1,16 +1,23 @@
-use super::recovery::mark_recovery_cache_finalization_pending;
+use super::recovery::{RecoveryCache, mark_recovery_cache_finalization_pending};
 use super::{
     ConclusionReportPending, ExecutionOutcome, RunnerConfig, RunnerWorkDir, command_stdout,
     unix_now,
 };
-use crate::api::finalize_attempt_cache;
+use crate::api::{
+    finalize_attempt_cache, report_attempt_cache_finalizations, report_attempt_cache_preparations,
+};
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{
-    AttemptCacheFinalizationOutcome, AttemptCacheFinalizationRequest, ClaimRunResponse,
+    AttemptCacheFinalizationOutcome, AttemptCacheFinalizationReport,
+    AttemptCacheFinalizationRequest, AttemptCachePreparationReport, ClaimRunResponse,
+    ReportAttemptCacheFinalizationsRequest, ReportAttemptCachePreparationsRequest,
 };
 use scope_domain::runs::{
-    cache::{CacheIdentity, CacheNamespace, CachePlatform},
+    cache::{
+        CacheColdReason, CacheFinalState, CacheIdentity, CacheNamespace, CachePlatform,
+        CachePreparation, MAX_CACHE_OBSERVATION_DURATION_MS,
+    },
     cutover::RunnerProtocolCanaryPhase,
     run::PinnedContainerImage,
     workflow::WorkflowPath,
@@ -19,6 +26,7 @@ use std::{
     fs::{self, File},
     path::{Path, PathBuf},
     process::Command,
+    time::Instant,
 };
 
 #[path = "cache_location.rs"]
@@ -45,14 +53,11 @@ mod identity_lock;
 #[cfg(test)]
 use identity_lock::canonical_identity_lock_digests;
 use identity_lock::{CacheFileLock, CacheIdentityLocks};
-use identity_lock::{
-    lock_cache_identities, lock_recorded_volume_identities,
-    try_lock_cache_identity_while_lifecycle_locked,
-};
+use identity_lock::{lock_cache_identities, try_lock_cache_identity_while_lifecycle_locked};
 
 #[path = "cache_finalization.rs"]
 mod finalization;
-pub(super) use finalization::finalize_volume_names;
+pub(super) use finalization::finalize_recovery_caches;
 use finalization::finalize_volume_names_while_identity_locked;
 #[cfg(test)]
 use finalization::{CacheFinalizationAction, cache_finalization_action};
@@ -61,6 +66,7 @@ use finalization::{CacheFinalizationAction, cache_finalization_action};
 pub(super) struct CacheMount {
     pub(super) volume_name: String,
     pub(super) target: String,
+    pub(super) identity_digest: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -77,6 +83,7 @@ pub(super) struct PreparedCaches {
     config: RunnerConfig,
     attempt_id: String,
     mounts: Vec<CacheMount>,
+    preparations: Vec<AttemptCachePreparationReport>,
     lifecycle_lock: Option<CacheFileLock>,
     _identity_locks: CacheIdentityLocks,
     finished: bool,
@@ -94,11 +101,13 @@ impl PreparedCaches {
                 config: config.clone(),
                 attempt_id: claim.attempt_id.clone(),
                 mounts: Vec::new(),
+                preparations: Vec::new(),
                 lifecycle_lock: None,
                 _identity_locks: CacheIdentityLocks::default(),
                 finished: false,
             });
         }
+        let preparation_started = Instant::now();
         let root = usable_root(config)?;
         let pinned_image = PinnedContainerImage::parse(pinned_image.to_string())?;
         let namespace = match claim.canary_phase {
@@ -139,6 +148,7 @@ impl PreparedCaches {
             config: config.clone(),
             attempt_id: claim.attempt_id.clone(),
             mounts: Vec::with_capacity(job.caches().len()),
+            preparations: Vec::with_capacity(job.caches().len()),
             lifecycle_lock: Some(lock),
             _identity_locks: identity_locks,
             finished: false,
@@ -149,7 +159,7 @@ impl PreparedCaches {
                 format: CACHE_FORMAT,
                 runner_id: config.runner_id.clone(),
                 runner_namespace: location.runner_namespace.clone(),
-                identity_digest: digest,
+                identity_digest: digest.clone(),
                 repository_id: identity.repository_id().to_string(),
                 namespace: identity.namespace().clone(),
                 cache_name: identity.cache().as_str().to_string(),
@@ -165,13 +175,34 @@ impl PreparedCaches {
             };
             let existing_record = read_record_candidate(&location, &config.runner_id);
             let existing_volume = inspect_volume(&location.volume_name)?;
-            let warm = existing_record
+            let metadata_exists = location.record_path.exists();
+            let metadata_ready = existing_record
                 .as_ref()
-                .is_some_and(|existing| metadata_allows_warm(existing, &record))
-                && existing_volume.as_ref().is_some_and(|volume| {
-                    volume_matches(volume, &record, &location.backing_path, &config.runner_id)
-                })
-                && backing_is_real_directory(&location.backing_path)?;
+                .is_some_and(|existing| metadata_allows_warm(existing, &record));
+            let volume_ready = existing_volume.as_ref().is_some_and(|volume| {
+                volume_matches(volume, &record, &location.backing_path, &config.runner_id)
+            });
+            let backing_ready = backing_is_real_directory(&location.backing_path)?;
+            let warm = metadata_ready && volume_ready && backing_ready;
+            let preparation = if warm {
+                CachePreparation::Warm
+            } else {
+                CachePreparation::Cold {
+                    reason: if !metadata_exists {
+                        CacheColdReason::MetadataMissing
+                    } else if existing_record.is_none() {
+                        CacheColdReason::MetadataInvalid
+                    } else if !metadata_ready {
+                        CacheColdReason::MetadataNotReady
+                    } else if existing_volume.is_none() {
+                        CacheColdReason::VolumeMissing
+                    } else if !volume_ready {
+                        CacheColdReason::VolumeInvalid
+                    } else {
+                        CacheColdReason::BackingDirectoryMissing
+                    },
+                }
+            };
             if warm {
                 if volume_is_referenced(&location.volume_name)? {
                     bail!(
@@ -204,6 +235,13 @@ impl PreparedCaches {
             prepared.mounts.push(CacheMount {
                 volume_name: location.volume_name,
                 target: cache.mount_path().to_string(),
+                identity_digest: digest.clone(),
+            });
+            prepared.preparations.push(AttemptCachePreparationReport {
+                cache_name: cache.as_str().to_string(),
+                identity_digest: digest,
+                preparation,
+                prepare_ms: elapsed_millis(preparation_started),
             });
         }
         Ok(prepared)
@@ -220,22 +258,76 @@ impl PreparedCaches {
             .collect()
     }
 
+    pub(super) fn recovery_caches(&self) -> Vec<RecoveryCache> {
+        self.mounts
+            .iter()
+            .map(|mount| RecoveryCache {
+                volume_name: mount.volume_name.clone(),
+                identity_digest: mount.identity_digest.clone(),
+            })
+            .collect()
+    }
+
+    pub(super) fn report_preparations(
+        &self,
+        client: &Client,
+        config: &RunnerConfig,
+        claim: &ClaimRunResponse,
+    ) {
+        if claim.canary_phase.is_some() || self.preparations.is_empty() {
+            return;
+        }
+        if let Err(error) = report_attempt_cache_preparations(
+            client,
+            &config.api_url,
+            &claim.attempt_token,
+            &claim.attempt_id,
+            &ReportAttemptCachePreparationsRequest {
+                caches: self.preparations.clone(),
+            },
+        ) {
+            eprintln!("Could not report attempt cache preparations: {error:#}");
+        }
+    }
+
     pub(super) fn confirm_container(&mut self, container_name: &str) -> anyhow::Result<()> {
         verify_container_mounts(container_name, &self.mounts)?;
         self.lifecycle_lock.take();
         Ok(())
     }
 
-    pub(super) fn finish(mut self, success: bool) -> anyhow::Result<()> {
+    pub(super) fn finish(
+        &mut self,
+        success: bool,
+    ) -> anyhow::Result<Vec<AttemptCacheFinalizationReport>> {
         self.lifecycle_lock.take();
-        finalize_volume_names_while_identity_locked(
+        let timings = finalize_volume_names_while_identity_locked(
             &self.config,
             &self.volume_names(),
             &self.attempt_id,
             success,
         )?;
         self.finished = true;
-        Ok(())
+        self._identity_locks = CacheIdentityLocks::default();
+        let final_state = if success {
+            CacheFinalState::Ready
+        } else {
+            CacheFinalState::Evicted
+        };
+        Ok(timings
+            .iter()
+            .map(|timing| AttemptCacheFinalizationReport {
+                identity_digest: self
+                    .mounts
+                    .iter()
+                    .find(|mount| mount.volume_name == timing.volume_name)
+                    .expect("finalized cache volume must belong to this preparation")
+                    .identity_digest
+                    .clone(),
+                final_state,
+                finalize_ms: timing.finalize_ms,
+            })
+            .collect())
     }
 
     pub(super) fn preserve(mut self) {
@@ -247,6 +339,32 @@ impl PreparedCaches {
             std::mem::forget(self);
         }
     }
+}
+
+pub(super) fn report_finalizations(
+    client: &Client,
+    config: &RunnerConfig,
+    claim: &ClaimRunResponse,
+    caches: Vec<AttemptCacheFinalizationReport>,
+) {
+    if claim.canary_phase.is_some() || caches.is_empty() {
+        return;
+    }
+    if let Err(error) = report_attempt_cache_finalizations(
+        client,
+        &config.api_url,
+        &claim.attempt_token,
+        &claim.attempt_id,
+        &ReportAttemptCacheFinalizationsRequest { caches },
+    ) {
+        eprintln!("Could not report attempt cache finalizations: {error:#}");
+    }
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis())
+        .unwrap_or(u64::MAX)
+        .min(MAX_CACHE_OBSERVATION_DURATION_MS)
 }
 
 impl Drop for PreparedCaches {

@@ -444,6 +444,7 @@ fn identity_lock_lives_from_confirmation_through_finalization() {
         },
         attempt_id: "attempt-1".to_string(),
         mounts: Vec::new(),
+        preparations: Vec::new(),
         lifecycle_lock: None,
         _identity_locks: identity_locks,
         finished: false,
@@ -518,6 +519,7 @@ fn preserved_recovery_keeps_the_identity_locked_until_process_exit() {
         },
         attempt_id: "attempt-preserved".to_string(),
         mounts: Vec::new(),
+        preparations: Vec::new(),
         lifecycle_lock: None,
         _identity_locks: identity_locks,
         finished: false,
@@ -531,36 +533,32 @@ fn preserved_recovery_keeps_the_identity_locked_until_process_exit() {
 }
 
 #[test]
-fn recovered_finalization_reacquires_the_recorded_identity_lock() {
-    let parent = TestDir::new("runner-cache-recovered-identity-lock");
+fn recovered_eviction_keeps_its_identity_after_local_removal() {
+    let parent = TestDir::new("runner-cache-recovered-eviction-identity");
     let root = parent.path().join("scope/runner");
     initialize(&root).unwrap();
-    let record = record(CacheState::Tainted {
-        attempt_id: "attempt-recovered".to_string(),
-    });
-    write_record(&root, &record).unwrap();
-
-    let locks = lock_recorded_volume_identities(
-        &root,
-        &record.runner_id,
-        std::slice::from_ref(&record.volume_name),
+    let identity_digest = "f".repeat(64);
+    let reports = finalize_recovery_caches(
+        &RunnerConfig {
+            api_url: "https://api.example.test".to_string(),
+            runner_id: "runner-1".to_string(),
+            name: "linux-box".to_string(),
+            secret: "secret".to_string(),
+            max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
+            cache_root: Some(root),
+        },
+        &[RecoveryCache {
+            volume_name: "scope-cache-v6-already-removed".to_string(),
+            identity_digest: identity_digest.clone(),
+        }],
+        "attempt-recovered",
+        false,
     )
     .unwrap();
-    let observer = File::options()
-        .read(true)
-        .write(true)
-        .open(
-            root.join("locks")
-                .join(&record.runner_namespace)
-                .join(format!("{}.lock", record.identity_digest)),
-        )
-        .unwrap();
-    assert!(matches!(
-        observer.try_lock().unwrap_err(),
-        std::fs::TryLockError::WouldBlock
-    ));
-    drop(locks);
-    observer.try_lock().unwrap();
+
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].identity_digest, identity_digest);
+    assert_eq!(reports[0].final_state, CacheFinalState::Evicted);
 }
 
 #[test]

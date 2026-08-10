@@ -351,7 +351,7 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
             .await
             .last()
             .map(String::as_str),
-        Some("m0018_truthful_run_log_truncation")
+        Some("m0019_run_attempt_cache_observations")
     );
 
     let old_producer_insert = db

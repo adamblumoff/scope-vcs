@@ -291,6 +291,7 @@ fn job_container_receives_only_declared_workflow_environment() {
     let caches = [cache::CacheMount {
         volume_name: "scope-cache-v1-abc".to_string(),
         target: "/scope/cache/cargo".to_string(),
+        identity_digest: "a".repeat(64),
     }];
     configure_job_container_creation(
         &mut command,
@@ -397,7 +398,7 @@ fn replayed_step_conclusion_advances_local_recovery_to_the_next_step() {
         pending_attempt_conclusion: None,
         pending_attempt_abandon: false,
         pending_cache_finalization: None,
-        cache_volumes: Vec::new(),
+        caches: Vec::new(),
     };
 
     advance_recovery_past_replayed_step(&mut progress);
@@ -489,7 +490,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
     .unwrap();
     mark_recovery_execution_started(&root, &claim, 90).unwrap();
     let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    assert_eq!(stored["schema_version"], 8);
+    assert_eq!(stored["schema_version"], 9);
     let stored: ClaimRunResponse = serde_json::from_value(stored["claim"].clone()).unwrap();
     assert_eq!(stored.attempt_id, claim.attempt_id);
     assert_eq!(stored.attempt_token, claim.attempt_token);

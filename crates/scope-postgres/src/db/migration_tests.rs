@@ -37,6 +37,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0016_workflow_runtime_contract",
     "m0017_run_history_indexes",
     "m0018_truthful_run_log_truncation",
+    "m0019_run_attempt_cache_observations",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -237,7 +238,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 43);
+    assert_eq!(scope_table_count, 44);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
     assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
     let review_columns = db

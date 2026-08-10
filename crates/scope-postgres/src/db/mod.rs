@@ -75,6 +75,7 @@ mod request_submission_transactions;
 mod requests;
 mod run_attempt_mutations;
 mod run_attempt_persistence;
+mod run_cache_observations;
 mod run_details;
 mod run_dispatch;
 mod run_history;
@@ -87,6 +88,7 @@ mod runner_protocol_cutover;
 #[cfg(test)]
 mod runner_protocol_cutover_tests;
 mod runs;
+pub use run_cache_observations::{AttemptCacheFinalizationCommand, AttemptCachePreparationCommand};
 pub use run_details::{RunAttemptDetail, RunDetail};
 pub use run_history::{RepositoryRun, RunHistoryCursor, RunHistoryPageQuery};
 pub use run_log_reads::{RecentRunLogs, StoredAttemptStepLogs, StoredRunLog};

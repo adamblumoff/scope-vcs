@@ -22,7 +22,8 @@ use scope_api_contract::{
     AttemptConclusionRequest, AttemptHeartbeatRequest, AttemptRecoveryStatusResponse,
     AttemptStatusResponse, AttemptStepStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
     CompleteAttemptStepRequest, PinAttemptContainerImageRequest, PinAttemptContainerImageResponse,
-    RunJobResponse, RunnerPollResponse, RunnerRunOffer, StepConclusionRequest,
+    ReportAttemptCacheFinalizationsRequest, ReportAttemptCachePreparationsRequest, RunJobResponse,
+    RunnerPollResponse, RunnerRunOffer, StepConclusionRequest,
 };
 use scope_domain::runs::run::{
     AttemptConclusion, PinnedContainerImage, RunAttemptStep, RunLogChunk, StepConclusion,
@@ -201,6 +202,65 @@ pub(crate) async fn finalize_cache(
         .metadata
         .runs()
         .finalize_runner_protocol_canary_cache(&attempt_id, &token_hash, succeeded, unix_now()?)
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn report_cache_preparations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attempt_id): Path<String>,
+    Json(input): Json<ReportAttemptCachePreparationsRequest>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let token_hash = attempt_token_hash(&headers)?;
+    state
+        .metadata
+        .runs()
+        .report_attempt_cache_preparations(
+            &attempt_id,
+            &token_hash,
+            input
+                .caches
+                .into_iter()
+                .map(|cache| scope_postgres::db::AttemptCachePreparationCommand {
+                    cache_name: cache.cache_name,
+                    identity_digest: cache.identity_digest,
+                    preparation: cache.preparation,
+                    prepare_ms: cache.prepare_ms,
+                })
+                .collect(),
+            unix_now()?,
+        )
+        .await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn report_cache_finalizations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attempt_id): Path<String>,
+    Json(input): Json<ReportAttemptCacheFinalizationsRequest>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let token_hash = attempt_token_hash(&headers)?;
+    state
+        .metadata
+        .runs()
+        .report_attempt_cache_finalizations(
+            &attempt_id,
+            &token_hash,
+            input
+                .caches
+                .into_iter()
+                .map(
+                    |cache| scope_postgres::db::AttemptCacheFinalizationCommand {
+                        identity_digest: cache.identity_digest,
+                        final_state: cache.final_state,
+                        finalize_ms: cache.finalize_ms,
+                    },
+                )
+                .collect(),
+            unix_now()?,
+        )
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
