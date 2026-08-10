@@ -134,13 +134,6 @@ fn read_container_step_log_range(
     if output.status.success() {
         return Ok(output.stdout);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-    if !stderr.contains("not running") && !stderr.contains("is not running") {
-        bail!(
-            "read incremental workflow step log: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
     let Some(log_len) = copy_step_log(container_name, snapshot)? else {
         return Ok(Vec::new());
     };
