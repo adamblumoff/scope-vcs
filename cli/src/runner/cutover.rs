@@ -68,8 +68,7 @@ pub fn recover(
                 candidate.run_id == canary.run_id
                     && matches!(
                         candidate.status,
-                        RunnerProtocolCanaryStatus::Pending
-                            | RunnerProtocolCanaryStatus::Running
+                        RunnerProtocolCanaryStatus::Pending | RunnerProtocolCanaryStatus::Running
                     )
             }) {
                 println!(
@@ -129,7 +128,10 @@ pub fn recover(
         let queued = run::queue_from_checkout(
             workflow_name(assignment.phase),
             Some(name),
-            &checkout.as_ref().expect("cutover checkout initialized").repo,
+            &checkout
+                .as_ref()
+                .expect("cutover checkout initialized")
+                .repo,
             &target.owner,
             &target.repo,
             &request_id,
@@ -219,7 +221,10 @@ fn canary_request_id(
     generation: u64,
     phase: RunnerProtocolCanaryPhase,
 ) -> String {
-    let identity = format!("{repository}\0{runner_id}\0{generation}\0{}", phase_label(phase));
+    let identity = format!(
+        "{repository}\0{runner_id}\0{generation}\0{}",
+        phase_label(phase)
+    );
     let digest = Sha256::digest(identity.as_bytes());
     hex::encode(&digest[..16])
 }

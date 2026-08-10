@@ -240,14 +240,7 @@ fn watch_run(
         if let Some(run) = terminal {
             print_job_lines(line_buffers.finish());
             let jobs = run_summary_client().and_then(|summary_client| {
-                run_jobs(
-                    &summary_client,
-                    api_url,
-                    session_token,
-                    owner,
-                    repo,
-                    run_id,
-                )
+                run_jobs(&summary_client, api_url, session_token, owner, repo, run_id)
             });
             match jobs {
                 Ok(jobs) => print_terminal(&run, Some(&jobs)),
