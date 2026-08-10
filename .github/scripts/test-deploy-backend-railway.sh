@@ -5,7 +5,44 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
 mkdir -p "$test_dir/bin" "$test_dir/api" "$test_dir/worker"
-touch "$test_dir/maintenance"
+
+cat > "$test_dir/maintenance" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$0 $*" >> "$FAKE_RAILWAY_TRACE"
+[[ "${DATABASE_URL:-}" == "postgres://public-database.test/scope" ]]
+
+case "${1:-}" in
+  plan)
+    if [[ "${FAKE_FAIL_FIRST_PLAN:-0}" == "1" && ! -f "$FAKE_RAILWAY_STATE/first-plan-failed" ]]; then
+      touch "$FAKE_RAILWAY_STATE/first-plan-failed"
+      exit 1
+    fi
+    if [[ "${FAKE_FAIL_RECOVERY_PLAN:-0}" == "1" && -f "$FAKE_RAILWAY_STATE/apply-attempted" ]]; then
+      exit 1
+    fi
+    if [[ -f "$FAKE_RAILWAY_STATE/exact" ]]; then
+      echo '{"exact":true,"pending":[]}'
+    else
+      echo '{"exact":false,"pending":[{"name":"m9999_test","impact":"maintenance-required"}]}'
+    fi
+    ;;
+  apply)
+    touch "$FAKE_RAILWAY_STATE/apply-attempted"
+    [[ "${FAKE_FAIL_APPLY:-0}" == "rollback" ]] && exit 1
+    touch "$FAKE_RAILWAY_STATE/exact"
+    [[ "${FAKE_FAIL_APPLY:-0}" == "committed-error" ]] && exit 1
+    echo '{"exact":true,"migration":"applied"}'
+    ;;
+  verify)
+    [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
+    echo '{"exact":true}'
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+FAKE
 chmod +x "$test_dir/maintenance"
 
 cat > "$test_dir/bin/railway" <<'FAKE'
@@ -13,32 +50,20 @@ cat > "$test_dir/bin/railway" <<'FAKE'
 set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_RAILWAY_TRACE"
 
-if [[ "$1 $2" == "run --project" ]]; then
-  command="${!#}"
-  case "$command" in
-    plan)
-      if [[ "${FAKE_FAIL_RECOVERY_PLAN:-0}" == "1" && -f "$FAKE_RAILWAY_STATE/apply-attempted" ]]; then
-        exit 1
-      fi
-      if [[ -f "$FAKE_RAILWAY_STATE/exact" ]]; then
-        echo '{"exact":true,"pending":[]}'
-      else
-        echo '{"exact":false,"pending":[{"name":"m9999_test","impact":"maintenance-required"}]}'
-      fi
-      ;;
-    apply)
-      touch "$FAKE_RAILWAY_STATE/apply-attempted"
-      [[ "${FAKE_FAIL_APPLY:-0}" == "rollback" ]] && exit 1
-      touch "$FAKE_RAILWAY_STATE/exact"
-      [[ "${FAKE_FAIL_APPLY:-0}" == "committed-error" ]] && exit 1
-      echo '{"exact":true,"migration":"applied"}'
-      ;;
-    verify)
-      [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
-      echo '{"exact":true}'
-      ;;
-  esac
-  exit 0
+if [[ "$1" == "run" ]]; then
+  service=""
+  while [[ "$1" != "--" ]]; do
+    if [[ "$1" == "--service" ]]; then
+      service="$2"
+      shift 2
+    else
+      shift
+    fi
+  done
+  [[ "$service" == "scope-postgres" ]]
+  shift
+  DATABASE_PUBLIC_URL="postgres://public-database.test/scope" "$@"
+  exit $?
 fi
 
 if [[ "$1 $2" == "deployment list" ]]; then
@@ -119,6 +144,7 @@ run_cutover() {
   local initial_closed="${7:-0}"
   local no_history="${8:-0}"
   local fail_scale_service="${9:-}"
+  local fail_first_plan="${10:-0}"
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
   mkdir -p "$state"
@@ -138,6 +164,7 @@ run_cutover() {
     FAKE_FAIL_UP_SERVICE="$fail_up_service" \
     FAKE_FAIL_RECOVERY_PLAN="$fail_recovery_plan" \
     FAKE_FAIL_SCALE_SERVICE="$fail_scale_service" \
+    FAKE_FAIL_FIRST_PLAN="$fail_first_plan" \
     RAILWAY_PROJECT_ID="project-test" \
     RAILWAY_TOKEN="token-test" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
@@ -216,6 +243,10 @@ if grep -F "service scale" "$test_dir/rolling-trace"; then
   echo "exact-schema deployment must stay on the rolling path" >&2
   exit 1
 fi
+
+run_cutover transient-plan 0 1 "" 0 0 0 0 "" 1
+[[ "$(cat "$test_dir/transient-plan-result")" == "0" ]]
+[[ "$(grep -F -x -c "$test_dir/maintenance plan" "$test_dir/transient-plan-trace")" == "2" ]]
 
 run_cutover interrupted 0 0 scope-worker
 [[ "$(cat "$test_dir/interrupted-result")" != "0" ]]

@@ -6,6 +6,7 @@ worker_upload_root="${2:?usage: deploy-backend-railway.sh <api-upload-root> <wor
 maintenance_binary="${SCOPE_MAINTENANCE_BINARY:-./target/release/scope-maintenance}"
 api_service="scope-api"
 worker_service="scope-worker"
+database_service="scope-postgres"
 environment="production"
 recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
 
@@ -25,8 +26,26 @@ api_topology=()
 worker_topology=()
 
 maintenance() {
-  railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
-    "$maintenance_binary" "$1"
+  # `railway run` executes on this CI host, so the database service's public proxy is required.
+  railway run "${railway_scope[@]}" --service "$database_service" --no-local -- \
+    sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" exec "$@"' \
+    scope-maintenance "$maintenance_binary" "$1"
+}
+
+maintenance_read() {
+  local command="$1"
+  local attempt output
+  for attempt in 1 2 3; do
+    if output="$(maintenance "$command")"; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if [[ "$attempt" -lt 3 ]]; then
+      echo "Maintenance $command failed; retrying read-only database access." >&2
+      sleep 2
+    fi
+  done
+  return 1
 }
 
 plan_requires_maintenance() {
@@ -191,7 +210,7 @@ restore_old_release() {
 deploy_and_reopen() {
   bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root" stopped
   bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root" stopped
-  maintenance verify
+  maintenance_read verify
   scale_service "$worker_service" "${worker_topology[@]}"
   wait_for_replica_state "$worker_service" "$(replica_total "${worker_topology[@]}")"
   scale_service "$api_service" "${api_topology[@]}"
@@ -214,7 +233,7 @@ leave_failure_state() {
 }
 trap 'leave_failure_state $?' EXIT
 
-plan_json="$(maintenance plan)"
+plan_json="$(maintenance_read plan)"
 set +e
 plan_requires_maintenance "$plan_json"
 plan_status=$?
@@ -252,7 +271,7 @@ case "$plan_status" in
       exit 1
     fi
     bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
-    maintenance verify
+    maintenance_read verify
     bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
     trap - EXIT
     exit 0
@@ -279,7 +298,7 @@ if ! maintenance apply; then
   # Once apply starts, an error does not prove its transaction rolled back. Fail closed unless a
   # fresh ledger read positively proves that the pre-migration state is unchanged.
   cutover_committed=1
-  recovery_plan="$(maintenance plan || true)"
+  recovery_plan="$(maintenance_read plan || true)"
   if [[ -n "$recovery_plan" ]] && plan_is_exact "$recovery_plan"; then
     cutover_committed=1
   elif [[ -n "$recovery_plan" ]] && plans_have_same_ledger "$plan_json" "$recovery_plan"; then
