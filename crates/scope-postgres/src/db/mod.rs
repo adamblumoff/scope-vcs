@@ -120,11 +120,12 @@ pub use repo_reads::RepoSummaryRead;
 use repository_rows::load_repository_facts;
 use scope_domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, repo_id};
 use sea_orm::{
-    AccessMode, ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseBackend,
-    DatabaseConnection, DatabaseTransaction, EntityTrait, IsolationLevel, QueryFilter, QueryOrder,
-    SqlxPostgresConnector, Statement, TransactionTrait,
+    AccessMode, ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection,
+    DatabaseTransaction, EntityTrait, IsolationLevel, QueryFilter, QueryOrder,
+    SqlxPostgresConnector, TransactionTrait,
 };
 use serde::{Serialize, de::DeserializeOwned};
+use sqlx::{Connection as _, PgConnection};
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_support::TestDatabaseTarget;
@@ -317,32 +318,27 @@ pub async fn apply_maintenance_migrations(database_url: String) -> anyhow::Resul
     Ok(())
 }
 
-pub struct ExclusiveWriterFence {
-    connection: DatabaseConnection,
+struct ExclusiveWriterFence {
+    connection: PgConnection,
 }
 
 impl ExclusiveWriterFence {
-    pub async fn acquire(database_url: &str) -> anyhow::Result<Self> {
-        let connection = connect_single_session(database_url).await?;
-        let acquired = connection
-            .query_one(Statement::from_string(
-                DatabaseBackend::Postgres,
-                writer_fence_statement("pg_try_advisory_lock"),
-            ))
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("PostgreSQL did not report writer-fence state"))?
-            .try_get::<bool>("", "acquired")?;
+    async fn acquire(database_url: &str) -> anyhow::Result<Self> {
+        let mut connection = PgConnection::connect(database_url).await?;
+        let acquired: bool = sqlx::query_scalar(&writer_fence_statement("pg_try_advisory_lock"))
+            .fetch_one(&mut connection)
+            .await?;
         if !acquired {
             anyhow::bail!(
-                "exclusive writer fence refused: an API or worker writer still holds the database fence"
+                "maintenance migration refused: an API or worker writer still holds the database fence"
             );
         }
         Ok(Self { connection })
     }
 
-    pub async fn release(self) -> anyhow::Result<()> {
-        self.connection
-            .execute_unprepared(&writer_fence_statement("pg_advisory_unlock"))
+    async fn release(mut self) -> anyhow::Result<()> {
+        sqlx::query(&writer_fence_statement("pg_advisory_unlock"))
+            .execute(&mut self.connection)
             .await?;
         self.connection.close().await?;
         Ok(())
@@ -367,12 +363,6 @@ async fn connect_writer_database(database_url: &str) -> anyhow::Result<DatabaseC
         .connect(database_url)
         .await?;
     Ok(SqlxPostgresConnector::from_sqlx_postgres_pool(pool))
-}
-
-async fn connect_single_session(database_url: &str) -> anyhow::Result<DatabaseConnection> {
-    let mut options = ConnectOptions::new(database_url.to_string());
-    options.max_connections(1).min_connections(1);
-    Ok(Database::connect(options).await?)
 }
 
 fn writer_fence_statement(function: &str) -> String {
