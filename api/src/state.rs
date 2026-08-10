@@ -4,7 +4,7 @@ use crate::{
         SCOPE_OPERATOR_TOKEN_ENV, data_dir, database_url_from_env, git_repo_root, non_empty_env,
     },
     git::cache::{GitDerivedCacheCoordinator, RawGitCacheRegistry},
-    object_store_config::{encryption_key_from_env, s3_from_env},
+    object_store_config::{encryption_key_from_env, previous_encryption_key_from_env, s3_from_env},
     persistence::ensure_private_dir,
     push_intents::push_intent_signing_key,
     repo_cleanup::best_effort_drain_pending_repo_storage_deletions,
@@ -42,11 +42,18 @@ impl AppState {
         let metadata = MetadataStore::connect(database_url_from_env()?).await?;
         let repo_events = RepoChangeBus::default();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
+        let raw_object_store = Arc::new(s3_from_env()?);
+        let encryption_key = encryption_key_from_env()?;
+        let encrypted_object_store = match previous_encryption_key_from_env()? {
+            Some(previous_key) => EncryptedObjectStore::with_previous_key(
+                raw_object_store,
+                encryption_key,
+                previous_key,
+            ),
+            None => EncryptedObjectStore::new(raw_object_store, encryption_key),
+        };
         let object_store = Arc::new(BudgetedObjectStore::new(
-            Arc::new(EncryptedObjectStore::new(
-                Arc::new(s3_from_env()?),
-                encryption_key_from_env()?,
-            )),
+            Arc::new(encrypted_object_store),
             runtime_budgets.clone(),
         ));
         let listener_bus = repo_events.clone();

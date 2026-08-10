@@ -8,23 +8,32 @@ Renames, removals, rewrites, protocol resets, and changed invariants require
 Production migration ownership belongs to the backend deployment job. For a
 maintenance-required plan it:
 
-1. Records the API and worker replica topology from their latest successful
-   deployments.
-2. Scales API traffic to zero, then scales the worker to zero, reading back
-   zero running replicas for each.
+1. Records the API and worker replica counts from Railway's current service
+   configuration. A first deployment uses the explicit replica counts from the
+   workflow because Railway has no deployment-derived replica metadata yet.
+2. Stops the exact active API deployment through Railway's deployment API,
+   then stops the exact active worker deployment, reading back zero running
+   replicas for each.
 3. Runs `scope-maintenance apply` once. The command also refuses unless it can
    acquire the database's exclusive writer fence.
-4. Uploads API and worker artifacts from the same checked-out revision and
-   verifies the exact migration ledger while traffic remains closed.
-5. Starts and health-checks the worker, then starts and health-checks the API.
+4. Verifies the exact migration ledger while traffic remains closed.
+5. Uploads and health-checks the worker from the checked-out revision, then
+   uploads and health-checks the API from that same revision.
 
 The successful migration transaction is the point of no return. After a failed
-apply command, the workflow restores the recorded old topology only when a
-fresh ledger read proves that the pre-migration state is unchanged. A committed
-or unreadable/otherwise indeterminate ledger leaves both writer services closed
-and must be recovered by rerunning the same revision to finish the forward
-deployment. Never restore an old API or worker unless rollback is positively
-proven.
+apply command, the workflow redeploys the exact stopped worker and API deployment
+IDs only when a fresh ledger read proves that the pre-migration state is unchanged.
+A committed or unreadable/otherwise indeterminate ledger leaves both writer
+services closed and must be recovered by rerunning the same revision to finish
+the forward deployment. Never restore an old API or worker unless rollback is
+positively proven.
+
+The database fence is the final concurrency boundary, not Railway's replica
+readback. Every API and worker database connection holds the shared side of the
+fence for its session. A deployment that races the shutdown either makes the
+maintenance command refuse before migration, or blocks while the exclusive
+fence is held. Runtime startup verifies the exact schema before opening its
+writer pool, so an old binary cannot begin writing after a committed migration.
 
 The maintenance command supports read-only inspection:
 

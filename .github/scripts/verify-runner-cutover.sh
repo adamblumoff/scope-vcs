@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ -z "${RAILWAY_API_TOKEN:-}" ]; then
-  echo "Set the RAILWAY_API_TOKEN secret before verifying the runner cutover."
+if [ -z "${RAILWAY_TOKEN:-}" ]; then
+  echo "Set the RAILWAY_TOKEN secret before verifying the runner cutover."
   exit 1
 fi
 

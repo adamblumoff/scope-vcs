@@ -1,7 +1,7 @@
 use crate::config::{
     SCOPE_BUCKET_ACCESS_KEY_ID_ENV, SCOPE_BUCKET_ENDPOINT_ENV, SCOPE_BUCKET_FORCE_PATH_STYLE_ENV,
     SCOPE_BUCKET_NAME_ENV, SCOPE_BUCKET_REGION_ENV, SCOPE_BUCKET_SECRET_ACCESS_KEY_ENV,
-    SCOPE_OBJECT_ENCRYPTION_KEY_ENV, non_empty_env,
+    SCOPE_OBJECT_ENCRYPTION_KEY_ENV, SCOPE_OBJECT_ENCRYPTION_PREVIOUS_KEY_ENV, non_empty_env,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 #[cfg(feature = "local-dev")]
@@ -14,13 +14,26 @@ use std::path::{Path, PathBuf};
 const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
 
 pub(crate) fn encryption_key_from_env() -> anyhow::Result<[u8; 32]> {
-    let encoded = required_env(SCOPE_OBJECT_ENCRYPTION_KEY_ENV)?;
-    let decoded = BASE64.decode(encoded.trim()).map_err(|error| {
-        anyhow::anyhow!("{SCOPE_OBJECT_ENCRYPTION_KEY_ENV} must be base64: {error}")
-    })?;
-    decoded.as_slice().try_into().map_err(|_| {
-        anyhow::anyhow!("{SCOPE_OBJECT_ENCRYPTION_KEY_ENV} must decode to exactly 32 bytes")
-    })
+    parse_encryption_key(
+        SCOPE_OBJECT_ENCRYPTION_KEY_ENV,
+        &required_env(SCOPE_OBJECT_ENCRYPTION_KEY_ENV)?,
+    )
+}
+
+pub(crate) fn previous_encryption_key_from_env() -> anyhow::Result<Option<[u8; 32]>> {
+    non_empty_env(SCOPE_OBJECT_ENCRYPTION_PREVIOUS_KEY_ENV)
+        .map(|encoded| parse_encryption_key(SCOPE_OBJECT_ENCRYPTION_PREVIOUS_KEY_ENV, &encoded))
+        .transpose()
+}
+
+fn parse_encryption_key(name: &str, encoded: &str) -> anyhow::Result<[u8; 32]> {
+    let decoded = BASE64
+        .decode(encoded.trim())
+        .map_err(|error| anyhow::anyhow!("{name} must be base64: {error}"))?;
+    decoded
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{name} must decode to exactly 32 bytes"))
 }
 
 pub(crate) fn s3_from_env() -> anyhow::Result<S3ObjectStore> {

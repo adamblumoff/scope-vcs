@@ -21,6 +21,10 @@ required-features = ["type-export"]
 name = "scope-maintenance"
 path = "src/bin/scope_maintenance.rs"
 
+[[bin]]
+name = "scope-object-rekey"
+path = "src/bin/scope_object_rekey.rs"
+
 [[test]]
 name = "workflows"
 path = "tests/workflows.rs"

@@ -28,6 +28,7 @@ const SCOPE_BUCKET_ACCESS_KEY_ID_ENV: &str = "SCOPE_BUCKET_ACCESS_KEY_ID";
 const SCOPE_BUCKET_SECRET_ACCESS_KEY_ENV: &str = "SCOPE_BUCKET_SECRET_ACCESS_KEY";
 const SCOPE_BUCKET_FORCE_PATH_STYLE_ENV: &str = "SCOPE_BUCKET_FORCE_PATH_STYLE";
 const SCOPE_OBJECT_ENCRYPTION_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_KEY";
+const SCOPE_OBJECT_ENCRYPTION_PREVIOUS_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_PREVIOUS_KEY";
 const SCOPE_OBJECT_STORE_ENV: &str = "SCOPE_OBJECT_STORE";
 const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
 
@@ -232,10 +233,13 @@ fn object_store_from_env(data_dir: &std::path::Path) -> anyhow::Result<Arc<dyn O
         }
         _ => Arc::new(S3ObjectStore::new(s3_settings_from_env()?)?),
     };
-    Ok(Arc::new(EncryptedObjectStore::new(
-        raw,
-        encryption_key_from_env()?,
-    )))
+    let encryption_key = encryption_key_from_env()?;
+    Ok(Arc::new(match previous_encryption_key_from_env()? {
+        Some(previous_key) => {
+            EncryptedObjectStore::with_previous_key(raw, encryption_key, previous_key)
+        }
+        None => EncryptedObjectStore::new(raw, encryption_key),
+    }))
 }
 
 fn s3_settings_from_env() -> anyhow::Result<S3ObjectStoreSettings> {
@@ -253,13 +257,26 @@ fn s3_settings_from_env() -> anyhow::Result<S3ObjectStoreSettings> {
 }
 
 fn encryption_key_from_env() -> anyhow::Result<[u8; 32]> {
-    let encoded = required_env(SCOPE_OBJECT_ENCRYPTION_KEY_ENV)?;
-    let decoded = BASE64.decode(encoded.trim()).map_err(|error| {
-        anyhow::anyhow!("{SCOPE_OBJECT_ENCRYPTION_KEY_ENV} must be base64: {error}")
-    })?;
-    decoded.as_slice().try_into().map_err(|_| {
-        anyhow::anyhow!("{SCOPE_OBJECT_ENCRYPTION_KEY_ENV} must decode to exactly 32 bytes")
-    })
+    parse_encryption_key(
+        SCOPE_OBJECT_ENCRYPTION_KEY_ENV,
+        &required_env(SCOPE_OBJECT_ENCRYPTION_KEY_ENV)?,
+    )
+}
+
+fn previous_encryption_key_from_env() -> anyhow::Result<Option<[u8; 32]>> {
+    non_empty_env(SCOPE_OBJECT_ENCRYPTION_PREVIOUS_KEY_ENV)
+        .map(|encoded| parse_encryption_key(SCOPE_OBJECT_ENCRYPTION_PREVIOUS_KEY_ENV, &encoded))
+        .transpose()
+}
+
+fn parse_encryption_key(name: &str, encoded: &str) -> anyhow::Result<[u8; 32]> {
+    let decoded = BASE64
+        .decode(encoded.trim())
+        .map_err(|error| anyhow::anyhow!("{name} must be base64: {error}"))?;
+    decoded
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{name} must decode to exactly 32 bytes"))
 }
 
 fn non_empty_env(name: &str) -> Option<String> {

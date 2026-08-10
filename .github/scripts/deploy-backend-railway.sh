@@ -11,12 +11,12 @@ worker_service="${SCOPE_RAILWAY_WORKER_SERVICE_ID:?SCOPE_RAILWAY_WORKER_SERVICE_
 database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SERVICE_ID is required}"
 recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
 
-if [[ -z "${RAILWAY_API_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
-  echo "RAILWAY_API_TOKEN and RAILWAY_PROJECT_ID are required for backend deployment." >&2
+if [[ -z "${RAILWAY_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
+  echo "RAILWAY_TOKEN and RAILWAY_PROJECT_ID are required for backend deployment." >&2
   exit 1
 fi
-if [[ -n "${RAILWAY_TOKEN:-}" ]]; then
-  echo "RAILWAY_TOKEN must not be set for backend deployment; use only RAILWAY_API_TOKEN." >&2
+if [[ -n "${RAILWAY_API_TOKEN:-}" ]]; then
+  echo "RAILWAY_API_TOKEN must not be set for backend deployment; use only RAILWAY_TOKEN." >&2
   exit 1
 fi
 if [[ ! -x "$maintenance_binary" ]]; then
@@ -28,12 +28,16 @@ railway_scope=(--project "$RAILWAY_PROJECT_ID" --environment "$environment")
 cutover_committed=0
 api_closed=0
 worker_closed=0
-api_topology=()
-worker_topology=()
+api_rollback_replicas=0
+worker_rollback_replicas=0
+api_rollback_deployment_id=""
+worker_rollback_deployment_id=""
 
 validate_production_target() {
   local status_json
   status_json="$(railway status "${railway_scope[@]}" --json)"
+  # The JavaScript template literals are evaluated by Node.
+  # shellcheck disable=SC2016
   RAILWAY_STATUS_JSON="$status_json" \
     EXPECTED_PROJECT_ID="$RAILWAY_PROJECT_ID" \
     EXPECTED_WORKSPACE_ID="$workspace_id" \
@@ -69,6 +73,8 @@ for (const [id, name] of expectedServices) {
 
 maintenance() {
   # `railway run` executes on this CI host, so the database service's public proxy is required.
+  # The child shell expands the Railway-injected database URL and command arguments.
+  # shellcheck disable=SC2016
   railway run "${railway_scope[@]}" --service "$database_service" --no-local -- \
     sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" exec "$@"' \
     scope-maintenance "$maintenance_binary" "$1"
@@ -125,66 +131,23 @@ process.exit(
 '
 }
 
-deployment_topology() {
-  local service_name="$1"
-  local deployments_json
-  deployments_json="$(
-    railway deployment list "${railway_scope[@]}" \
-      --service "$service_name" --limit 20 --json
-  )"
-  DEPLOYMENTS_JSON="$deployments_json" node -e '
-const deployments = JSON.parse(process.env.DEPLOYMENTS_JSON || "[]");
-for (const deployment of deployments) {
-  if (deployment.status !== "SUCCESS") continue;
-  const deploy = deployment.meta?.serviceManifest?.deploy;
-  if (!deploy) continue;
-  let regions = deploy.multiRegionConfig;
-  if (!regions && typeof deploy.region === "string") {
-    regions = {[deploy.region]: {numReplicas: deploy.numReplicas ?? 1}};
-  }
-  if (!regions || typeof regions !== "object") continue;
-  const entries = Object.entries(regions)
-    .map(([region, config]) => [region, config?.numReplicas ?? 0])
-    .filter(([, replicas]) => Number.isInteger(replicas) && replicas > 0)
-    .sort(([left], [right]) => left.localeCompare(right));
-  if (entries.length === 0) continue;
-  for (const [region, replicas] of entries) console.log(`${region}=${replicas}`);
-  process.exit(0);
-}
-process.exit(1);
-'
-}
-
-configured_topology() {
-  local variable_name="$1"
-  local configured="${!variable_name:-}"
-  local assignment
-  for assignment in $configured; do
-    if [[ ! "$assignment" =~ ^[A-Za-z0-9_-]+=[1-9][0-9]*$ ]]; then
-      echo "$variable_name must contain positive region=replica assignments." >&2
-      return 1
-    fi
-    printf '%s\n' "$assignment"
-  done
-}
-
-zero_topology() {
-  local assignment
-  for assignment in "$@"; do
-    printf '%s=0\n' "${assignment%%=*}"
-  done
-}
-
-service_replica_line() {
+service_state_line() {
   local service_name="$1"
   local services_json
   services_json="$(railway service list "${railway_scope[@]}" --json)"
   SERVICES_JSON="$services_json" SERVICE_NAME="$service_name" node -e '
 const services = JSON.parse(process.env.SERVICES_JSON || "[]");
-const service = services.find((item) => item.name === process.env.SERVICE_NAME);
+const target = process.env.SERVICE_NAME;
+const service = services.find((item) => item.id === target || item.name === target);
 if (!service) process.exit(1);
 const replicas = service.replicas || {};
-console.log([service.status || "", replicas.running || 0, replicas.crashed || 0].join("\t"));
+console.log([
+  service.status || "",
+  replicas.running || 0,
+  replicas.crashed || 0,
+  replicas.configured || 0,
+  service.deploymentStopped === true ? "1" : "0",
+].join("\t"));
 '
 }
 
@@ -192,13 +155,13 @@ wait_for_replica_state() {
   local service_name="$1"
   local expected_running="$2"
   local deadline=$((SECONDS + 600))
-  local line status running crashed
+  local line status running crashed configured stopped
   while (( SECONDS < deadline )); do
-    line="$(service_replica_line "$service_name" || true)"
+    line="$(service_state_line "$service_name" || true)"
     if [[ -n "$line" ]]; then
-      IFS=$'\t' read -r status running crashed <<< "$line"
+      IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
       if [[ "$running" == "$expected_running" && "${crashed:-0}" == "0" ]]; then
-        if [[ "$expected_running" == "0" || "$status" == "SUCCESS" ]]; then
+        if [[ "$expected_running" == "0" || ( "$status" == "SUCCESS" && "$stopped" == "0" ) ]]; then
           return 0
         fi
       fi
@@ -209,76 +172,228 @@ wait_for_replica_state() {
   return 1
 }
 
-replica_total() {
-  local total=0 assignment
-  for assignment in "$@"; do
-    total=$((total + ${assignment#*=}))
+wait_for_service_health() {
+  local service_name="$1"
+  local deadline=$((SECONDS + 600))
+  local line status running crashed configured stopped
+  while (( SECONDS < deadline )); do
+    line="$(service_state_line "$service_name" || true)"
+    if [[ -n "$line" ]]; then
+      IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
+      if [[ "$status" == "SUCCESS" && "$stopped" == "0" && "$configured" -gt 0 \
+        && "$running" == "$configured" && "${crashed:-0}" == "0" ]]; then
+        return 0
+      fi
+    fi
+    sleep 10
   done
-  printf '%s\n' "$total"
+  echo "Timed out waiting for $service_name to reach its configured healthy replica count." >&2
+  return 1
+}
+
+service_is_healthy() {
+  local line status running crashed configured stopped
+  line="$(service_state_line "$1")"
+  IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
+  [[ "$status" == "SUCCESS" && "$stopped" == "0" && "$configured" -gt 0 \
+    && "$running" == "$configured" && "${crashed:-0}" == "0" ]]
 }
 
 running_replicas() {
-  local line status running crashed
-  line="$(service_replica_line "$1")"
-  IFS=$'\t' read -r status running crashed <<< "$line"
+  local line status running crashed configured stopped
+  line="$(service_state_line "$1")"
+  IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
   printf '%s\n' "$running"
 }
 
-scale_service() {
+configured_replicas() {
+  local line status running crashed configured stopped
+  line="$(service_state_line "$1")"
+  IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
+  printf '%s\n' "$configured"
+}
+
+configured_or_declared_replicas() {
   local service_name="$1"
-  shift
-  railway service scale "${railway_scope[@]}" --service "$service_name" --json "$@"
+  local variable_name="$2"
+  local configured declared
+  configured="$(configured_replicas "$service_name")"
+  if [[ "$configured" -gt 0 ]]; then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+  declared="${!variable_name:-}"
+  if [[ ! "$declared" =~ ^[1-9][0-9]*$ ]]; then
+    echo "$variable_name must declare a positive replica count when Railway has no deployment metadata." >&2
+    return 1
+  fi
+  printf '%s\n' "$declared"
+}
+
+service_has_deployment_history() {
+  local deployments_json
+  deployments_json="$(railway deployment list "${railway_scope[@]}" --service "$1" --limit 1 --json)"
+  DEPLOYMENTS_JSON="$deployments_json" node -e '
+const deployments = JSON.parse(process.env.DEPLOYMENTS_JSON || "[]");
+process.exit(Array.isArray(deployments) && deployments.length > 0 ? 0 : 1);
+'
+}
+
+service_deployment_id() {
+  local services_json
+  services_json="$(railway service list "${railway_scope[@]}" --json)"
+  SERVICES_JSON="$services_json" SERVICE_NAME="$1" node -e '
+const services = JSON.parse(process.env.SERVICES_JSON || "[]");
+const target = process.env.SERVICE_NAME;
+const service = services.find((item) => item.id === target || item.name === target);
+if (!service) process.exit(1);
+if (service.deploymentStopped === true) process.exit(0);
+process.stdout.write(service.deploymentId || "");
+'
+}
+
+service_deployment_line() {
+  local services_json
+  services_json="$(railway service list "${railway_scope[@]}" --json)"
+  SERVICES_JSON="$services_json" SERVICE_NAME="$1" node -e '
+const services = JSON.parse(process.env.SERVICES_JSON || "[]");
+const target = process.env.SERVICE_NAME;
+const service = services.find((item) => item.id === target || item.name === target);
+if (!service) process.exit(1);
+if (service.deploymentStopped === true) process.exit(0);
+process.stdout.write([service.deploymentId || "", service.status || ""].join("\t"));
+'
+}
+
+mutate_deployment() {
+  local mutation="$1"
+  local deployment_id="$2"
+  local request response
+  case "$mutation" in
+    deploymentStop|deploymentRedeploy|deploymentRemove) ;;
+    *) echo "Unsupported Railway deployment mutation: $mutation" >&2; return 2 ;;
+  esac
+  request="$(
+    # GraphQL variable syntax is evaluated by Railway, not this shell.
+    # shellcheck disable=SC2016
+    DEPLOYMENT_ID="$deployment_id" DEPLOYMENT_MUTATION="$mutation" node -e '
+const mutation = process.env.DEPLOYMENT_MUTATION;
+const selection = mutation === "deploymentRedeploy" ? " { id }" : "";
+process.stdout.write(JSON.stringify({
+  query: `mutation ${mutation}($id: String!) { ${mutation}(id: $id)${selection} }`,
+  variables: {id: process.env.DEPLOYMENT_ID},
+}));
+'
+  )"
+  response="$(
+    # Supplying headers on stdin keeps the project token out of the process argument list.
+    printf 'Project-Access-Token: %s\nContent-Type: application/json\n' "$RAILWAY_TOKEN" \
+      | curl --silent --show-error --fail-with-body \
+        --request POST \
+        --url https://backboard.railway.com/graphql/v2 \
+        --header @- \
+        --data-binary "$request"
+  )"
+  RAILWAY_GRAPHQL_RESPONSE="$response" DEPLOYMENT_MUTATION="$mutation" node -e '
+const response = JSON.parse(process.env.RAILWAY_GRAPHQL_RESPONSE || "{}");
+if (Array.isArray(response.errors) && response.errors.length > 0) {
+  console.error(response.errors.map(({message}) => message).join("; "));
+  process.exit(1);
+}
+const result = response.data?.[process.env.DEPLOYMENT_MUTATION];
+if (result !== true && typeof result?.id !== "string") process.exit(1);
+'
+}
+
+stop_service() {
+  local service_name="$1"
+  local line deployment_id deployment_status mutation
+  line="$(service_deployment_line "$service_name")"
+  IFS=$'\t' read -r deployment_id deployment_status <<< "$line"
+  if [[ -z "${deployment_id:-}" ]]; then
+    if [[ "$(running_replicas "$service_name")" == "0" ]]; then
+      return 0
+    fi
+    echo "Could not identify the active deployment for $service_name." >&2
+    return 1
+  fi
+  case "$deployment_status" in
+    SUCCESS|SLEEPING) mutation=deploymentStop ;;
+    CRASHED|FAILED)
+      if [[ "$cutover_committed" == "0" ]]; then
+        echo "Refusing maintenance because $service_name degraded to $deployment_status before shutdown." >&2
+        return 1
+      fi
+      mutation=deploymentRemove
+      ;;
+    *)
+      echo "Refusing to close $service_name deployment $deployment_id in $deployment_status state." >&2
+      return 1
+      ;;
+  esac
+  mutate_deployment "$mutation" "$deployment_id"
 }
 
 quiesce_writers() {
-  local api_zero worker_zero
-  mapfile -t api_zero < <(zero_topology "${api_topology[@]}")
-  mapfile -t worker_zero < <(zero_topology "${worker_topology[@]}")
   if [[ "$api_closed" == "0" ]]; then
-    scale_service "$api_service" "${api_zero[@]}"
+    if [[ "$cutover_committed" == "0" && -z "$api_rollback_deployment_id" ]]; then
+      api_rollback_deployment_id="$(service_deployment_id "$api_service")"
+    fi
+    stop_service "$api_service"
     api_closed=1
     wait_for_replica_state "$api_service" 0
   fi
   if [[ "$worker_closed" == "0" ]]; then
-    scale_service "$worker_service" "${worker_zero[@]}"
+    if [[ "$cutover_committed" == "0" && -z "$worker_rollback_deployment_id" ]]; then
+      worker_rollback_deployment_id="$(service_deployment_id "$worker_service")"
+    fi
+    stop_service "$worker_service"
     worker_closed=1
     wait_for_replica_state "$worker_service" 0
   fi
 }
 
+restore_service() {
+  local service_name="$1"
+  local expected_replicas="$2"
+  local deployment_id="$3"
+  if [[ -z "$deployment_id" ]]; then
+    echo "Cannot restore $service_name without its exact stopped deployment ID." >&2
+    return 1
+  fi
+  mutate_deployment deploymentRedeploy "$deployment_id"
+  wait_for_replica_state "$service_name" "$expected_replicas"
+}
+
 restore_old_release() {
-  echo "Migration did not commit; restoring the previous worker and API topology." >&2
+  echo "Migration did not commit; restoring the previous worker and API deployments." >&2
   if [[ "$worker_closed" == "1" ]]; then
-    scale_service "$worker_service" "${worker_topology[@]}"
+    restore_service "$worker_service" "$worker_rollback_replicas" "$worker_rollback_deployment_id"
     worker_closed=0
-    wait_for_replica_state "$worker_service" "$(replica_total "${worker_topology[@]}")"
   fi
   if [[ "$api_closed" == "1" ]]; then
-    scale_service "$api_service" "${api_topology[@]}"
+    restore_service "$api_service" "$api_rollback_replicas" "$api_rollback_deployment_id"
     api_closed=0
-    wait_for_replica_state "$api_service" "$(replica_total "${api_topology[@]}")"
   fi
 }
 
 deploy_and_reopen() {
-  bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root" stopped
-  bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root" stopped
   maintenance_read verify
-  scale_service "$worker_service" "${worker_topology[@]}"
   worker_closed=0
-  wait_for_replica_state "$worker_service" "$(replica_total "${worker_topology[@]}")"
-  scale_service "$api_service" "${api_topology[@]}"
+  bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
+  wait_for_service_health "$worker_service"
   api_closed=0
-  wait_for_replica_state "$api_service" "$(replica_total "${api_topology[@]}")"
+  bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
+  wait_for_service_health "$api_service"
 }
 
 leave_failure_state() {
   local exit_status="$1"
   trap - EXIT
-  if [[ "$exit_status" -ne 0 && ( "$api_closed" == "1" || "$worker_closed" == "1" ) ]]; then
-    if [[ "$cutover_committed" == "0" ]]; then
+  if [[ "$exit_status" -ne 0 ]]; then
+    if [[ "$cutover_committed" == "0" && ( "$api_closed" == "1" || "$worker_closed" == "1" ) ]]; then
       restore_old_release || echo "Failed to restore the previous release; writers remain closed." >&2
-    else
+    elif [[ "$cutover_committed" == "1" ]]; then
       quiesce_writers || echo "Failed to re-close both writers after the committed cutover." >&2
       echo "Migration committed; writers remain closed. Rerun this workflow to finish the forward-only deployment." >&2
     fi
@@ -288,6 +403,13 @@ leave_failure_state() {
 trap 'leave_failure_state $?' EXIT
 
 validate_production_target
+
+api_rollback_replicas="$(
+  configured_or_declared_replicas "$api_service" SCOPE_RAILWAY_API_REPLICAS
+)"
+worker_rollback_replicas="$(
+  configured_or_declared_replicas "$worker_service" SCOPE_RAILWAY_WORKER_REPLICAS
+)"
 
 plan_json="$(maintenance_read plan)"
 set +e
@@ -300,19 +422,15 @@ case "$plan_status" in
     api_running="$(running_replicas "$api_service")"
     worker_running="$(running_replicas "$worker_service")"
     if [[ "$api_running" == "0" && "$worker_running" == "0" ]]; then
-      mapfile -t api_topology < <(deployment_topology "$api_service")
-      mapfile -t worker_topology < <(deployment_topology "$worker_service")
-      if [[ "${#api_topology[@]}" == "0" && "${#worker_topology[@]}" == "0" ]]; then
-        mapfile -t api_topology < <(configured_topology SCOPE_API_TOPOLOGY)
-        mapfile -t worker_topology < <(configured_topology SCOPE_WORKER_TOPOLOGY)
-        if [[ "${#api_topology[@]}" == "0" || "${#worker_topology[@]}" == "0" ]]; then
-          echo "Initial deployment requires explicit API and worker topology." >&2
-          exit 1
-        fi
-      elif [[ "${#api_topology[@]}" == "0" || "${#worker_topology[@]}" == "0" ]]; then
-        echo "Closed writers have inconsistent deployment topology history." >&2
+      api_has_history=0
+      worker_has_history=0
+      service_has_deployment_history "$api_service" && api_has_history=1
+      service_has_deployment_history "$worker_service" && worker_has_history=1
+      if [[ "$api_has_history" != "$worker_has_history" ]]; then
+        echo "Closed writers have inconsistent deployment history." >&2
         exit 1
-      elif [[ "$recover_closed_cutover" != "1" ]]; then
+      fi
+      if [[ "$api_has_history" == "1" && "$recover_closed_cutover" != "1" ]]; then
         echo "Writers are intentionally closed or await cutover recovery; rerun this workflow to authorize reopening." >&2
         exit 1
       fi
@@ -339,14 +457,8 @@ case "$plan_status" in
     ;;
 esac
 
-mapfile -t api_topology < <(deployment_topology "$api_service")
-mapfile -t worker_topology < <(deployment_topology "$worker_service")
-if [[ "${#api_topology[@]}" == "0" && "${#worker_topology[@]}" == "0" ]]; then
-  mapfile -t api_topology < <(configured_topology SCOPE_API_TOPOLOGY)
-  mapfile -t worker_topology < <(configured_topology SCOPE_WORKER_TOPOLOGY)
-fi
-if [[ "${#api_topology[@]}" == "0" || "${#worker_topology[@]}" == "0" ]]; then
-  echo "Could not read the current API and worker replica topology; refusing maintenance." >&2
+if ! service_is_healthy "$api_service" || ! service_is_healthy "$worker_service"; then
+  echo "Maintenance cutover requires healthy API and worker deployments before closing writers." >&2
   exit 1
 fi
 

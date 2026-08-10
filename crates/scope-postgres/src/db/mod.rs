@@ -308,29 +308,45 @@ pub async fn verify_schema(database_url: String) -> anyhow::Result<()> {
 }
 
 pub async fn apply_maintenance_migrations(database_url: String) -> anyhow::Result<()> {
-    let fence = connect_single_session(&database_url).await?;
-    let acquired = fence
-        .query_one(Statement::from_string(
-            DatabaseBackend::Postgres,
-            writer_fence_statement("pg_try_advisory_lock"),
-        ))
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("PostgreSQL did not report writer-fence state"))?
-        .try_get::<bool>("", "acquired")?;
-    if !acquired {
-        anyhow::bail!(
-            "maintenance migration refused: an API or worker writer still holds the database fence"
-        );
-    }
-
+    let fence = ExclusiveWriterFence::acquire(&database_url).await?;
     let db = Database::connect(database_url).await?;
     let migration_result = crate::migrations::apply_in_maintenance(&db).await;
-    let release_result = fence
-        .execute_unprepared(&writer_fence_statement("pg_advisory_unlock"))
-        .await;
+    let release_result = fence.release().await;
     migration_result?;
     release_result?;
     Ok(())
+}
+
+pub struct ExclusiveWriterFence {
+    connection: DatabaseConnection,
+}
+
+impl ExclusiveWriterFence {
+    pub async fn acquire(database_url: &str) -> anyhow::Result<Self> {
+        let connection = connect_single_session(database_url).await?;
+        let acquired = connection
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                writer_fence_statement("pg_try_advisory_lock"),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("PostgreSQL did not report writer-fence state"))?
+            .try_get::<bool>("", "acquired")?;
+        if !acquired {
+            anyhow::bail!(
+                "exclusive writer fence refused: an API or worker writer still holds the database fence"
+            );
+        }
+        Ok(Self { connection })
+    }
+
+    pub async fn release(self) -> anyhow::Result<()> {
+        self.connection
+            .execute_unprepared(&writer_fence_statement("pg_advisory_unlock"))
+            .await?;
+        self.connection.close().await?;
+        Ok(())
+    }
 }
 
 async fn connect_writer_database(database_url: &str) -> anyhow::Result<DatabaseConnection> {

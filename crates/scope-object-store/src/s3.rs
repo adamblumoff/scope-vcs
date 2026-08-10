@@ -123,6 +123,7 @@ impl S3ObjectStore {
         &self,
         method: &str,
         canonical_uri: &str,
+        canonical_query: &str,
         host: &str,
         payload: &[u8],
     ) -> Result<Vec<(String, String)>, ObjectStoreError> {
@@ -142,7 +143,7 @@ impl S3ObjectStore {
             format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
         let signed_headers = "host;x-amz-content-sha256;x-amz-date";
         let canonical_request = format!(
-            "{method}\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+            "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
         );
         let credential_scope = format!("{date_stamp}/{}/s3/aws4_request", self.region);
         let string_to_sign = format!(
@@ -187,10 +188,45 @@ impl S3ObjectStore {
                 ));
             }
         };
-        for (name, value) in self.signed_headers(method, &canonical_uri, &host, &payload)? {
+        for (name, value) in self.signed_headers(method, &canonical_uri, "", &host, &payload)? {
             request = request.header(name, value);
         }
         send_blocking_request(method, "bucket", request, None)
+    }
+
+    fn send_bucket_query(&self, canonical_query: &str) -> Result<Vec<u8>, ObjectStoreError> {
+        let url = format!("{}?{canonical_query}", self.bucket_url());
+        let host = Self::request_host(&url)?;
+        let canonical_uri = self.bucket_canonical_uri();
+        let client = self.client.as_ref().ok_or_else(|| {
+            ObjectStoreError::internal_message("object store client is shut down")
+        })?;
+        let mut request = client.get(&url).timeout(self.request_timeout);
+        for (name, value) in
+            self.signed_headers("GET", &canonical_uri, canonical_query, &host, &[])?
+        {
+            request = request.header(name, value);
+        }
+        send_blocking_request("GET", "bucket listing", request, None)
+    }
+
+    pub fn list_keys(&self) -> Result<Vec<String>, ObjectStoreError> {
+        let mut keys = Vec::new();
+        let mut continuation_token = None;
+        loop {
+            let query = list_objects_query(continuation_token.as_deref());
+            let body = self.send_bucket_query(&query)?;
+            let page = parse_list_objects_page(&body)?;
+            keys.extend(page.keys);
+            if !page.is_truncated {
+                return Ok(keys);
+            }
+            continuation_token = Some(page.next_continuation_token.ok_or_else(|| {
+                ObjectStoreError::service_unavailable(
+                    "object store returned a truncated listing without a continuation token",
+                )
+            })?);
+        }
     }
 
     fn send(
@@ -219,11 +255,77 @@ impl S3ObjectStore {
                 ));
             }
         };
-        for (name, value) in self.signed_headers(method, &canonical_uri, &host, &payload)? {
+        for (name, value) in self.signed_headers(method, &canonical_uri, "", &host, &payload)? {
             request = request.header(name, value);
         }
         send_blocking_request(method, key, request, max_bytes)
     }
+}
+
+struct ListObjectsPage {
+    keys: Vec<String>,
+    is_truncated: bool,
+    next_continuation_token: Option<String>,
+}
+
+fn list_objects_query(continuation_token: Option<&str>) -> String {
+    let mut parameters = vec![("list-type", "2".to_string())];
+    if let Some(token) = continuation_token {
+        parameters.push(("continuation-token", aws_percent_encode(token)));
+    }
+    parameters.sort_by_key(|(name, _)| *name);
+    parameters
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn aws_percent_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn parse_list_objects_page(body: &[u8]) -> Result<ListObjectsPage, ObjectStoreError> {
+    let body = std::str::from_utf8(body).map_err(|error| {
+        ObjectStoreError::service_unavailable(format!(
+            "object store returned a non-UTF-8 listing: {error}"
+        ))
+    })?;
+    let document = roxmltree::Document::parse(body).map_err(|error| {
+        ObjectStoreError::service_unavailable(format!(
+            "object store returned an invalid listing: {error}"
+        ))
+    })?;
+    let text = |name: &str| {
+        document
+            .descendants()
+            .find(|node| node.is_element() && node.tag_name().name() == name)
+            .and_then(|node| node.text())
+    };
+    let keys = document
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "Contents")
+        .filter_map(|contents| {
+            contents
+                .children()
+                .find(|node| node.is_element() && node.tag_name().name() == "Key")
+                .and_then(|node| node.text())
+                .map(ToString::to_string)
+        })
+        .collect();
+    Ok(ListObjectsPage {
+        keys,
+        is_truncated: text("IsTruncated") == Some("true"),
+        next_continuation_token: text("NextContinuationToken").map(ToString::to_string),
+    })
 }
 
 fn send_blocking_request(
@@ -389,6 +491,35 @@ mod tests {
         assert_eq!(request.method, "GET");
         assert_eq!(request.path, "/scope-bucket/objects/too-large");
         assert_signed_s3_headers(&request);
+    }
+
+    #[test]
+    fn s3_store_lists_all_keys_across_paginated_responses() {
+        let server = TestS3Server::start(vec![
+            (
+                br#"<ListBucketResult><IsTruncated>true</IsTruncated><Contents><Key>objects/a&amp;b</Key></Contents><NextContinuationToken>next/+==</NextContinuationToken></ListBucketResult>"#.to_vec(),
+                None,
+            ),
+            (
+                br#"<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>objects/c</Key></Contents></ListBucketResult>"#.to_vec(),
+                None,
+            ),
+        ]);
+        let store = test_s3_store(&server.endpoint);
+
+        assert_eq!(store.list_keys().unwrap(), ["objects/a&b", "objects/c"]);
+
+        let first = server.recv();
+        assert_eq!(first.method, "GET");
+        assert_eq!(first.path, "/scope-bucket?list-type=2");
+        assert_signed_s3_headers(&first);
+        let second = server.recv();
+        assert_eq!(second.method, "GET");
+        assert_eq!(
+            second.path,
+            "/scope-bucket?continuation-token=next%2F%2B%3D%3D&list-type=2"
+        );
+        assert_signed_s3_headers(&second);
     }
 
     fn test_s3_store(endpoint: &str) -> S3ObjectStore {
