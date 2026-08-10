@@ -1,4 +1,4 @@
-use super::recovery::mark_recovery_cache_finalization_pending;
+use super::recovery::{RecoveryCache, mark_recovery_cache_finalization_pending};
 use super::{
     ConclusionReportPending, ExecutionOutcome, RunnerConfig, RunnerWorkDir, command_stdout,
     unix_now,
@@ -60,7 +60,7 @@ use identity_lock::{
 
 #[path = "cache_finalization.rs"]
 mod finalization;
-pub(super) use finalization::finalize_volume_names;
+pub(super) use finalization::finalize_recovery_caches;
 use finalization::finalize_volume_names_while_identity_locked;
 #[cfg(test)]
 use finalization::{CacheFinalizationAction, cache_finalization_action};
@@ -110,6 +110,7 @@ impl PreparedCaches {
                 finished: false,
             });
         }
+        let preparation_started = Instant::now();
         let root = usable_root(config)?;
         let pinned_image = PinnedContainerImage::parse(pinned_image.to_string())?;
         let namespace = match claim.canary_phase {
@@ -156,7 +157,6 @@ impl PreparedCaches {
             finished: false,
         };
         for (cache, identity, location) in plans {
-            let preparation_started = Instant::now();
             let digest = identity.digest();
             let record = CacheRecord {
                 format: CACHE_FORMAT,
@@ -258,6 +258,16 @@ impl PreparedCaches {
         self.mounts
             .iter()
             .map(|mount| mount.volume_name.clone())
+            .collect()
+    }
+
+    pub(super) fn recovery_caches(&self) -> Vec<RecoveryCache> {
+        self.mounts
+            .iter()
+            .map(|mount| RecoveryCache {
+                volume_name: mount.volume_name.clone(),
+                identity_digest: mount.identity_digest.clone(),
+            })
             .collect()
     }
 

@@ -566,6 +566,35 @@ fn recovered_finalization_reacquires_the_recorded_identity_lock() {
 }
 
 #[test]
+fn recovered_eviction_keeps_its_identity_after_local_removal() {
+    let parent = TestDir::new("runner-cache-recovered-eviction-identity");
+    let root = parent.path().join("scope/runner");
+    initialize(&root).unwrap();
+    let identity_digest = "f".repeat(64);
+    let reports = finalize_recovery_caches(
+        &RunnerConfig {
+            api_url: "https://api.example.test".to_string(),
+            runner_id: "runner-1".to_string(),
+            name: "linux-box".to_string(),
+            secret: "secret".to_string(),
+            max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
+            cache_root: Some(root),
+        },
+        &[RecoveryCache {
+            volume_name: "scope-cache-v6-already-removed".to_string(),
+            identity_digest: identity_digest.clone(),
+        }],
+        "attempt-recovered",
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].identity_digest, identity_digest);
+    assert_eq!(reports[0].final_state, CacheFinalState::Evicted);
+}
+
+#[test]
 fn finalization_is_crash_idempotent_without_weakening_attempt_ownership() {
     let tainted = record(CacheState::Tainted {
         attempt_id: "attempt-1".to_string(),

@@ -264,7 +264,7 @@ fn execute_claim(
         probe_storage_quota_support(&container_image, limits)?
     };
     let mut caches = cache::PreparedCaches::prepare(config, claim, &container_image)?;
-    mark_recovery_caches_attached(&work.path, claim, &caches.volume_names())?;
+    mark_recovery_caches_attached(&work.path, claim, &caches.recovery_caches())?;
     log_phase(&claim.attempt_id, "cache_prepare", phase);
     let container_name = job_container_name(&claim.attempt_id);
     let mut create = Command::new("docker");
@@ -382,7 +382,7 @@ fn finish_attempt_caches(
 fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Result<()> {
     let claim = recovery.recovery.claim.clone();
     let work_dir = recovery.work_dir.clone();
-    let volumes = recovery.recovery.progress.cache_volumes.clone();
+    let caches = recovery.recovery.progress.caches.clone();
     if let Some(outcome) = recovery
         .recovery
         .progress
@@ -396,7 +396,7 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
     match resume_claim_execution(config, recovery) {
         Ok(outcome) => {
             let reusable = cache::is_reusable_after_execution(claim.canary_phase, outcome);
-            match cache::finalize_volume_names(config, &volumes, &claim.attempt_id, reusable) {
+            match cache::finalize_recovery_caches(config, &caches, &claim.attempt_id, reusable) {
                 Err(error) => {
                     eprintln!("Could not finalize recovered attempt caches: {error:#}");
                     if outcome.succeeded() && claim.canary_phase.is_some() {

@@ -1,8 +1,9 @@
 use super::{
     CacheRecord, CacheState, RunnerConfig, find_record_for_volume, inspect_volume, lifecycle_lock,
-    lock_recorded_volume_identities, record_location, remove_cache, unix_now, volume_is_referenced,
+    lock_cache_identities, record_location, remove_cache, unix_now, volume_is_referenced,
     write_record,
 };
+use crate::runner::recovery::RecoveryCache;
 use anyhow::bail;
 use scope_api_contract::AttemptCacheFinalizationReport;
 use scope_domain::runs::cache::CacheFinalState;
@@ -14,35 +15,53 @@ pub(super) struct CacheFinalizationTiming {
     pub(super) finalize_ms: u64,
 }
 
-pub(in crate::runner) fn finalize_volume_names(
+pub(in crate::runner) fn finalize_recovery_caches(
     config: &RunnerConfig,
-    volumes: &[String],
+    caches: &[RecoveryCache],
     attempt_id: &str,
     success: bool,
 ) -> anyhow::Result<Vec<AttemptCacheFinalizationReport>> {
-    if volumes.is_empty() {
+    if caches.is_empty() {
         return Ok(Vec::new());
     }
     let root = super::usable_root(config)?;
-    let _identity_locks = lock_recorded_volume_identities(&root, &config.runner_id, volumes)?;
-    Ok(
-        finalize_volume_names_at_root(config, &root, volumes, attempt_id, success)?
-            .into_iter()
-            .filter_map(|timing| {
-                timing
-                    .identity_digest
-                    .map(|identity_digest| AttemptCacheFinalizationReport {
-                        identity_digest,
-                        final_state: if success {
-                            CacheFinalState::Ready
-                        } else {
-                            CacheFinalState::Evicted
-                        },
-                        finalize_ms: timing.finalize_ms,
-                    })
+    let _identity_locks = lock_cache_identities(
+        &root,
+        &config.runner_id,
+        caches.iter().map(|cache| cache.identity_digest.clone()),
+    )?;
+    let volumes = caches
+        .iter()
+        .map(|cache| cache.volume_name.clone())
+        .collect::<Vec<_>>();
+    finalize_volume_names_at_root(config, &root, &volumes, attempt_id, success)?
+        .into_iter()
+        .map(|timing| {
+            let cache = caches
+                .iter()
+                .find(|cache| cache.volume_name == timing.volume_name)
+                .expect("finalized recovery volume must be recorded");
+            if timing
+                .identity_digest
+                .as_ref()
+                .is_some_and(|digest| digest != &cache.identity_digest)
+            {
+                bail!(
+                    "recovered cache volume {} changed identity",
+                    timing.volume_name
+                );
+            }
+            Ok(AttemptCacheFinalizationReport {
+                identity_digest: cache.identity_digest.clone(),
+                final_state: if success {
+                    CacheFinalState::Ready
+                } else {
+                    CacheFinalState::Evicted
+                },
+                finalize_ms: timing.finalize_ms,
             })
-            .collect(),
-    )
+        })
+        .collect()
 }
 
 pub(super) fn finalize_volume_names_while_identity_locked(

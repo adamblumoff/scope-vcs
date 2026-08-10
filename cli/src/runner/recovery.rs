@@ -18,7 +18,7 @@ const RECOVERY_CLAIM_FILE: &str = "claim.json";
 const RECOVERY_CLAIM_TEMP_FILE: &str = ".claim.json.tmp";
 const RECOVERY_PROGRESS_FILE: &str = "progress.json";
 const RECOVERY_PROGRESS_TEMP_FILE: &str = ".progress.json.tmp";
-const RECOVERY_SCHEMA_VERSION: u8 = 8;
+const RECOVERY_SCHEMA_VERSION: u8 = 9;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RecoveryEnvelope {
@@ -51,7 +51,13 @@ pub(super) struct RecoveryProgress {
     pub(super) pending_attempt_conclusion: Option<AttemptConclusionRequest>,
     pub(super) pending_attempt_abandon: bool,
     pub(super) pending_cache_finalization: Option<AttemptCacheFinalizationOutcome>,
-    pub(super) cache_volumes: Vec<String>,
+    pub(super) caches: Vec<RecoveryCache>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct RecoveryCache {
+    pub(super) volume_name: String,
+    pub(super) identity_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -104,7 +110,7 @@ pub(super) fn persist_recovery_claim(
             pending_attempt_conclusion: None,
             pending_attempt_abandon: false,
             pending_cache_finalization: None,
-            cache_volumes: Vec::new(),
+            caches: Vec::new(),
         },
     )?;
     write_private_atomic_json(
@@ -121,17 +127,17 @@ pub(super) fn persist_recovery_claim(
 pub(super) fn mark_recovery_caches_attached(
     work_dir: &Path,
     claim: &ClaimRunResponse,
-    volumes: &[String],
+    caches: &[RecoveryCache],
 ) -> anyhow::Result<()> {
     let stored = matching_recovery_claim(work_dir, claim)?;
     let mut progress = stored.progress;
-    if progress.cache_volumes == volumes {
+    if progress.caches == caches {
         return Ok(());
     }
-    if !progress.cache_volumes.is_empty() {
+    if !progress.caches.is_empty() {
         bail!("runner recovery cache identity changed before execution");
     }
-    progress.cache_volumes = volumes.to_vec();
+    progress.caches = caches.to_vec();
     write_recovery_progress(work_dir, &progress)
 }
 
@@ -471,9 +477,9 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                         "could not confirm unstarted Scope container {container_name} was removed"
                     );
                 }
-                let finalizations = super::cache::finalize_volume_names(
+                let finalizations = super::cache::finalize_recovery_caches(
                     config,
-                    &recovery.progress.cache_volumes,
+                    &recovery.progress.caches,
                     &recovery.claim.attempt_id,
                     false,
                 )?;
@@ -493,9 +499,9 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                         recovery,
                     });
                 } else {
-                    let finalizations = super::cache::finalize_volume_names(
+                    let finalizations = super::cache::finalize_recovery_caches(
                         config,
-                        &recovery.progress.cache_volumes,
+                        &recovery.progress.caches,
                         &recovery.claim.attempt_id,
                         false,
                     )?;
@@ -787,7 +793,10 @@ mod tests {
             pending_attempt_conclusion: None,
             pending_attempt_abandon: false,
             pending_cache_finalization: Some(AttemptCacheFinalizationOutcome::Succeeded),
-            cache_volumes: vec!["scope-cache-v1-test".to_string()],
+            caches: vec![RecoveryCache {
+                volume_name: "scope-cache-v6-test".to_string(),
+                identity_digest: "a".repeat(64),
+            }],
         };
         let restored: RecoveryProgress =
             serde_json::from_slice(&serde_json::to_vec(&progress).unwrap()).unwrap();
@@ -795,6 +804,7 @@ mod tests {
             restored.pending_cache_finalization,
             Some(AttemptCacheFinalizationOutcome::Succeeded)
         );
+        assert_eq!(restored.caches, progress.caches);
     }
 
     #[test]
@@ -833,7 +843,7 @@ mod tests {
         let work_dir = root.path().join("attempt-newer");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);
-        fs::write(&claim_path, br#"{"schema_version":9}"#).unwrap();
+        fs::write(&claim_path, br#"{"schema_version":10}"#).unwrap();
 
         let StoredRecoveryEnvelope::Newer { schema_version } =
             load_recovery_envelope(&claim_path).unwrap()
@@ -841,7 +851,7 @@ mod tests {
             panic!("newer recovery schema was not preserved");
         };
 
-        assert_eq!(schema_version, 9);
+        assert_eq!(schema_version, 10);
         assert!(claim_path.exists());
     }
 }
