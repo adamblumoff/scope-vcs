@@ -3,14 +3,16 @@ import type {
   RunRunnerSelection,
 } from '@/api/types.generated'
 
-const DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-  timeZone: 'UTC',
-})
+export function createRunTimeFormatter(timeZone?: string) {
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone,
+  })
+}
 
-export function formatRunUnixTime(value: number) {
-  return DATE_FORMATTER.format(new Date(value * 1_000))
+export function runUnixTimeDate(value: number) {
+  return new Date(value * 1_000)
 }
 
 export function formatRunRunnerSelection(selection: RunRunnerSelection) {

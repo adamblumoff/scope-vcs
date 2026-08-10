@@ -2,7 +2,6 @@ import type { RepoRunJobDetail } from '@/api/types'
 import { cn } from '@/lib/utils'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useMemo } from 'react'
-import { formatRunUnixTime } from './run-formatting'
 import {
   JOB_GRAPH_NODE_HEIGHT,
   JOB_GRAPH_NODE_WIDTH,
@@ -10,6 +9,7 @@ import {
 } from './run-job-graph-model'
 import { runJobPanelId } from './run-job-ids'
 import { RunStatusDot } from './run-status-dot'
+import { RunTimestamp } from './run-timestamp'
 
 export function RunJobGraph({
   compact = false,
@@ -109,7 +109,7 @@ export function RunJobGraph({
               <span className="truncate text-[10px] text-muted-foreground/80">
                 {job.needs.length > 0
                   ? `After ${job.needs.join(', ')}`
-                  : `Updated ${formatRunUnixTime(job.updated_at_unix)}`}
+                  : <>Updated <RunTimestamp value={job.updated_at_unix} /></>}
               </span>
             </button>
           )

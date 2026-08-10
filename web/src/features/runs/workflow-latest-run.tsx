@@ -13,7 +13,8 @@ import { reconcileExpandedJobs, runNeedsPolling } from './repository-run-detail-
 import { RunStatusDot } from './run-status-dot'
 import { RunJobGraph } from './run-job-graph'
 import { runJobPanelId } from './run-job-ids'
-import { formatRunUnixTime, runDisplayState } from './run-formatting'
+import { runDisplayState } from './run-formatting'
+import { RunTimestamp } from './run-timestamp'
 
 const LATEST_RUN_REFRESH_INTERVAL_MS = 2_000
 
@@ -103,7 +104,8 @@ export function WorkflowLatestRun({
             </span>
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
-            {run.workflow_name} · updated {formatRunUnixTime(run.updated_at_unix)}
+            {run.workflow_name} · updated{' '}
+            <RunTimestamp value={displayedRun.updated_at_unix} />
           </p>
         </div>
         <Link
@@ -195,7 +197,11 @@ function jobStatusLabel({ job, attempts }: RepoRunJobDetail) {
       .find((step) => step.state === 'running')
     return activeStep ? `Running ${activeStep.name}` : 'Running'
   }
-  return `${capitalize(job.state)} ${formatRunUnixTime(job.updated_at_unix)}`
+  return (
+    <>
+      {capitalize(job.state)} <RunTimestamp value={job.updated_at_unix} />
+    </>
+  )
 }
 
 function toggleSet(current: ReadonlySet<string>, key: string) {
