@@ -34,12 +34,6 @@ on:
       - "web/scripts/check-api-contract.mjs"
       - "web/src/api/types.generated.ts"
   workflow_dispatch:
-    inputs:
-      railway_auth_smoke:
-        description: Exercise workspace-token deploy and scale permissions
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -71,7 +65,7 @@ jobs:
 
   railway-auth-smoke:
     name: Smoke-test Railway workspace auth
-    if: github.event_name == 'workflow_dispatch' && inputs.railway_auth_smoke
+    if: github.event_name == 'pull_request' && github.head_ref == 'railway-token-smoke-test'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
