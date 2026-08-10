@@ -88,6 +88,11 @@ jobs:
         run: |
           set -euo pipefail
           scope=(--project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID")
+          if ! railway whoami --json >/dev/null; then
+            echo "Railway rejected RAILWAY_API_TOKEN before project access was checked." >&2
+            exit 1
+          fi
+          echo "Railway accepted the API token; checking scope-vcs access."
           cleanup() {
             railway service scale "${scope[@]}" --service "$RAILWAY_SERVICE_ID" --json us-east4-eqdc4a=0 || true
           }
