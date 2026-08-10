@@ -4,14 +4,19 @@ set -euo pipefail
 api_upload_root="${1:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root>}"
 worker_upload_root="${2:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root>}"
 maintenance_binary="${SCOPE_MAINTENANCE_BINARY:-./target/release/scope-maintenance}"
-api_service="scope-api"
-worker_service="scope-worker"
-database_service="scope-postgres"
-environment="production"
+workspace_id="${SCOPE_RAILWAY_WORKSPACE_ID:?SCOPE_RAILWAY_WORKSPACE_ID is required}"
+environment="${SCOPE_RAILWAY_ENVIRONMENT_ID:?SCOPE_RAILWAY_ENVIRONMENT_ID is required}"
+api_service="${SCOPE_RAILWAY_API_SERVICE_ID:?SCOPE_RAILWAY_API_SERVICE_ID is required}"
+worker_service="${SCOPE_RAILWAY_WORKER_SERVICE_ID:?SCOPE_RAILWAY_WORKER_SERVICE_ID is required}"
+database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SERVICE_ID is required}"
 recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
 
-if [[ -z "${RAILWAY_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
-  echo "RAILWAY_TOKEN and RAILWAY_PROJECT_ID are required for backend deployment." >&2
+if [[ -z "${RAILWAY_API_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
+  echo "RAILWAY_API_TOKEN and RAILWAY_PROJECT_ID are required for backend deployment." >&2
+  exit 1
+fi
+if [[ -n "${RAILWAY_TOKEN:-}" ]]; then
+  echo "RAILWAY_TOKEN must not be set for backend deployment; use only RAILWAY_API_TOKEN." >&2
   exit 1
 fi
 if [[ ! -x "$maintenance_binary" ]]; then
@@ -21,9 +26,46 @@ fi
 
 railway_scope=(--project "$RAILWAY_PROJECT_ID" --environment "$environment")
 cutover_committed=0
-cutover_started=0
+api_closed=0
+worker_closed=0
 api_topology=()
 worker_topology=()
+
+validate_production_target() {
+  local status_json
+  status_json="$(railway status "${railway_scope[@]}" --json)"
+  RAILWAY_STATUS_JSON="$status_json" \
+    EXPECTED_PROJECT_ID="$RAILWAY_PROJECT_ID" \
+    EXPECTED_WORKSPACE_ID="$workspace_id" \
+    EXPECTED_ENVIRONMENT_ID="$environment" \
+    EXPECTED_API_SERVICE_ID="$api_service" \
+    EXPECTED_WORKER_SERVICE_ID="$worker_service" \
+    EXPECTED_DATABASE_SERVICE_ID="$database_service" \
+    node -e '
+const status = JSON.parse(process.env.RAILWAY_STATUS_JSON || "{}");
+const fail = (message) => {
+  console.error(`Refusing backend deployment: ${message}.`);
+  process.exit(1);
+};
+const expectedServices = new Map([
+  [process.env.EXPECTED_API_SERVICE_ID, "scope-api"],
+  [process.env.EXPECTED_WORKER_SERVICE_ID, "scope-worker"],
+  [process.env.EXPECTED_DATABASE_SERVICE_ID, "scope-postgres"],
+]);
+const environments = status.environments?.edges?.map(({node}) => node) || [];
+const services = status.services?.edges?.map(({node}) => node) || [];
+if (status.id !== process.env.EXPECTED_PROJECT_ID) fail("Railway project ID does not match the reviewed target");
+if (status.workspaceId !== process.env.EXPECTED_WORKSPACE_ID) fail("Railway workspace ID does not match the reviewed target");
+if (!environments.some(({id, name}) => id === process.env.EXPECTED_ENVIRONMENT_ID && name === "production")) {
+  fail("Railway production environment does not match the reviewed target");
+}
+for (const [id, name] of expectedServices) {
+  if (!services.some((service) => service.id === id && service.name === name)) {
+    fail(`Railway service ${name} does not match the reviewed target`);
+  }
+}
+'
+}
 
 maintenance() {
   # `railway run` executes on this CI host, so the database service's public proxy is required.
@@ -192,19 +234,30 @@ quiesce_writers() {
   local api_zero worker_zero
   mapfile -t api_zero < <(zero_topology "${api_topology[@]}")
   mapfile -t worker_zero < <(zero_topology "${worker_topology[@]}")
-  cutover_started=1
-  scale_service "$api_service" "${api_zero[@]}"
-  wait_for_replica_state "$api_service" 0
-  scale_service "$worker_service" "${worker_zero[@]}"
-  wait_for_replica_state "$worker_service" 0
+  if [[ "$api_closed" == "0" ]]; then
+    scale_service "$api_service" "${api_zero[@]}"
+    api_closed=1
+    wait_for_replica_state "$api_service" 0
+  fi
+  if [[ "$worker_closed" == "0" ]]; then
+    scale_service "$worker_service" "${worker_zero[@]}"
+    worker_closed=1
+    wait_for_replica_state "$worker_service" 0
+  fi
 }
 
 restore_old_release() {
   echo "Migration did not commit; restoring the previous worker and API topology." >&2
-  scale_service "$worker_service" "${worker_topology[@]}"
-  wait_for_replica_state "$worker_service" "$(replica_total "${worker_topology[@]}")"
-  scale_service "$api_service" "${api_topology[@]}"
-  wait_for_replica_state "$api_service" "$(replica_total "${api_topology[@]}")"
+  if [[ "$worker_closed" == "1" ]]; then
+    scale_service "$worker_service" "${worker_topology[@]}"
+    worker_closed=0
+    wait_for_replica_state "$worker_service" "$(replica_total "${worker_topology[@]}")"
+  fi
+  if [[ "$api_closed" == "1" ]]; then
+    scale_service "$api_service" "${api_topology[@]}"
+    api_closed=0
+    wait_for_replica_state "$api_service" "$(replica_total "${api_topology[@]}")"
+  fi
 }
 
 deploy_and_reopen() {
@@ -212,16 +265,17 @@ deploy_and_reopen() {
   bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root" stopped
   maintenance_read verify
   scale_service "$worker_service" "${worker_topology[@]}"
+  worker_closed=0
   wait_for_replica_state "$worker_service" "$(replica_total "${worker_topology[@]}")"
   scale_service "$api_service" "${api_topology[@]}"
+  api_closed=0
   wait_for_replica_state "$api_service" "$(replica_total "${api_topology[@]}")"
-  cutover_started=0
 }
 
 leave_failure_state() {
   local exit_status="$1"
   trap - EXIT
-  if [[ "$exit_status" -ne 0 && "$cutover_started" == "1" ]]; then
+  if [[ "$exit_status" -ne 0 && ( "$api_closed" == "1" || "$worker_closed" == "1" ) ]]; then
     if [[ "$cutover_committed" == "0" ]]; then
       restore_old_release || echo "Failed to restore the previous release; writers remain closed." >&2
     else
@@ -232,6 +286,8 @@ leave_failure_state() {
   exit "$exit_status"
 }
 trap 'leave_failure_state $?' EXIT
+
+validate_production_target
 
 plan_json="$(maintenance_read plan)"
 set +e
@@ -260,7 +316,8 @@ case "$plan_status" in
         echo "Writers are intentionally closed or await cutover recovery; rerun this workflow to authorize reopening." >&2
         exit 1
       fi
-      cutover_started=1
+      api_closed=1
+      worker_closed=1
       cutover_committed=1
       deploy_and_reopen
       trap - EXIT

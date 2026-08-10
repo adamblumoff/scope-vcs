@@ -68,6 +68,7 @@ jobs:
     needs: [checks, deployment-tests]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    environment: production
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -121,8 +122,13 @@ jobs:
         shell: bash
         env:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
-          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_PROJECT_ID: 45dd67fa-6d69-48ad-9680-1313d41b4490
+          SCOPE_RAILWAY_WORKSPACE_ID: 746a91f2-86c3-4caf-88d8-d773871b46d3
+          SCOPE_RAILWAY_ENVIRONMENT_ID: 2f21f6b6-6817-4338-9e08-cf18e78b8f46
+          SCOPE_RAILWAY_API_SERVICE_ID: 9456cd8d-40bd-489a-a181-72b7f777c4a8
+          SCOPE_RAILWAY_WORKER_SERVICE_ID: a474a0d1-3000-4a95-9ca3-cd3a7f3ef669
+          SCOPE_RAILWAY_DATABASE_SERVICE_ID: 44c41a90-2d1a-4a1b-85c9-6af85d179be3
           SCOPE_API_TOPOLOGY: us-west=1
           SCOPE_WORKER_TOPOLOGY: us-west=1
           SCOPE_RECOVER_CLOSED_CUTOVER: ${{ github.run_attempt > 1 && '1' || '0' }}
@@ -133,6 +139,7 @@ jobs:
     needs: deploy-backend
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    environment: production
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -150,6 +157,8 @@ jobs:
       - name: Verify production runner cutover
         shell: bash
         env:
-          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_PROJECT_ID: 45dd67fa-6d69-48ad-9680-1313d41b4490
+          SCOPE_RAILWAY_ENVIRONMENT_ID: 2f21f6b6-6817-4338-9e08-cf18e78b8f46
+          SCOPE_RAILWAY_API_SERVICE_ID: 9456cd8d-40bd-489a-a181-72b7f777c4a8
         run: bash .github/scripts/verify-runner-cutover.sh

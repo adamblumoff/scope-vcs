@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ -z "${RAILWAY_TOKEN:-}" ]; then
-  echo "Set the RAILWAY_TOKEN repository secret before verifying the runner cutover."
+if [ -z "${RAILWAY_API_TOKEN:-}" ]; then
+  echo "Set the RAILWAY_API_TOKEN secret before verifying the runner cutover."
   exit 1
 fi
 
@@ -11,13 +11,16 @@ if [ -z "${RAILWAY_PROJECT_ID:-}" ]; then
   exit 1
 fi
 
+railway_environment="${SCOPE_RAILWAY_ENVIRONMENT_ID:?SCOPE_RAILWAY_ENVIRONMENT_ID is required}"
+api_service="${SCOPE_RAILWAY_API_SERVICE_ID:?SCOPE_RAILWAY_API_SERVICE_ID is required}"
+
 cutover_json="$(
   # Railway injects these variables for the child shell.
   # shellcheck disable=SC2016
   railway run \
     --project "$RAILWAY_PROJECT_ID" \
-    --service scope-api \
-    --environment production \
+    --service "$api_service" \
+    --environment "$railway_environment" \
     bash -lc 'curl --silent --show-error --fail-with-body --max-time 20 --header "Authorization: Bearer $SCOPE_OPERATOR_TOKEN" "https://$RAILWAY_PUBLIC_DOMAIN/v1/admin/runner-cutover"'
 )"
 
