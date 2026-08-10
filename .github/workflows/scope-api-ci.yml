@@ -34,6 +34,12 @@ on:
       - "web/scripts/check-api-contract.mjs"
       - "web/src/api/types.generated.ts"
   workflow_dispatch:
+    inputs:
+      railway_auth_smoke:
+        description: Exercise workspace-token deploy and scale permissions
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -62,6 +68,84 @@ jobs:
 
       - name: Test Railway cutover orchestration
         run: bash .github/scripts/test-deploy-backend-railway.sh
+
+  railway-auth-smoke:
+    name: Smoke-test Railway workspace auth
+    if: github.event_name == 'workflow_dispatch' && inputs.railway_auth_smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@5.23.1
+
+      - name: Scale, redeploy, and verify disposable service
+        shell: bash
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_PROJECT_ID: 45dd67fa-6d69-48ad-9680-1313d41b4490
+          RAILWAY_ENVIRONMENT_ID: 4de31334-3999-4f2a-b471-7b1f74c0fb18
+          RAILWAY_SERVICE_ID: 987cf625-24a5-4c07-a24a-9bd4a3342031
+        run: |
+          set -euo pipefail
+          scope=(--project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID")
+          cleanup() {
+            railway service scale "${scope[@]}" --service "$RAILWAY_SERVICE_ID" --json us-east4-eqdc4a=0 || true
+          }
+          trap cleanup EXIT
+
+          wait_for_replicas() {
+            local expected="$1" deadline=$((SECONDS + 300)) services_json running crashed
+            while (( SECONDS < deadline )); do
+              services_json="$(railway service list "${scope[@]}" --json)"
+              read -r running crashed < <(
+                SERVICES_JSON="$services_json" SERVICE_ID="$RAILWAY_SERVICE_ID" node -e '
+const services = JSON.parse(process.env.SERVICES_JSON || "[]");
+const service = services.find(({id}) => id === process.env.SERVICE_ID);
+if (!service) process.exit(1);
+process.stdout.write(`${service.replicas?.running || 0} ${service.replicas?.crashed || 0}`);
+'
+              )
+              if [[ "$running" == "$expected" && "$crashed" == "0" ]]; then return 0; fi
+              sleep 5
+            done
+            return 1
+          }
+
+          wait_for_deployment() {
+            local deployment_id="$1" deadline=$((SECONDS + 600)) deployments_json status
+            while (( SECONDS < deadline )); do
+              deployments_json="$(railway deployment list "${scope[@]}" --service "$RAILWAY_SERVICE_ID" --limit 10 --json)"
+              status="$(
+                DEPLOYMENTS_JSON="$deployments_json" DEPLOYMENT_ID="$deployment_id" node -e '
+const deployments = JSON.parse(process.env.DEPLOYMENTS_JSON || "[]");
+process.stdout.write(deployments.find(({id}) => id === process.env.DEPLOYMENT_ID)?.status || "");
+'
+              )"
+              case "$status" in
+                SUCCESS) return 0 ;;
+                FAILED|CRASHED|REMOVED) return 1 ;;
+              esac
+              sleep 5
+            done
+            return 1
+          }
+
+          wait_for_replicas 1
+          railway service scale "${scope[@]}" --service "$RAILWAY_SERVICE_ID" --json us-east4-eqdc4a=0
+          wait_for_replicas 0
+          railway service scale "${scope[@]}" --service "$RAILWAY_SERVICE_ID" --json us-east4-eqdc4a=1
+          wait_for_replicas 1
+          redeploy_json="$(railway redeploy "${scope[@]}" --service "$RAILWAY_SERVICE_ID" --yes --json)"
+          deployment_id="$(REDEPLOY_JSON="$redeploy_json" node -e 'const value = JSON.parse(process.env.REDEPLOY_JSON || "{}"); process.stdout.write(value.deploymentId || value.id || "");')"
+          [[ -n "$deployment_id" ]]
+          wait_for_deployment "$deployment_id"
+          echo "Workspace token scaled and redeployed the disposable service successfully."
 
   deploy-backend:
     name: Deploy backend
