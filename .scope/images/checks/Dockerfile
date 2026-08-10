@@ -7,12 +7,18 @@ ARG NODE_SHA256=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
 ARG PNPM_VERSION=11.1.0
 ARG POSTGRES_VERSION=15.18-0+deb12u1
 ARG PLAYWRIGHT_VERSION=1.61.1
+ARG DEBIAN_SNAPSHOT=20260518T000000Z
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
     RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu
 
-RUN apt-get update \
+RUN sed -i \
+        -e "s|http://deb.debian.org/debian-security|https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
+        -e "s|http://deb.debian.org/debian|https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|" \
+        /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99snapshot \
+    && apt-get update \
     && apt-get install --yes --no-install-recommends \
         iproute2 \
         "postgresql-15=${POSTGRES_VERSION}" \
