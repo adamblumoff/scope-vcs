@@ -52,7 +52,7 @@ printf '%s\n' "$*" >> "$FAKE_RAILWAY_TRACE"
 
 if [[ "$1" == "status" ]]; then
   cat <<'JSON'
-{"id":"project-test","workspaceId":"workspace-test","environments":{"edges":[{"node":{"id":"production","name":"production"}}]},"services":{"edges":[{"node":{"id":"scope-api","name":"scope-api"}},{"node":{"id":"scope-worker","name":"scope-worker"}},{"node":{"id":"scope-postgres","name":"scope-postgres"}}]}}
+{"id":"project-test","environments":{"edges":[{"node":{"id":"production","name":"production"}}]},"services":{"edges":[{"node":{"id":"scope-api","name":"scope-api"}},{"node":{"id":"scope-worker","name":"scope-worker"}},{"node":{"id":"scope-postgres","name":"scope-postgres"}}]}}
 JSON
   exit 0
 fi
@@ -258,7 +258,6 @@ run_cutover() {
     FAKE_DENY_REMOVE_SERVICE="$deny_remove_service" \
     RAILWAY_PROJECT_ID="project-test" \
     RAILWAY_TOKEN="token-test" \
-    SCOPE_RAILWAY_WORKSPACE_ID="workspace-test" \
     SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
     SCOPE_RAILWAY_API_SERVICE_ID="scope-api" \
     SCOPE_RAILWAY_WORKER_SERVICE_ID="scope-worker" \

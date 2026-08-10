@@ -4,7 +4,6 @@ set -euo pipefail
 api_upload_root="${1:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root>}"
 worker_upload_root="${2:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root>}"
 maintenance_binary="${SCOPE_MAINTENANCE_BINARY:-./target/release/scope-maintenance}"
-workspace_id="${SCOPE_RAILWAY_WORKSPACE_ID:?SCOPE_RAILWAY_WORKSPACE_ID is required}"
 environment="${SCOPE_RAILWAY_ENVIRONMENT_ID:?SCOPE_RAILWAY_ENVIRONMENT_ID is required}"
 api_service="${SCOPE_RAILWAY_API_SERVICE_ID:?SCOPE_RAILWAY_API_SERVICE_ID is required}"
 worker_service="${SCOPE_RAILWAY_WORKER_SERVICE_ID:?SCOPE_RAILWAY_WORKER_SERVICE_ID is required}"
@@ -40,7 +39,6 @@ validate_production_target() {
   # shellcheck disable=SC2016
   RAILWAY_STATUS_JSON="$status_json" \
     EXPECTED_PROJECT_ID="$RAILWAY_PROJECT_ID" \
-    EXPECTED_WORKSPACE_ID="$workspace_id" \
     EXPECTED_ENVIRONMENT_ID="$environment" \
     EXPECTED_API_SERVICE_ID="$api_service" \
     EXPECTED_WORKER_SERVICE_ID="$worker_service" \
@@ -59,7 +57,6 @@ const expectedServices = new Map([
 const environments = status.environments?.edges?.map(({node}) => node) || [];
 const services = status.services?.edges?.map(({node}) => node) || [];
 if (status.id !== process.env.EXPECTED_PROJECT_ID) fail("Railway project ID does not match the reviewed target");
-if (status.workspaceId !== process.env.EXPECTED_WORKSPACE_ID) fail("Railway workspace ID does not match the reviewed target");
 if (!environments.some(({id, name}) => id === process.env.EXPECTED_ENVIRONMENT_ID && name === "production")) {
   fail("Railway production environment does not match the reviewed target");
 }
