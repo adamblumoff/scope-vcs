@@ -12,6 +12,14 @@ pub fn install(
     unsupported()
 }
 
+pub fn recover_cutover(
+    _name: &str,
+    _repository: &str,
+    _max_concurrent_jobs: Option<u8>,
+) -> anyhow::Result<()> {
+    unsupported()
+}
+
 pub fn status() -> anyhow::Result<()> {
     unsupported()
 }
