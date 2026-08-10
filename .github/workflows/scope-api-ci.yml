@@ -99,11 +99,11 @@ jobs:
               services_json="$(railway service list "${scope[@]}" --json)"
               read -r running crashed < <(
                 SERVICES_JSON="$services_json" SERVICE_ID="$RAILWAY_SERVICE_ID" node -e '
-const services = JSON.parse(process.env.SERVICES_JSON || "[]");
-const service = services.find(({id}) => id === process.env.SERVICE_ID);
-if (!service) process.exit(1);
-process.stdout.write(`${service.replicas?.running || 0} ${service.replicas?.crashed || 0}`);
-'
+                const services = JSON.parse(process.env.SERVICES_JSON || "[]");
+                const service = services.find(({id}) => id === process.env.SERVICE_ID);
+                if (!service) process.exit(1);
+                process.stdout.write(`${service.replicas?.running || 0} ${service.replicas?.crashed || 0}`);
+                '
               )
               if [[ "$running" == "$expected" && "$crashed" == "0" ]]; then return 0; fi
               sleep 5
@@ -117,9 +117,9 @@ process.stdout.write(`${service.replicas?.running || 0} ${service.replicas?.cras
               deployments_json="$(railway deployment list "${scope[@]}" --service "$RAILWAY_SERVICE_ID" --limit 10 --json)"
               status="$(
                 DEPLOYMENTS_JSON="$deployments_json" DEPLOYMENT_ID="$deployment_id" node -e '
-const deployments = JSON.parse(process.env.DEPLOYMENTS_JSON || "[]");
-process.stdout.write(deployments.find(({id}) => id === process.env.DEPLOYMENT_ID)?.status || "");
-'
+                const deployments = JSON.parse(process.env.DEPLOYMENTS_JSON || "[]");
+                process.stdout.write(deployments.find(({id}) => id === process.env.DEPLOYMENT_ID)?.status || "");
+                '
               )"
               case "$status" in
                 SUCCESS) return 0 ;;
