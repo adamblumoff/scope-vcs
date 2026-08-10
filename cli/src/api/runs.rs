@@ -11,12 +11,10 @@ use scope_api_contract::{
     CreateManualRunQuery, CreateRunnerProtocolCanaryRequest, PinAttemptContainerImageRequest,
     PinAttemptContainerImageResponse, PushTriggerEvaluationResponse, RegisterRunnerRequest,
     RegisterRunnerResponse, ReportAttemptCacheFinalizationsRequest,
-    ReportAttemptCachePreparationsRequest, RunEventsQuery, RunLogResponse, RunResponse,
-    RunnerPollResponse, RunnerProtocolCutoverResponse, RunnerResponse,
+    ReportAttemptCachePreparationsRequest, RepositoryRunDetailResponse, RunEventsQuery,
+    RunLogResponse, RunResponse, RunnerPollResponse, RunnerProtocolCutoverResponse, RunnerResponse,
     UpgradeRunnerRegistrationRequest, UpgradeRunnerRegistrationResponse,
 };
-use scope_domain::runs::run::RunJobState;
-use serde::Deserialize;
 use std::io::BufRead;
 
 pub fn register_runner(
@@ -304,31 +302,15 @@ pub enum RunStreamEvent {
     Status(RunResponse),
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct WatchedRunJob {
-    pub key: String,
-    pub state: RunJobState,
-}
-
-#[derive(Deserialize)]
-struct WatchedRunDetail {
-    jobs: Vec<WatchedRunJobDetail>,
-}
-
-#[derive(Deserialize)]
-struct WatchedRunJobDetail {
-    job: WatchedRunJob,
-}
-
-pub fn run_jobs(
+pub fn run_detail(
     client: &Client,
     api_url: &str,
     session_token: &str,
     owner: &str,
     repo: &str,
     run_id: &str,
-) -> anyhow::Result<Vec<WatchedRunJob>> {
-    let detail: WatchedRunDetail = parse_json(
+) -> anyhow::Result<RepositoryRunDetailResponse> {
+    parse_json(
         client
             .get(format!(
                 "{api_url}{}",
@@ -336,10 +318,9 @@ pub fn run_jobs(
             ))
             .bearer_auth(session_token)
             .send()
-            .context("load Scope run jobs")?,
-        "load Scope run jobs",
-    )?;
-    Ok(detail.jobs.into_iter().map(|detail| detail.job).collect())
+            .context("load Scope run detail")?,
+        "load Scope run detail",
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

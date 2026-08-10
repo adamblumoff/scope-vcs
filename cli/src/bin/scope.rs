@@ -18,7 +18,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Print one machine-readable JSON document for request commands"
+        help = "Print one machine-readable JSON document for supported commands"
     )]
     json: bool,
     #[command(subcommand)]
@@ -107,9 +107,9 @@ struct GitCredentialArgs {
 
 #[derive(Parser)]
 struct RunArgs {
-    #[arg(help = "Workflow name, or watch/cancel/retry")]
+    #[arg(help = "Workflow name, or show/watch/cancel/retry")]
     target: String,
-    #[arg(help = "Run ID for watch/cancel/retry")]
+    #[arg(help = "Run ID for show/watch/cancel/retry")]
     run_id: Option<String>,
     #[arg(long, help = "Run on this repository-scoped runner name")]
     runner: Option<String>,
@@ -221,11 +221,21 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> anyhow::Result<()> {
-    if cli.json && !matches!(&cli.command, CommandKind::Request(_)) {
+    let json_supported = match &cli.command {
+        CommandKind::Request(_) => true,
+        CommandKind::Run(args) => {
+            args.target == "show"
+                && args.run_id.is_some()
+                && args.runner.is_none()
+                && !args.no_watch
+        }
+        _ => false,
+    };
+    if cli.json && !json_supported {
         return Err(
             scope_cli::error::CliError::new(scope_cli::api::ErrorResponse::new(
                 scope_cli::api::ErrorCode::BadRequest,
-                "--json currently supports request commands only",
+                "--json currently supports request commands and `scope run show`",
             ))
             .into(),
         );
@@ -248,7 +258,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         CommandKind::Login(args) => scope_cli::login::login(args.headless, args.exchange),
         CommandKind::Logout => scope_cli::login::logout(),
         CommandKind::Whoami => scope_cli::login::whoami(),
-        CommandKind::Run(args) => run_workflow(args),
+        CommandKind::Run(args) => run_workflow(args, cli.json),
         CommandKind::Runner(args) => run_runner(args.command),
         CommandKind::GitCredential(args) => run_git_credential(&args.operation),
     }
@@ -290,8 +300,11 @@ fn run_request(args: RequestArgs, json: bool) -> anyhow::Result<()> {
     run_request_command(command, &client, &api_url, &session.token, json)?.render(json)
 }
 
-fn run_workflow(args: RunArgs) -> anyhow::Result<()> {
+fn run_workflow(args: RunArgs, json: bool) -> anyhow::Result<()> {
     match (args.target.as_str(), args.run_id.as_deref()) {
+        ("show", Some(run_id)) if args.runner.is_none() && !args.no_watch => {
+            scope_cli::run::show(run_id, args.remote.as_deref(), json)
+        }
         ("watch", Some(run_id)) if args.runner.is_none() && !args.no_watch => {
             scope_cli::run::watch(run_id, args.remote.as_deref())
         }
@@ -301,16 +314,16 @@ fn run_workflow(args: RunArgs) -> anyhow::Result<()> {
         ("retry", Some(run_id)) if args.runner.is_none() => {
             scope_cli::run::retry(run_id, args.remote.as_deref(), args.no_watch)
         }
-        ("watch" | "cancel", Some(_)) => {
+        ("show" | "watch" | "cancel", Some(_)) => {
             Err(CliError::usage(
-                "--runner is only valid when starting a workflow; --no-watch is not valid for watch or cancel"
+                "--runner is only valid when starting a workflow; --no-watch is not valid for show, watch, or cancel"
             )
             .into())
         }
         ("retry", Some(_)) => {
             Err(CliError::usage("--runner is only valid when starting a workflow").into())
         }
-        ("watch" | "cancel" | "retry", None) => {
+        ("show" | "watch" | "cancel" | "retry", None) => {
             Err(CliError::usage(format!(
                 "scope run {} requires a run ID",
                 args.target
@@ -318,7 +331,7 @@ fn run_workflow(args: RunArgs) -> anyhow::Result<()> {
             .into())
         }
         (_, Some(_)) => Err(CliError::usage(
-            "a run ID is accepted only by `scope run watch`, `scope run cancel`, or `scope run retry`"
+            "a run ID is accepted only by `scope run show`, `scope run watch`, `scope run cancel`, or `scope run retry`"
         )
         .into()),
         (workflow, None) => scope_cli::run::start(

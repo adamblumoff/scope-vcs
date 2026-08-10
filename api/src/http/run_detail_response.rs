@@ -1,11 +1,15 @@
 use crate::{
     error::ApiError,
     http::responses::{
-        RepositoryRunAttemptResponse, RepositoryRunDetailResponse, RepositoryRunJobDetailResponse,
+        RepositoryRunAttemptResponse, RepositoryRunCacheObservationResponse,
+        RepositoryRunCacheResponse, RepositoryRunDetailResponse, RepositoryRunJobDetailResponse,
         RepositoryRunJobResponse, RepositoryRunStepResponse, RepositoryRunSummaryResponse,
     },
 };
-use scope_domain::runs::workflow::RunnerSelector;
+use scope_domain::runs::{
+    cache::{AttemptCacheObservation, WorkflowCache},
+    workflow::RunnerSelector,
+};
 use scope_postgres::db::RunDetail;
 use std::collections::BTreeMap;
 
@@ -18,14 +22,19 @@ pub(super) fn build_run_detail_response(
     for attempt_detail in detail.attempts {
         let attempt = attempt_detail.attempt;
         let job_key = attempt.job_key.as_str().to_string();
-        let workflow_steps = workflow
-            .job(&attempt.job_key)
-            .ok_or_else(|| {
-                ApiError::internal_message(
-                    "persisted run attempt job is missing from its workflow revision",
-                )
-            })?
-            .steps();
+        let workflow_job = workflow.job(&attempt.job_key).ok_or_else(|| {
+            ApiError::internal_message(
+                "persisted run attempt job is missing from its workflow revision",
+            )
+        })?;
+        let caches = cache_responses(
+            workflow_job.caches(),
+            attempt_detail.caches,
+            &attempt.id,
+            detail.workflow_revision.workflow().path().as_str(),
+            &job_key,
+        )?;
+        let workflow_steps = workflow_job.steps();
         let steps = attempt_detail
             .steps
             .into_iter()
@@ -60,6 +69,7 @@ pub(super) fn build_run_detail_response(
                 started_at_unix: attempt.started_at_unix,
                 completed_at_unix: attempt.completed_at_unix,
                 terminal_reason: attempt.terminal_reason.map(Into::into),
+                caches,
                 steps,
             });
     }
@@ -89,6 +99,10 @@ pub(super) fn build_run_detail_response(
                         RunnerSelector::Any => None,
                         RunnerSelector::Named(name) => Some(name.clone()),
                     },
+                    pinned_container_image: job
+                        .pinned_container_image
+                        .as_ref()
+                        .map(|image| image.as_str().to_string()),
                     state: job.state.into(),
                     created_at_unix: job.created_at_unix,
                     updated_at_unix: job.updated_at_unix,
@@ -104,4 +118,59 @@ pub(super) fn build_run_detail_response(
         ));
     }
     Ok(RepositoryRunDetailResponse { run, jobs })
+}
+
+fn cache_responses(
+    definitions: &[WorkflowCache],
+    observations: Vec<AttemptCacheObservation>,
+    attempt_id: &str,
+    workflow_path: &str,
+    job_key: &str,
+) -> Result<Vec<RepositoryRunCacheResponse>, ApiError> {
+    let mut observations_by_name = BTreeMap::new();
+    for observation in observations {
+        if observation.attempt_id != attempt_id
+            || observation.workflow_path.as_str() != workflow_path
+            || observation.job_key.as_str() != job_key
+        {
+            return Err(ApiError::internal_message(
+                "persisted cache observation does not match its run attempt",
+            ));
+        }
+        if observations_by_name
+            .insert(observation.cache_name.clone(), observation)
+            .is_some()
+        {
+            return Err(ApiError::internal_message(
+                "persisted run attempt contains duplicate cache observations",
+            ));
+        }
+    }
+    let caches = definitions
+        .iter()
+        .map(|definition| {
+            let observation = observations_by_name
+                .remove(definition.as_str())
+                .map(|observation| RepositoryRunCacheObservationResponse {
+                    workflow_path: observation.workflow_path.as_str().to_string(),
+                    job_key: observation.job_key.as_str().to_string(),
+                    identity_digest: observation.identity_digest,
+                    preparation: observation.preparation.into(),
+                    prepare_ms: observation.prepare_ms,
+                    final_state: observation.final_state.into(),
+                    finalize_ms: observation.finalize_ms,
+                });
+            RepositoryRunCacheResponse {
+                name: definition.as_str().to_string(),
+                path: definition.mount_path().to_string(),
+                observation,
+            }
+        })
+        .collect();
+    if !observations_by_name.is_empty() {
+        return Err(ApiError::internal_message(
+            "persisted cache observation is missing from its workflow revision",
+        ));
+    }
+    Ok(caches)
 }

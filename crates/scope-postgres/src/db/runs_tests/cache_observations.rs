@@ -171,7 +171,7 @@ async fn cache_observation_reports_are_authenticated_and_exactly_idempotent() {
                 "attempt-cache",
                 &token_hash,
                 vec![AttemptCacheFinalizationCommand {
-                    identity_digest,
+                    identity_digest: identity_digest.clone(),
                     final_state: CacheFinalState::Ready,
                     finalize_ms: 8,
                 }],
@@ -182,4 +182,13 @@ async fn cache_observation_reports_are_authenticated_and_exactly_idempotent() {
             .kind,
         PostgresErrorKind::Conflict
     );
+    let detail = store.runs().run_detail("run-cache").await.unwrap().unwrap();
+    assert_eq!(detail.attempts.len(), 1);
+    assert_eq!(detail.attempts[0].caches.len(), 1);
+    let cache = &detail.attempts[0].caches[0];
+    assert_eq!(cache.attempt_id, "attempt-cache");
+    assert_eq!(cache.cache_name, "cargo");
+    assert_eq!(cache.identity_digest, identity_digest);
+    assert_eq!(cache.final_state, CacheFinalState::Evicted);
+    assert_eq!(cache.finalize_ms, Some(8));
 }

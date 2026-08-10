@@ -38,6 +38,7 @@ import {
   runDisplayState,
 } from './run-formatting'
 import { RunTimestamp } from './run-timestamp'
+import { RunAttemptEnvironment } from './run-attempt-environment'
 
 export function RepositoryRunDetailPage({
   cancelRun,
@@ -192,6 +193,7 @@ function JobDetailsPanel({
               onLogRetry={onLogRetry}
               onSelectStep={(stepIndex) => onSelectStep(attempt.id, stepIndex)}
               onToggle={() => onToggleAttempt(attempt)}
+              pinnedContainerImage={job.pinned_container_image}
               selectedStepIndex={
                 selection?.jobKey === job.key &&
                   selection.attemptId === attempt.id
@@ -310,6 +312,7 @@ function AttemptRow({
   onLogRetry,
   onSelectStep,
   onToggle,
+  pinnedContainerImage,
   selectedStepIndex,
 }: {
   attempt: RepoRunAttempt
@@ -318,6 +321,7 @@ function AttemptRow({
   onLogRetry: () => void
   onSelectStep: (stepIndex: number) => void
   onToggle: () => void
+  pinnedContainerImage: string | null
   selectedStepIndex: number | null
 }) {
   const panelId = `run-attempt-${attempt.id}`
@@ -357,6 +361,10 @@ function AttemptRow({
               {attempt.terminal_reason.message}
             </p>
           ) : null}
+          <RunAttemptEnvironment
+            caches={attempt.caches}
+            pinnedContainerImage={pinnedContainerImage}
+          />
           <div className="divide-y divide-border">
             {attempt.steps.map((step) => (
               <StepRow

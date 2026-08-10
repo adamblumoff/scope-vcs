@@ -1,6 +1,7 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    cache::AttemptCacheObservation,
     job::RunJob,
     run::{MAX_RUN_ATTEMPTS, Run, RunAttempt, RunAttemptStep},
     workflow::{MAX_WORKFLOW_JOBS, WorkflowRevision},
@@ -11,6 +12,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunAttemptDetail {
     pub attempt: RunAttempt,
+    pub caches: Vec<AttemptCacheObservation>,
     pub steps: Vec<RunAttemptStep>,
 }
 
@@ -88,9 +90,20 @@ where
         Vec::new()
     } else {
         entities::run_attempt_step::Entity::find()
-            .filter(entities::run_attempt_step::Column::AttemptId.is_in(attempt_ids))
+            .filter(entities::run_attempt_step::Column::AttemptId.is_in(attempt_ids.clone()))
             .order_by_asc(entities::run_attempt_step::Column::AttemptId)
             .order_by_asc(entities::run_attempt_step::Column::StepIndex)
+            .all(conn)
+            .await
+            .map_err(PostgresError::internal)?
+    };
+    let cache_models = if attempt_ids.is_empty() {
+        Vec::new()
+    } else {
+        entities::run_attempt_cache::Entity::find()
+            .filter(entities::run_attempt_cache::Column::AttemptId.is_in(attempt_ids))
+            .order_by_asc(entities::run_attempt_cache::Column::AttemptId)
+            .order_by_asc(entities::run_attempt_cache::Column::CacheName)
             .all(conn)
             .await
             .map_err(PostgresError::internal)?
@@ -103,14 +116,27 @@ where
             .or_default()
             .push(step.try_into_domain()?);
     }
+    let mut caches_by_attempt = HashMap::<String, Vec<AttemptCacheObservation>>::new();
+    for cache in cache_models {
+        let attempt_id = cache.attempt_id.clone();
+        caches_by_attempt
+            .entry(attempt_id)
+            .or_default()
+            .push(cache.try_into_domain()?);
+    }
     let mut details = Vec::with_capacity(attempts.len());
     for attempt in attempts {
         let steps = steps_by_attempt.remove(&attempt.id).unwrap_or_default();
+        let caches = caches_by_attempt.remove(&attempt.id).unwrap_or_default();
         let attempt = attempt.try_into_domain()?;
         attempt
             .validate_execution(&steps)
             .map_err(PostgresError::invalid_input)?;
-        details.push(RunAttemptDetail { attempt, steps });
+        details.push(RunAttemptDetail {
+            attempt,
+            caches,
+            steps,
+        });
     }
     Ok(details)
 }

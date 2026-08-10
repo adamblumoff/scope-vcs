@@ -1,7 +1,7 @@
 use scope_domain::runs::{
-    cache::{CacheFinalState, CachePreparation},
+    cache::{CacheColdReason, CacheFinalState, CachePreparation},
     cutover::{RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus, RunnerProtocolCutoverState},
-    run::{AttemptState, RunState, StepState},
+    run::{AttemptState, AttemptTerminalReason, RunJobState, RunState, StepState},
     runner::{RunnerCapabilities, RunnerMaxConcurrentJobs},
     trigger::PushTriggerEvaluationState,
     workflow::WorkflowJob,
@@ -123,6 +123,310 @@ pub enum RunRunnerSelection {
     Any,
     Named { name: String },
     Mixed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
+pub enum RepositoryRunState {
+    Queued,
+    Leased,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+    Lost,
+}
+
+impl From<RunState> for RepositoryRunState {
+    fn from(state: RunState) -> Self {
+        match state {
+            RunState::Queued => Self::Queued,
+            RunState::Leased => Self::Leased,
+            RunState::Running => Self::Running,
+            RunState::Succeeded => Self::Succeeded,
+            RunState::Failed => Self::Failed,
+            RunState::Canceled => Self::Canceled,
+            RunState::Lost => Self::Lost,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunSummaryResponse {
+    pub id: String,
+    pub workflow_name: String,
+    pub git_oid: String,
+    pub runner_selection: RunRunnerSelection,
+    pub state: RepositoryRunState,
+    pub cancellation_requested: bool,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
+    pub completed_at_unix: Option<u64>,
+    pub can_cancel: bool,
+    pub can_retry: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
+pub enum RepositoryRunJobState {
+    Blocked,
+    Queued,
+    Leased,
+    Running,
+    Succeeded,
+    Failed,
+    Skipped,
+    Canceled,
+    Lost,
+}
+
+impl From<RunJobState> for RepositoryRunJobState {
+    fn from(state: RunJobState) -> Self {
+        match state {
+            RunJobState::Blocked => Self::Blocked,
+            RunJobState::Queued => Self::Queued,
+            RunJobState::Leased => Self::Leased,
+            RunJobState::Running => Self::Running,
+            RunJobState::Succeeded => Self::Succeeded,
+            RunJobState::Failed => Self::Failed,
+            RunJobState::Skipped => Self::Skipped,
+            RunJobState::Canceled => Self::Canceled,
+            RunJobState::Lost => Self::Lost,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
+pub enum RepositoryRunAttemptState {
+    Leased,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+    Lost,
+}
+
+impl From<AttemptState> for RepositoryRunAttemptState {
+    fn from(state: AttemptState) -> Self {
+        match state {
+            AttemptState::Leased => Self::Leased,
+            AttemptState::Running => Self::Running,
+            AttemptState::Succeeded => Self::Succeeded,
+            AttemptState::Failed => Self::Failed,
+            AttemptState::Canceled => Self::Canceled,
+            AttemptState::Lost => Self::Lost,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
+pub enum RepositoryRunStepState {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+    Lost,
+    Skipped,
+}
+
+impl From<StepState> for RepositoryRunStepState {
+    fn from(state: StepState) -> Self {
+        match state {
+            StepState::Pending => Self::Pending,
+            StepState::Running => Self::Running,
+            StepState::Succeeded => Self::Succeeded,
+            StepState::Failed => Self::Failed,
+            StepState::Canceled => Self::Canceled,
+            StepState::Lost => Self::Lost,
+            StepState::Skipped => Self::Skipped,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(tag = "kind", rename_all = "kebab-case"))]
+pub enum RepositoryRunTerminalReason {
+    StepFailed { step_index: u32, exit_code: i32 },
+    TimedOut { step_index: Option<u32> },
+    Canceled { step_index: Option<u32> },
+    RunnerLost { step_index: Option<u32> },
+    RunnerSetupFailed { exit_code: i32, message: String },
+}
+
+impl From<AttemptTerminalReason> for RepositoryRunTerminalReason {
+    fn from(reason: AttemptTerminalReason) -> Self {
+        match reason {
+            AttemptTerminalReason::StepFailed {
+                step_index,
+                exit_code,
+            } => Self::StepFailed {
+                step_index,
+                exit_code,
+            },
+            AttemptTerminalReason::TimedOut { step_index } => Self::TimedOut { step_index },
+            AttemptTerminalReason::Canceled { step_index } => Self::Canceled { step_index },
+            AttemptTerminalReason::RunnerLost { step_index } => Self::RunnerLost { step_index },
+            AttemptTerminalReason::RunnerSetupFailed { exit_code, message } => {
+                Self::RunnerSetupFailed { exit_code, message }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
+pub enum RepositoryRunCacheColdReason {
+    MetadataMissing,
+    MetadataInvalid,
+    MetadataNotReady,
+    VolumeMissing,
+    VolumeInvalid,
+    BackingDirectoryMissing,
+}
+
+impl From<CacheColdReason> for RepositoryRunCacheColdReason {
+    fn from(reason: CacheColdReason) -> Self {
+        match reason {
+            CacheColdReason::MetadataMissing => Self::MetadataMissing,
+            CacheColdReason::MetadataInvalid => Self::MetadataInvalid,
+            CacheColdReason::MetadataNotReady => Self::MetadataNotReady,
+            CacheColdReason::VolumeMissing => Self::VolumeMissing,
+            CacheColdReason::VolumeInvalid => Self::VolumeInvalid,
+            CacheColdReason::BackingDirectoryMissing => Self::BackingDirectoryMissing,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(tag = "kind", rename_all = "kebab-case"))]
+pub enum RepositoryRunCachePreparation {
+    Warm,
+    Cold {
+        reason: RepositoryRunCacheColdReason,
+    },
+}
+
+impl From<CachePreparation> for RepositoryRunCachePreparation {
+    fn from(preparation: CachePreparation) -> Self {
+        match preparation {
+            CachePreparation::Warm => Self::Warm,
+            CachePreparation::Cold { reason } => Self::Cold {
+                reason: reason.into(),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
+pub enum RepositoryRunCacheFinalState {
+    Pending,
+    Ready,
+    Evicted,
+}
+
+impl From<CacheFinalState> for RepositoryRunCacheFinalState {
+    fn from(state: CacheFinalState) -> Self {
+        match state {
+            CacheFinalState::Pending => Self::Pending,
+            CacheFinalState::Ready => Self::Ready,
+            CacheFinalState::Evicted => Self::Evicted,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunCacheObservationResponse {
+    pub workflow_path: String,
+    pub job_key: String,
+    pub identity_digest: String,
+    pub preparation: RepositoryRunCachePreparation,
+    pub prepare_ms: u64,
+    pub final_state: RepositoryRunCacheFinalState,
+    pub finalize_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunCacheResponse {
+    pub name: String,
+    pub path: String,
+    pub observation: Option<RepositoryRunCacheObservationResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunStepResponse {
+    pub index: u32,
+    pub name: String,
+    pub command: String,
+    pub state: RepositoryRunStepState,
+    pub started_at_unix: Option<u64>,
+    pub completed_at_unix: Option<u64>,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunAttemptResponse {
+    pub id: String,
+    pub runner_id: String,
+    pub runner_name: String,
+    pub state: RepositoryRunAttemptState,
+    pub created_at_unix: u64,
+    pub started_at_unix: Option<u64>,
+    pub completed_at_unix: Option<u64>,
+    pub terminal_reason: Option<RepositoryRunTerminalReason>,
+    pub caches: Vec<RepositoryRunCacheResponse>,
+    pub steps: Vec<RepositoryRunStepResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunJobResponse {
+    pub key: String,
+    pub needs: Vec<String>,
+    pub desired_runner: Option<String>,
+    pub pinned_container_image: Option<String>,
+    pub state: RepositoryRunJobState,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
+    pub completed_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunJobDetailResponse {
+    pub job: RepositoryRunJobResponse,
+    pub attempts: Vec<RepositoryRunAttemptResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunDetailResponse {
+    pub run: RepositoryRunSummaryResponse,
+    pub jobs: Vec<RepositoryRunJobDetailResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -420,6 +724,45 @@ mod tests {
         assert_eq!(
             serde_json::to_value(finalization).unwrap()["caches"][0]["final_state"],
             "ready"
+        );
+    }
+
+    #[test]
+    fn repository_cache_contract_keeps_missing_reports_distinct_from_cold() {
+        let cold = RepositoryRunCacheResponse {
+            name: "cargo".to_string(),
+            path: "/scope/cache/cargo".to_string(),
+            observation: Some(RepositoryRunCacheObservationResponse {
+                workflow_path: "/.scope/runs/checks.yml".to_string(),
+                job_key: "backend".to_string(),
+                identity_digest: "a".repeat(64),
+                preparation: RepositoryRunCachePreparation::Cold {
+                    reason: RepositoryRunCacheColdReason::MetadataMissing,
+                },
+                prepare_ms: 12,
+                final_state: RepositoryRunCacheFinalState::Ready,
+                finalize_ms: Some(8),
+            }),
+        };
+        let unavailable = RepositoryRunCacheResponse {
+            name: "target".to_string(),
+            path: "/workspace/target".to_string(),
+            observation: None,
+        };
+
+        let cold_json = serde_json::to_value(&cold).unwrap();
+        assert_eq!(cold_json["observation"]["preparation"]["kind"], "cold");
+        assert_eq!(
+            cold_json["observation"]["preparation"]["reason"],
+            "metadata-missing"
+        );
+        assert_eq!(
+            serde_json::to_value(&unavailable).unwrap()["observation"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            serde_json::from_value::<RepositoryRunCacheResponse>(cold_json).unwrap(),
+            cold
         );
     }
 }

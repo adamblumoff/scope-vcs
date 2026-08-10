@@ -51,6 +51,7 @@ import type {
   RepositoryRunWorkflowResponse,
   RepositoryRunDetailResponse,
   RepositoryRunAttemptResponse,
+  RepositoryRunCacheResponse,
   RepositoryRunJobDetailResponse,
   RepositoryRunJobResponse,
   RepositoryRunJobState,
@@ -102,6 +103,7 @@ export type RepoRunWorkflow = RepositoryRunWorkflowResponse
 export type RepoRunState = RepositoryRunState
 export type RepoRunDetail = RepositoryRunDetailResponse
 export type RepoRunAttempt = RepositoryRunAttemptResponse
+export type RepoRunCache = RepositoryRunCacheResponse
 export type RepoRunJobDetail = RepositoryRunJobDetailResponse
 export type RepoRunJob = RepositoryRunJobResponse
 export type RepoRunJobState = RepositoryRunJobState

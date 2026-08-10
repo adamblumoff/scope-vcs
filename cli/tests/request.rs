@@ -173,7 +173,7 @@ fn global_json_rejects_commands_without_typed_results() {
     assert_eq!(error.code, scope_api_contract::ErrorCode::BadRequest);
     assert_eq!(
         error.message,
-        "--json currently supports request commands only"
+        "--json currently supports request commands and `scope run show`"
     );
 }
 
