@@ -291,6 +291,7 @@ fn job_container_receives_only_declared_workflow_environment() {
     let caches = [cache::CacheMount {
         volume_name: "scope-cache-v1-abc".to_string(),
         target: "/scope/cache/cargo".to_string(),
+        identity_digest: "a".repeat(64),
     }];
     configure_job_container_creation(
         &mut command,

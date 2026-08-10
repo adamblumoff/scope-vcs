@@ -28,6 +28,10 @@ pub const RUNNER_CLAIM: &str = "/v1/runner-protocol/runs/{run_id}/jobs/{job_key}
 pub const ATTEMPT_HEARTBEAT: &str = "/v1/runner-protocol/attempts/{attempt_id}/heartbeat";
 pub const ATTEMPT_CACHE_FINALIZATION: &str =
     "/v1/runner-protocol/attempts/{attempt_id}/cache-finalization";
+pub const ATTEMPT_CACHE_PREPARATIONS: &str =
+    "/v1/runner-protocol/attempts/{attempt_id}/cache-observations/preparations";
+pub const ATTEMPT_CACHE_FINALIZATIONS: &str =
+    "/v1/runner-protocol/attempts/{attempt_id}/cache-observations/finalizations";
 pub const ATTEMPT_RECOVERY_STATUS: &str =
     "/v1/runner-protocol/attempts/{attempt_id}/recovery-status";
 pub const ATTEMPT_CONTAINER_IMAGE: &str =
@@ -156,6 +160,20 @@ pub fn attempt_cache_finalization(attempt_id: &str) -> String {
     attempt_action(attempt_id, "cache-finalization")
 }
 
+pub fn attempt_cache_preparations(attempt_id: &str) -> String {
+    format!(
+        "{}/cache-observations/preparations",
+        attempt_root(attempt_id)
+    )
+}
+
+pub fn attempt_cache_finalizations(attempt_id: &str) -> String {
+    format!(
+        "{}/cache-observations/finalizations",
+        attempt_root(attempt_id)
+    )
+}
+
 pub fn attempt_recovery_status(attempt_id: &str) -> String {
     attempt_action(attempt_id, "recovery-status")
 }
@@ -189,11 +207,11 @@ pub fn attempt_step_complete(attempt_id: &str, step_index: u32) -> String {
 }
 
 fn attempt_action(attempt_id: &str, action: &str) -> String {
-    format!(
-        "/v1/runner-protocol/attempts/{}/{}",
-        path_segment(attempt_id),
-        action
-    )
+    format!("{}/{}", attempt_root(attempt_id), action)
+}
+
+fn attempt_root(attempt_id: &str) -> String {
+    format!("/v1/runner-protocol/attempts/{}", path_segment(attempt_id))
 }
 
 fn attempt_step_action(attempt_id: &str, step_index: u32, action: &str) -> String {
@@ -373,6 +391,14 @@ mod tests {
             (
                 attempt_cache_finalization("attempt/with space"),
                 "/v1/runner-protocol/attempts/attempt%2Fwith%20space/cache-finalization",
+            ),
+            (
+                attempt_cache_preparations("attempt/with space"),
+                "/v1/runner-protocol/attempts/attempt%2Fwith%20space/cache-observations/preparations",
+            ),
+            (
+                attempt_cache_finalizations("attempt/with space"),
+                "/v1/runner-protocol/attempts/attempt%2Fwith%20space/cache-observations/finalizations",
             ),
             (
                 repo_request("an owner", "r/name", "request?#1"),

@@ -471,12 +471,13 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                         "could not confirm unstarted Scope container {container_name} was removed"
                     );
                 }
-                super::cache::finalize_volume_names(
+                let finalizations = super::cache::finalize_volume_names(
                     config,
                     &recovery.progress.cache_volumes,
                     &recovery.claim.attempt_id,
                     false,
                 )?;
+                super::cache::report_finalizations(&client, config, &recovery.claim, finalizations);
                 abandon_recovery_claim(&client, config, &recovery)?;
                 fs::remove_dir_all(entry.path())
                     .context("remove unstarted runner recovery state")?;
@@ -492,12 +493,18 @@ pub(super) fn recover_runner_state(config: &RunnerConfig) -> anyhow::Result<Vec<
                         recovery,
                     });
                 } else {
-                    super::cache::finalize_volume_names(
+                    let finalizations = super::cache::finalize_volume_names(
                         config,
                         &recovery.progress.cache_volumes,
                         &recovery.claim.attempt_id,
                         false,
                     )?;
+                    super::cache::report_finalizations(
+                        &client,
+                        config,
+                        &recovery.claim,
+                        finalizations,
+                    );
                     abandon_recovery_claim(&client, config, &recovery)?;
                     fs::remove_dir_all(entry.path()).context("remove interrupted runner work")?;
                 }

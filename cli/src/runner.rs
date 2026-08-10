@@ -285,6 +285,7 @@ fn execute_claim(
     command_success(&mut create, "create Docker job container")?;
     let container = ContainerGuard::new(container_name);
     caches.confirm_container(&container.name)?;
+    caches.report_preparations(&client, config, claim);
     log_phase(&claim.attempt_id, "container_create", phase);
     if finish_before_execution(&mut supervisor, &client, config, claim)? {
         return Ok(());
@@ -322,27 +323,33 @@ fn execute_claim(
             log_phase(&claim.attempt_id, "steps", phase);
             let cleanup = Instant::now();
             let reusable = cache::is_reusable_after_execution(claim.canary_phase, outcome);
-            if let Err(error) = caches.finish(reusable) {
-                eprintln!(
-                    "Could not finalize attempt caches; tainted caches were not reused: {error:#}"
-                );
-                if outcome.succeeded() && claim.canary_phase.is_some() {
-                    cache::finish_canary_ack(
-                        &client,
-                        config,
-                        claim,
-                        &mut work,
-                        AttemptCacheFinalizationOutcome::Failed,
-                    )?;
+            match caches.finish(reusable) {
+                Err(error) => {
+                    eprintln!(
+                        "Could not finalize attempt caches; tainted caches were not reused: {error:#}"
+                    );
+                    if outcome.succeeded() && claim.canary_phase.is_some() {
+                        cache::finish_canary_ack(
+                            &client,
+                            config,
+                            claim,
+                            &mut work,
+                            AttemptCacheFinalizationOutcome::Failed,
+                        )?;
+                    }
                 }
-            } else if outcome.succeeded() && claim.canary_phase.is_some() {
-                cache::finish_canary_ack(
-                    &client,
-                    config,
-                    claim,
-                    &mut work,
-                    AttemptCacheFinalizationOutcome::Succeeded,
-                )?;
+                Ok(finalizations) => {
+                    cache::report_finalizations(&client, config, claim, finalizations);
+                    if outcome.succeeded() && claim.canary_phase.is_some() {
+                        cache::finish_canary_ack(
+                            &client,
+                            config,
+                            claim,
+                            &mut work,
+                            AttemptCacheFinalizationOutcome::Succeeded,
+                        )?;
+                    }
+                }
             }
             log_phase(&claim.attempt_id, "cleanup", cleanup);
             Ok(())
@@ -374,35 +381,46 @@ fn resume_claim(config: &RunnerConfig, recovery: RecoveryAttempt) -> anyhow::Res
     match resume_claim_execution(config, recovery) {
         Ok(outcome) => {
             let reusable = cache::is_reusable_after_execution(claim.canary_phase, outcome);
-            if let Err(error) =
-                cache::finalize_volume_names(config, &volumes, &claim.attempt_id, reusable)
-            {
-                eprintln!("Could not finalize recovered attempt caches: {error:#}");
-                if outcome.succeeded() && claim.canary_phase.is_some() {
-                    let mut work = RunnerWorkDir {
-                        path: work_dir.clone(),
-                        cleanup_on_drop: false,
-                    };
-                    cache::finish_canary_ack(
-                        &attempt_control_client()?,
-                        config,
-                        &claim,
-                        &mut work,
-                        AttemptCacheFinalizationOutcome::Failed,
-                    )?;
+            match cache::finalize_volume_names(config, &volumes, &claim.attempt_id, reusable) {
+                Err(error) => {
+                    eprintln!("Could not finalize recovered attempt caches: {error:#}");
+                    if outcome.succeeded() && claim.canary_phase.is_some() {
+                        let mut work = RunnerWorkDir {
+                            path: work_dir.clone(),
+                            cleanup_on_drop: false,
+                        };
+                        cache::finish_canary_ack(
+                            &attempt_control_client()?,
+                            config,
+                            &claim,
+                            &mut work,
+                            AttemptCacheFinalizationOutcome::Failed,
+                        )?;
+                    }
                 }
-            } else if outcome.succeeded() && claim.canary_phase.is_some() {
-                let mut work = RunnerWorkDir {
-                    path: work_dir.clone(),
-                    cleanup_on_drop: false,
-                };
-                cache::finish_canary_ack(
-                    &attempt_control_client()?,
-                    config,
-                    &claim,
-                    &mut work,
-                    AttemptCacheFinalizationOutcome::Succeeded,
-                )?;
+                Ok(finalizations) => {
+                    match attempt_control_client() {
+                        Ok(client) => {
+                            cache::report_finalizations(&client, config, &claim, finalizations)
+                        }
+                        Err(error) => {
+                            eprintln!("Could not create cache observation client: {error:#}")
+                        }
+                    }
+                    if outcome.succeeded() && claim.canary_phase.is_some() {
+                        let mut work = RunnerWorkDir {
+                            path: work_dir.clone(),
+                            cleanup_on_drop: false,
+                        };
+                        cache::finish_canary_ack(
+                            &attempt_control_client()?,
+                            config,
+                            &claim,
+                            &mut work,
+                            AttemptCacheFinalizationOutcome::Succeeded,
+                        )?;
+                    }
+                }
             }
             if claim.canary_phase.is_some() {
                 std::fs::remove_dir_all(work_dir)

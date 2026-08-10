@@ -462,6 +462,19 @@ impl RunAttempt {
         self.authenticate(job, &self.runner_id, token_hash, now_unix)
     }
 
+    pub fn authenticate_cache_observation_report(
+        &self,
+        job: &RunJob,
+        token_hash: &str,
+        now_unix: u64,
+    ) -> Result<(), DomainError> {
+        if self.state.is_terminal() {
+            self.authenticate_identity(job, &self.runner_id, token_hash)
+        } else {
+            self.authenticate_access(job, token_hash, now_unix)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn complete(
         &mut self,

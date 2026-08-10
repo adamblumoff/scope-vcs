@@ -1,12 +1,19 @@
 use super::*;
 use futures_util::StreamExt;
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttemptCacheFinalizationOutcome, AttemptCacheFinalizationRequest,
-    CompleteAttemptStepRequest, PinAttemptContainerImageRequest, RegisterRunnerRequest,
-    StepConclusionRequest, UpgradeRunnerRegistrationRequest,
+    AppendAttemptLogRequest, AttemptCacheFinalizationOutcome, AttemptCacheFinalizationReport,
+    AttemptCacheFinalizationRequest, AttemptCachePreparationReport, CompleteAttemptStepRequest,
+    PinAttemptContainerImageRequest, RegisterRunnerRequest, ReportAttemptCacheFinalizationsRequest,
+    ReportAttemptCachePreparationsRequest, StepConclusionRequest, UpgradeRunnerRegistrationRequest,
 };
-use scope_domain::runs::runner::{
-    RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerMaxConcurrentJobs,
+use scope_domain::runs::{
+    cache::{
+        CacheColdReason, CacheFinalState, CacheIdentity, CacheNamespace, CachePlatform,
+        CachePreparation, WorkflowCache,
+    },
+    run::PinnedContainerImage,
+    runner::{RUNNER_PROTOCOL_VERSION, RunnerCapabilities, RunnerMaxConcurrentJobs},
+    workflow::{WorkflowJobId, WorkflowPath},
 };
 use std::time::Duration;
 
@@ -15,7 +22,9 @@ name: Test
 on:
   manual: true
 runs-on: linux-box
-caches: []
+caches:
+  - name: cargo
+    path: /scope/cache/cargo
 container:
   image: alpine:3.20
 timeout: 5m
@@ -427,6 +436,39 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     assert_eq!(pinned.status(), StatusCode::OK);
     assert_eq!(response_json(pinned).await["image"], pinned_image);
 
+    let identity_digest = CacheIdentity::new(
+        TEST_REPO_ID,
+        CacheNamespace::workflow(
+            &WorkflowPath::parse("/.scope/runs/test.yml").unwrap(),
+            &WorkflowJobId::parse("checks").unwrap(),
+        ),
+        WorkflowCache::new("cargo", "/scope/cache/cargo").unwrap(),
+        &PinnedContainerImage::parse(pinned_image).unwrap(),
+        CachePlatform::LinuxAmd64,
+    )
+    .unwrap()
+    .digest();
+    let preparation = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &scope_api_contract::routes::attempt_cache_preparations(&attempt_id),
+            Some(format!("Bearer {attempt_token}")),
+            &ReportAttemptCachePreparationsRequest {
+                caches: vec![AttemptCachePreparationReport {
+                    cache_name: "cargo".to_string(),
+                    identity_digest: identity_digest.clone(),
+                    preparation: CachePreparation::Cold {
+                        reason: CacheColdReason::MetadataMissing,
+                    },
+                    prepare_ms: 12,
+                }],
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(preparation.status(), StatusCode::NO_CONTENT);
+
     let started = app
         .clone()
         .oneshot(machine_request(
@@ -523,6 +565,24 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .await
         .unwrap();
     assert_eq!(completed.status(), StatusCode::OK);
+
+    let finalization = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &scope_api_contract::routes::attempt_cache_finalizations(&attempt_id),
+            Some(format!("Bearer {attempt_token}")),
+            &ReportAttemptCacheFinalizationsRequest {
+                caches: vec![AttemptCacheFinalizationReport {
+                    identity_digest,
+                    final_state: CacheFinalState::Ready,
+                    finalize_ms: 8,
+                }],
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(finalization.status(), StatusCode::NO_CONTENT);
 
     let history = app
         .clone()

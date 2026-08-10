@@ -568,6 +568,86 @@ pub mod run_attempt_step {
     }
 }
 
+pub mod run_attempt_cache {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_run_attempt_caches")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub attempt_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub identity_digest: String,
+        pub workflow_path: String,
+        pub job_key: String,
+        pub cache_name: String,
+        pub preparation: String,
+        pub cold_reason: Option<String>,
+        pub prepare_ms: i64,
+        pub final_state: String,
+        pub finalize_ms: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(observation: &AttemptCacheObservation) -> Result<Self, PostgresError> {
+            let (preparation, cold_reason) = match observation.preparation {
+                CachePreparation::Warm => ("warm".to_string(), None),
+                CachePreparation::Cold { reason } => {
+                    ("cold".to_string(), Some(encode_enum(reason)?))
+                }
+            };
+            Ok(Self {
+                attempt_id: observation.attempt_id.clone(),
+                identity_digest: observation.identity_digest.clone(),
+                workflow_path: observation.workflow_path.as_str().to_string(),
+                job_key: observation.job_key.as_str().to_string(),
+                cache_name: observation.cache_name.clone(),
+                preparation,
+                cold_reason,
+                prepare_ms: u64_to_i64(observation.prepare_ms, "cache preparation duration")?,
+                final_state: encode_enum(observation.final_state)?,
+                finalize_ms: observation
+                    .finalize_ms
+                    .map(|value| u64_to_i64(value, "cache finalization duration"))
+                    .transpose()?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<AttemptCacheObservation, PostgresError> {
+            let preparation = match (self.preparation.as_str(), self.cold_reason) {
+                ("warm", None) => CachePreparation::Warm,
+                ("cold", Some(reason)) => CachePreparation::Cold {
+                    reason: decode_enum::<CacheColdReason>(reason)?,
+                },
+                _ => {
+                    return Err(PostgresError::invalid_input(
+                        "persisted cache preparation is inconsistent",
+                    ));
+                }
+            };
+            AttemptCacheObservation::restore(
+                self.attempt_id,
+                WorkflowPath::parse(self.workflow_path).map_err(PostgresError::invalid_input)?,
+                WorkflowJobId::parse(self.job_key).map_err(PostgresError::invalid_input)?,
+                self.cache_name,
+                self.identity_digest,
+                preparation,
+                i64_to_u64(self.prepare_ms, "cache preparation duration")?,
+                decode_enum::<CacheFinalState>(self.final_state)?,
+                self.finalize_ms
+                    .map(|value| i64_to_u64(value, "cache finalization duration"))
+                    .transpose()?,
+            )
+            .map_err(PostgresError::invalid_input)
+        }
+    }
+}
+
 pub mod run_log {
     use super::*;
 

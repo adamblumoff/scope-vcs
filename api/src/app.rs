@@ -105,6 +105,14 @@ pub fn router(state: AppState) -> Router {
             post(http::runner_protocol::finalize_cache),
         )
         .route(
+            routes::ATTEMPT_CACHE_PREPARATIONS,
+            post(http::runner_protocol::report_cache_preparations),
+        )
+        .route(
+            routes::ATTEMPT_CACHE_FINALIZATIONS,
+            post(http::runner_protocol::report_cache_finalizations),
+        )
+        .route(
             routes::ATTEMPT_RECOVERY_STATUS,
             get(http::runner_protocol::recovery_status),
         )

@@ -11,6 +11,7 @@ use thiserror::Error;
 pub const MAX_WORKFLOW_CACHE_NAME_BYTES: usize = 64;
 pub const MAX_WORKFLOW_CACHE_PATH_BYTES: usize = 1024;
 pub const CACHE_IDENTITY_FORMAT: &str = "scope-cache-v3";
+pub const MAX_CACHE_OBSERVATION_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
 
 const RESERVED_CACHE_NAME_PREFIX: &str = "scope-";
 const RESERVED_CACHE_PATHS: &[&str] = &["/scope-steps", "/scope-step.log", "/scope-active-step"];
@@ -38,20 +39,7 @@ pub struct WorkflowCache {
 impl WorkflowCache {
     pub fn new(name: impl Into<String>, path: impl Into<String>) -> Result<Self, CacheError> {
         let name = name.into();
-        if name.is_empty()
-            || name.len() > MAX_WORKFLOW_CACHE_NAME_BYTES
-            || name.starts_with('-')
-            || name.ends_with('-')
-            || name.contains("--")
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        {
-            return Err(CacheError::InvalidName);
-        }
-        if name.starts_with(RESERVED_CACHE_NAME_PREFIX) {
-            return Err(CacheError::ReservedName);
-        }
+        validate_cache_name(&name)?;
         let path = path.into();
         let parsed = Path::new(&path);
         if path.is_empty()
@@ -86,6 +74,193 @@ impl WorkflowCache {
     pub fn mount_path(&self) -> &str {
         &self.path
     }
+}
+
+fn validate_cache_name(name: &str) -> Result<(), CacheError> {
+    if name.is_empty()
+        || name.len() > MAX_WORKFLOW_CACHE_NAME_BYTES
+        || name.starts_with('-')
+        || name.ends_with('-')
+        || name.contains("--")
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(CacheError::InvalidName);
+    }
+    if name.starts_with(RESERVED_CACHE_NAME_PREFIX) {
+        return Err(CacheError::ReservedName);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CacheColdReason {
+    MetadataMissing,
+    MetadataInvalid,
+    MetadataNotReady,
+    VolumeMissing,
+    VolumeInvalid,
+    BackingDirectoryMissing,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum CachePreparation {
+    Warm,
+    Cold { reason: CacheColdReason },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CacheFinalState {
+    Pending,
+    Ready,
+    Evicted,
+}
+
+/// Durable facts observed by a runner for one cache during one attempt.
+///
+/// The workflow namespace is supplied by the claimed attempt, not by the runner
+/// report, so a report cannot move a cache observation across jobs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttemptCacheObservation {
+    pub attempt_id: String,
+    pub workflow_path: WorkflowPath,
+    pub job_key: WorkflowJobId,
+    pub cache_name: String,
+    pub identity_digest: String,
+    pub preparation: CachePreparation,
+    pub prepare_ms: u64,
+    pub final_state: CacheFinalState,
+    pub finalize_ms: Option<u64>,
+}
+
+impl AttemptCacheObservation {
+    pub fn prepared(
+        attempt_id: impl Into<String>,
+        workflow_path: WorkflowPath,
+        job_key: WorkflowJobId,
+        cache_name: impl Into<String>,
+        identity_digest: impl Into<String>,
+        preparation: CachePreparation,
+        prepare_ms: u64,
+    ) -> Result<Self, DomainError> {
+        let attempt_id = attempt_id.into();
+        if attempt_id.trim().is_empty() {
+            return Err(DomainError::invalid_input(
+                "cache observation attempt id is required",
+            ));
+        }
+        let cache_name = cache_name.into();
+        validate_cache_name(&cache_name).map_err(DomainError::invalid_input)?;
+        let identity_digest = identity_digest.into();
+        if identity_digest.len() != 64
+            || !identity_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(DomainError::invalid_input(
+                "cache observation identity digest must be 64 lowercase hexadecimal characters",
+            ));
+        }
+        validate_observation_duration(prepare_ms)?;
+        Ok(Self {
+            attempt_id,
+            workflow_path,
+            job_key,
+            cache_name,
+            identity_digest,
+            preparation,
+            prepare_ms,
+            final_state: CacheFinalState::Pending,
+            finalize_ms: None,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn restore(
+        attempt_id: impl Into<String>,
+        workflow_path: WorkflowPath,
+        job_key: WorkflowJobId,
+        cache_name: impl Into<String>,
+        identity_digest: impl Into<String>,
+        preparation: CachePreparation,
+        prepare_ms: u64,
+        final_state: CacheFinalState,
+        finalize_ms: Option<u64>,
+    ) -> Result<Self, DomainError> {
+        let mut observation = Self::prepared(
+            attempt_id,
+            workflow_path,
+            job_key,
+            cache_name,
+            identity_digest,
+            preparation,
+            prepare_ms,
+        )?;
+        match (final_state, finalize_ms) {
+            (CacheFinalState::Pending, None) => {}
+            (CacheFinalState::Ready | CacheFinalState::Evicted, Some(duration)) => {
+                observation.finalize(final_state, duration)?;
+            }
+            _ => {
+                return Err(DomainError::invalid_input(
+                    "cache final state and duration are inconsistent",
+                ));
+            }
+        }
+        Ok(observation)
+    }
+
+    /// Exact retries are idempotent; a different terminal report is a conflict.
+    pub fn finalize(
+        &mut self,
+        state: CacheFinalState,
+        finalize_ms: u64,
+    ) -> Result<bool, DomainError> {
+        if state == CacheFinalState::Pending {
+            return Err(DomainError::invalid_input(
+                "cache finalization must be ready or evicted",
+            ));
+        }
+        validate_observation_duration(finalize_ms)?;
+        match (self.final_state, self.finalize_ms) {
+            (CacheFinalState::Pending, None) => {
+                self.final_state = state;
+                self.finalize_ms = Some(finalize_ms);
+                Ok(true)
+            }
+            (existing_state, Some(existing_ms))
+                if existing_state == state && existing_ms == finalize_ms =>
+            {
+                Ok(false)
+            }
+            _ => Err(DomainError::conflict(
+                "cache observation already finalized with different facts",
+            )),
+        }
+    }
+
+    pub fn has_same_preparation(&self, other: &Self) -> bool {
+        self.attempt_id == other.attempt_id
+            && self.workflow_path == other.workflow_path
+            && self.job_key == other.job_key
+            && self.cache_name == other.cache_name
+            && self.identity_digest == other.identity_digest
+            && self.preparation == other.preparation
+            && self.prepare_ms == other.prepare_ms
+    }
+}
+
+fn validate_observation_duration(duration_ms: u64) -> Result<(), DomainError> {
+    if duration_ms > MAX_CACHE_OBSERVATION_DURATION_MS {
+        return Err(DomainError::invalid_input(
+            "cache observation duration exceeds the maximum job duration",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -370,6 +545,38 @@ mod tests {
                 cache("cargo"),
                 &image('a'),
                 CachePlatform::LinuxAmd64,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn attempt_cache_observation_accepts_exact_retries_and_rejects_conflicts() {
+        let mut observation = AttemptCacheObservation::prepared(
+            "attempt-1",
+            WorkflowPath::parse("/.scope/runs/test.yml").unwrap(),
+            WorkflowJobId::parse("checks").unwrap(),
+            "cargo",
+            "a".repeat(64),
+            CachePreparation::Cold {
+                reason: CacheColdReason::MetadataMissing,
+            },
+            17,
+        )
+        .unwrap();
+
+        assert!(observation.finalize(CacheFinalState::Ready, 9).unwrap());
+        assert!(!observation.finalize(CacheFinalState::Ready, 9).unwrap());
+        assert!(observation.finalize(CacheFinalState::Evicted, 9).is_err());
+        assert!(
+            AttemptCacheObservation::prepared(
+                "attempt-1",
+                WorkflowPath::parse("/.scope/runs/test.yml").unwrap(),
+                WorkflowJobId::parse("checks").unwrap(),
+                "cargo",
+                "A".repeat(64),
+                CachePreparation::Warm,
+                1,
             )
             .is_err()
         );

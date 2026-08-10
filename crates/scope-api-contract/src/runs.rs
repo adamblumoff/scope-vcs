@@ -1,4 +1,5 @@
 use scope_domain::runs::{
+    cache::{CacheFinalState, CachePreparation},
     cutover::{RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus, RunnerProtocolCutoverState},
     run::{AttemptState, RunState, StepState},
     runner::{RunnerCapabilities, RunnerMaxConcurrentJobs},
@@ -206,6 +207,31 @@ pub struct AttemptCacheFinalizationRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReportAttemptCachePreparationsRequest {
+    pub caches: Vec<AttemptCachePreparationReport>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AttemptCachePreparationReport {
+    pub cache_name: String,
+    pub identity_digest: String,
+    pub preparation: CachePreparation,
+    pub prepare_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReportAttemptCacheFinalizationsRequest {
+    pub caches: Vec<AttemptCacheFinalizationReport>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AttemptCacheFinalizationReport {
+    pub identity_digest: String,
+    pub final_state: CacheFinalState,
+    pub finalize_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum AttemptCacheFinalizationOutcome {
     Succeeded,
@@ -276,6 +302,7 @@ pub struct RunEventsQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scope_domain::runs::cache::{CacheColdReason, CacheFinalState, CachePreparation};
 
     #[test]
     fn cutover_contract_uses_stable_kebab_case_domain_values() {
@@ -362,5 +389,37 @@ mod tests {
         assert_eq!(json["protocol_version"], 4);
         assert_eq!(json["capabilities"]["operating_system"], "linux");
         assert_eq!(json["max_concurrent_jobs"], 4);
+    }
+
+    #[test]
+    fn cache_observation_contract_uses_constrained_domain_values() {
+        let preparation = ReportAttemptCachePreparationsRequest {
+            caches: vec![AttemptCachePreparationReport {
+                cache_name: "cargo".to_string(),
+                identity_digest: "a".repeat(64),
+                preparation: CachePreparation::Cold {
+                    reason: CacheColdReason::MetadataMissing,
+                },
+                prepare_ms: 12,
+            }],
+        };
+        let finalization = ReportAttemptCacheFinalizationsRequest {
+            caches: vec![AttemptCacheFinalizationReport {
+                identity_digest: "a".repeat(64),
+                final_state: CacheFinalState::Ready,
+                finalize_ms: 8,
+            }],
+        };
+
+        let preparation_json = serde_json::to_value(preparation).unwrap();
+        assert_eq!(preparation_json["caches"][0]["preparation"]["kind"], "cold");
+        assert_eq!(
+            preparation_json["caches"][0]["preparation"]["reason"],
+            "metadata-missing"
+        );
+        assert_eq!(
+            serde_json::to_value(finalization).unwrap()["caches"][0]["final_state"],
+            "ready"
+        );
     }
 }

@@ -10,9 +10,10 @@ use scope_api_contract::{
     AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest, CompleteAttemptStepRequest,
     CreateManualRunQuery, CreateRunnerProtocolCanaryRequest, PinAttemptContainerImageRequest,
     PinAttemptContainerImageResponse, PushTriggerEvaluationResponse, RegisterRunnerRequest,
-    RegisterRunnerResponse, RunEventsQuery, RunLogResponse, RunResponse, RunnerPollResponse,
-    RunnerProtocolCutoverResponse, RunnerResponse, UpgradeRunnerRegistrationRequest,
-    UpgradeRunnerRegistrationResponse,
+    RegisterRunnerResponse, ReportAttemptCacheFinalizationsRequest,
+    ReportAttemptCachePreparationsRequest, RunEventsQuery, RunLogResponse, RunResponse,
+    RunnerPollResponse, RunnerProtocolCutoverResponse, RunnerResponse,
+    UpgradeRunnerRegistrationRequest, UpgradeRunnerRegistrationResponse,
 };
 use scope_domain::runs::run::RunJobState;
 use serde::Deserialize;
@@ -164,6 +165,50 @@ pub fn finalize_attempt_cache(
             .send()
             .context("finalize Scope attempt cache")?,
         "finalize Scope attempt cache",
+    )?;
+    Ok(())
+}
+
+pub fn report_attempt_cache_preparations(
+    client: &Client,
+    api_url: &str,
+    attempt_token: &str,
+    attempt_id: &str,
+    request: &ReportAttemptCachePreparationsRequest,
+) -> anyhow::Result<()> {
+    successful(
+        client
+            .post(format!(
+                "{api_url}{}",
+                routes::attempt_cache_preparations(attempt_id)
+            ))
+            .bearer_auth(attempt_token)
+            .json(request)
+            .send()
+            .context("report Scope attempt cache preparations")?,
+        "report Scope attempt cache preparations",
+    )?;
+    Ok(())
+}
+
+pub fn report_attempt_cache_finalizations(
+    client: &Client,
+    api_url: &str,
+    attempt_token: &str,
+    attempt_id: &str,
+    request: &ReportAttemptCacheFinalizationsRequest,
+) -> anyhow::Result<()> {
+    successful(
+        client
+            .post(format!(
+                "{api_url}{}",
+                routes::attempt_cache_finalizations(attempt_id)
+            ))
+            .bearer_auth(attempt_token)
+            .json(request)
+            .send()
+            .context("report Scope attempt cache finalizations")?,
+        "report Scope attempt cache finalizations",
     )?;
     Ok(())
 }
