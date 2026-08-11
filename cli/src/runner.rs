@@ -54,8 +54,8 @@ use management::parse_repository;
 pub use management::{
     add_repository, doctor, install, list_caches, prune_caches, remove_repository, status,
 };
-pub use worker_pool::daemon;
 use worker_pool::JobWorkers;
+pub use worker_pool::daemon;
 mod recovery;
 use recovery::{
     RecoveryAttempt, RecoveryProgress, mark_recovery_abandon_pending,

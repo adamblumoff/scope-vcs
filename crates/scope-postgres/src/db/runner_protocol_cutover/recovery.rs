@@ -22,7 +22,7 @@ pub(super) async fn reconcile_abandoned_running_canary(
 ) -> Result<(), PostgresError> {
     debug_assert_eq!(
         snapshot.cutover.state(),
-        RunnerProtocolCutoverState::V7Fenced
+        RunnerProtocolCutoverState::V8Fenced
     );
     let Some(index) = snapshot
         .canaries

@@ -52,7 +52,11 @@ fn recovered_attempts_share_the_bounded_job_worker_coordinator() {
         }
     };
     assert_ne!(first, second);
-    assert!(started_receiver.recv_timeout(Duration::from_millis(100)).is_err());
+    assert!(
+        started_receiver
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
 
     release_sender.send(()).unwrap();
     let third = started_receiver
@@ -82,18 +86,22 @@ fn a_job_failure_wakes_the_coordinator_without_waiting_for_an_earlier_job() {
         let start_barrier = Arc::clone(&start_barrier);
         workers
             .spawn(format!("attempt-{attempt}"), move || {
-            start_barrier.wait();
-            if attempt == 1 {
-            thread::sleep(Duration::from_millis(500));
-            }
-            anyhow::bail!("attempt {attempt} test failure")
-        })
-        .unwrap();
+                start_barrier.wait();
+                if attempt == 1 {
+                    thread::sleep(Duration::from_millis(500));
+                }
+                anyhow::bail!("attempt {attempt} test failure")
+            })
+            .unwrap();
     }
     let error = workers.wait_for_capacity().unwrap_err();
 
     assert!(started_at.elapsed() < Duration::from_millis(250));
-    assert!(error.to_string().contains("runner attempt attempt-2 failed"));
+    assert!(
+        error
+            .to_string()
+            .contains("runner attempt attempt-2 failed")
+    );
 }
 
 #[test]

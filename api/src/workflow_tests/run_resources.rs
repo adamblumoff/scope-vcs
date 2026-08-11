@@ -8,6 +8,7 @@ runs-on: linux-box
 caches: []
 container:
   image: alpine:3.20
+resources: { cpu: 1, memory: 1gb }
 timeout: 5m
 jobs:
   checks:

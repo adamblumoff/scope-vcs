@@ -1,5 +1,8 @@
 use super::migration_tests::{applied_versions, isolated_database, relation_exists};
 use crate::migrations;
+use scope_domain::runs::workflow::{
+    CompiledWorkflow, WorkflowIdentity, WorkflowPath, WorkflowRevision,
+};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::MigratorTrait;
 
@@ -276,11 +279,22 @@ async fn workflow_jobs_rewrite_refuses_to_start_until_attempts_are_drained() {
         .unwrap();
     let definition = row.try_get::<serde_json::Value>("", "definition").unwrap();
     assert_eq!(definition["jobs"][0]["id"], "checks");
+    assert_eq!(definition["jobs"][0]["resources"]["cpu_millis"], 1_000);
     assert!(definition.get("steps").is_none());
+    let compiled: CompiledWorkflow = serde_json::from_value(definition).unwrap();
+    let revision = WorkflowRevision::new(
+        WorkflowIdentity::new(
+            "repo_jobs",
+            WorkflowPath::parse("/.scope/runs/jobs.yml").unwrap(),
+        )
+        .unwrap(),
+        compiled,
+    )
+    .unwrap();
     assert_eq!(
         row.try_get::<String>("", "workflow_revision_digest")
             .unwrap(),
-        "8cdebe376f88f8bf41167103995e5bde523ed8a2fc28844f363621a9ce92ebc5"
+        revision.digest()
     );
 }
 
@@ -351,7 +365,7 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
             .await
             .last()
             .map(String::as_str),
-        Some("m0019_run_attempt_cache_observations")
+        Some("m0020_job_resources")
     );
 
     let old_producer_insert = db
@@ -377,7 +391,7 @@ async fn workflow_jobs_rewrite_waits_for_pending_push_trigger_payloads() {
          ) VALUES (
              'outbox_push_jobs_new_after', 'push_main_trigger_evaluation:repo_push_jobs:3',
              'push_main_trigger_evaluation', 'repo_push_jobs', 3,
-             '{\"workflow_schema_version\": 4}'::jsonb,
+             '{\"workflow_schema_version\": 5}'::jsonb,
              'ready', 0, 3, NULL, NULL, NULL, 3, 3, NULL
          )",
     )

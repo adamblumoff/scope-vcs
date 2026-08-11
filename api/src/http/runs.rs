@@ -863,6 +863,7 @@ mod tests {
             "run-summary",
             WorkflowJobId::parse("checks").unwrap(),
             RunnerSelector::Any,
+            scope_domain::runs::resources::JobResources::new(1_000, 1024 * 1024 * 1024).unwrap(),
             None,
             RunJobState::Failed,
             last_attempt_number,

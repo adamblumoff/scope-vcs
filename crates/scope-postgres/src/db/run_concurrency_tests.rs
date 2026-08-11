@@ -1,15 +1,62 @@
 use super::runs_tests::{
     enqueue, parallel_revision, postgres_store, register_runner, register_runner_with_capacity,
-    revision, run, run_for_revision, workflow_fixtures::revision_with_jobs,
+    revision, run, run_for_revision,
+    workflow_fixtures::{revision_with_jobs, revision_with_resources},
 };
 use crate::error::PostgresErrorKind;
 use scope_domain::runs::{
+    resources::JobResources,
     run::{
         AttemptConclusion, PinnedContainerImage, RunJobState, RunLogChunk, RunState, RunTrigger,
         StepConclusion, StepState,
     },
     workflow::RunnerSelector,
 };
+
+#[tokio::test]
+async fn atomic_claim_next_skips_jobs_that_do_not_fit_reported_capacity() {
+    let store = postgres_store();
+    register_runner_with_capacity(&store, "runner-1", "linux-one", 2).await;
+    let small = JobResources::new(1_000, 1024 * 1024 * 1024).unwrap();
+    let large = JobResources::new(4_000, 4 * 1024 * 1024 * 1024).unwrap();
+    let revision = revision_with_resources(&[("large", large), ("small", small)]);
+    enqueue(
+        &store,
+        run_for_revision(
+            "run-resource-fit",
+            "manual:resource-fit",
+            &revision,
+            RunnerSelector::Any,
+            RunTrigger::Manual,
+            Some("user_owner".into()),
+        ),
+        revision,
+    )
+    .await;
+
+    let first = store
+        .runs()
+        .claim_next_job("runner-1", small, "attempt-small", &"a".repeat(64), 20, 80)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.job.key.as_str(), "small");
+    assert!(
+        store
+            .runs()
+            .claim_next_job("runner-1", small, "attempt-none", &"b".repeat(64), 21, 81,)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let second = store
+        .runs()
+        .claim_next_job("runner-1", large, "attempt-large", &"c".repeat(64), 22, 82)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.job.key.as_str(), "large");
+}
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Barrier, task::JoinSet, time::timeout};

@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 const CANARY_IMAGE: &str = "registry.example/runner-canary@sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
 #[tokio::test]
-async fn fenced_v7_dispatches_only_the_canary_suite_then_opens() {
+async fn fenced_v8_dispatches_only_the_canary_suite_then_opens() {
     let store = runs_tests::postgres_store();
     runs_tests::register_runner(&store, "runner-1", "linux-box").await;
     runs_tests::enqueue(
@@ -158,7 +158,7 @@ async fn fenced_v7_dispatches_only_the_canary_suite_then_opens() {
     }
 
     let fenced = store.admin().runner_protocol_cutover().await.unwrap();
-    assert_eq!(fenced.cutover.state(), RunnerProtocolCutoverState::V7Fenced);
+    assert_eq!(fenced.cutover.state(), RunnerProtocolCutoverState::V8Fenced);
     assert_eq!(fenced.canary_generation, 1);
     assert!(
         fenced
@@ -168,10 +168,10 @@ async fn fenced_v7_dispatches_only_the_canary_suite_then_opens() {
     );
     let opened = store
         .admin()
-        .advance_runner_protocol_cutover(RunnerProtocolCutoverState::V7Open, 50)
+        .advance_runner_protocol_cutover(RunnerProtocolCutoverState::V8Open, 50)
         .await
         .unwrap();
-    assert_eq!(opened.cutover.state(), RunnerProtocolCutoverState::V7Open);
+    assert_eq!(opened.cutover.state(), RunnerProtocolCutoverState::V8Open);
     let (attempt_id, token_hash) = final_ack.unwrap();
     assert_eq!(
         store
@@ -229,6 +229,7 @@ name: Checks
 on: { push: true }
 runs-on: any
 container: { image: alpine:3.20 }
+resources: { cpu: 1, memory: 1gb }
 timeout: 1m
 caches: []
 jobs:
@@ -280,7 +281,7 @@ jobs:
 }
 
 #[tokio::test]
-async fn open_v7_hot_paths_do_not_take_the_cutover_row_lock() {
+async fn open_v8_hot_paths_do_not_take_the_cutover_row_lock() {
     let store = runs_tests::postgres_store();
     runs_tests::register_runner_with_capacity(&store, "runner-1", "linux-box", 2).await;
     let revision = runs_tests::revision();
@@ -492,7 +493,7 @@ async fn successful_canary_with_lost_finalization_can_be_retried_after_its_deadl
         .finalize_runner_protocol_canary_cache(&attempt_id, &token_hash, true, 91)
         .await
         .unwrap_err();
-    assert!(late_ack.message.contains("active protocol V7 canary"));
+    assert!(late_ack.message.contains("active protocol V8 canary"));
     let current = store.admin().runner_protocol_cutover().await.unwrap();
     assert_eq!(current.canary_generation, 2);
     assert_eq!(current.canaries[0].run_id(), "run-replacement");
@@ -691,12 +692,12 @@ async fn concurrent_abandoned_canary_retries_converge_on_one_replacement() {
 }
 
 #[tokio::test]
-async fn old_runner_cannot_claim_v7_jobs_and_upgrades_atomically() {
+async fn old_runner_cannot_claim_v8_jobs_and_upgrades_atomically() {
     let store = runs_tests::postgres_store();
     runs_tests::register_runner(&store, "runner-1", "linux-box").await;
     runs_tests::enqueue(
         &store,
-        runs_tests::run("run-v7", "manual:v7"),
+        runs_tests::run("run-v8", "manual:v8"),
         runs_tests::revision(),
     )
     .await;
@@ -715,7 +716,7 @@ async fn old_runner_cannot_claim_v7_jobs_and_upgrades_atomically() {
         store
             .runs()
             .claim_job(
-                "run-v7",
+                "run-v8",
                 "checks",
                 "runner-1",
                 "attempt-v4",
@@ -794,7 +795,7 @@ async fn set_fenced(store: &MetadataStore) {
         .db
         .execute(Statement::from_string(
             DatabaseBackend::Postgres,
-            "UPDATE scope_runner_protocol_cutover SET state = 'v7-fenced' WHERE key = 'current'"
+            "UPDATE scope_runner_protocol_cutover SET state = 'v8-fenced' WHERE key = 'current'"
                 .to_string(),
         ))
         .await
@@ -896,6 +897,8 @@ fn canary_revision(
                     vec![],
                     RunnerSelector::named(runner_name).unwrap(),
                     ContainerSpec::new(image).unwrap(),
+                    scope_domain::runs::resources::JobResources::new(1_000, 1024 * 1024 * 1024)
+                        .unwrap(),
                     RUNNER_PROTOCOL_CANARY_TIMEOUT_SECONDS,
                     vec![
                         WorkflowCache::new(

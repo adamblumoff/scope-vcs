@@ -790,6 +790,8 @@ fn revision_for_repository_with_runner(
                     vec![],
                     runner,
                     ContainerSpec::new("rust:1.90").unwrap(),
+                    scope_domain::runs::resources::JobResources::new(1_000, 1024 * 1024 * 1024)
+                        .unwrap(),
                     20 * 60,
                     vec![],
                     vec![WorkflowStep::new("Test", "cargo test").unwrap()],

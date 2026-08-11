@@ -3,7 +3,7 @@ use super::*;
 pub mod outbox_job {
     use super::*;
 
-    pub const PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION: u8 = 4;
+    pub const PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION: u8 = 5;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "scope_outbox_jobs")]

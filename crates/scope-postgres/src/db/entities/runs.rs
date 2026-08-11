@@ -332,6 +332,8 @@ pub mod run_job {
         #[sea_orm(primary_key, auto_increment = false)]
         pub job_key: String,
         pub desired_runner_name: Option<String>,
+        pub cpu_millis: i64,
+        pub memory_bytes: i64,
         pub pinned_container_image: Option<String>,
         pub state: String,
         pub last_attempt_number: i32,
@@ -355,6 +357,8 @@ pub mod run_job {
                     RunnerSelector::Any => None,
                     RunnerSelector::Named(name) => Some(name.clone()),
                 },
+                cpu_millis: u64_to_i64(job.resources.cpu_millis(), "run job CPU request")?,
+                memory_bytes: u64_to_i64(job.resources.memory_bytes(), "run job memory request")?,
                 pinned_container_image: job
                     .pinned_container_image
                     .as_ref()
@@ -383,6 +387,11 @@ pub mod run_job {
                 self.run_id,
                 WorkflowJobId::parse(self.job_key).map_err(PostgresError::invalid_input)?,
                 desired_runner,
+                JobResources::new(
+                    i64_to_u64(self.cpu_millis, "run job CPU request")?,
+                    i64_to_u64(self.memory_bytes, "run job memory request")?,
+                )
+                .map_err(PostgresError::invalid_input)?,
                 self.pinned_container_image
                     .map(PinnedContainerImage::parse)
                     .transpose()

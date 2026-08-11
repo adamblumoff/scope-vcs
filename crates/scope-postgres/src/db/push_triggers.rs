@@ -398,6 +398,7 @@ name: Pinned Test
 on: { push: true }
 runs-on: any
 container: { image: alpine:3.20 }
+resources: { cpu: 1, memory: 1gb }
 timeout: 1m
 caches: []
 jobs:
@@ -596,7 +597,7 @@ jobs:
             .db
             .execute(Statement::from_string(
                 DatabaseBackend::Postgres,
-                "UPDATE scope_runner_protocol_cutover SET state = 'v7-fenced' WHERE key = 'current'"
+                "UPDATE scope_runner_protocol_cutover SET state = 'v8-fenced' WHERE key = 'current'"
                     .to_string(),
             ))
             .await
@@ -617,6 +618,7 @@ name: Checks
 on: { push: true }
 runs-on: any
 container: { image: alpine:3.20 }
+resources: { cpu: 1, memory: 1gb }
 timeout: 1m
 caches: []
 jobs:
@@ -663,7 +665,7 @@ jobs:
         assert_eq!(
             evaluation.message.as_deref(),
             Some(
-                "push-triggered workflows are blocked while runner protocol cutover is v7-fenced; upgrade a runner and complete the canary suite"
+                "push-triggered workflows are blocked while runner protocol cutover is v8-fenced; upgrade a runner and complete the canary suite"
             )
         );
         assert!(evaluation.checks.is_empty());
@@ -688,7 +690,7 @@ jobs:
             .db
             .execute(Statement::from_string(
                 DatabaseBackend::Postgres,
-                "UPDATE scope_runner_protocol_cutover SET state = 'v7-fenced' WHERE key = 'current'"
+                "UPDATE scope_runner_protocol_cutover SET state = 'v8-fenced' WHERE key = 'current'"
                     .to_string(),
             ))
             .await
@@ -709,6 +711,7 @@ name: Manual only
 on: { manual: true }
 runs-on: any
 container: { image: alpine:3.20 }
+resources: { cpu: 1, memory: 1gb }
 timeout: 1m
 caches: []
 jobs:
@@ -827,6 +830,7 @@ name: Repeat
 on: { push: true }
 runs-on: any
 container: { image: alpine:3.20 }
+resources: { cpu: 1, memory: 1gb }
 timeout: 1m
 caches: []
 jobs:

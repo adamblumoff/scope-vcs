@@ -7,8 +7,8 @@ use reqwest::{
 use scope_api_contract::{
     AdvanceRunnerProtocolCutoverRequest, AppendAttemptLogRequest, AttachRunnerRepositoryRequest,
     AttemptCacheFinalizationRequest, AttemptHeartbeatRequest, AttemptRecoveryStatusResponse,
-    AttemptStatusResponse, CompleteAttemptRequest, CompleteAttemptStepRequest, CreateManualRunQuery,
-    CreateRunnerProtocolCanaryRequest, PinAttemptContainerImageRequest,
+    AttemptStatusResponse, CompleteAttemptRequest, CompleteAttemptStepRequest,
+    CreateManualRunQuery, CreateRunnerProtocolCanaryRequest, PinAttemptContainerImageRequest,
     PinAttemptContainerImageResponse, PushTriggerEvaluationResponse, RegisterRunnerRequest,
     RegisterRunnerResponse, ReportAttemptCacheFinalizationsRequest,
     ReportAttemptCachePreparationsRequest, RepositoryRunDetailResponse, RunEventsQuery,
@@ -476,10 +476,7 @@ pub fn runner_poll(
 pub fn runner_status(client: &Client, api_url: &str, runner_secret: &str) -> anyhow::Result<()> {
     let response = successful(
         client
-            .post(format!(
-                "{api_url}{}",
-                routes::RUNNER_PROTOCOL_STATUS
-            ))
+            .post(format!("{api_url}{}", routes::RUNNER_PROTOCOL_STATUS))
             .bearer_auth(runner_secret)
             .send()
             .context("check Scope runner authentication")?,

@@ -130,7 +130,10 @@ impl JobWorkers {
         attempt_id: String,
         run: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
     ) -> anyhow::Result<()> {
-        assert!(self.active < self.max_active, "runner worker capacity exceeded");
+        assert!(
+            self.active < self.max_active,
+            "runner worker capacity exceeded"
+        );
         let completion_sender = self.completion_sender.clone();
         let thread_name = format!("scope-runner-{attempt_id}");
         thread::Builder::new()
@@ -191,9 +194,8 @@ impl JobWorkers {
         self.active -= 1;
         match completion.outcome {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => {
-                Err(error).with_context(|| format!("runner attempt {} failed", completion.attempt_id))
-            }
+            Ok(Err(error)) => Err(error)
+                .with_context(|| format!("runner attempt {} failed", completion.attempt_id)),
             Err(_) => bail!("runner attempt {} panicked", completion.attempt_id),
         }
     }
@@ -291,10 +293,7 @@ mod tests {
 
         let reservation = admission.reserve(requested, "exact".to_string()).unwrap();
         assert_eq!(reservation.limits().cpu_millis, requested.cpu_millis());
-        assert_eq!(
-            reservation.limits().memory_bytes,
-            requested.memory_bytes()
-        );
+        assert_eq!(reservation.limits().memory_bytes, requested.memory_bytes());
         assert_eq!(reservation.limits().pids, defaults.pids);
         assert_eq!(reservation.limits().storage_bytes, defaults.storage_bytes);
     }

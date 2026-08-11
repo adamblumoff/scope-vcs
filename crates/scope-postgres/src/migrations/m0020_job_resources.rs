@@ -1,94 +1,19 @@
+use scope_domain::runs::workflow::{
+    CompiledWorkflow, WorkflowIdentity, WorkflowPath, WorkflowRevision,
+};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::{DbErr, MigrationName, MigrationTrait, SchemaManager};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use sha2::{Digest, Sha256};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-const WORKFLOW_DIGEST_VERSION: u8 = 4;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PersistedWorkflowV3 {
-    name: String,
-    triggers: PersistedWorkflowTriggers,
-    jobs: Vec<PersistedWorkflowJobV3>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PersistedWorkflowJobV3 {
-    id: String,
-    needs: Vec<String>,
-    runner: PersistedRunnerSelector,
-    container: PersistedWorkflowContainer,
-    timeout_seconds: u64,
-    caches: Vec<String>,
-    steps: Vec<PersistedWorkflowStep>,
-}
-
-#[derive(Serialize)]
-struct PersistedWorkflowV4 {
-    name: String,
-    triggers: PersistedWorkflowTriggers,
-    jobs: Vec<PersistedWorkflowJobV4>,
-}
-
-#[derive(Serialize)]
-struct PersistedWorkflowJobV4 {
-    id: String,
-    needs: Vec<String>,
-    runner: PersistedRunnerSelector,
-    container: PersistedWorkflowContainer,
-    timeout_seconds: u64,
-    caches: Vec<PersistedWorkflowCache>,
-    environment: BTreeMap<String, String>,
-    steps: Vec<PersistedWorkflowStep>,
-}
-
-#[derive(Serialize)]
-struct PersistedWorkflowCache {
-    name: String,
-    path: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct PersistedWorkflowTriggers {
-    manual: bool,
-    push_main: bool,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(
-    deny_unknown_fields,
-    tag = "kind",
-    content = "name",
-    rename_all = "kebab-case"
-)]
-enum PersistedRunnerSelector {
-    Any,
-    Named(String),
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct PersistedWorkflowContainer {
-    image: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct PersistedWorkflowStep {
-    name: String,
-    run: String,
-}
+const DEFAULT_CPU_MILLIS: u64 = 1_000;
+const DEFAULT_MEMORY_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub struct Migration;
 
 impl MigrationName for Migration {
     fn name(&self) -> &str {
-        "m0016_workflow_runtime_contract"
+        "m0020_job_resources"
     }
 }
 
@@ -104,23 +29,41 @@ impl MigrationTrait for Migration {
         )
         .await?;
         require_drained_runtime(db).await?;
-        rewrite_workflow_revisions(db).await?;
-        // Populated databases deliberately enter the fence without carrying V5
-        // assignments forward. The fenced enqueue guard admits only canonical
-        // V6 canary runs, which supplies the post-migration bootstrap path.
         db.execute_unprepared(
-            "ALTER TABLE scope_outbox_jobs
-                 DROP CONSTRAINT scope_outbox_jobs_push_workflow_schema_v3;
+            "ALTER TABLE scope_run_jobs ADD COLUMN cpu_millis bigint;
+             ALTER TABLE scope_run_jobs ADD COLUMN memory_bytes bigint;",
+        )
+        .await?;
+        rewrite_workflow_revisions(db).await?;
+        db.execute_unprepared(
+            "UPDATE scope_run_jobs AS job
+             SET cpu_millis = (definition_job.value -> 'resources' ->> 'cpu_millis')::bigint,
+                 memory_bytes = (definition_job.value -> 'resources' ->> 'memory_bytes')::bigint
+             FROM scope_runs AS run
+             JOIN scope_workflow_revisions AS revision
+               ON revision.digest = run.workflow_revision_digest
+             CROSS JOIN LATERAL jsonb_array_elements(revision.definition -> 'jobs') AS definition_job(value)
+             WHERE job.run_id = run.id
+               AND definition_job.value ->> 'id' = job.job_key;
+             ALTER TABLE scope_run_jobs ALTER COLUMN cpu_millis SET NOT NULL;
+             ALTER TABLE scope_run_jobs ALTER COLUMN memory_bytes SET NOT NULL;
+             ALTER TABLE scope_run_jobs
+                 ADD CONSTRAINT scope_run_jobs_resources CHECK (
+                     cpu_millis BETWEEN 500 AND 64000
+                     AND memory_bytes BETWEEN 536870912 AND 1099511627776
+                 );
              ALTER TABLE scope_outbox_jobs
-                 ADD CONSTRAINT scope_outbox_jobs_push_workflow_schema_v4 CHECK (
+                 DROP CONSTRAINT scope_outbox_jobs_push_workflow_schema_v4;
+             ALTER TABLE scope_outbox_jobs
+                 ADD CONSTRAINT scope_outbox_jobs_push_workflow_schema_v5 CHECK (
                      kind <> 'push_main_trigger_evaluation' OR
                      completed_at_unix IS NOT NULL OR
-                     payload @> '{\"workflow_schema_version\": 4}'::jsonb
+                     payload @> '{\"workflow_schema_version\": 5}'::jsonb
                  );
              ALTER TABLE scope_runner_protocol_cutover
                  DROP CONSTRAINT scope_runner_protocol_cutover_values;
              ALTER TABLE scope_runners
-                 DROP CONSTRAINT scope_runners_v5_cutover;
+                 DROP CONSTRAINT scope_runners_v7_cutover;
              WITH cutover_time AS (
                  SELECT extract(epoch FROM clock_timestamp())::bigint AS now_unix
              )
@@ -148,23 +91,37 @@ impl MigrationTrait for Migration {
              UPDATE scope_runner_protocol_cutover
              SET state = CASE
                      WHEN EXISTS (SELECT 1 FROM scope_workflow_revisions)
-                     THEN 'v6-fenced'
-                     ELSE 'v6-open'
+                     THEN 'v8-fenced'
+                     ELSE 'v8-open'
                  END,
                  canary_generation = 0,
                  updated_at_unix = extract(epoch FROM clock_timestamp())::bigint
              WHERE key = 'current';
              ALTER TABLE scope_runner_protocol_cutover
                  ADD CONSTRAINT scope_runner_protocol_cutover_values CHECK (
-                     state IN ('v6-fenced', 'v6-open') AND
+                     state IN ('v8-fenced', 'v8-open') AND
                      canary_generation >= 0 AND
                      updated_at_unix >= 0
                  );
-             UPDATE scope_runners SET enabled = FALSE WHERE protocol_version < 6;
+             UPDATE scope_runners SET enabled = FALSE WHERE protocol_version < 8;
              ALTER TABLE scope_runners
-                 ADD CONSTRAINT scope_runners_v6_cutover CHECK (
-                     protocol_version >= 6 OR NOT enabled
-                 );",
+                 ADD CONSTRAINT scope_runners_v8_cutover CHECK (
+                     protocol_version >= 8 OR NOT enabled
+                 );
+             CREATE FUNCTION scope_notify_run_dispatch() RETURNS trigger
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 IF NEW.state = 'queued'
+                    AND (TG_OP = 'INSERT' OR OLD.state IS DISTINCT FROM NEW.state)
+                 THEN
+                     PERFORM pg_notify('scope_run_dispatch', '');
+                 END IF;
+                 RETURN NEW;
+             END;
+             $$;
+             CREATE TRIGGER scope_run_jobs_dispatch_notify
+             AFTER INSERT OR UPDATE OF state ON scope_run_jobs
+             FOR EACH ROW EXECUTE FUNCTION scope_notify_run_dispatch();",
         )
         .await?;
         Ok(())
@@ -196,7 +153,7 @@ where
             .try_get::<i64>("", "count")?;
         if count != 0 {
             return Err(DbErr::Migration(format!(
-                "workflow runtime contract migration requires the runtime to drain; found {count} {noun}"
+                "job resource migration requires the runtime to drain; found {count} {noun}"
             )));
         }
     }
@@ -225,7 +182,7 @@ where
                 .is_some()
         {
             return Err(DbErr::Migration(
-                "workflow runtime rewrite produced an invalid digest mapping".to_string(),
+                "job resource rewrite produced an invalid digest mapping".to_string(),
             ));
         }
         db.execute(Statement::from_sql_and_values(
@@ -250,7 +207,7 @@ where
             .try_get::<Value>("", "definition")?;
         if persisted != definition {
             return Err(DbErr::Migration(
-                "workflow runtime revision digest collision".to_string(),
+                "job resource workflow revision digest collision".to_string(),
             ));
         }
     }
@@ -272,57 +229,52 @@ where
     Ok(())
 }
 
-fn rewrite_definition(definition: Value) -> Result<(Value, String), DbErr> {
-    let persisted: PersistedWorkflowV3 =
-        serde_json::from_value(definition).map_err(|error| DbErr::Migration(error.to_string()))?;
-    let rewritten = PersistedWorkflowV4 {
-        name: persisted.name,
-        triggers: persisted.triggers,
-        jobs: persisted
-            .jobs
-            .into_iter()
-            .map(|job| PersistedWorkflowJobV4 {
-                id: job.id,
-                needs: job.needs,
-                runner: job.runner,
-                container: job.container,
-                timeout_seconds: job.timeout_seconds,
-                caches: job
-                    .caches
-                    .into_iter()
-                    .map(|name| PersistedWorkflowCache {
-                        path: format!("/scope/cache/{name}"),
-                        name,
-                    })
-                    .collect(),
-                environment: BTreeMap::new(),
-                steps: job.steps,
-            })
-            .collect(),
-    };
-    #[derive(Serialize)]
-    struct DigestInput<'a> {
-        version: u8,
-        definition: &'a PersistedWorkflowV4,
+fn rewrite_definition(mut definition: Value) -> Result<(Value, String), DbErr> {
+    let jobs = definition
+        .get_mut("jobs")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| DbErr::Migration("workflow definition jobs are invalid".to_string()))?;
+    for job in jobs {
+        let job = job
+            .as_object_mut()
+            .ok_or_else(|| DbErr::Migration("workflow definition job is invalid".to_string()))?;
+        if job.contains_key("resources") {
+            return Err(DbErr::Migration(
+                "workflow definition already contains job resources".to_string(),
+            ));
+        }
+        job.insert(
+            "resources".to_string(),
+            json!({
+                "cpu_millis": DEFAULT_CPU_MILLIS,
+                "memory_bytes": DEFAULT_MEMORY_BYTES,
+            }),
+        );
     }
-    let bytes = serde_json::to_vec(&DigestInput {
-        version: WORKFLOW_DIGEST_VERSION,
-        definition: &rewritten,
-    })
+    let compiled: CompiledWorkflow =
+        serde_json::from_value(definition).map_err(|error| DbErr::Migration(error.to_string()))?;
+    let revision = WorkflowRevision::new(
+        WorkflowIdentity::new(
+            "migration",
+            WorkflowPath::parse("/.scope/runs/migration.yml")
+                .map_err(|error| DbErr::Migration(error.to_string()))?,
+        )
+        .map_err(|error| DbErr::Migration(error.to_string()))?,
+        compiled,
+    )
     .map_err(|error| DbErr::Migration(error.to_string()))?;
-    let digest = hex::encode(Sha256::digest(bytes));
-    let definition =
-        serde_json::to_value(rewritten).map_err(|error| DbErr::Migration(error.to_string()))?;
+    let digest = revision.digest().to_string();
+    let definition = serde_json::to_value(revision.definition())
+        .map_err(|error| DbErr::Migration(error.to_string()))?;
     Ok((definition, digest))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
-    fn rewrite_adds_explicit_cache_paths_and_empty_environment() {
+    fn rewrite_adds_explicit_resources_and_uses_the_domain_digest() {
         let (definition, digest) = rewrite_definition(json!({
             "name": "Checks",
             "triggers": { "manual": true, "push_main": false },
@@ -332,18 +284,30 @@ mod tests {
                 "runner": { "kind": "any" },
                 "container": { "image": "rust:1.94" },
                 "timeout_seconds": 60,
-                "caches": ["cargo"],
+                "caches": [],
+                "environment": {},
                 "steps": [{ "name": "Test", "run": "cargo test" }]
             }]
         }))
         .unwrap();
 
         assert_eq!(
-            definition["jobs"][0]["caches"][0],
-            json!({ "name": "cargo", "path": "/scope/cache/cargo" })
+            definition["jobs"][0]["resources"],
+            json!({
+                "cpu_millis": DEFAULT_CPU_MILLIS,
+                "memory_bytes": DEFAULT_MEMORY_BYTES,
+            })
         );
-        assert_eq!(definition["jobs"][0]["environment"], json!({}));
-        assert_eq!(digest.len(), 64);
-        assert!(definition["jobs"][0].get("resources").is_none());
+        let compiled: CompiledWorkflow = serde_json::from_value(definition).unwrap();
+        let revision = WorkflowRevision::new(
+            WorkflowIdentity::new(
+                "repo-1",
+                WorkflowPath::parse("/.scope/runs/checks.yml").unwrap(),
+            )
+            .unwrap(),
+            compiled,
+        )
+        .unwrap();
+        assert_eq!(revision.digest(), digest);
     }
 }

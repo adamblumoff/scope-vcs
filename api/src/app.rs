@@ -94,8 +94,11 @@ pub fn router(state: AppState) -> Router {
             axum::routing::put(http::runners::attach_runner_repository)
                 .delete(http::runners::detach_runner_repository),
         )
+        .route(
+            routes::RUNNER_PROTOCOL_STATUS,
+            post(http::runner_protocol::status),
+        )
         .route(routes::RUNNER_POLL, post(http::runner_protocol::poll))
-        .route(routes::RUNNER_CLAIM, post(http::runner_protocol::claim))
         .route(
             routes::ATTEMPT_HEARTBEAT,
             post(http::runner_protocol::heartbeat),

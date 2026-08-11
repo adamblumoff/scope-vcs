@@ -31,6 +31,7 @@ caches:
     path: /workspace/target
 container:
   image: alpine:3.20
+resources: { cpu: 1, memory: 1gb }
 timeout: 5m
 jobs:
   checks:
@@ -47,6 +48,7 @@ runs-on: any
 caches: []
 container:
   image: alpine:3.20
+resources: { cpu: 1, memory: 1gb }
 timeout: 5m
 jobs:
   backend:
@@ -150,6 +152,7 @@ on: { push: true }
 runs-on: any
 caches: []
 container: { image: alpine:3.20 }
+resources: { cpu: 1, memory: 1gb }
 timeout: 1m
 jobs:
   checks:
@@ -235,7 +238,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .unwrap();
     assert_eq!(registered.status(), StatusCode::OK);
     let registered = response_json(registered).await;
-    let runner_secret = registered["secret"].as_str().unwrap().to_string();
+    let runner_auth = registered["secret"].as_str().unwrap().to_string();
 
     let source = temp_git_repo("manual-run-protocol");
     fs::create_dir_all(source.join(".scope/runs")).unwrap();
@@ -279,29 +282,17 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(machine_request(
             "POST",
             scope_api_contract::routes::RUNNER_POLL,
-            &runner_secret,
-            Body::empty(),
+            &runner_auth,
+            Body::from(r#"{"available_resources":{"cpu_millis":1000,"memory_bytes":1073741824}}"#),
         ))
         .await
         .unwrap();
     assert_eq!(polled.status(), StatusCode::OK);
     let polled = response_json(polled).await;
-    let run_id = polled["run"]["run_id"].as_str().unwrap().to_string();
-
-    let claimed = app
-        .clone()
-        .oneshot(machine_request(
-            "POST",
-            &scope_api_contract::routes::runner_claim(&run_id, "checks"),
-            &runner_secret,
-            Body::empty(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(claimed.status(), StatusCode::OK);
-    let claimed = response_json(claimed).await;
+    let claimed = &polled["claim"];
+    let run_id = claimed["job"]["run_id"].as_str().unwrap().to_string();
     let attempt_id = claimed["attempt_id"].as_str().unwrap().to_string();
-    let attempt_token = claimed["attempt_token"].as_str().unwrap().to_string();
+    let attempt_auth = claimed["attempt_token"].as_str().unwrap().to_string();
     assert_eq!(claimed["job"]["git_oid"], git_oid);
     assert_eq!(claimed["job"]["job_key"], "checks");
     assert_eq!(claimed["job"]["workflow_path"], "/.scope/runs/test.yml");
@@ -312,8 +303,8 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(machine_request(
             "GET",
             &scope_api_contract::routes::attempt_source(&attempt_id),
-            &attempt_token,
-            Body::empty(),
+            &attempt_auth,
+            Body::from(r#"{"available_resources":{"cpu_millis":1000,"memory_bytes":1073741824}}"#),
         ))
         .await
         .unwrap();
@@ -331,7 +322,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(json_request(
             "POST",
             &scope_api_contract::routes::attempt_container_image(&attempt_id),
-            Some(format!("Bearer {attempt_token}")),
+            Some(format!("Bearer {attempt_auth}")),
             &PinAttemptContainerImageRequest {
                 image: pinned_image.clone(),
             },
@@ -358,7 +349,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(json_request(
             "POST",
             &scope_api_contract::routes::attempt_cache_preparations(&attempt_id),
-            Some(format!("Bearer {attempt_token}")),
+            Some(format!("Bearer {attempt_auth}")),
             &ReportAttemptCachePreparationsRequest {
                 caches: vec![AttemptCachePreparationReport {
                     cache_name: "cargo".to_string(),
@@ -379,7 +370,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(machine_request(
             "POST",
             &scope_api_contract::routes::attempt_step_start(&attempt_id, 0),
-            &attempt_token,
+            &attempt_auth,
             Body::empty(),
         ))
         .await
@@ -396,7 +387,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(json_request(
             "POST",
             &scope_api_contract::routes::attempt_logs(&attempt_id),
-            Some(format!("Bearer {attempt_token}")),
+            Some(format!("Bearer {attempt_auth}")),
             &AppendAttemptLogRequest {
                 step_index: 0,
                 sequence: 1,
@@ -444,7 +435,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
             .oneshot(json_request(
                 "POST",
                 &scope_api_contract::routes::attempt_logs(&attempt_id),
-                Some(format!("Bearer {attempt_token}")),
+                Some(format!("Bearer {attempt_auth}")),
                 &AppendAttemptLogRequest {
                     step_index: 0,
                     sequence,
@@ -461,7 +452,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(json_request(
             "POST",
             &scope_api_contract::routes::attempt_step_complete(&attempt_id, 0),
-            Some(format!("Bearer {attempt_token}")),
+            Some(format!("Bearer {attempt_auth}")),
             &CompleteAttemptStepRequest {
                 conclusion: StepConclusionRequest::Succeeded,
                 logs_truncated: false,
@@ -476,7 +467,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(json_request(
             "POST",
             &scope_api_contract::routes::attempt_cache_finalizations(&attempt_id),
-            Some(format!("Bearer {attempt_token}")),
+            Some(format!("Bearer {attempt_auth}")),
             &ReportAttemptCacheFinalizationsRequest {
                 caches: vec![AttemptCacheFinalizationReport {
                     identity_digest: identity_digest.clone(),
@@ -531,7 +522,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
     assert_eq!(runners["runners"][0]["name"], "linux-box");
     assert_eq!(runners["runners"][0]["state"], "online");
     let resources_json = serde_json::to_string(&(history, runners)).unwrap();
-    assert!(!resources_json.contains(&runner_secret));
+    assert!(!resources_json.contains(&runner_auth));
     for forbidden_field in [
         "secret",
         "owner_user_id",
@@ -754,24 +745,13 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(machine_request(
             "POST",
             scope_api_contract::routes::RUNNER_POLL,
-            &runner_secret,
-            Body::empty(),
+            &runner_auth,
+            Body::from(r#"{"available_resources":{"cpu_millis":1000,"memory_bytes":1073741824}}"#),
         ))
         .await
         .unwrap();
     assert_eq!(offered_again.status(), StatusCode::OK);
-    let claimed_again = app
-        .clone()
-        .oneshot(machine_request(
-            "POST",
-            &scope_api_contract::routes::runner_claim(&run_id, "checks"),
-            &runner_secret,
-            Body::empty(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(claimed_again.status(), StatusCode::OK);
-    let newer_attempt_id = response_json(claimed_again).await["attempt_id"]
+    let newer_attempt_id = response_json(offered_again).await["claim"]["attempt_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -810,7 +790,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
                     TEST_REPO_NAME,
                     &run_id,
                 ))
-                .header(AUTHORIZATION, format!("Bearer {attempt_token}"))
+                .header(AUTHORIZATION, format!("Bearer {attempt_auth}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -826,7 +806,7 @@ async fn manual_run_protocol_crosses_human_runner_and_attempt_credentials() {
         .oneshot(machine_request(
             "GET",
             &scope_api_contract::routes::attempt_source(&attempt_id),
-            &runner_secret,
+            &runner_auth,
             Body::empty(),
         ))
         .await
@@ -862,10 +842,21 @@ async fn unused_runner_registration_can_be_rolled_back() {
         .await
         .unwrap();
     assert_eq!(registered.status(), StatusCode::OK);
-    let runner_id = response_json(registered).await["runner"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let registered = response_json(registered).await;
+    let runner_id = registered["runner"]["id"].as_str().unwrap().to_string();
+    let runner_auth = registered["secret"].as_str().unwrap();
+
+    let status = app
+        .clone()
+        .oneshot(machine_request(
+            "POST",
+            scope_api_contract::routes::RUNNER_PROTOCOL_STATUS,
+            runner_auth,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::NO_CONTENT);
 
     let deleted = app
         .clone()
@@ -965,6 +956,7 @@ fn machine_request(method: &str, uri: &str, token: &str, body: Body) -> Request<
         .method(method)
         .uri(uri)
         .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(CONTENT_TYPE, "application/json")
         .body(body)
         .unwrap()
 }

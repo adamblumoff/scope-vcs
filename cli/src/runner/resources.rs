@@ -741,8 +741,7 @@ mod tests {
             cpu_millis: DAEMON_CPU_RESERVE_MILLIS + MIN_JOB_CPU_MILLIS,
             pid_headroom: PID_RESERVE + MIN_JOB_PIDS * u64::from(slots.get()),
             transient: TransientCapacity {
-                available_bytes: TRANSIENT_DISK_RESERVE
-                    + MIN_JOB_STORAGE * u64::from(slots.get()),
+                available_bytes: TRANSIENT_DISK_RESERVE + MIN_JOB_STORAGE * u64::from(slots.get()),
                 available_inodes: Some(EMERGENCY_INODE_FLOOR),
             },
         };

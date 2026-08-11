@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 pub const MAX_RUNNER_NAME_BYTES: usize = 64;
 pub const MAX_RUNNER_VERSION_BYTES: usize = 100;
 pub const MAX_RUNNER_CONCURRENT_JOBS: u8 = 16;
-pub const RUNNER_PROTOCOL_VERSION: u32 = 7;
+pub const RUNNER_PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]

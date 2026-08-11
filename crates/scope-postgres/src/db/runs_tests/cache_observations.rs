@@ -16,6 +16,8 @@ async fn cache_observation_reports_are_authenticated_and_exactly_idempotent() {
                     vec![],
                     RunnerSelector::Any,
                     ContainerSpec::new("rust:1.90").unwrap(),
+                    scope_domain::runs::resources::JobResources::new(1_000, 1024 * 1024 * 1024)
+                        .unwrap(),
                     20 * 60,
                     vec![cache.clone()],
                     vec![WorkflowStep::new("Test", "cargo test").unwrap()],

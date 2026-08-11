@@ -72,20 +72,20 @@ impl AdminStore {
         if current != next
             && (current, next)
                 != (
-                    RunnerProtocolCutoverState::V7Fenced,
-                    RunnerProtocolCutoverState::V7Open,
+                    RunnerProtocolCutoverState::V8Fenced,
+                    RunnerProtocolCutoverState::V8Open,
                 )
         {
             return Err(PostgresError::conflict(
-                "startup migration owns the protocol rewrite; runtime may only open a fenced V7 cutover",
+                "startup migration owns the protocol rewrite; runtime may only open a fenced V8 cutover",
             ));
         }
-        if current == RunnerProtocolCutoverState::V7Fenced
-            && next == RunnerProtocolCutoverState::V7Open
+        if current == RunnerProtocolCutoverState::V8Fenced
+            && next == RunnerProtocolCutoverState::V8Open
             && !canary_suite_succeeded(&snapshot)
         {
             return Err(PostgresError::conflict(
-                "the current cold-write, warm-read, and evict canary generation must succeed before V7 opens",
+                "the current cold-write, warm-read, and evict canary generation must succeed before V8 opens",
             ));
         }
 
@@ -110,9 +110,9 @@ impl AdminStore {
     ) -> Result<RunnerProtocolCutoverSnapshot, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let mut snapshot = load_snapshot(&tx, true).await?;
-        if snapshot.cutover.state() != RunnerProtocolCutoverState::V7Fenced {
+        if snapshot.cutover.state() != RunnerProtocolCutoverState::V8Fenced {
             return Err(PostgresError::conflict(
-                "runner protocol canaries can only be assigned while V7 is fenced",
+                "runner protocol canaries can only be assigned while V8 is fenced",
             ));
         }
 
@@ -212,7 +212,7 @@ impl AdminStore {
             .map_err(PostgresError::internal)?;
             save_cutover_state(
                 &tx,
-                RunnerProtocolCutoverState::V7Fenced,
+                RunnerProtocolCutoverState::V8Fenced,
                 snapshot.canary_generation,
                 now_unix,
             )
@@ -277,14 +277,14 @@ impl RunStore {
                 "cache finalization requires a successful canary attempt",
             ));
         }
-        if cutover.state() == RunnerProtocolCutoverState::V7Open
+        if cutover.state() == RunnerProtocolCutoverState::V8Open
             && succeeded
             && canary.status() == RunnerProtocolCanaryStatus::Succeeded
         {
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(canary);
         }
-        if cutover.state() != RunnerProtocolCutoverState::V7Fenced {
+        if cutover.state() != RunnerProtocolCutoverState::V8Fenced {
             return Err(PostgresError::unavailable(
                 "cache finalization is only accepted for the active fenced canary",
             ));
@@ -482,11 +482,11 @@ pub(super) async fn mark_canary_claimed(
     now_unix: u64,
 ) -> Result<Option<RunnerProtocolCanaryPhase>, PostgresError> {
     let (cutover, _) = load_cutover(tx, false).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V7Fenced {
+    if cutover.state() != RunnerProtocolCutoverState::V8Fenced {
         return Ok(None);
     }
     let (cutover, generation) = load_cutover(tx, true).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V7Fenced {
+    if cutover.state() != RunnerProtocolCutoverState::V8Fenced {
         return Ok(None);
     }
     let mut canary = current_canary_for_run(tx, generation, runner_id, run_id, true).await?;
@@ -510,7 +510,7 @@ pub(super) async fn guard_attempt_operation(
     // Keep the open-state hot path lock-free. While fenced, serialize the
     // operation with canary reassignment and phase advancement using the same
     // singleton -> canary lock order as claims and terminal updates.
-    let (cutover, generation) = if cutover.state() == RunnerProtocolCutoverState::V7Fenced {
+    let (cutover, generation) = if cutover.state() == RunnerProtocolCutoverState::V8Fenced {
         load_cutover(tx, true).await?
     } else {
         (cutover, generation)
@@ -519,7 +519,7 @@ pub(super) async fn guard_attempt_operation(
         .state()
         .allows_attempt_operation(runner.protocol_version)
         && match cutover.state() {
-            RunnerProtocolCutoverState::V7Fenced => {
+            RunnerProtocolCutoverState::V8Fenced => {
                 match current_canary_for_run(tx, generation, runner_id, run_id, true).await {
                     Ok(_) => true,
                     Err(error) if error.kind == PostgresErrorKind::Unavailable => false,
@@ -545,7 +545,7 @@ pub(super) async fn guard_canary_pinned_image(
     image: &PinnedContainerImage,
 ) -> Result<(), PostgresError> {
     let (cutover, generation) = load_cutover(tx, false).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V7Fenced {
+    if cutover.state() != RunnerProtocolCutoverState::V8Fenced {
         return Ok(());
     }
     let canary = current_canary_for_run(tx, generation, runner_id, run_id, false).await?;
@@ -567,14 +567,14 @@ pub(super) async fn record_canary_attempt_terminal(
     now_unix: u64,
 ) -> Result<(), PostgresError> {
     let (cutover, _) = load_cutover(tx, false).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V7Fenced
+    if cutover.state() != RunnerProtocolCutoverState::V8Fenced
         || !state.is_terminal()
         || state == AttemptState::Succeeded
     {
         return Ok(());
     }
     let (cutover, generation) = load_cutover(tx, true).await?;
-    if cutover.state() != RunnerProtocolCutoverState::V7Fenced {
+    if cutover.state() != RunnerProtocolCutoverState::V8Fenced {
         return Ok(());
     }
     let mut canary = match current_canary_for_run(tx, generation, runner_id, run_id, true).await {
@@ -771,7 +771,7 @@ async fn ensure_canary_target(
         .try_into_domain()?;
     if !runner.supports_dispatch() {
         return Err(PostgresError::conflict(
-            "canary runner must be enabled and support protocol V7",
+            "canary runner must be enabled and support protocol V8",
         ));
     }
     let run = entities::run::Entity::find_by_id(run_id.to_string())
@@ -897,7 +897,7 @@ where
         ))
         .await
         .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::unavailable("run is not the active protocol V7 canary"))?;
+        .ok_or_else(|| PostgresError::unavailable("run is not the active protocol V8 canary"))?;
     canary_from_row(&row)
 }
 

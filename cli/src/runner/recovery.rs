@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn older_recovery_is_retired_before_current_schema_decoding() {
-        let root = TestDir::new("runner-v7-recovery");
+        let root = TestDir::new("runner-v8-recovery");
         let work_dir = root.path().join("attempt-v6");
         fs::create_dir(&work_dir).unwrap();
         let claim_path = work_dir.join(RECOVERY_CLAIM_FILE);

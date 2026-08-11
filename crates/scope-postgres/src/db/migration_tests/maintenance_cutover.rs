@@ -53,11 +53,13 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 2);
+    assert_eq!(plan.pending.len(), 3);
     assert_eq!(plan.pending[0].name, "m0018_truthful_run_log_truncation");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0019_run_attempt_cache_observations");
     assert_eq!(plan.pending[1].impact, MigrationImpact::Online);
+    assert_eq!(plan.pending[2].name, "m0020_job_resources");
+    assert_eq!(plan.pending[2].impact, MigrationImpact::MaintenanceRequired);
 }
 
 #[tokio::test]
@@ -94,7 +96,7 @@ async fn truthful_log_cutover_fences_protocol_six_runners() {
         .unwrap()
         .try_get::<String>("", "state")
         .unwrap();
-    assert_eq!(cutover, "v7-open");
+    assert_eq!(cutover, "v8-open");
     let enabled = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,

@@ -21,6 +21,7 @@ use scope_api_contract::CliSessionTokenResponse;
 use scope_object_store::{EncryptedObjectStore, ObjectStore};
 use scope_postgres::db::MetadataStore;
 use std::sync::Arc;
+use tokio::sync::watch;
 
 pub use env::is_local_dev_env;
 
@@ -69,6 +70,11 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         .start_repo_change_listener(move |payload| {
             listener_bus.publish_notification_payload(&payload)
         })?;
+    let (run_dispatch_events, _) = watch::channel(0_u64);
+    let dispatch_events = run_dispatch_events.clone();
+    metadata.start_run_dispatch_listener(move || {
+        dispatch_events.send_modify(|version| *version = version.wrapping_add(1));
+    })?;
     let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
     let object_store: Arc<dyn ObjectStore> = Arc::new(BudgetedObjectStore::new(
         raw_object_store,
@@ -85,6 +91,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         runtime_budgets,
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
         repo_events,
+        run_dispatch_events,
         push_intent_signing_key,
         raw_git_cache,
         git_cache_builds: Arc::new(crate::git::cache::GitDerivedCacheCoordinator::default()),

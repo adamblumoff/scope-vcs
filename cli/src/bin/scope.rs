@@ -137,7 +137,7 @@ enum RunnerCommand {
     },
     Status,
     Doctor,
-    #[command(about = "Upgrade this runner, verify the V7 canary suite, and open the cutover")]
+    #[command(about = "Upgrade this runner, verify the V8 canary suite, and open the cutover")]
     Cutover {
         #[arg(long)]
         name: String,

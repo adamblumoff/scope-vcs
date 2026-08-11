@@ -14,6 +14,7 @@ use crate::{
 use scope_object_store::{EncryptedObjectStore, ObjectStore};
 use scope_postgres::db::MetadataStore;
 use std::{path::PathBuf, sync::Arc};
+use tokio::sync::watch;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +25,7 @@ pub struct AppState {
     pub(crate) runtime_budgets: Arc<RuntimeBudgets>,
     pub(crate) operator_token: Option<Arc<str>>,
     pub(crate) repo_events: RepoChangeBus,
+    pub(crate) run_dispatch_events: watch::Sender<u64>,
     pub(crate) push_intent_signing_key: Arc<[u8]>,
     pub(crate) raw_git_cache: Arc<RawGitCacheRegistry>,
     pub(crate) git_cache_builds: Arc<GitDerivedCacheCoordinator>,
@@ -41,6 +43,7 @@ impl AppState {
             .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
         let metadata = MetadataStore::connect(database_url_from_env()?).await?;
         let repo_events = RepoChangeBus::default();
+        let (run_dispatch_events, _) = watch::channel(0_u64);
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
         let object_store = Arc::new(BudgetedObjectStore::new(
             Arc::new(EncryptedObjectStore::new(
@@ -55,6 +58,10 @@ impl AppState {
             .start_repo_change_listener(move |payload| {
                 listener_bus.publish_notification_payload(&payload)
             })?;
+        let dispatch_events = run_dispatch_events.clone();
+        metadata.start_run_dispatch_listener(move || {
+            dispatch_events.send_modify(|version| *version = version.wrapping_add(1));
+        })?;
         let raw_git_cache = RawGitCacheRegistry::new(data_dir.join("git-cache"))
             .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
 
@@ -66,6 +73,7 @@ impl AppState {
             runtime_budgets,
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
             repo_events,
+            run_dispatch_events,
             push_intent_signing_key,
             raw_git_cache: raw_git_cache.clone(),
             git_cache_builds: Arc::new(GitDerivedCacheCoordinator::default()),
@@ -88,6 +96,7 @@ impl AppState {
         let test_object_store = Arc::new(scope_object_store::MemoryObjectStore::new());
         let target = scope_postgres::db::TestDatabaseTarget::required().unwrap();
         let metadata = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let (run_dispatch_events, _) = watch::channel(0_u64);
         Self {
             metadata,
             data_dir: Arc::new(data_dir.clone()),
@@ -106,6 +115,7 @@ impl AppState {
             runtime_budgets,
             operator_token: None,
             repo_events: RepoChangeBus::default(),
+            run_dispatch_events,
             push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
             raw_git_cache: RawGitCacheRegistry::new(data_dir.join("git-cache")).unwrap(),
             git_cache_builds: Arc::new(GitDerivedCacheCoordinator::default()),

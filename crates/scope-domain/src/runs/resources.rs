@@ -37,10 +37,6 @@ impl JobResources {
     pub fn memory_bytes(self) -> u64 {
         self.memory_bytes
     }
-
-    pub fn fits_within(self, available: Self) -> bool {
-        self.cpu_millis <= available.cpu_millis && self.memory_bytes <= available.memory_bytes
-    }
 }
 
 impl<'de> Deserialize<'de> for JobResources {
@@ -82,13 +78,5 @@ mod tests {
         assert!(JobResources::new(MIN_JOB_CPU_MILLIS, MIN_JOB_MEMORY_BYTES - 1).is_err());
         assert!(JobResources::new(MAX_JOB_CPU_MILLIS + 1, MIN_JOB_MEMORY_BYTES).is_err());
         assert!(JobResources::new(MIN_JOB_CPU_MILLIS, MAX_JOB_MEMORY_BYTES + 1).is_err());
-    }
-
-    #[test]
-    fn fits_only_when_both_dimensions_fit() {
-        let request = JobResources::new(2_000, 2 * 1024 * 1024 * 1024).unwrap();
-        assert!(request.fits_within(JobResources::new(4_000, 4 * 1024 * 1024 * 1024).unwrap()));
-        assert!(!request.fits_within(JobResources::new(1_000, 4 * 1024 * 1024 * 1024).unwrap()));
-        assert!(!request.fits_within(JobResources::new(4_000, 1024 * 1024 * 1024).unwrap()));
     }
 }

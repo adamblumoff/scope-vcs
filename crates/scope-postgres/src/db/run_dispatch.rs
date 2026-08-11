@@ -10,7 +10,9 @@ use super::{
     runs::{DispatchOffer, unique_conflict, workflow_revision_for_run},
 };
 use crate::error::PostgresError;
-use scope_domain::runs::{job::reconcile_run, run::RunJobState, runner::Runner};
+use scope_domain::runs::{
+    job::reconcile_run, resources::JobResources, run::RunJobState, runner::Runner,
+};
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, IntoActiveModel, Statement,
     TransactionTrait,
@@ -52,6 +54,8 @@ async fn dispatch_candidate(
     tx: &DatabaseTransaction,
     runner_id: &str,
     canary_run_id: Option<&str>,
+    available_resources: JobResources,
+    lock_job: bool,
 ) -> Result<Option<DispatchCandidate>, PostgresError> {
     const ELIGIBLE_JOB: &str = "
         SELECT job.run_id, job.job_key
@@ -65,6 +69,8 @@ async fn dispatch_candidate(
           AND run.state IN ('queued', 'leased', 'running')
           AND run.cancellation_requested = FALSE
           AND (job.desired_runner_name IS NULL OR job.desired_runner_name = runner_grant.name)
+          AND job.cpu_millis <= $2
+          AND job.memory_bytes <= $3
         ORDER BY job.created_at_unix, job.run_id, job.job_key
         LIMIT 1";
     const ELIGIBLE_CANARY_JOB: &str = "
@@ -79,19 +85,37 @@ async fn dispatch_candidate(
           AND run.state IN ('queued', 'leased', 'running')
           AND run.cancellation_requested = FALSE
           AND (job.desired_runner_name IS NULL OR job.desired_runner_name = runner_grant.name)
-          AND job.run_id = $2
+          AND job.cpu_millis <= $2
+          AND job.memory_bytes <= $3
+          AND job.run_id = $4
         ORDER BY job.created_at_unix, job.run_id, job.job_key
         LIMIT 1";
+    let cpu_millis =
+        entities::u64_to_i64(available_resources.cpu_millis(), "available runner CPU")?;
+    let memory_bytes = entities::u64_to_i64(
+        available_resources.memory_bytes(),
+        "available runner memory",
+    )?;
+    let lock_clause = if lock_job {
+        " FOR UPDATE OF job SKIP LOCKED"
+    } else {
+        ""
+    };
     let statement = match canary_run_id {
         Some(run_id) => Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            ELIGIBLE_CANARY_JOB,
-            [runner_id.into(), run_id.into()],
+            format!("{ELIGIBLE_CANARY_JOB}{lock_clause}"),
+            [
+                runner_id.into(),
+                cpu_millis.into(),
+                memory_bytes.into(),
+                run_id.into(),
+            ],
         ),
         None => Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
-            ELIGIBLE_JOB,
-            [runner_id.into()],
+            format!("{ELIGIBLE_JOB}{lock_clause}"),
+            [runner_id.into(), cpu_millis.into(), memory_bytes.into()],
         ),
     };
     tx.query_one(statement)
@@ -144,7 +168,11 @@ impl RunStore {
             DispatchCutover::General => None,
             DispatchCutover::None => unreachable!("none dispatch returned above"),
         };
-        let Some(candidate) = dispatch_candidate(&tx, runner_id, canary_run_id).await? else {
+        let available_resources = JobResources::new(64_000, 1024 * 1024 * 1024 * 1024)
+            .expect("maximum resources are valid");
+        let Some(candidate) =
+            dispatch_candidate(&tx, runner_id, canary_run_id, available_resources, false).await?
+        else {
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(None);
         };
@@ -196,82 +224,156 @@ impl RunStore {
         lease_expires_at_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        guard_claim(&tx, runner_id, run_id).await?;
-        let run_snapshot = entities::run::Entity::find_by_id(run_id.to_string())
+        let claim = claim_job_in_transaction(
+            &tx,
+            run_id,
+            job_key,
+            runner_id,
+            attempt_id,
+            token_hash,
+            now_unix,
+            lease_expires_at_unix,
+        )
+        .await?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(claim)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn claim_next_job(
+        &self,
+        runner_id: &str,
+        available_resources: JobResources,
+        attempt_id: &str,
+        token_hash: &str,
+        now_unix: u64,
+        lease_expires_at_unix: u64,
+    ) -> Result<Option<DispatchClaim>, PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let runner = entities::runner::Entity::find_by_id(runner_id.to_string())
             .one(&tx)
             .await
             .map_err(PostgresError::internal)?
-            .ok_or_else(|| PostgresError::not_found("run not found"))?
+            .ok_or_else(|| PostgresError::not_found("runner not found"))?
             .try_into_domain()?;
-        let mut job = locked_job(&tx, run_id, job_key).await?;
-        let mut runner = runner_by_id(&tx, runner_id).await?;
-        if !runner_has_capacity(&tx, &runner, now_unix).await? {
-            return Err(PostgresError::resource_exhausted(format!(
-                "runner has reached its capacity of {} concurrent job(s)",
-                runner.max_concurrent_jobs.get()
-            )));
+        if !runner.supports_dispatch() || !runner_has_capacity(&tx, &runner, now_unix).await? {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(None);
         }
-        let grant = grant_by_ids(&tx, run_snapshot.workflow.repository_id(), runner_id).await?;
-        let workflow_revision = workflow_revision_for_run(&tx, &run_snapshot).await?;
-        let definition = workflow_revision
-            .definition()
-            .job(&job.key)
-            .ok_or_else(|| PostgresError::internal_message("run job definition is missing"))?;
-        let (attempt, steps) = job
-            .claim(
-                &run_snapshot,
-                definition,
-                &runner,
-                &grant,
-                attempt_id,
-                token_hash,
-                now_unix,
-                lease_expires_at_unix,
-            )
-            .map_err(PostgresError::from)?;
-        runner.record_seen(now_unix).map_err(PostgresError::from)?;
-
-        entities::run_attempt::Entity::insert(
-            entities::run_attempt::Model::from_domain(&attempt)?.into_active_model(),
+        let dispatch = dispatch_cutover(&tx, runner_id, runner.protocol_version).await?;
+        let canary_run_id = match &dispatch {
+            DispatchCutover::Canary(run_id) => Some(run_id.as_str()),
+            DispatchCutover::General => None,
+            DispatchCutover::None => {
+                tx.commit().await.map_err(PostgresError::internal)?;
+                return Ok(None);
+            }
+        };
+        let Some(candidate) =
+            dispatch_candidate(&tx, runner_id, canary_run_id, available_resources, true).await?
+        else {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(None);
+        };
+        let claim = claim_job_in_transaction(
+            &tx,
+            &candidate.run_id,
+            &candidate.job_key,
+            runner_id,
+            attempt_id,
+            token_hash,
+            now_unix,
+            lease_expires_at_unix,
         )
-        .exec(&tx)
-        .await
-        .map_err(|error| {
-            unique_conflict(error, "run attempt id or token hash is already in use")
-        })?;
-        entities::run_attempt_step::Entity::insert_many(
-            steps
-                .iter()
-                .map(entities::run_attempt_step::Model::from_domain)
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .map(IntoActiveModel::into_active_model),
-        )
-        .exec(&tx)
-        .await
-        .map_err(PostgresError::internal)?;
-        save_job(&tx, &job).await?;
-        let mut run = locked_run(&tx, run_id).await?;
-        if run.cancellation_requested || run.state.is_terminal() {
-            return Err(PostgresError::conflict("run is no longer dispatchable"));
-        }
-        let mut jobs = jobs_for_run(&tx, run_id).await?;
-        if let Some(stored) = jobs.iter_mut().find(|stored| stored.key == job.key) {
-            *stored = job.clone();
-        }
-        reconcile_run(&mut run, &mut jobs, &workflow_revision, now_unix)
-            .map_err(PostgresError::from)?;
-        save_run(&tx, &run).await?;
-        save_runner(&tx, &runner).await?;
-        let canary_phase = mark_canary_claimed(&tx, runner_id, run_id, now_unix).await?;
+        .await?;
         tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(DispatchClaim {
-            run,
-            job,
-            attempt,
-            steps,
-            workflow_revision,
-            canary_phase,
-        })
+        Ok(Some(claim))
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn claim_job_in_transaction(
+    tx: &DatabaseTransaction,
+    run_id: &str,
+    job_key: &str,
+    runner_id: &str,
+    attempt_id: &str,
+    token_hash: &str,
+    now_unix: u64,
+    lease_expires_at_unix: u64,
+) -> Result<DispatchClaim, PostgresError> {
+    guard_claim(tx, runner_id, run_id).await?;
+    let run_snapshot = entities::run::Entity::find_by_id(run_id.to_string())
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| PostgresError::not_found("run not found"))?
+        .try_into_domain()?;
+    let mut job = locked_job(tx, run_id, job_key).await?;
+    let mut runner = runner_by_id(tx, runner_id).await?;
+    if !runner_has_capacity(tx, &runner, now_unix).await? {
+        return Err(PostgresError::resource_exhausted(format!(
+            "runner has reached its capacity of {} concurrent job(s)",
+            runner.max_concurrent_jobs.get()
+        )));
+    }
+    let grant = grant_by_ids(tx, run_snapshot.workflow.repository_id(), runner_id).await?;
+    let workflow_revision = workflow_revision_for_run(tx, &run_snapshot).await?;
+    let definition = workflow_revision
+        .definition()
+        .job(&job.key)
+        .ok_or_else(|| PostgresError::internal_message("run job definition is missing"))?;
+    let (attempt, steps) = job
+        .claim(
+            &run_snapshot,
+            definition,
+            &runner,
+            &grant,
+            attempt_id,
+            token_hash,
+            now_unix,
+            lease_expires_at_unix,
+        )
+        .map_err(PostgresError::from)?;
+    runner.record_seen(now_unix).map_err(PostgresError::from)?;
+
+    entities::run_attempt::Entity::insert(
+        entities::run_attempt::Model::from_domain(&attempt)?.into_active_model(),
+    )
+    .exec(tx)
+    .await
+    .map_err(|error| unique_conflict(error, "run attempt id or token hash is already in use"))?;
+    entities::run_attempt_step::Entity::insert_many(
+        steps
+            .iter()
+            .map(entities::run_attempt_step::Model::from_domain)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(IntoActiveModel::into_active_model),
+    )
+    .exec(tx)
+    .await
+    .map_err(PostgresError::internal)?;
+    save_job(tx, &job).await?;
+    let mut run = locked_run(tx, run_id).await?;
+    if run.cancellation_requested || run.state.is_terminal() {
+        return Err(PostgresError::conflict("run is no longer dispatchable"));
+    }
+    let mut jobs = jobs_for_run(tx, run_id).await?;
+    if let Some(stored) = jobs.iter_mut().find(|stored| stored.key == job.key) {
+        *stored = job.clone();
+    }
+    reconcile_run(&mut run, &mut jobs, &workflow_revision, now_unix)
+        .map_err(PostgresError::from)?;
+    save_run(tx, &run).await?;
+    save_runner(tx, &runner).await?;
+    let canary_phase = mark_canary_claimed(tx, runner_id, run_id, now_unix).await?;
+    Ok(DispatchClaim {
+        run,
+        job,
+        attempt,
+        steps,
+        workflow_revision,
+        canary_phase,
+    })
 }

@@ -6,6 +6,7 @@ use scope_domain::projection_views::{ProjectionViewFile, ProjectionViewFileConte
 use scope_domain::runs::{
     cache::{AttemptCacheObservation, CacheColdReason, CacheFinalState, CachePreparation},
     job::RunJob,
+    resources::JobResources,
     run::{
         AttemptState, AttemptTerminalReason, PinnedContainerImage, Run, RunAttempt, RunAttemptStep,
         RunJobState, RunLogChunk, RunSource, RunState, RunTrigger, StepState,

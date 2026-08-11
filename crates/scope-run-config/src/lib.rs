@@ -1,5 +1,6 @@
 use scope_domain::runs::{
     cache::WorkflowCache,
+    resources::JobResources,
     workflow::{
         CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowError, WorkflowIdentity,
         WorkflowJob, WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
@@ -26,6 +27,8 @@ pub enum RunConfigError {
     UnsupportedPushBranches,
     #[error("workflow timeout must be an integer followed by s, m, or h")]
     InvalidTimeout,
+    #[error("workflow resources are invalid: {0}")]
+    InvalidResources(String),
     #[error("workflow name {0:?} is defined by more than one file")]
     DuplicateWorkflowName(String),
     #[error(transparent)]
@@ -78,6 +81,7 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
         RunnerSelector::named(raw.runs_on)?
     };
     let container = ContainerSpec::new(raw.container.image)?;
+    let resources = parse_resources(&raw.resources)?;
     let timeout_seconds = parse_timeout_seconds(&raw.timeout)?;
     let caches = raw
         .caches
@@ -105,6 +109,12 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
                 Some(container) => ContainerSpec::new(container.image)?,
                 None => container.clone(),
             };
+            let job_resources = job
+                .resources
+                .as_ref()
+                .map(parse_resources)
+                .transpose()?
+                .unwrap_or(resources);
             let job_timeout_seconds = match job.timeout {
                 Some(timeout) => parse_timeout_seconds(&timeout)?,
                 None => timeout_seconds,
@@ -130,6 +140,7 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
                 needs,
                 job_runner,
                 job_container,
+                job_resources,
                 job_timeout_seconds,
                 job_caches,
                 steps,
@@ -180,6 +191,30 @@ fn parse_timeout_seconds(timeout: &str) -> Result<u64, RunConfigError> {
         .ok_or(RunConfigError::InvalidTimeout)
 }
 
+fn parse_resources(resources: &RawResources) -> Result<JobResources, RunConfigError> {
+    let cpu_millis = resources
+        .cpu
+        .checked_mul(1_000)
+        .ok_or_else(|| RunConfigError::InvalidResources("CPU value overflows".to_string()))?;
+    let memory = resources.memory.trim();
+    let (number, multiplier) = if let Some(value) = memory.strip_suffix("gb") {
+        (value, 1024_u64.pow(3))
+    } else if let Some(value) = memory.strip_suffix("mb") {
+        (value, 1024_u64.pow(2))
+    } else {
+        return Err(RunConfigError::InvalidResources(
+            "memory must be an integer followed by mb or gb".to_string(),
+        ));
+    };
+    let memory_bytes = number
+        .parse::<u64>()
+        .map_err(|_| RunConfigError::InvalidResources("memory value is not an integer".into()))?
+        .checked_mul(multiplier)
+        .ok_or_else(|| RunConfigError::InvalidResources("memory value overflows".into()))?;
+    JobResources::new(cpu_millis, memory_bytes)
+        .map_err(|error| RunConfigError::InvalidResources(error.to_string()))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawWorkflow {
@@ -189,6 +224,7 @@ struct RawWorkflow {
     #[serde(rename = "runs-on")]
     runs_on: String,
     container: RawContainer,
+    resources: RawResources,
     timeout: String,
     #[serde(default)]
     caches: Vec<RawCache>,
@@ -234,6 +270,13 @@ struct RawContainer {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawResources {
+    cpu: u64,
+    memory: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawJob {
     #[serde(default)]
     needs: Vec<String>,
@@ -241,6 +284,8 @@ struct RawJob {
     runs_on: Option<String>,
     #[serde(default)]
     container: Option<RawContainer>,
+    #[serde(default)]
+    resources: Option<RawResources>,
     #[serde(default)]
     timeout: Option<String>,
     #[serde(default)]
@@ -304,6 +349,7 @@ on:
 runs-on: any
 container:
   image: rust:1.90
+resources: { cpu: 1, memory: 1gb }
 timeout: 20m
 caches:
   - name: cargo-target
@@ -355,6 +401,7 @@ name: Test
 on: { push: true, manual: true }
 runs-on: any
 container: { image: "rust:1.90" }
+resources: { cpu: 1, memory: 1gb }
 timeout: 1200s
 caches:
   - { name: cargo, path: /scope/cache/cargo }
@@ -444,16 +491,16 @@ jobs:
                 include_bytes!("../../../.scope/runs/checks.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v7-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-cold-write.yml").as_slice(),
+                "/.scope/runs/v8-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v8-canary-cold-write.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v7-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-warm-read.yml").as_slice(),
+                "/.scope/runs/v8-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v8-canary-warm-read.yml").as_slice(),
             ),
             (
-                "/.scope/runs/v7-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-evict.yml").as_slice(),
+                "/.scope/runs/v8-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v8-canary-evict.yml").as_slice(),
             ),
         ] {
             parse_workflow(path, bytes).unwrap_or_else(|error| {
@@ -471,18 +518,18 @@ jobs:
         for (phase, path, bytes) in [
             (
                 RunnerProtocolCanaryPhase::ColdWrite,
-                "/.scope/runs/v7-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-cold-write.yml").as_slice(),
+                "/.scope/runs/v8-canary-cold-write.yml",
+                include_bytes!("../../../.scope/runs/v8-canary-cold-write.yml").as_slice(),
             ),
             (
                 RunnerProtocolCanaryPhase::WarmRead,
-                "/.scope/runs/v7-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-warm-read.yml").as_slice(),
+                "/.scope/runs/v8-canary-warm-read.yml",
+                include_bytes!("../../../.scope/runs/v8-canary-warm-read.yml").as_slice(),
             ),
             (
                 RunnerProtocolCanaryPhase::Evict,
-                "/.scope/runs/v7-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-evict.yml").as_slice(),
+                "/.scope/runs/v8-canary-evict.yml",
+                include_bytes!("../../../.scope/runs/v8-canary-evict.yml").as_slice(),
             ),
         ] {
             let parsed = parse_workflow(path, bytes).unwrap();
@@ -569,6 +616,7 @@ name: Graph
 on: { manual: true }
 runs-on: remote-linux
 container: { image: rust:1.90 }
+resources: { cpu: 1, memory: 1gb }
 timeout: 20m
 caches: [{ name: cargo, path: /scope/cache/cargo }]
 env: { SHARED: workflow, WORKFLOW_ONLY: yes }
@@ -581,6 +629,7 @@ jobs:
     needs: [backend]
     runs-on: browser-runner
     container: { image: node:24 }
+    resources: { cpu: 2, memory: 2gb }
     timeout: 5m
     caches: []
     steps:

@@ -23,7 +23,7 @@ use scope_api_contract::{
     AttemptStatusResponse, AttemptStepStatusResponse, ClaimRunResponse, CompleteAttemptRequest,
     CompleteAttemptStepRequest, PinAttemptContainerImageRequest, PinAttemptContainerImageResponse,
     ReportAttemptCacheFinalizationsRequest, ReportAttemptCachePreparationsRequest, RunJobResponse,
-    RunnerPollResponse, RunnerRunOffer, StepConclusionRequest,
+    RunnerPollRequest, RunnerPollResponse, StepConclusionRequest,
 };
 use scope_domain::runs::run::{
     AttemptConclusion, PinnedContainerImage, RunAttemptStep, RunLogChunk, StepConclusion,
@@ -33,60 +33,66 @@ use std::time::Duration;
 
 const ATTEMPT_LEASE_SECONDS: u64 = 90;
 const MAX_SOURCE_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
-const POLL_ITERATIONS: usize = 20;
+// Queue notifications make new work immediate. A short periodic resync also refreshes the
+// runner's reported capacity promptly after local jobs finish while a poll is in flight.
+const POLL_ITERATIONS: usize = 2;
+
+pub(crate) async fn status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::http::StatusCode, ApiError> {
+    require_runner(&state, &headers).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
 
 pub(crate) async fn poll(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Json(input): Json<RunnerPollRequest>,
 ) -> Result<Json<RunnerPollResponse>, ApiError> {
     let runner = require_runner(&state, &headers).await?;
+    let mut dispatch_events = state.run_dispatch_events.subscribe();
     for iteration in 0..POLL_ITERATIONS {
-        if let Some(offer) = state
+        let now = unix_now()?;
+        let lease_expires_at_unix = now + ATTEMPT_LEASE_SECONDS;
+        let (attempt_token, attempt_token_hash) = generate_attempt_token()?;
+        if let Some(claim) = state
             .metadata
             .runs()
-            .next_dispatchable_job(&runner.id, unix_now()?)
+            .claim_next_job(
+                &runner.id,
+                input.available_resources,
+                &generate_prefixed_id("attempt_")?,
+                &attempt_token_hash,
+                now,
+                lease_expires_at_unix,
+            )
             .await?
         {
             return Ok(Json(RunnerPollResponse {
-                run: Some(RunnerRunOffer {
-                    run_id: offer.run.id,
-                    job_key: offer.job.key.as_str().to_string(),
-                    repository_id: offer.run.workflow.repository_id().to_string(),
-                    workflow_name: offer.run.workflow.path().name().to_string(),
-                    git_oid: offer.run.source.git_oid().to_string(),
-                }),
+                claim: Some(claim_response(claim, attempt_token, lease_expires_at_unix)),
             }));
         }
         if iteration + 1 < POLL_ITERATIONS {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::select! {
+                changed = dispatch_events.changed() => {
+                    if changed.is_err() {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            }
         }
     }
-    Ok(Json(RunnerPollResponse { run: None }))
+    Ok(Json(RunnerPollResponse { claim: None }))
 }
 
-pub(crate) async fn claim(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((run_id, job_key)): Path<(String, String)>,
-) -> Result<Json<ClaimRunResponse>, ApiError> {
-    let runner = require_runner(&state, &headers).await?;
-    let now = unix_now()?;
-    let lease_expires_at_unix = now + ATTEMPT_LEASE_SECONDS;
-    let (attempt_token, attempt_token_hash) = generate_attempt_token()?;
-    let claim = state
-        .metadata
-        .runs()
-        .claim_job(
-            &run_id,
-            &job_key,
-            &runner.id,
-            &generate_prefixed_id("attempt_")?,
-            &attempt_token_hash,
-            now,
-            lease_expires_at_unix,
-        )
-        .await?;
-    Ok(Json(ClaimRunResponse {
+fn claim_response(
+    claim: scope_postgres::db::DispatchClaim,
+    attempt_token: String,
+    lease_expires_at_unix: u64,
+) -> ClaimRunResponse {
+    ClaimRunResponse {
         attempt_id: claim.attempt.id,
         attempt_token,
         lease_expires_at_unix,
@@ -110,7 +116,7 @@ pub(crate) async fn claim(
                 .expect("claimed run job definition must exist")
                 .clone(),
         },
-    }))
+    }
 }
 
 pub(crate) async fn pin_container_image(
