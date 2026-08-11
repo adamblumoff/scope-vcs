@@ -6,6 +6,7 @@ use crate::{
             RunRunnerSummary, create_run_jobs, reconcile_run, request_run_cancellation, retry_run,
             summarize_run_runners,
         },
+        resources::JobResources,
         runner::{
             RUNNER_PROTOCOL_VERSION, Runner, RunnerCapabilities, RunnerGrant,
             RunnerMaxConcurrentJobs, RunnerName,
@@ -35,6 +36,7 @@ fn workflow(jobs: &[(&str, &[&str])]) -> WorkflowRevision {
                     .collect(),
                 RunnerSelector::Any,
                 ContainerSpec::new("rust:latest").unwrap(),
+                JobResources::new(1_000, 1024 * 1024 * 1024).unwrap(),
                 600,
                 vec![],
                 vec![WorkflowStep::new("Test", "cargo test").unwrap()],
@@ -192,6 +194,7 @@ fn manual_any_override_cannot_widen_a_named_job_runner() {
                 vec![],
                 RunnerSelector::named("linux-one").unwrap(),
                 ContainerSpec::new("rust:latest").unwrap(),
+                JobResources::new(1_000, 1024 * 1024 * 1024).unwrap(),
                 600,
                 vec![],
                 vec![WorkflowStep::new("Test", "cargo test").unwrap()],

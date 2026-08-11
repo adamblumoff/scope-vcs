@@ -4,6 +4,10 @@ fn cache(name: &str) -> WorkflowCache {
     WorkflowCache::new(name, format!("/scope/cache/{name}")).unwrap()
 }
 
+fn resources() -> JobResources {
+    JobResources::new(1_000, 1024 * 1024 * 1024).unwrap()
+}
+
 fn job(
     id: &str,
     needs: &[&str],
@@ -18,6 +22,7 @@ fn job(
             .collect(),
         RunnerSelector::Any,
         ContainerSpec::new("rust:1.90").unwrap(),
+        resources(),
         20 * 60,
         caches,
         steps,
@@ -123,6 +128,7 @@ fn compiled_workflow_enforces_behavior_invariants() {
         vec![],
         RunnerSelector::named("linux-box").unwrap(),
         ContainerSpec::new("rust:1.90").unwrap(),
+        resources(),
         60,
         vec![],
         vec![
@@ -149,6 +155,7 @@ fn compiled_workflow_enforces_behavior_invariants() {
             vec![],
             RunnerSelector::Named("any".to_string()),
             ContainerSpec::new("rust:1.90").unwrap(),
+            resources(),
             60,
             vec![],
             vec![WorkflowStep::new("Test", "cargo test").unwrap()],
@@ -163,6 +170,7 @@ fn compiled_workflow_enforces_behavior_invariants() {
             vec![dependency.clone()],
             RunnerSelector::Any,
             ContainerSpec::new("rust:1.90").unwrap(),
+            resources(),
             60,
             vec![],
             vec![WorkflowStep::new("Test", "cargo test").unwrap()],
@@ -175,6 +183,7 @@ fn compiled_workflow_enforces_behavior_invariants() {
             vec![dependency.clone(), dependency],
             RunnerSelector::Any,
             ContainerSpec::new("rust:1.90").unwrap(),
+            resources(),
             60,
             vec![],
             vec![WorkflowStep::new("Test", "cargo test").unwrap()],
@@ -236,7 +245,7 @@ fn compiled_workflow_enforces_behavior_invariants() {
 }
 
 #[test]
-fn cache_and_job_order_are_canonical_in_the_v4_digest() {
+fn cache_and_job_order_are_canonical_in_the_v5_digest() {
     let identity = || {
         WorkflowIdentity::new(
             "repo-1",
@@ -272,6 +281,7 @@ fn cache_and_job_order_are_canonical_in_the_v4_digest() {
             vec![],
             RunnerSelector::Any,
             ContainerSpec::new("rust:1.90").unwrap(),
+            resources(),
             60,
             vec![cargo.clone(), cargo],
             vec![WorkflowStep::new("Test", "cargo test").unwrap()],
@@ -288,6 +298,7 @@ fn cache_and_job_order_are_canonical_in_the_v4_digest() {
             vec![],
             RunnerSelector::Any,
             ContainerSpec::new("rust:1.90").unwrap(),
+            resources(),
             60,
             excessive,
             vec![WorkflowStep::new("Test", "cargo test").unwrap()],

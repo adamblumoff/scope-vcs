@@ -2,6 +2,7 @@ pub mod cache;
 pub mod cutover;
 pub mod job;
 mod log;
+pub mod resources;
 pub mod run;
 pub mod runner;
 mod source;

@@ -1,4 +1,5 @@
 use super::{
+    resources::JobResources,
     run::{MAX_RUN_ATTEMPTS, PinnedContainerImage, Run, RunAttempt, RunAttemptStep},
     runner::{Runner, RunnerGrant, required, validate_sha256_hash},
     state::{RunJobState, RunState},
@@ -12,6 +13,7 @@ pub struct RunJob {
     pub run_id: String,
     pub key: WorkflowJobId,
     pub desired_runner: RunnerSelector,
+    pub resources: JobResources,
     pub pinned_container_image: Option<PinnedContainerImage>,
     pub state: RunJobState,
     pub last_attempt_number: u32,
@@ -63,6 +65,7 @@ impl RunJob {
             run_id: run.id.clone(),
             key: definition.id().clone(),
             desired_runner,
+            resources: definition.resources(),
             pinned_container_image: None,
             state: if definition.needs().is_empty() {
                 RunJobState::Queued
@@ -82,6 +85,7 @@ impl RunJob {
         run_id: impl Into<String>,
         key: WorkflowJobId,
         desired_runner: RunnerSelector,
+        resources: JobResources,
         pinned_container_image: Option<PinnedContainerImage>,
         state: RunJobState,
         last_attempt_number: u32,
@@ -94,6 +98,7 @@ impl RunJob {
             run_id: required("run job run id", run_id.into())?,
             key,
             desired_runner,
+            resources,
             pinned_container_image,
             state,
             last_attempt_number,
@@ -123,6 +128,11 @@ impl RunJob {
                 "run job does not match its run or workflow definition",
             ));
         }
+        if self.resources != definition.resources() {
+            return Err(DomainError::invariant_violation(
+                "run job resources do not match its workflow definition",
+            ));
+        }
         if self.state != RunJobState::Queued || self.current_attempt_id.is_some() {
             return Err(DomainError::conflict("run job is not queued"));
         }
@@ -131,7 +141,7 @@ impl RunJob {
         }
         if !runner.supports_dispatch() {
             return Err(DomainError::conflict(
-                "runner does not support the V7 dispatch protocol",
+                "runner does not support the V8 dispatch protocol",
             ));
         }
         if !grant.is_active()

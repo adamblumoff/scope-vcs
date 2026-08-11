@@ -1,5 +1,6 @@
 use super::{
     cache::{CacheError, WorkflowCache},
+    resources::JobResources,
     runner::RunnerName,
 };
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -23,7 +24,7 @@ pub const MAX_STEP_COMMAND_BYTES: usize = 64 * 1024;
 pub const MAX_WORKFLOW_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
 
 const WORKFLOW_PATH_PREFIX: &str = "/.scope/runs/";
-const WORKFLOW_DIGEST_VERSION: u8 = 4;
+const WORKFLOW_DIGEST_VERSION: u8 = 5;
 
 #[derive(Debug, Error)]
 pub enum WorkflowError {
@@ -297,6 +298,7 @@ pub struct WorkflowJob {
     needs: Vec<WorkflowJobId>,
     runner: RunnerSelector,
     container: ContainerSpec,
+    resources: JobResources,
     timeout_seconds: u64,
     caches: Vec<WorkflowCache>,
     environment: BTreeMap<String, String>,
@@ -310,6 +312,7 @@ impl WorkflowJob {
         mut needs: Vec<WorkflowJobId>,
         runner: RunnerSelector,
         container: ContainerSpec,
+        resources: JobResources,
         timeout_seconds: u64,
         mut caches: Vec<WorkflowCache>,
         steps: Vec<WorkflowStep>,
@@ -373,6 +376,7 @@ impl WorkflowJob {
             needs,
             runner,
             container,
+            resources,
             timeout_seconds,
             caches,
             environment: BTreeMap::new(),
@@ -403,6 +407,10 @@ impl WorkflowJob {
 
     pub fn container(&self) -> &ContainerSpec {
         &self.container
+    }
+
+    pub fn resources(&self) -> JobResources {
+        self.resources
     }
 
     pub fn timeout_seconds(&self) -> u64 {
@@ -464,6 +472,7 @@ struct PersistedWorkflowJob {
     needs: Vec<String>,
     runner: PersistedRunnerSelector,
     container: PersistedContainerSpec,
+    resources: JobResources,
     timeout_seconds: u64,
     caches: Vec<PersistedWorkflowCache>,
     environment: BTreeMap<String, String>,
@@ -515,6 +524,7 @@ impl<'de> Deserialize<'de> for WorkflowJob {
             needs,
             runner,
             container,
+            job.resources,
             job.timeout_seconds,
             caches,
             steps,
@@ -571,6 +581,7 @@ impl<'de> Deserialize<'de> for CompiledWorkflow {
                     needs,
                     runner,
                     container,
+                    job.resources,
                     job.timeout_seconds,
                     caches,
                     steps,
