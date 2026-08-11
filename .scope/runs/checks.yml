@@ -6,7 +6,7 @@ on:
       - main
 runs-on: remote-linux
 container:
-  image: rust:1.94.0-bookworm
+  image: ghcr.io/adamblumoff/scope-vcs/checks@sha256:026dd8b675ea52cfcf999765eafb3be81e9c723f551c469d5d0d11d1142fba0a
 timeout: 60m
 caches: []
 env:
@@ -24,20 +24,6 @@ jobs:
     env:
       SCOPE_TEST_DATABASE_URL: postgres://scope:scope@127.0.0.1:5432/scope_test
     steps:
-      - name: Install dependencies
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install --yes --no-install-recommends curl postgresql postgresql-client xz-utils
-          curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 \
-            https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
-            --output /tmp/node.tar.xz
-          tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
-          for attempt in 1 2 3; do
-            rustup component add --toolchain 1.94.0-x86_64-unknown-linux-gnu rustfmt clippy && break
-            [ "$attempt" -lt 3 ] || exit 1
-            sleep 5
-          done
       - name: Check Rust workspace
         run: |
           service postgresql start
@@ -59,29 +45,8 @@ jobs:
       - name: pnpm-store
         path: /root/.local/share/pnpm/store
     steps:
-      - name: Install integration dependencies
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install --yes --no-install-recommends curl iproute2 postgresql postgresql-client xz-utils
-          curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 \
-            https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
-            --output /tmp/node.tar.xz
-          tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
-          corepack enable
-          for attempt in 1 2 3; do
-            corepack prepare pnpm@11.1.0 --activate && break
-            [ "$attempt" -lt 3 ] || exit 1
-            sleep 5
-          done
-          (cd web && pnpm install --frozen-lockfile)
-      - name: Install Rust tooling
-        run: |
-          for attempt in 1 2 3; do
-            rustup component add rustfmt clippy --toolchain 1.94.0-x86_64-unknown-linux-gnu && break
-            [ "$attempt" -lt 3 ] || exit 1
-            sleep 5
-          done
+      - name: Install JavaScript dependencies
+        run: (cd web && pnpm install --frozen-lockfile)
       - name: Check formatting
         run: |
           cargo fmt --manifest-path cli/Cargo.toml -- --check
@@ -131,39 +96,11 @@ jobs:
         path: /scope/cache/cargo
       - name: cargo-target
         path: /workspace/target
-      - name: playwright
-        path: /root/.cache/ms-playwright
       - name: pnpm-store
         path: /root/.local/share/pnpm/store
     steps:
-      - name: Install system dependencies
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install --yes --no-install-recommends curl iproute2 postgresql postgresql-client xz-utils
-      - name: Install Node and pnpm
-        run: |
-          curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 \
-            https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
-            --output /tmp/node.tar.xz
-          tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
-          corepack enable
-          for attempt in 1 2 3; do
-            corepack prepare pnpm@11.1.0 --activate && break
-            [ "$attempt" -lt 3 ] || exit 1
-            sleep 5
-          done
-      - name: Install Rust tooling
-        run: |
-          for attempt in 1 2 3; do
-            rustup component add --toolchain 1.94.0-x86_64-unknown-linux-gnu rustfmt clippy && break
-            [ "$attempt" -lt 3 ] || exit 1
-            sleep 5
-          done
       - name: Install dependencies
         run: (cd web && pnpm install --frozen-lockfile)
-      - name: Install Chromium
-        run: (cd web && pnpm exec playwright install --with-deps chromium)
       - name: Test
         run: (cd web && pnpm test)
       - name: Check
