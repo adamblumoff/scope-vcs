@@ -8,7 +8,7 @@ import type {
 } from '@/api/types'
 import type { RateRequestInput } from '@/api/requests'
 import { EmptyState } from '@/components/empty-state'
-import { PageContent } from '@/components/page-header'
+import { PageContent, WorkbenchPane } from '@/components/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
@@ -164,46 +164,48 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
   }
 
   return (
-    <div className={hasLifecycleActions ? 'pb-20 xl:pb-0' : undefined}>
-      {requestHeader()}
-      <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="order-2 min-w-0 xl:order-1">
-          <RequestDescription
-            canEdit={request.permissions.can_edit_identity}
-            description={description}
-            onSave={saveDescription}
-          />
-          <RequestViewTabs params={{ ...params, requestId: request.id }} />
-          {children}
-        </div>
-        <RequestContextRail
-          actions={requestActions}
-          onRate={rateRequest}
-          params={requestParams}
-          ratings={ratings}
-          request={request}
-        />
-      </div>
-
-      {hasLifecycleActions ? (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--border-strong)] bg-background/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur xl:hidden">
-          <RequestLifecycleActions
+    <WorkbenchPane>
+      <div className={hasLifecycleActions ? 'pb-20 xl:pb-0' : undefined}>
+        {requestHeader()}
+        <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="order-2 min-w-0 xl:order-1">
+            <RequestDescription
+              canEdit={request.permissions.can_edit_identity}
+              description={description}
+              onSave={saveDescription}
+            />
+            <RequestViewTabs params={{ ...params, requestId: request.id }} />
+            {children}
+          </div>
+          <RequestContextRail
             actions={requestActions}
-            className="grid w-full grid-cols-2 [&>button]:min-h-10"
+            onRate={rateRequest}
+            params={requestParams}
+            ratings={ratings}
             request={request}
           />
         </div>
-      ) : null}
 
-      <RequestActivityDrawer
-        activity={history.activity}
-        error={history.error}
-        load={history.retry}
-        loading={history.loading}
-        onOpenChange={history.onOpenChange}
-        open={history.open}
-      />
-    </div>
+        {hasLifecycleActions ? (
+          <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--border-strong)] bg-background/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur xl:hidden">
+            <RequestLifecycleActions
+              actions={requestActions}
+              className="grid w-full grid-cols-2 [&>button]:min-h-10"
+              request={request}
+            />
+          </div>
+        ) : null}
+
+        <RequestActivityDrawer
+          activity={history.activity}
+          error={history.error}
+          load={history.retry}
+          loading={history.loading}
+          onOpenChange={history.onOpenChange}
+          open={history.open}
+        />
+      </div>
+    </WorkbenchPane>
   )
 }
 
