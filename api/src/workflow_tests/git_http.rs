@@ -393,7 +393,7 @@ async fn real_git_first_push_over_http_applies_immediately() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chunked_real_git_published_push_over_http_applies_update() {
+async fn chunked_real_git_published_push_over_http_accepts_image_context() {
     let secret = "scope_git_test";
     let state = test_state_with_git_push_token(secret).await;
     let (origin, _server) = spawn_test_server(&state).await;
@@ -422,8 +422,18 @@ async fn chunked_real_git_published_push_over_http_applies_update() {
         "hello over published chunked http\n",
     )
     .unwrap();
-    run_git(Some(&source), &["add", "-A"], "add readme update").unwrap();
-    commit_all(&source, "update readme");
+    let image_dir = source.join(".scope/images/checks");
+    fs::create_dir_all(&image_dir).unwrap();
+    fs::write(image_dir.join("Dockerfile"), "FROM scratch\n").unwrap();
+    fs::create_dir_all(image_dir.join("scripts")).unwrap();
+    fs::write(image_dir.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "-A"],
+        "add readme and image context update",
+    )
+    .unwrap();
+    commit_all(&source, "add image context");
     configure_push_intent_header(&state, &source, &remote, &test_owner_id()).await;
     run_git(
         Some(&source),
@@ -435,6 +445,36 @@ async fn chunked_real_git_published_push_over_http_applies_update() {
     assert_eq!(
         live_file_content(&state, "/README.md").await.as_deref(),
         Some("hello over published chunked http\n")
+    );
+    assert_eq!(
+        live_file_content(&state, "/.scope/images/checks/Dockerfile")
+            .await
+            .as_deref(),
+        Some("FROM scratch\n")
+    );
+    assert_eq!(
+        live_file_content(&state, "/.scope/images/checks/scripts/install.sh")
+            .await
+            .as_deref(),
+        Some("#!/bin/sh\n")
+    );
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    let image_path = ScopePath::parse("/.scope/images/checks/Dockerfile").unwrap();
+    assert_eq!(
+        repo.repo_config.visibility_for_path(&image_path),
+        Visibility::Private
+    );
+    assert!(
+        !project_graph(
+            &repo.graph,
+            &repo.visibility_events,
+            ProjectionViewKey::Public,
+        )
+        .visible_paths()
+        .iter()
+        .any(|path| path == image_path.as_str())
     );
 }
 

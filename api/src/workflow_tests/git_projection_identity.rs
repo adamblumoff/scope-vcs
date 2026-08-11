@@ -12,6 +12,12 @@ async fn permissioned_scope_sessions_share_raw_live_head() {
         "name: Test\non: { manual: true }\nruns-on: any\ncontainer: { image: rust:1.90 }\ntimeout: 20m\nsteps: [{ name: Test, run: cargo test }]\n",
     )
     .unwrap();
+    fs::create_dir_all(source.join(".scope/images/checks")).unwrap();
+    fs::write(
+        source.join(".scope/images/checks/Dockerfile"),
+        "FROM scratch\n",
+    )
+    .unwrap();
     run_git(Some(&source), &["add", "-A"], "add readme").unwrap();
     commit_all(&source, "raw snapshot commit");
     let bare = clone_test_repo(&source, "owner-upload-snapshot-bare", true);
@@ -65,6 +71,7 @@ async fn permissioned_scope_sessions_share_raw_live_head() {
         clone_with_bearer(&remote, &clone, &bearer, &format!("clone as {actor}"));
         heads.push(git_stdout_text(&clone, &["rev-parse", "HEAD"], "clone head").unwrap());
         assert!(clone.join(".scope/runs/test.yml").is_file());
+        assert!(clone.join(".scope/images/checks/Dockerfile").is_file());
     }
     assert!(heads.iter().all(|head| head == &expected));
 }

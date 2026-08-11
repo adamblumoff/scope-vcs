@@ -92,6 +92,7 @@ async fn maintainer_controlled_intermediate_edits_cannot_enter_public_request_hi
         ("claude-settings", ".claude/settings.json", false),
         ("agent-skill", ".agents/skills/review/SKILL.md", false),
         ("claude-mcp", ".mcp.json", false),
+        ("scope-image", ".scope/images/checks/Dockerfile", false),
     ] {
         let state = test_state_with_request().await;
         let (source, permissioned_remote, _server, _) =

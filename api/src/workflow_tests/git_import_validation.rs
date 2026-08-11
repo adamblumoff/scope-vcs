@@ -228,6 +228,9 @@ fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
     validate_pushed_file_path(".scope/RULES.md").unwrap();
     validate_pushed_file_path(".scope/runs/test.yml").unwrap();
     validate_pushed_file_path(".scope/runs/test-api.yaml").unwrap();
+    validate_pushed_file_path(".scope/images/checks/Dockerfile").unwrap();
+    validate_pushed_file_path(".scope/images/checks/.dockerignore").unwrap();
+    validate_pushed_file_path(".scope/images/checks/scripts/install.sh").unwrap();
     for path in [
         "README.md ",
         "dir\\file.txt",
@@ -239,6 +242,10 @@ fn pushed_tree_rejects_paths_scope_would_normalize_or_git_cannot_serve() {
         ".scope",
         ".scope/repo.json",
         ".scope/anything.json",
+        ".scope/images",
+        ".scope/images/Dockerfile",
+        ".scope/images/Checks/Dockerfile",
+        ".scope/images/checks--api/Dockerfile",
         ".scope/runs/Test.yml",
         ".scope/runs/test.json",
         ".scope/runs/nested/test.yml",
