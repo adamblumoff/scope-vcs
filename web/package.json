@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "check": "pnpm typecheck && pnpm check:api-contract && pnpm check:line-limit && pnpm check:react-doctor && pnpm check:konsistent",
+    "check": "pnpm typecheck && pnpm check:line-limit && pnpm check:react-doctor && pnpm check:konsistent",
     "check:api-contract": "node scripts/check-api-contract.mjs",
     "check:konsistent": "konsistent check",
     "check:line-limit": "node scripts/check-line-limit.mjs",
