@@ -74,8 +74,6 @@ export function useRequestDiscussionStore({
   )
   const [error, setError] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
-  const [newActivity, setNewActivity] = useState(false)
   const collectionRef = useRef(collection)
   const dataGenerationRef = useRef(0)
   const activeKeyRef = useRef(key)
@@ -113,7 +111,6 @@ export function useRequestDiscussionStore({
           const context = syncContextRef.current
           return context.actions.loadChanges({ ...context.params, after })
         },
-        onActivity: () => setNewActivity(true),
         onCatchUpError: (requestError) => {
           setError(
             messageFor(
@@ -143,58 +140,27 @@ export function useRequestDiscussionStore({
       )
       setError(null)
       setLoadingMore(false)
-      setRefreshing(false)
-      setNewActivity(false)
     }
     sync.reset(key)
 
-    let cancelled = false
     async function initialize() {
       if (!keyChanged) {
-        const authoritative = await sync.refresh(() =>
+        await sync.refresh(() =>
           Promise.resolve(initialPage),
         )
-        if (
-          !cancelled &&
-          authoritative &&
-          isCurrent(key)
-        ) {
-          setNewActivity(false)
-        }
       }
       await sync.catchUp()
     }
     void initialize()
 
     return () => {
-      cancelled = true
       sync.stop()
     }
-  }, [initialPage, isCurrent, key, setCurrentCollection, sync])
+  }, [initialPage, key, setCurrentCollection, sync])
 
   useEffect(() => {
     writeRequestDiscussionCache(key, collectionRef.current)
   }, [collection, key])
-
-  const refresh = useCallback(async () => {
-    const operationKey = key
-    setRefreshing(true)
-    setError(null)
-    try {
-      const authoritative = await sync.refresh(() => actions.load(params))
-      if (authoritative && isCurrent(operationKey)) {
-        setNewActivity(false)
-      }
-    } catch (requestError) {
-      if (isCurrent(operationKey)) {
-        setError(messageFor(requestError, 'Discussions could not be refreshed.'))
-      }
-    } finally {
-      if (isCurrent(operationKey)) {
-        setRefreshing(false)
-      }
-    }
-  }, [actions, isCurrent, key, params, sync])
 
   const onRepoChange = useCallback(
     (event: RepoChangeEvent) => {
@@ -400,10 +366,7 @@ export function useRequestDiscussionStore({
     loadMore,
     loadingMore,
     markRead,
-    newActivity,
     patch,
-    refresh,
-    refreshing,
     retry,
     setExpanded,
     resolve,

@@ -288,6 +288,10 @@ test('public repository requests route is anonymously readable', async () => {
 test('seeded request discussion and changes stay reciprocal and ordered', async () => {
   await withPage(`/${owner}/update-demo/requests/req_demo_ready`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Add bounded retry timing' }).waitFor()
+    assert.equal(
+      await page.getByRole('button', { name: 'Refresh', exact: true }).count(),
+      0,
+    )
     await page.getByText('Public request', { exact: true }).last().waitFor()
     const threads = page.locator('.request-discussion-thread')
     await threads.first().waitFor()

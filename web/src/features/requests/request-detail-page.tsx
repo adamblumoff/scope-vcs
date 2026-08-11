@@ -216,7 +216,7 @@ function RequestViewTabs({
 }) {
   const tabClass = 'inline-flex h-11 items-center gap-2 border-b-2 px-1 text-sm font-medium transition-colors'
   return (
-    <nav aria-label="Request views" className="flex gap-6 border-b border-border px-5 lg:px-7">
+    <nav aria-label="Request views" className="flex gap-6 px-5 lg:px-7">
       <Link
         activeOptions={{ exact: true }}
         activeProps={{ className: 'border-brand text-foreground' }}

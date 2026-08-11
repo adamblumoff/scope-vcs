@@ -49,8 +49,7 @@ export function RequestChangesView({
   if (!revisions) {
     return (
       <EmptyState
-        className="border-b border-border"
-        description="The request conversation is still available. Refresh to try loading its revision history again."
+        description="The request conversation is still available. Reload the page to try loading its revision history again."
         icon={<GitCommit />}
         title="Changes are unavailable"
       />
