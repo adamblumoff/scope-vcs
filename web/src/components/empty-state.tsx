@@ -56,11 +56,13 @@ export function EmptyState({
  * Replaces the per-feature copies that each picked their own min-height.
  */
 export function PanelState({
+  busy,
   children,
   className,
   role,
   tone = 'muted',
 }: {
+  busy?: boolean
   children: ReactNode
   className?: string
   role?: 'alert'
@@ -68,6 +70,7 @@ export function PanelState({
 }) {
   return (
     <div
+      aria-busy={busy || undefined}
       className={cn(
         'flex h-full min-h-[220px] flex-col items-center justify-center gap-3 px-6 py-10 text-center text-sm leading-5',
         tone === 'error' ? 'text-danger-strong' : 'text-muted-foreground',

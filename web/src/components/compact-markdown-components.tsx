@@ -72,7 +72,7 @@ export const compactMarkdownComponents = {
   pre: ({ className, ...props }: ComponentProps<'pre'>) => (
     <pre
       className={cn(
-        'my-3 overflow-x-auto rounded-md border border-border bg-[#090b0e] p-3 font-mono text-xs leading-5 text-[#eceae5] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-inherit',
+        'my-3 overflow-x-auto rounded-md border border-border bg-[var(--terminal-surface)] p-3 font-mono text-xs leading-5 text-[var(--terminal-foreground)] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-inherit',
         className,
       )}
       {...props}

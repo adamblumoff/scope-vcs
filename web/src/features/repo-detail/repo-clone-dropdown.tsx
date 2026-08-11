@@ -62,12 +62,12 @@ export function RepoCloneDropdown({
       >
         <Code2 className="size-3.5" />
         <span>Clone</span>
-        <span className="-my-2 ml-1 flex h-8 items-center border-l border-white/10 pl-2">
+        <span className="-my-2 ml-1 flex h-8 items-center border-l border-border pl-2">
           <ChevronDown
             className={cn(
-            'size-3.5 text-white/70 transition-transform',
-            open && 'rotate-180',
-          )}
+              'size-3.5 text-muted-foreground transition-transform',
+              open && 'rotate-180',
+            )}
           />
         </span>
       </Button>

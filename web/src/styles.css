@@ -212,6 +212,14 @@ a {
    */
   --app-topbar: 57px;
   --app-chrome: 113px;
+
+  /*
+   * The run log viewer is a terminal surface: always dark, in both themes.
+   * Its foreground colors are therefore fixed rather than theme-derived.
+   */
+  --terminal-surface: #090b0e;
+  --terminal-foreground: #eceae5;
+  --terminal-danger: #e4868e;
 }
 
 @layer base {

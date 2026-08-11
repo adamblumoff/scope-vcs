@@ -49,7 +49,7 @@ export function RepositoryHtmlRenderer({
           title={`${displayPath} preview`}
         />
       ) : (
-        <pre className="min-h-[32rem] overflow-x-auto bg-[#090b0e] p-5 font-mono text-xs leading-5 whitespace-pre text-[#eceae5] sm:p-7">
+        <pre className="min-h-[32rem] overflow-x-auto bg-[var(--terminal-surface)] p-5 font-mono text-xs leading-5 whitespace-pre text-[var(--terminal-foreground)] sm:p-7">
           <code>{source}</code>
         </pre>
       )}

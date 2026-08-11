@@ -445,7 +445,7 @@ function StepLogs({
   return (
     <section
       aria-label={`${step.name} output`}
-      className="border-t border-border bg-[#090b0e] text-[#eceae5]"
+      className="border-t border-border bg-[var(--terminal-surface)] text-[var(--terminal-foreground)]"
       id={id}
     >
       <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-2 text-xs text-white/60">
@@ -461,7 +461,7 @@ function StepLogs({
       </div>
       {logState.error ? (
         <div
-          className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-3 text-sm text-danger-strong"
+          className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-3 text-sm text-[var(--terminal-danger)]"
           role="alert"
         >
           <span>{logState.error}</span>

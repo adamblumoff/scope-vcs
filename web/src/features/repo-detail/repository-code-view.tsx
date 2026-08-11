@@ -210,7 +210,7 @@ function SourceContent({
 
   if (loading) {
     return (
-      <PanelState aria-busy="true">
+      <PanelState busy>
         <LoaderCircle className="size-5 animate-spin" />
         <span>Loading {displayPath(selectedPath)}</span>
       </PanelState>
@@ -291,7 +291,7 @@ function SourceFileContent({
   }
 
   return (
-    <pre className="min-h-full bg-[#090b0e] p-5 font-mono text-xs leading-5 whitespace-pre text-[#eceae5] sm:p-7">
+    <pre className="min-h-full bg-[var(--terminal-surface)] p-5 font-mono text-xs leading-5 whitespace-pre text-[var(--terminal-foreground)] sm:p-7">
       <code>{file.content.text}</code>
     </pre>
   )
