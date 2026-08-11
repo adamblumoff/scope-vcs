@@ -1,5 +1,4 @@
 const HTML_DOCTYPE = /^\s*<!doctype\s+html[^>]*>/i
-const HTML_META_START = /<meta(?=[\s/>])/gi
 
 export const REPOSITORY_HTML_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -23,8 +22,43 @@ export function isRepositoryHtmlPath(path: string) {
 }
 
 export function repositoryHtmlDocument(source: string) {
-  const authoredDocument = source
-    .replace(HTML_DOCTYPE, '')
-    .replace(HTML_META_START, '&lt;meta')
+  const authoredDocument = stripAuthoredMetaElements(
+    source.replace(HTML_DOCTYPE, ''),
+  )
   return `<!doctype html>${REPOSITORY_HTML_POLICY}${authoredDocument}`
+}
+
+function stripAuthoredMetaElements(source: string) {
+  const metaStart = /<meta(?=[\t\n\f\r />])/gi
+  let output = ''
+  let offset = 0
+
+  for (const match of source.matchAll(metaStart)) {
+    const start = match.index
+    if (start < offset) continue
+
+    output += source.slice(offset, start)
+    const end = htmlTagEnd(source, start + match[0].length)
+    if (end === undefined) return output
+    offset = end + 1
+  }
+
+  return output + source.slice(offset)
+}
+
+function htmlTagEnd(source: string, offset: number) {
+  let quote: '"' | "'" | undefined
+
+  for (let index = offset; index < source.length; index += 1) {
+    const character = source[index]
+    if (quote) {
+      if (character === quote) quote = undefined
+    } else if (character === '"' || character === "'") {
+      quote = character
+    } else if (character === '>') {
+      return index
+    }
+  }
+
+  return undefined
 }

@@ -45,20 +45,24 @@ test('enforces the policy when authored markup contains misleading head text', (
   )
 })
 
-test('neutralizes authored meta elements that could navigate the preview', () => {
+test('removes authored meta elements that could navigate the preview', () => {
   const document = repositoryHtmlDocument(`
     <html>
       <head>
-        <META HTTP-EQUIV="refresh" content="0;url=https://example.com">
+        <META HTTP-EQUIV="refresh" content="0 > 0;url=https://example.com">
         <meta/name="theme-color" content="red">
+        <metadata>kept</metadata>
+        <style>body { color: green; }</style>
       </head>
       <body>Hello</body>
     </html>
   `)
 
   assert.doesNotMatch(document, /<meta http-equiv="refresh"/i)
-  assert.match(document, /&lt;meta HTTP-EQUIV="refresh"/)
-  assert.match(document, /&lt;meta\/name="theme-color"/)
+  assert.doesNotMatch(document, /0 > 0;url=https:\/\/example.com/)
+  assert.doesNotMatch(document, /name="theme-color"/)
+  assert.match(document, /<metadata>kept<\/metadata>/)
+  assert.match(document, /<style>body \{ color: green; \}<\/style>/)
   assert.match(document, /<meta charset="utf-8">/)
   assert.match(
     document,
