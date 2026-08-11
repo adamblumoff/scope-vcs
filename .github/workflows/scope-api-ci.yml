@@ -57,7 +57,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_DB: scope_test
-          POSTGRES_PASSWORD: scope
+          POSTGRES_PASSWORD: test-secret
           POSTGRES_USER: scope
         ports:
           - 5432:5432
@@ -67,7 +67,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      SCOPE_TEST_DATABASE_URL: postgres://scope:scope@127.0.0.1:5432/scope_test
+      SCOPE_TEST_DATABASE_URL: postgres://scope:test-secret@127.0.0.1:5432/scope_test
     steps:
       - name: Checkout
         uses: actions/checkout@v7
