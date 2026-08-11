@@ -41,27 +41,35 @@ pub(in crate::runner) fn finalize_recovery_caches(
                 .iter()
                 .find(|cache| cache.volume_name == timing.volume_name)
                 .expect("finalized recovery volume must be recorded");
-            if timing
-                .identity_digest
-                .as_ref()
-                .is_some_and(|digest| digest != &cache.identity_digest)
-            {
-                bail!(
-                    "recovered cache volume {} changed identity",
-                    timing.volume_name
-                );
-            }
-            Ok(AttemptCacheFinalizationReport {
-                identity_digest: cache.identity_digest.clone(),
-                final_state: if success {
-                    CacheFinalState::Ready
-                } else {
-                    CacheFinalState::Evicted
-                },
-                finalize_ms: timing.finalize_ms,
-            })
+            recovery_finalization_report(cache, timing, success)
         })
         .collect()
+}
+
+pub(super) fn recovery_finalization_report(
+    cache: &RecoveryCache,
+    timing: CacheFinalizationTiming,
+    success: bool,
+) -> anyhow::Result<AttemptCacheFinalizationReport> {
+    if timing
+        .identity_digest
+        .as_ref()
+        .is_some_and(|digest| digest != &cache.identity_digest)
+    {
+        bail!(
+            "recovered cache volume {} changed identity",
+            timing.volume_name
+        );
+    }
+    Ok(AttemptCacheFinalizationReport {
+        identity_digest: cache.identity_digest.clone(),
+        final_state: if success {
+            CacheFinalState::Ready
+        } else {
+            CacheFinalState::Evicted
+        },
+        finalize_ms: timing.finalize_ms,
+    })
 }
 
 pub(super) fn finalize_volume_names_while_identity_locked(

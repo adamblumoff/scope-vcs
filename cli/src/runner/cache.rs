@@ -60,7 +60,10 @@ mod finalization;
 pub(super) use finalization::finalize_recovery_caches;
 use finalization::finalize_volume_names_while_identity_locked;
 #[cfg(test)]
-use finalization::{CacheFinalizationAction, cache_finalization_action};
+use finalization::{
+    CacheFinalizationAction, CacheFinalizationTiming, cache_finalization_action,
+    recovery_finalization_report,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CacheMount {

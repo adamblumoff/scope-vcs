@@ -534,31 +534,25 @@ fn preserved_recovery_keeps_the_identity_locked_until_process_exit() {
 
 #[test]
 fn recovered_eviction_keeps_its_identity_after_local_removal() {
-    let parent = TestDir::new("runner-cache-recovered-eviction-identity");
-    let root = parent.path().join("scope/runner");
-    initialize(&root).unwrap();
     let identity_digest = "f".repeat(64);
-    let reports = finalize_recovery_caches(
-        &RunnerConfig {
-            api_url: "https://api.example.test".to_string(),
-            runner_id: "runner-1".to_string(),
-            name: "linux-box".to_string(),
-            secret: "secret".to_string(),
-            max_concurrent_jobs: RunnerMaxConcurrentJobs::new(2).unwrap(),
-            cache_root: Some(root),
-        },
-        &[RecoveryCache {
-            volume_name: "scope-cache-v6-already-removed".to_string(),
+    let volume_name = "scope-cache-v6-already-removed".to_string();
+    let report = recovery_finalization_report(
+        &RecoveryCache {
+            volume_name: volume_name.clone(),
             identity_digest: identity_digest.clone(),
-        }],
-        "attempt-recovered",
+        },
+        CacheFinalizationTiming {
+            volume_name,
+            identity_digest: None,
+            finalize_ms: 17,
+        },
         false,
     )
     .unwrap();
 
-    assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0].identity_digest, identity_digest);
-    assert_eq!(reports[0].final_state, CacheFinalState::Evicted);
+    assert_eq!(report.identity_digest, identity_digest);
+    assert_eq!(report.final_state, CacheFinalState::Evicted);
+    assert_eq!(report.finalize_ms, 17);
 }
 
 #[test]
