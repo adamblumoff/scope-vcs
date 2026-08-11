@@ -45,7 +45,6 @@ function RequestsRoute() {
   return (
     <RequestsPage
       initialPages={initialPages}
-      live={live}
       loadPage={loadPage}
       params={params}
     />

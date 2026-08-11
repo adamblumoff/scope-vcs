@@ -8,7 +8,6 @@ import {
   activeRepoSection,
   repoSectionsForActor,
 } from '@/components/repo-section-model'
-import { RepositoryContextStrip } from '@/components/repository-context-strip'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import { UserButton } from '@clerk/tanstack-react-start'
 import { Link, useMatchRoute } from '@tanstack/react-router'
@@ -48,27 +47,30 @@ export function RepoShell({
   return (
     <AppShell
       header={() => (
-        <ApplicationTopbar items={items} repository={params}>
+        <ApplicationTopbar
+          facts={[
+            ...(repo.lifecycle_state === 'Ready'
+              ? []
+              : [{
+                  id: 'lifecycle',
+                  label: repo.lifecycle_state,
+                  semantic: 'warning' as const,
+                }]),
+            ...(repo.open_request_count > 0
+              ? [{
+                  id: 'requests',
+                  label: `${repo.open_request_count} open`,
+                }]
+              : []),
+          ]}
+          items={items}
+          repository={params}
+        >
           <UserButton />
         </ApplicationTopbar>
       )}
-      subheader={() => (
-        <RepositoryContextStrip
-          facts={[
-            { id: 'lifecycle', label: repo.lifecycle_state, semantic: repo.lifecycle_state === 'Ready' ? 'success' : 'warning' },
-            ...(repo.access.actor === 'Public'
-              ? []
-              : [{ id: 'actor', label: repo.access.actor }]),
-            ...(repo.open_request_count > 0
-              ? [{ id: 'requests', label: `${repo.open_request_count} open` }]
-              : []),
-          ]}
-        />
-      )}
     >
-      <div className="mx-auto w-full max-w-[1440px]">
-        {children}
-      </div>
+      {children}
     </AppShell>
   )
 }

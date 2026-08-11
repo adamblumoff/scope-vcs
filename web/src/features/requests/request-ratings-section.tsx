@@ -66,13 +66,13 @@ export function RequestRatingsSection({
   }
 
   return (
-    <section className="border-b border-border px-5 py-5">
+    <section>
       <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         <Star className="size-3.5" />
         <h2>Participant ratings</h2>
       </div>
       {ratings.length ? (
-        <div className="mt-3 divide-y divide-border border-y border-border">
+        <div className="mt-3 divide-y divide-border">
           {ratings.map((rating) => (
             <div className="py-3 text-xs leading-5" key={rating.id}>
               <div className="font-medium">

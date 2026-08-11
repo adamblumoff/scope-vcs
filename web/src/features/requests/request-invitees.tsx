@@ -35,7 +35,7 @@ export function RequestInvitees({
   }
 
   return (
-    <section className="border-b border-border px-5 py-5">
+    <section>
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
           Invitees
@@ -44,12 +44,9 @@ export function RequestInvitees({
           {request.invitees.length} / 30
         </span>
       </div>
-      <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        Exact-handle collaborators can push this public request branch. They cannot edit its identity or assess it.
-      </p>
 
       {request.invitees.length > 0 ? (
-        <div className="mt-3 divide-y divide-border border-y border-border">
+        <div className="mt-3 divide-y divide-border">
           {request.invitees.map((invitee) => (
             <div className="flex min-w-0 items-center gap-2 py-2" key={invitee.user.id}>
               <span className="min-w-0 flex-1 truncate text-sm">@{invitee.user.handle}</span>
@@ -75,7 +72,9 @@ export function RequestInvitees({
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-sm text-muted-foreground">No invitees.</p>
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">
+          No invitees. Exact-handle collaborators can push this branch.
+        </p>
       )}
 
       {request.permissions.can_manage_invitees ? (

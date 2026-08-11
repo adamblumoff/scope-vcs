@@ -13,7 +13,6 @@ import type {
 } from '@/api/types'
 import { PageContent } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
-import { WorkbenchHeader } from '@/components/workbench-header'
 import { storeHomeFlash } from '@/lib/home-flash'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { useReducer } from 'react'
@@ -104,11 +103,6 @@ export function RepoSettingsPage({
 
   return (
     <>
-      <WorkbenchHeader
-        description={repo.id}
-        eyebrow="Manage"
-        title="Settings"
-      />
       <PageContent>
         {deleteError && (
           <PageErrorAlert title="Repository deletion failed">

@@ -1,26 +1,17 @@
 import type {
-  CommitDetail,
   CommitFile,
   CommitHistory,
   CommitSummary,
   ProjectionPreviewAudience,
   RepoParams,
-  ReviewFileDiff,
 } from '@/api/types'
-import { FileSystemTree } from '@/components/file-system-tree'
+import { EmptyState } from '@/components/empty-state'
+import { WorkbenchBar, WorkbenchPane } from '@/components/page-header'
 import { RouteErrorContent } from '@/components/route-error-page'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
-import {
-  workspaceTabDomIds,
-  workspaceTabPanelId,
-  type WorkspaceTabItem,
-} from '@/components/workspace-tab-model'
-import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
-import { WorkbenchHeader } from '@/components/workbench-header'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import type { WorkspaceTabItem } from '@/components/workspace-tab-model'
+import { AudienceToggle } from '@/features/history/history-audience-toggle'
+import { HistoryWorkbench } from '@/features/history/history-workbench'
 import {
   historyCommitCacheKey,
   historyDiffCacheKey,
@@ -34,29 +25,20 @@ import {
   writeHistoryDiffScroll,
 } from '@/features/history/history-resource-cache'
 import {
-  historyCommitTitle,
-  historyRowLabels,
-} from '@/features/history/history-row-labels'
-import {
-  useCachedResource,
-  type CachedResource,
-} from '@/lib/use-cached-resource'
-import { cn } from '@/lib/utils'
+  resourceToCommitState,
+  resourceToDiffState,
+  type CommitDetailState,
+  type CommitFileDiffState,
+} from '@/features/history/history-state'
+import { useCachedResource } from '@/lib/use-cached-resource'
 import {
   loadCommitDetail,
   loadCommitFileDiff,
 } from '@/routes/-repo-history-actions'
 import { useNavigate } from '@tanstack/react-router'
-import {
-  Globe2,
-  GitCommit,
-  History,
-  LockKeyhole,
-  TriangleAlert,
-} from 'lucide-react'
-import { type ReactNode, useCallback, useMemo, useRef } from 'react'
-import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
-import { audienceLabel, changeCountLabel } from '../review/review-labels'
+import { History } from 'lucide-react'
+import { type ReactNode, useCallback, useMemo } from 'react'
+import { changeCountLabel } from '../review/review-labels'
 
 const HISTORY_TAB_SET_ID = 'history-file-diffs'
 
@@ -99,8 +81,8 @@ export function HistoryPage(props: HistoryPageProps) {
   } = useHistoryPageModel(props)
 
   return (
-    <>
-      <WorkbenchHeader
+    <WorkbenchPane>
+      <WorkbenchBar
         actions={availableAudiences.length > 1 ? (
           <AudienceToggle
             audience={audience}
@@ -108,10 +90,7 @@ export function HistoryPage(props: HistoryPageProps) {
             onSelect={selectAudience}
           />
         ) : undefined}
-        count={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
-        description={`Projected commit history for ${repoId}.`}
-        eyebrow={`${audienceLabel(audience)} view`}
-        title="History"
+        summary={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
       />
       <HistoryWorkbench
         commitState={commitState}
@@ -130,85 +109,7 @@ export function HistoryPage(props: HistoryPageProps) {
         selectedCommitId={selectedCommitId}
         selectedFilePath={selectedFilePath}
       />
-    </>
-  )
-}
-
-export function HistoryWorkbench({
-  commitContext,
-  commitState,
-  commits,
-  diffIdentity,
-  emptyDescription,
-  emptyTitle,
-  fileDiffState,
-  fileTabs,
-  onActivateFileTab,
-  onCloseFileTab,
-  onRetryCommit,
-  onRetryDiff,
-  onSelectCommit,
-  onSelectFile,
-  selectedCommitId,
-  selectedFilePath,
-}: {
-  commitContext?: ReactNode
-  commitState: CommitDetailState
-  commits: CommitSummary[]
-  diffIdentity: string | null
-  emptyDescription: string
-  emptyTitle: string
-  fileDiffState: CommitFileDiffState
-  fileTabs: WorkspaceTabItem[]
-  onActivateFileTab: (path: string) => void
-  onCloseFileTab: (path: string) => string | null
-  onRetryCommit?: () => void
-  onRetryDiff?: () => void
-  onSelectCommit: (commit: CommitSummary) => void
-  onSelectFile: (file: CommitFile) => void
-  selectedCommitId: string | null
-  selectedFilePath: string | null
-}) {
-  return (
-    <section className="px-4 pb-10 sm:px-6 lg:px-8">
-      <div className="flex items-center gap-2 border-b border-border py-4">
-        <History className="size-4 text-muted-foreground" />
-        <h2 className="text-sm font-semibold leading-5">Commits</h2>
-      </div>
-
-      {commits.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 py-16 text-center">
-          <History className="size-6 text-muted-foreground" />
-          <div className="text-sm">
-            <div className="text-base font-semibold leading-6">{emptyTitle}</div>
-            <p className="mt-0.5 text-muted-foreground">{emptyDescription}</p>
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,0.46fr)_minmax(0,1.54fr)]">
-          <CommitList
-            commits={commits}
-            onSelectCommit={onSelectCommit}
-            selectedCommitId={selectedCommitId}
-          />
-          <CommitDetailPanel
-            commitContext={commitContext}
-            commitState={commitState}
-            diffIdentity={diffIdentity}
-            diffScrollTop={readHistoryDiffScroll(diffIdentity)}
-            fileDiffState={fileDiffState}
-            fileTabs={fileTabs}
-            onActivateFileTab={onActivateFileTab}
-            onCloseFileTab={onCloseFileTab}
-            onDiffScroll={(scrollTop) => writeHistoryDiffScroll(diffIdentity, scrollTop)}
-            onRetryCommit={onRetryCommit}
-            onRetryDiff={onRetryDiff}
-            onSelectFile={onSelectFile}
-            selectedFilePath={selectedFilePath}
-          />
-        </div>
-      )}
-    </section>
+    </WorkbenchPane>
   )
 }
 
@@ -390,330 +291,6 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
   }
 }
 
-function CommitList({
-  commits,
-  onSelectCommit,
-  selectedCommitId,
-}: {
-  commits: CommitSummary[]
-  onSelectCommit: (commit: CommitSummary) => void
-  selectedCommitId: string | null
-}) {
-  return (
-    <div className="border-b border-border lg:border-b-0 lg:border-r">
-      <div className="hidden grid-cols-[minmax(0,1fr)_80px] gap-3 border-b border-border px-2 py-2 text-xs font-medium leading-4 text-muted-foreground sm:grid">
-        <div>Commit</div>
-        <div className="text-right">Files</div>
-      </div>
-      <div className="divide-y divide-border">
-        {commits.map((commit) => {
-          const labels = historyRowLabels(commit)
-          const selected = selectedCommitId === commit.projected_id
-          return (
-            <button
-              aria-label={labels.ariaLabel}
-              className={cn(
-                'grid w-full grid-cols-[minmax(0,1fr)_80px] gap-x-3 px-2 py-3 text-left text-sm transition-colors hover:bg-muted/70',
-                selected &&
-                  'bg-brand-muted shadow-[inset_2px_0_0_0_var(--brand)] hover:bg-brand-muted',
-              )}
-              key={commit.projected_id}
-              onClick={() => onSelectCommit(commit)}
-              title={commit.logical_commit_id}
-              type="button"
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <GitCommit className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 font-mono">
-                  <span className="block truncate text-xs font-medium">
-                    {labels.title}
-                  </span>
-                  <span className="mt-0.5 block truncate text-[11px] leading-4 text-muted-foreground">
-                    {labels.compactId}
-                  </span>
-                </span>
-              </div>
-              <div className="self-center text-right font-mono text-xs text-muted-foreground">
-                {commit.change_count}
-              </div>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function CommitDetailPanel({
-  commitContext,
-  commitState,
-  diffIdentity,
-  diffScrollTop,
-  fileDiffState,
-  fileTabs,
-  onActivateFileTab,
-  onCloseFileTab,
-  onDiffScroll,
-  onRetryCommit,
-  onRetryDiff,
-  onSelectFile,
-  selectedFilePath,
-}: {
-  commitContext?: ReactNode
-  commitState: CommitDetailState
-  diffIdentity: string | null
-  diffScrollTop: number
-  fileDiffState: CommitFileDiffState
-  fileTabs: WorkspaceTabItem[]
-  onActivateFileTab: (path: string) => void
-  onCloseFileTab: (path: string) => string | null
-  onDiffScroll: (scrollTop: number) => void
-  onRetryCommit?: () => void
-  onRetryDiff?: () => void
-  onSelectFile: (file: CommitFile) => void
-  selectedFilePath: string | null
-}) {
-  const fileNavigatorRef = useRef<HTMLDivElement>(null)
-
-  if (commitState.status === 'loading') {
-    return <CommitDetailSkeleton />
-  }
-
-  if (commitState.status === 'failed') {
-    return (
-      <PanelState tone="error">
-        <TriangleAlert className="size-4 text-destructive" />
-        <span>{commitState.error}</span>
-        {onRetryCommit && (
-          <Button onClick={onRetryCommit} size="sm" type="button" variant="secondary">
-            Retry
-          </Button>
-        )}
-      </PanelState>
-    )
-  }
-
-  if (!commitState.commit) {
-    return (
-      <PanelState>
-        <GitCommit className="size-4 text-muted-foreground" />
-        <span>Select a commit</span>
-      </PanelState>
-    )
-  }
-
-  const commit = commitState.commit
-  const diffOpen = selectedFilePath !== null
-  const activeTabDomIds = selectedFilePath && fileTabs.some((tab) => tab.id === selectedFilePath)
-    ? workspaceTabDomIds(HISTORY_TAB_SET_ID, selectedFilePath)
-    : null
-  function closeUnavailableDiff() {
-    if (!selectedFilePath) return
-    onCloseFileTab(selectedFilePath)
-    requestAnimationFrame(() => fileNavigatorRef.current?.focus())
-  }
-
-  return (
-    <div className="min-w-0">
-      <div className="border-b border-border px-2 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="neutral">{commit.logical_commit_id}</Badge>
-          {commit.author && <Badge variant="neutral">{commit.author}</Badge>}
-        </div>
-        <h3 className="mt-2 truncate font-mono text-sm font-semibold leading-5">
-          {historyCommitTitle(commit)}
-        </h3>
-        {commitContext}
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]">
-        <div
-          aria-label="Commit file navigator"
-          className="min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          ref={fileNavigatorRef}
-          tabIndex={-1}
-        >
-          {commit.files.length === 0 ? (
-            <div className="px-2 py-10 text-sm text-muted-foreground">
-              No file changes in this commit.
-            </div>
-          ) : (
-            <FileSystemTree
-              compactVisibility
-              files={commit.files}
-              getFileMeta={commitFileStatus}
-              metaColumnLabel="Change"
-              onSelectFile={onSelectFile}
-              selectedFilePath={selectedFilePath}
-            />
-          )}
-        </div>
-        <div className="h-[70vh] min-h-[340px] max-h-[720px] min-w-0 overflow-hidden border-border xl:border-l">
-          <div className="flex h-full min-h-[340px] min-w-0 flex-col">
-            <WorkspaceTabStrip
-              activeId={selectedFilePath}
-              ariaLabel="Open history diffs"
-              onActivate={onActivateFileTab}
-              onClose={onCloseFileTab}
-              onEmptyFocus={() => fileNavigatorRef.current?.focus()}
-              tabSetId={HISTORY_TAB_SET_ID}
-              tabs={fileTabs}
-            />
-            <div
-              aria-label={fileTabs.length > 0 && !activeTabDomIds ? 'History diff viewer' : undefined}
-              aria-labelledby={activeTabDomIds?.tabId}
-              className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              id={workspaceTabPanelId(HISTORY_TAB_SET_ID)}
-              role={fileTabs.length > 0 ? 'tabpanel' : undefined}
-              tabIndex={fileTabs.length > 0 ? 0 : undefined}
-            >
-              {diffOpen ? (
-                <ReviewFileDiffDrawer
-                  cacheKey={diffIdentity}
-                  className="min-h-0"
-                  diff={fileDiffState.diff}
-                  error={fileDiffState.error}
-                  loading={fileDiffState.status === 'loading'}
-                  onClose={fileTabs.length === 0 ? closeUnavailableDiff : undefined}
-                  onRetry={fileDiffState.status === 'failed' ? onRetryDiff : undefined}
-                  onScrollTopChange={onDiffScroll}
-                  scrollTop={diffScrollTop}
-                  selectedPath={selectedFilePath}
-                  showHeader={fileTabs.length === 0}
-                />
-              ) : (
-                <PanelState>
-                  <span>Select a changed file</span>
-                </PanelState>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function CommitDetailSkeleton() {
-  return (
-    <div className="min-w-0">
-      <div className="border-b border-border px-2 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Skeleton className="h-5 w-16" />
-          <Skeleton className="h-5 w-24" />
-        </div>
-        <Skeleton className="mt-2 h-4 w-2/3" />
-      </div>
-      <div className="space-y-3 px-2 py-4">
-        {Array.from({ length: 5 }).map((_, index) => (
-          <div className="flex items-center gap-2" key={index}>
-            <Skeleton className="size-4 rounded" />
-            <Skeleton className="h-3.5 w-1/2" />
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function AudienceToggle({
-  audience,
-  availableAudiences,
-  onSelect,
-}: {
-  audience: ProjectionPreviewAudience
-  availableAudiences: ProjectionPreviewAudience[]
-  onSelect: (audience: ProjectionPreviewAudience) => void
-}) {
-  return (
-    <ToggleGroup
-      onValueChange={(value) => {
-        if (value) {
-          onSelect(value as ProjectionPreviewAudience)
-        }
-      }}
-      type="single"
-      value={audience}
-    >
-      {(['private', 'public'] as const).map((option) => {
-        const Icon = option === 'private' ? LockKeyhole : Globe2
-        return (
-          <ToggleGroupItem
-            aria-label={`${audienceLabel(option)} view`}
-            disabled={!availableAudiences.includes(option)}
-            key={option}
-            value={option}
-          >
-            <Icon className="size-3" />
-            <span>{audienceLabel(option)} view</span>
-          </ToggleGroupItem>
-        )
-      })}
-    </ToggleGroup>
-  )
-}
-
-function PanelState({
-  children,
-  tone = 'muted',
-}: {
-  children: ReactNode
-  tone?: 'error' | 'muted'
-}) {
-  return (
-    <div
-      className={cn(
-        'flex min-h-[360px] items-center justify-center gap-2 px-4 text-sm leading-5',
-        tone === 'error' ? 'text-destructive' : 'text-muted-foreground',
-      )}
-    >
-      {children}
-    </div>
-  )
-}
-
-export type CommitDetailState =
-  | { commit: null; error: null; status: 'idle' }
-  | { commit: null; error: null; status: 'loading' }
-  | { commit: CommitDetail; error: null; status: 'loaded' }
-  | { commit: null; error: string; status: 'failed' }
-
-export type CommitFileDiffState =
-  | { diff: null; error: null; status: 'idle' }
-  | { diff: null; error: null; status: 'loading' }
-  | { diff: ReviewFileDiff; error: null; status: 'loaded' }
-  | { diff: null; error: string; status: 'failed' }
-
-function resourceToCommitState(
-  resource: CachedResource<CommitDetail>,
-): CommitDetailState {
-  switch (resource.status) {
-    case 'idle':
-      return { commit: null, error: null, status: 'idle' }
-    case 'loading':
-      return { commit: null, error: null, status: 'loading' }
-    case 'loaded':
-      return { commit: resource.value, error: null, status: 'loaded' }
-    case 'failed':
-      return { commit: null, error: resource.error, status: 'failed' }
-  }
-}
-
-function resourceToDiffState(
-  resource: CachedResource<ReviewFileDiff>,
-): CommitFileDiffState {
-  switch (resource.status) {
-    case 'idle':
-      return { diff: null, error: null, status: 'idle' }
-    case 'loading':
-      return { diff: null, error: null, status: 'loading' }
-    case 'loaded':
-      return { diff: resource.value, error: null, status: 'loaded' }
-    case 'failed':
-      return { diff: null, error: resource.error, status: 'failed' }
-  }
-}
-
 function selectedAudience(
   histories: CommitHistories,
   requestedAudience?: ProjectionPreviewAudience,
@@ -731,18 +308,4 @@ function latestCommitId(history: CommitHistory | null) {
 function fileName(path: string) {
   const displayPath = path.replace(/^\/+/, '')
   return displayPath.split('/').at(-1) ?? displayPath
-}
-
-function commitFileStatus(file: CommitFile) {
-  return <Badge variant="neutral">{file.kind}</Badge>
-}
-
-export function HistoryError({ error }: { error: unknown }) {
-  return (
-    <RouteErrorContent
-      error={error}
-      fallbackMessage="Unexpected history error"
-      title="History unavailable"
-    />
-  )
 }

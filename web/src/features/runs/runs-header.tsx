@@ -1,4 +1,4 @@
-import { WorkbenchHeader } from '@/components/workbench-header'
+import { WorkbenchBar } from '@/components/page-header'
 
 export function RunsHeader({
   runCount,
@@ -8,21 +8,17 @@ export function RunsHeader({
   workflowName?: string
 }) {
   return (
-    <WorkbenchHeader
+    <WorkbenchBar
       actions={(
         <code className="max-w-full overflow-x-auto whitespace-nowrap text-xs text-muted-foreground">
-          scope run &lt;workflow&gt;{' '}--runner &lt;name&gt;
+          scope run &lt;workflow&gt; --runner &lt;name&gt;
         </code>
       )}
-      count={runCount === undefined ? undefined : `${runCount} loaded`}
-      description={(
-        <>
-          {workflowName ? `History for ${workflowName}. ` : null}
-          Jobs from <code>.scope/runs</code> on your attached machines.
-        </>
-      )}
-      eyebrow="Execute"
-      title="Runs"
+      summary={
+        runCount === undefined
+          ? undefined
+          : `${runCount} ${runCount === 1 ? 'run' : 'runs'}${workflowName ? ` in ${workflowName}` : ''}`
+      }
     />
   )
 }

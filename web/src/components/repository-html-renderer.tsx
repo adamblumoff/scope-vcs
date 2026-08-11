@@ -42,7 +42,7 @@ export function RepositoryHtmlRenderer({
       </div>
       {mode === 'preview' ? (
         <iframe
-          className="h-[calc(100dvh-356px)] min-h-[32rem] max-h-[70rem] w-full border-0 bg-white"
+          className="h-[calc(100dvh-var(--app-chrome)-132px)] min-h-[32rem] max-h-[70rem] w-full border-0 bg-white"
           referrerPolicy="no-referrer"
           sandbox=""
           srcDoc={document}

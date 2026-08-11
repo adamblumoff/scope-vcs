@@ -5,12 +5,10 @@ export function AppShell({
   children,
   className,
   header,
-  subheader,
 }: {
   children: ReactNode
   className?: string
   header?: () => ReactNode
-  subheader?: () => ReactNode
 }) {
   return (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -21,7 +19,6 @@ export function AppShell({
         Skip to content
       </a>
       {header?.()}
-      {subheader?.()}
       <main
         className={cn(
           'min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',

@@ -62,12 +62,7 @@ export function InvitePage({
     >
       <PageContent>
         <PageHeader
-          badges={(
-            <>
-              <Badge variant="info">Invite</Badge>
-              <Badge variant="neutral">{invite.invited_email}</Badge>
-            </>
-          )}
+          badges={<Badge variant="neutral">{invite.invited_email}</Badge>}
           description={(
             <span className="font-mono text-muted-foreground">
               {invite.repo_id}

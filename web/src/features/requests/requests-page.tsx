@@ -1,16 +1,15 @@
 import type { RequestQueueSection } from '@/api/request-queue-input'
 import type {
-  RepoLiveState,
   RepoParams,
   RequestList,
   RequestListItem,
 } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { WorkbenchHeader } from '@/components/workbench-header'
+import { EmptyState } from '@/components/empty-state'
+import { PageContent } from '@/components/page-header'
 import { Link } from '@tanstack/react-router'
 import {
-  ArrowRight,
   CheckCircle2,
   GitPullRequest,
   Search,
@@ -26,7 +25,6 @@ import {
 } from './request-list-model'
 import {
   formatUnixDate,
-  requestAudienceLabel,
   requestAuthorRoleLabel,
   requestMergeabilityLabel,
   requestStatusLabel,
@@ -35,20 +33,17 @@ import {
 
 const SECTION_DETAILS = {
   your_work: {
-    description: 'Requests you authored or joined, including private drafts.',
-    empty: 'No requests involve you in this repository.',
+    empty: 'Nothing here involves you yet.',
     icon: UserRound,
     title: 'Your work',
   },
   open: {
-    description: 'Oldest submissions first.',
-    empty: 'No open requests are visible.',
+    empty: 'No open requests.',
     icon: GitPullRequest,
     title: 'Open',
   },
   closed: {
-    description: 'Closed and merged requests, newest decision first.',
-    empty: 'No closed requests are visible.',
+    empty: 'No closed requests.',
     icon: CheckCircle2,
     title: 'Closed',
   },
@@ -56,12 +51,10 @@ const SECTION_DETAILS = {
 
 export function RequestsPage({
   initialPages,
-  live,
   loadPage,
   params,
 }: {
   initialPages: RequestQueuePages
-  live: RepoLiveState
   loadPage: (
     section: RequestQueueSection,
     cursor: string | null,
@@ -162,41 +155,33 @@ export function RequestsPage({
   }
 
   return (
-    <>
-      <WorkbenchHeader
-        count={`${live.repo.open_request_count} open`}
-        description="Keep drafts close, review submitted work, and find terminal requests."
-        eyebrow="Contributions"
-        title="Requests"
+    <PageContent className="pb-16">
+      <QueueSearch
+        busy={Boolean(loadingSection) || searching}
+        error={searchError}
+        onChange={(value) => dispatch({ type: 'search_draft_changed', value })}
+        onClear={clearSearch}
+        onSubmit={submitSearch}
+        query={searchDraft}
+        searching={searching}
+        searchQuery={searchQuery}
       />
-      <div className="px-4 pb-12 sm:px-6 lg:px-8">
-        <QueueSearch
-          busy={Boolean(loadingSection) || searching}
-          error={searchError}
-          onChange={(value) => dispatch({ type: 'search_draft_changed', value })}
-          onClear={clearSearch}
-          onSubmit={submitSearch}
-          query={searchDraft}
-          searching={searching}
-          searchQuery={searchQuery}
-        />
-        <div aria-busy={searching} className="divide-y divide-border">
-          {REQUEST_QUEUE_SECTION_ORDER.map((section) => (
-            <QueueSection
-              busy={Boolean(loadingSection) || searching}
-              error={sectionErrors[section]}
-              key={section}
-              loading={loadingSection === section}
-              onLoadMore={() => void loadMore(section)}
-              page={pages[section]}
-              params={params}
-              searchQuery={section === 'your_work' ? '' : searchQuery}
-              section={section}
-            />
-          ))}
-        </div>
+      <div aria-busy={searching} className="mt-10 grid gap-12">
+        {REQUEST_QUEUE_SECTION_ORDER.map((section) => (
+          <QueueSection
+            busy={Boolean(loadingSection) || searching}
+            error={sectionErrors[section]}
+            key={section}
+            loading={loadingSection === section}
+            onLoadMore={() => void loadMore(section)}
+            page={pages[section]}
+            params={params}
+            searchQuery={section === 'your_work' ? '' : searchQuery}
+            section={section}
+          />
+        ))}
       </div>
-    </>
+    </PageContent>
   )
 }
 
@@ -221,7 +206,7 @@ function QueueSearch({
 }) {
   return (
     <form
-      className="flex flex-col gap-2 border-b border-border py-5 sm:flex-row sm:items-center"
+      className="flex flex-col gap-2 sm:flex-row sm:items-center"
       onSubmit={onSubmit}
       role="search"
     >
@@ -235,7 +220,7 @@ function QueueSearch({
           className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           disabled={busy}
           onChange={(event) => onChange(event.target.value)}
-          placeholder="Search open and closed requests"
+          placeholder="Search requests"
           type="search"
           value={query}
         />
@@ -289,30 +274,23 @@ function QueueSection({
   const Icon = details.icon
   const headingId = `request-queue-${section}`
   const emptyMessage = searchQuery
-    ? `No ${details.title.toLowerCase()} requests match “${searchQuery}”.`
+    ? `Nothing matches “${searchQuery}”.`
     : details.empty
 
   return (
-    <section aria-labelledby={headingId} className="py-7 sm:py-8">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
-            <h2 className="text-base font-semibold tracking-[-0.012em]" id={headingId}>
-              {details.title}
-            </h2>
-          </div>
-          <p className="mt-1 text-sm leading-5 text-muted-foreground">
-            {details.description}
-          </p>
-        </div>
+    <section aria-labelledby={headingId}>
+      <div className="flex items-center gap-2">
+        <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
+        <h2 className="text-sm font-semibold" id={headingId}>
+          {details.title}
+        </h2>
         <span className="text-xs tabular-nums text-muted-foreground">
           {requestCountLabel(page.requests.length, Boolean(page.next_cursor))}
         </span>
       </div>
 
       {page.requests.length ? (
-        <div className="mt-4 divide-y divide-border border-y border-border">
+        <div className="mt-2 divide-y divide-border">
           {page.requests.map((request) => (
             <RequestQueueRow
               key={request.id}
@@ -323,9 +301,7 @@ function QueueSection({
           ))}
         </div>
       ) : (
-        <p className="mt-4 border-y border-border py-6 text-sm text-muted-foreground">
-          {emptyMessage}
-        </p>
+        <EmptyState className="mt-3" inline title={emptyMessage} />
       )}
 
       {page.next_cursor ? (
@@ -337,7 +313,7 @@ function QueueSection({
             type="button"
             variant="secondary"
           >
-            {loading ? 'Loading…' : `Load more ${details.title.toLowerCase()}`}
+            {loading ? 'Loading…' : 'Load more'}
           </Button>
           {loading ? (
             <output className="sr-only">
@@ -347,7 +323,7 @@ function QueueSection({
         </div>
       ) : null}
       {error ? (
-        <p className="mt-2 text-sm text-destructive" role="alert">
+        <p className="mt-2 text-sm text-danger-strong" role="alert">
           {error}
         </p>
       ) : null}
@@ -366,49 +342,35 @@ function RequestQueueRow({
 }) {
   return (
     <Link
-      className="group grid min-w-0 gap-3 py-4 outline-none transition-colors [contain-intrinsic-size:auto_76px] [content-visibility:auto] hover:bg-muted/45 focus-visible:bg-muted/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-3"
+      className="group block min-w-0 rounded-md py-3 outline-none transition-colors [contain-intrinsic-size:auto_64px] [content-visibility:auto] hover:bg-accent/50 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       params={{ ...params, requestId: request.id }}
+      title={request.id}
       to="/$owner/$repo/requests/$requestId"
     >
-      <div className="min-w-0">
-        <h3 className="break-words text-sm font-semibold leading-6 tracking-[-0.008em] group-hover:underline">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
+        <h3 className="break-words text-sm font-medium leading-6 group-hover:underline">
           {request.title}
         </h3>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
-          {request.title !== request.name ? (
-            <>
-              <span className="font-mono">{request.name}</span>
-              <MetadataSeparator />
-            </>
-          ) : null}
-          <span>{requestAudienceLabel(request)}</span>
-          <MetadataSeparator />
-          <span>{requestAuthorRoleLabel(request)}</span>
-          <MetadataSeparator />
-          <span className="font-mono">{request.id}</span>
-          <MetadataSeparator />
-          <QueueDate request={request} section={section} />
-          {section === 'your_work' ? (
-            <>
-              <MetadataSeparator />
-              <span>{requestStatusLabel(request)}</span>
-            </>
-          ) : null}
-        </div>
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
-        {section === 'closed' ? (
-          <>
-            <Badge variant={requestStatusTone(request)}>
-              {requestStatusLabel(request)}
-            </Badge>
-          </>
-        ) : section === 'open' ? (
-          <span className="text-xs text-muted-foreground">
-            {requestMergeabilityLabel(request)}
+        {request.title !== request.name ? (
+          <span className="truncate font-mono text-xs text-muted-foreground">
+            {request.name}
           </span>
         ) : null}
-        <ArrowRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+      </div>
+      {/* Status stays adjacent to the title rather than justified to the far
+          edge, so wide viewports do not separate a row from its state. */}
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted-foreground">
+        {section === 'open' ? (
+          <span>{requestMergeabilityLabel(request)}</span>
+        ) : (
+          <Badge variant={requestStatusTone(request)}>
+            {requestStatusLabel(request)}
+          </Badge>
+        )}
+        <span aria-hidden="true">·</span>
+        <span>{requestAuthorRoleLabel(request)}</span>
+        <span aria-hidden="true">·</span>
+        <QueueDate request={request} section={section} />
       </div>
     </Link>
   )
@@ -425,10 +387,6 @@ function QueueDate({
     return <span className="tabular-nums">Submitted {formatUnixDate(request.submitted_at_unix)}</span>
   }
   return <span className="tabular-nums">Updated {formatUnixDate(request.updated_at_unix)}</span>
-}
-
-function MetadataSeparator() {
-  return <span aria-hidden="true">·</span>
 }
 
 function errorMessage(error: unknown, fallback: string) {

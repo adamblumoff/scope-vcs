@@ -1,4 +1,5 @@
 import type { RequestParams, RequestSummary } from '@/api/types'
+import { EmptyState } from '@/components/empty-state'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -162,15 +163,12 @@ export function RequestDiscussionWorkbench({
                 ))}
               </div>
             ) : (
-              <div className="border-b border-border px-5 py-14 text-center lg:px-7">
-                <MessageSquare className="mx-auto size-5 text-muted-foreground" />
-                <h3 className="mt-3 text-sm font-semibold">
-                  No timeline activity yet
-                </h3>
-                <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
-                  Updates and conversations will appear here in order.
-                </p>
-              </div>
+              <EmptyState
+                className="border-b border-border"
+                description="Updates and conversations will appear here in order."
+                icon={<MessageSquare />}
+                title="No timeline activity yet"
+              />
             )}
 
             {store.collection.nextCursor ? (

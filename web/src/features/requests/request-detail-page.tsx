@@ -7,11 +7,10 @@ import type {
   RequestRatings,
 } from '@/api/types'
 import type { RateRequestInput } from '@/api/requests'
-import { LifecycleBadge } from '@/components/lifecycle-badge'
-import { PageContent, PageHeader } from '@/components/page-header'
+import { EmptyState } from '@/components/empty-state'
+import { PageContent } from '@/components/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { WorkbenchHeader } from '@/components/workbench-header'
 import { Link } from '@tanstack/react-router'
 import { GitCommit, History, MessageSquare, ShieldQuestion } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
@@ -37,24 +36,18 @@ import { useRequestActivityHistory } from './use-request-activity-history'
 export function RequestUnavailablePage({ params }: { params: RepoParams }) {
   return (
     <PageContent>
-      <PageHeader
-        actions={(
+      <EmptyState
+        action={(
           <Button asChild size="sm" variant="secondary">
             <Link params={params} to="/$owner/$repo/requests">
-              Requests
+              Back to requests
             </Link>
           </Button>
         )}
-        badges={<Badge variant="warning">Unavailable</Badge>}
-        description="This request does not exist or is unavailable to this account."
+        description="It does not exist, or this account cannot see it. Sign in with an account that has access."
+        icon={<ShieldQuestion />}
         title="Request not found"
       />
-      <section className="mt-8 border-t border-border py-8">
-        <div className="flex max-w-2xl items-start gap-3 text-sm leading-6 text-muted-foreground">
-          <ShieldQuestion className="mt-0.5 size-4 shrink-0" />
-          <p>Sign in with an account that has access, or return to the request list.</p>
-        </div>
-      </section>
     </PageContent>
   )
 }
@@ -118,15 +111,33 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
 
   function requestHeader() {
     return (
-      <WorkbenchHeader
-        actions={(
-          <div className="flex flex-wrap items-center justify-end gap-2">
+      <header className="px-5 pb-5 pt-7 sm:px-6 lg:px-8">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0">
+            <h1 className="break-words text-[26px] font-semibold leading-[1.15] tracking-[-0.02em] sm:text-[30px]">
+              {request.title}
+            </h1>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <Badge variant={requestStatusTone(request)}>
+                {requestStatusLabel(request)}
+              </Badge>
+              {request.state === 'Open' ? (
+                <Badge variant={requestMergeabilityTone(request)}>
+                  {requestMergeabilityLabel(request)}
+                </Badge>
+              ) : null}
+              <span className="font-mono text-xs text-muted-foreground">
+                {request.name}
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 xl:justify-end">
             <RequestLifecycleActions
               actions={requestActions}
               className="hidden xl:flex"
               request={request}
             />
-            <Button asChild className="h-9" size="sm" variant="secondary">
+            <Button asChild size="sm" variant="secondary">
               <Link params={params} to="/$owner/$repo/requests">Requests</Link>
             </Button>
             {request.permissions.can_view_activity ? (
@@ -142,28 +153,13 @@ export function RequestDetailPage(props: RequestDetailPageProps) {
               </Button>
             ) : null}
           </div>
-        )}
-        className="sm:flex-col sm:items-stretch xl:flex-row xl:items-end"
-        count={<span className="font-mono">{request.name} / {request.id}</span>}
-        description={(
-          <div className="grid gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <LifecycleBadge state={live.repo.lifecycle_state} />
-              <Badge variant={requestStatusTone(request)}>{requestStatusLabel(request)}</Badge>
-              {request.state === 'Open' ? (
-                <Badge variant={requestMergeabilityTone(request)}>
-                  {requestMergeabilityLabel(request)}
-                </Badge>
-              ) : null}
-            </div>
-            {requestActions.error ? (
-              <p className="text-sm text-destructive" role="alert">{requestActions.error}</p>
-            ) : null}
-          </div>
-        )}
-        eyebrow="Request"
-        title={request.title}
-      />
+        </div>
+        {requestActions.error ? (
+          <p className="mt-3 text-sm text-danger-strong" role="alert">
+            {requestActions.error}
+          </p>
+        ) : null}
+      </header>
     )
   }
 

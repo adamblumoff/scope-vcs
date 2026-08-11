@@ -58,7 +58,7 @@ export function RepoCloneDropdown({
         onClick={toggleOpen}
         size="sm"
         type="button"
-        variant="chrome"
+        variant="secondary"
       >
         <Code2 className="size-3.5" />
         <span>Clone</span>

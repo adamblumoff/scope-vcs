@@ -1,0 +1,199 @@
+import type { CommitFile } from '@/api/types'
+import { PanelState, EmptyState } from '@/components/empty-state'
+import { FileSystemTree } from '@/components/file-system-tree'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  workspaceTabDomIds,
+  workspaceTabPanelId,
+  type WorkspaceTabItem,
+} from '@/components/workspace-tab-model'
+import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
+import { historyCommitTitle } from '@/features/history/history-row-labels'
+import type {
+  CommitDetailState,
+  CommitFileDiffState,
+} from '@/features/history/history-state'
+import { GitCommit, TriangleAlert } from 'lucide-react'
+import { type ReactNode, useRef } from 'react'
+import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
+
+const HISTORY_TAB_SET_ID = 'history-file-diffs'
+
+export function CommitDetailPanel({
+  commitContext,
+  commitState,
+  diffIdentity,
+  diffScrollTop,
+  fileDiffState,
+  fileTabs,
+  onActivateFileTab,
+  onCloseFileTab,
+  onDiffScroll,
+  onRetryCommit,
+  onRetryDiff,
+  onSelectFile,
+  selectedFilePath,
+}: {
+  commitContext?: ReactNode
+  commitState: CommitDetailState
+  diffIdentity: string | null
+  diffScrollTop: number
+  fileDiffState: CommitFileDiffState
+  fileTabs: WorkspaceTabItem[]
+  onActivateFileTab: (path: string) => void
+  onCloseFileTab: (path: string) => string | null
+  onDiffScroll: (scrollTop: number) => void
+  onRetryCommit?: () => void
+  onRetryDiff?: () => void
+  onSelectFile: (file: CommitFile) => void
+  selectedFilePath: string | null
+}) {
+  const fileNavigatorRef = useRef<HTMLDivElement>(null)
+
+  if (commitState.status === 'loading') {
+    return <CommitDetailSkeleton />
+  }
+
+  if (commitState.status === 'failed') {
+    return (
+      <PanelState tone="error">
+        <TriangleAlert className="size-5" />
+        <span>{commitState.error}</span>
+        {onRetryCommit && (
+          <Button onClick={onRetryCommit} size="sm" type="button" variant="secondary">
+            Retry
+          </Button>
+        )}
+      </PanelState>
+    )
+  }
+
+  if (!commitState.commit) {
+    return (
+      <PanelState>
+        <GitCommit className="size-5" />
+        <span>Select a commit</span>
+      </PanelState>
+    )
+  }
+
+  const commit = commitState.commit
+  const diffOpen = selectedFilePath !== null
+  const activeTabDomIds = selectedFilePath && fileTabs.some((tab) => tab.id === selectedFilePath)
+    ? workspaceTabDomIds(HISTORY_TAB_SET_ID, selectedFilePath)
+    : null
+  function closeUnavailableDiff() {
+    if (!selectedFilePath) return
+    onCloseFileTab(selectedFilePath)
+    requestAnimationFrame(() => fileNavigatorRef.current?.focus())
+  }
+
+  return (
+    <div className="min-w-0">
+      <div className="border-b border-border px-5 py-4 sm:px-6">
+        <h3 className="truncate text-sm font-semibold leading-5">
+          {historyCommitTitle(commit)}
+        </h3>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-muted-foreground">
+          <span>{commit.logical_commit_id}</span>
+          {commit.author && (
+            <>
+              <span aria-hidden>·</span>
+              <span>{commit.author}</span>
+            </>
+          )}
+        </div>
+        {commitContext}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]">
+        <div
+          aria-label="Commit file navigator"
+          className="min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          ref={fileNavigatorRef}
+          tabIndex={-1}
+        >
+          {commit.files.length === 0 ? (
+            <EmptyState inline className="px-5 py-8 sm:px-6" title="No file changes in this commit." />
+          ) : (
+            <FileSystemTree
+              compactVisibility
+              files={commit.files}
+              getFileMeta={commitFileStatus}
+              metaColumnLabel="Change"
+              onSelectFile={onSelectFile}
+              selectedFilePath={selectedFilePath}
+            />
+          )}
+        </div>
+        <div className="h-[70vh] min-h-[340px] max-h-[720px] min-w-0 overflow-hidden border-border xl:border-l">
+          <div className="flex h-full min-h-[340px] min-w-0 flex-col">
+            <WorkspaceTabStrip
+              activeId={selectedFilePath}
+              ariaLabel="Open history diffs"
+              onActivate={onActivateFileTab}
+              onClose={onCloseFileTab}
+              onEmptyFocus={() => fileNavigatorRef.current?.focus()}
+              tabSetId={HISTORY_TAB_SET_ID}
+              tabs={fileTabs}
+            />
+            <div
+              aria-label={fileTabs.length > 0 && !activeTabDomIds ? 'History diff viewer' : undefined}
+              aria-labelledby={activeTabDomIds?.tabId}
+              className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              id={workspaceTabPanelId(HISTORY_TAB_SET_ID)}
+              role={fileTabs.length > 0 ? 'tabpanel' : undefined}
+              tabIndex={fileTabs.length > 0 ? 0 : undefined}
+            >
+              {diffOpen ? (
+                <ReviewFileDiffDrawer
+                  cacheKey={diffIdentity}
+                  className="min-h-0"
+                  diff={fileDiffState.diff}
+                  error={fileDiffState.error}
+                  loading={fileDiffState.status === 'loading'}
+                  onClose={fileTabs.length === 0 ? closeUnavailableDiff : undefined}
+                  onRetry={fileDiffState.status === 'failed' ? onRetryDiff : undefined}
+                  onScrollTopChange={onDiffScroll}
+                  scrollTop={diffScrollTop}
+                  selectedPath={selectedFilePath}
+                  showHeader={fileTabs.length === 0}
+                />
+              ) : (
+                <PanelState>
+                  <span>Select a changed file</span>
+                </PanelState>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Mirrors the loaded layout: commit heading, mono meta line, then file rows. */
+function CommitDetailSkeleton() {
+  return (
+    <div className="min-w-0">
+      <div className="border-b border-border px-5 py-4 sm:px-6">
+        <Skeleton className="h-4 w-2/5" />
+        <Skeleton className="mt-2 h-3 w-28" />
+      </div>
+      <div className="space-y-3 px-5 py-4 sm:px-6">
+        {Array.from({ length: 5 }).map((_, index) => (
+          <div className="flex items-center gap-2" key={index}>
+            <Skeleton className="size-4 rounded-sm" />
+            <Skeleton className="h-3.5 w-1/2" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function commitFileStatus(file: CommitFile) {
+  return <Badge variant="neutral">{file.kind}</Badge>
+}

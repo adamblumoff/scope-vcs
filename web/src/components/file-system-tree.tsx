@@ -19,8 +19,10 @@ import {
   type FileSystemTreeNode,
 } from './file-system-tree-model'
 
-const FULL_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_110px_120px]'
-const COMPACT_TREE_COLUMNS = 'sm:grid-cols-[minmax(0,1fr)_84px_28px]'
+const FULL_TREE_COLUMNS =
+  'grid-cols-[minmax(0,1fr)_auto_auto] sm:grid-cols-[minmax(0,1fr)_110px_120px]'
+const COMPACT_TREE_COLUMNS =
+  'grid-cols-[minmax(0,1fr)_auto_auto] sm:grid-cols-[minmax(0,1fr)_84px_28px]'
 
 export function FileSystemTree<TFile extends FileSystemTreeFileBase>({
   compactVisibility = false,
@@ -110,7 +112,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
     <div>
       <div
         className={cn(
-          'hidden min-h-10 gap-3 px-3 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground sm:grid sm:items-center',
+          'hidden gap-3 px-3 pb-1.5 pt-1 text-[11px] font-medium text-muted-foreground sm:grid sm:items-center',
           columnsClassName,
         )}
       >
@@ -124,7 +126,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
           )}
         </div>
       </div>
-      <ul className="space-y-1">
+      <ul className="space-y-0.5">
         {root.children.map((node) => (
           <FileSystemTreeNodeRow
             folderState={folderState}
@@ -175,7 +177,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
     return (
       <li
         className={cn(
-          'relative grid min-h-12 gap-2 rounded-md border border-transparent px-3 py-2.5 text-sm transition-[background-color,border-color] hover:bg-muted/55 sm:items-center',
+          'relative grid min-h-9 items-center gap-2 rounded-md border border-transparent px-3 py-1.5 text-sm transition-[background-color,border-color] hover:bg-accent/50',
           selected &&
             'border-[var(--border-strong)] bg-muted shadow-[inset_2px_0_0_0_var(--platinum-bright)] hover:bg-muted',
           columnsClassName,
@@ -200,21 +202,15 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             </div>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-xs leading-4">
-          <span className="font-medium text-muted-foreground sm:hidden">
-            Status
-          </span>
+        <div className="flex items-center gap-1.5 text-xs leading-4">
           {getFileMeta?.(node.file)}
         </div>
         <div
           className={cn(
             'flex items-center gap-1.5',
-            compactVisibility && 'sm:justify-center',
+            compactVisibility && 'justify-end sm:justify-center',
           )}
         >
-          <span className="text-xs font-medium text-muted-foreground sm:hidden">
-            Visibility
-          </span>
           <VisibilityBadge
             compact={compactVisibility}
             visibility={node.file.visibility}
@@ -236,7 +232,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
     <>
       <li
         className={cn(
-          'grid min-h-12 gap-2 rounded-md border border-transparent px-3 py-2.5 text-sm transition-colors hover:bg-muted/40 sm:items-center',
+          'grid min-h-9 items-center gap-2 rounded-md border border-transparent px-3 py-1.5 text-sm transition-colors hover:bg-accent/50',
           columnsClassName,
         )}
       >
@@ -268,18 +264,14 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
           </span>
         </div>
         <div className="flex items-center gap-1.5 text-xs leading-4 text-muted-foreground">
-          <span className="font-medium sm:hidden">Status</span>
           {node.files.length} {node.files.length === 1 ? 'file' : 'files'}
         </div>
         <div
           className={cn(
             'flex items-center gap-1.5',
-            compactVisibility && 'sm:justify-center',
+            compactVisibility && 'justify-end sm:justify-center',
           )}
         >
-          <span className="text-xs font-medium text-muted-foreground sm:hidden">
-            Visibility
-          </span>
           <VisibilityBadge compact={compactVisibility} visibility={visibility} />
         </div>
       </li>

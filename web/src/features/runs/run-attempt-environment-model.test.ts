@@ -68,8 +68,8 @@ describe('run attempt environment model', () => {
       'Cache facts were not reported for this attempt.',
     )
     assert.equal(cacheTimingLabel(caches[2]!), 'unavailable')
-    assert.equal(cacheStateClass(caches[0]!), 'text-emerald-600')
-    assert.equal(cacheStateClass(caches[1]!), 'text-amber-600')
+    assert.equal(cacheStateClass(caches[0]!), 'text-success')
+    assert.equal(cacheStateClass(caches[1]!), 'text-warning')
     assert.equal(cacheStateClass(caches[2]!), 'text-muted-foreground')
     assert.equal(
       cacheSummaryLabel([caches[2]!]),

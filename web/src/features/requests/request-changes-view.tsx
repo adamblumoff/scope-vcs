@@ -4,6 +4,7 @@ import type {
   ReviewFileDiff,
 } from '@/api/types'
 import type { LoadRequestRevisionCommitInput } from '@/api/requests'
+import { EmptyState } from '@/components/empty-state'
 import { GitCommit } from 'lucide-react'
 import {
   RequestChangesWorkbench,
@@ -47,13 +48,12 @@ export function RequestChangesView({
 }: RequestChangesViewProps) {
   if (!revisions) {
     return (
-      <section className="border-b border-border px-5 py-14 text-center lg:px-7">
-        <GitCommit className="mx-auto size-5 text-muted-foreground" />
-        <h2 className="mt-3 text-sm font-semibold">Changes are unavailable</h2>
-        <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
-          The request conversation is still available. Refresh to try loading its revision history again.
-        </p>
-      </section>
+      <EmptyState
+        className="border-b border-border"
+        description="The request conversation is still available. Refresh to try loading its revision history again."
+        icon={<GitCommit />}
+        title="Changes are unavailable"
+      />
     )
   }
 

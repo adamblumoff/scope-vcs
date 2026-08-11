@@ -78,6 +78,9 @@ export function WorkspaceTabStrip({
     })
   }
 
+  // An empty strip is just a hollow bar; render nothing until a tab exists.
+  if (tabs.length === 0) return null
+
   return (
     <div
       aria-label={ariaLabel}

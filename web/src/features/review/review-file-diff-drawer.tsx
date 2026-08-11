@@ -1,4 +1,5 @@
 import type { ReviewFileDiff } from '@/api/types'
+import { PanelState } from '@/components/empty-state'
 import { displayPath } from '@/components/file-system-tree-model'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -130,15 +131,15 @@ export function ReviewFileDiffDrawer({
           {loading ? (
             <DiffSkeleton />
           ) : error ? (
-            <DiffState role="alert" tone="error">
-              <TriangleAlert className="size-4 text-destructive" />
+            <PanelState role="alert" tone="error">
+              <TriangleAlert className="size-5" />
               <span>{error}</span>
               {onRetry && (
                 <Button onClick={onRetry} size="sm" type="button" variant="secondary">
                   Retry
                 </Button>
               )}
-            </DiffState>
+            </PanelState>
           ) : contentSides.binary.length > 0 && contentSides.text.length > 0 ? (
             <MixedContentDiffState
               binary={contentSides.binary}
@@ -155,10 +156,10 @@ export function ReviewFileDiffDrawer({
               />
             </div>
           ) : (
-            <DiffState>
-              <FileText className="size-4 text-muted-foreground" />
+            <PanelState>
+              <FileText className="size-5" />
               <span>{emptyDiffLabel(diff)}</span>
-            </DiffState>
+            </PanelState>
           )}
         </div>
       </div>
@@ -243,9 +244,9 @@ function textContents(content: ReviewFileContent | null) {
 
 function BinaryDiffState({ sides }: { sides: BinaryContentSide[] }) {
   return (
-    <div className="flex min-h-[220px] items-center justify-center px-4 py-6 text-sm text-muted-foreground">
+    <PanelState>
       <BinarySummary sides={sides} />
-    </div>
+    </PanelState>
   )
 }
 
@@ -357,24 +358,3 @@ function DiffSkeleton() {
   )
 }
 
-function DiffState({
-  children,
-  role,
-  tone = 'muted',
-}: {
-  children: ReactNode
-  role?: 'alert'
-  tone?: 'error' | 'muted'
-}) {
-  return (
-    <div
-      className={cn(
-        'flex min-h-[220px] items-center justify-center gap-2 px-4 text-sm leading-5',
-        tone === 'error' ? 'text-destructive' : 'text-muted-foreground',
-      )}
-      role={role}
-    >
-      {children}
-    </div>
-  )
-}

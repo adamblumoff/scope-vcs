@@ -244,7 +244,7 @@ function InviteMemberForm({
         </Button>
       </div>
 
-      <div className="rounded-lg border border-amber-400/50 bg-amber-100 px-3 py-2 text-sm leading-5 text-amber-900 dark:bg-amber-400/10 dark:text-amber-100">
+      <div className="rounded-md border border-warning-border bg-warning-soft px-3 py-2 text-sm leading-5 text-warning-strong">
         Members always read private files once they accept. This toggle grants
         repository push access only.
       </div>

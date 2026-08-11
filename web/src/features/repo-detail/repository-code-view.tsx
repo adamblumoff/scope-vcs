@@ -1,4 +1,5 @@
 import type { RepoFile, RepoFileContent, RepoParams } from '@/api/types'
+import { EmptyState, PanelState } from '@/components/empty-state'
 import { FileSystemTree } from '@/components/file-system-tree'
 import { isRepositoryHtmlPath } from '@/components/repository-html'
 import { RepositoryHtmlRenderer } from '@/components/repository-html-renderer'
@@ -67,12 +68,13 @@ export function RepositoryCodeView({
   return (
     <section>
       {files.length === 0 ? (
-        <EmptySource
+        <EmptyState
           description="Run scope push from the CLI to add files to this repository."
+          icon={<FileQuestion />}
           title="No files yet"
         />
       ) : (
-        <div className="grid min-w-0 lg:min-h-[calc(100dvh-225px)] lg:grid-cols-[minmax(300px,0.36fr)_minmax(0,0.64fr)]">
+        <div className="grid min-w-0 lg:min-h-[calc(100dvh-var(--app-chrome))] lg:grid-cols-[minmax(300px,0.36fr)_minmax(0,0.64fr)]">
           <div
             aria-label="Repository file navigator"
             className="min-w-0 border-b border-border px-3 py-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring lg:border-b-0 lg:border-r lg:px-5"
@@ -160,7 +162,7 @@ function SourcePane({
       <div
         aria-label={activeTabDomIds ? undefined : 'Repository file viewer'}
         aria-labelledby={activeTabDomIds?.tabId}
-        className="max-h-[calc(100dvh-300px)] overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="max-h-[calc(100dvh-var(--app-chrome)-84px)] overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         id={workspaceTabPanelId(CODE_TAB_SET_ID)}
         onScroll={(event) =>
           writeRepositorySourceScroll(scrollKey, event.currentTarget.scrollTop)
@@ -199,51 +201,40 @@ function SourceContent({
 }) {
   if (!selectedPath) {
     return (
-      <EmptySource
-        description="Choose a file from the tree to inspect its projected contents."
-        title="Select a file"
-      />
+      <PanelState>
+        <FileQuestion className="size-5" />
+        <span>Select a file to inspect its projected contents.</span>
+      </PanelState>
     )
   }
 
   if (loading) {
     return (
-      <div
-        aria-busy="true"
-        className="flex min-h-52 items-center justify-center px-5 py-10 text-center"
-      >
-        <div className="max-w-sm">
-          <LoaderCircle className="mx-auto size-5 animate-spin text-muted-foreground" />
-          <h3 className="mt-3 text-sm font-semibold">Loading source</h3>
-          <p className="mt-1 text-sm leading-5 text-muted-foreground">
-            Fetching {displayPath(selectedPath)}.
-          </p>
-        </div>
-      </div>
+      <PanelState aria-busy="true">
+        <LoaderCircle className="size-5 animate-spin" />
+        <span>Loading {displayPath(selectedPath)}</span>
+      </PanelState>
     )
   }
 
   if (error) {
     return (
-      <div className="flex min-h-52 items-center justify-center px-5 py-10 text-center" role="alert">
-        <div className="max-w-sm">
-          <TriangleAlert className="mx-auto size-5 text-destructive" />
-          <h3 className="mt-3 text-sm font-semibold">Source unavailable</h3>
-          <p className="mt-1 text-sm leading-5 text-muted-foreground">{error}</p>
-          <Button className="mt-4" onClick={retry} size="sm" type="button" variant="secondary">
-            Retry
-          </Button>
-        </div>
-      </div>
+      <PanelState role="alert" tone="error">
+        <TriangleAlert className="size-5" />
+        <span>{error}</span>
+        <Button onClick={retry} size="sm" type="button" variant="secondary">
+          Retry
+        </Button>
+      </PanelState>
     )
   }
 
   if (!file) {
     return (
-      <EmptySource
-        description="This file is no longer available in the current scoped view."
-        title="File unavailable"
-      />
+      <PanelState>
+        <FileQuestion className="size-5" />
+        <span>This file is no longer available in the current scoped view.</span>
+      </PanelState>
     )
   }
 
@@ -269,10 +260,14 @@ function SourceFileContent({
 }) {
   if (file.content.kind !== 'text') {
     return (
-      <EmptySource
-        description={`${formatBytes(file.content.size_bytes)} · ${file.content.oid.slice(0, 12)}`}
-        title="Binary file not rendered"
-      />
+      <PanelState>
+        <FileQuestion className="size-5" />
+        <span>
+          Binary file not rendered ·{' '}
+          {formatBytes(file.content.size_bytes)} ·{' '}
+          {file.content.oid.slice(0, 12)}
+        </span>
+      </PanelState>
     )
   }
 
@@ -299,18 +294,6 @@ function SourceFileContent({
     <pre className="min-h-full bg-[#090b0e] p-5 font-mono text-xs leading-5 whitespace-pre text-[#eceae5] sm:p-7">
       <code>{file.content.text}</code>
     </pre>
-  )
-}
-
-function EmptySource({ description, title }: { description: string; title: string }) {
-  return (
-    <div className="flex min-h-52 items-center justify-center px-5 py-10 text-center">
-      <div className="max-w-sm">
-        <FileQuestion className="mx-auto size-5 text-muted-foreground" />
-        <h3 className="mt-3 text-sm font-semibold">{title}</h3>
-        <p className="mt-1 text-sm leading-5 text-muted-foreground">{description}</p>
-      </div>
-    </div>
   )
 }
 
