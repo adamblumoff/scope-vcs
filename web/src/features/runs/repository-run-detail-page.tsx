@@ -10,7 +10,6 @@ import type {
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { RouteErrorContent } from '@/components/route-error-page'
 import { Button } from '@/components/ui/button'
-import { WorkbenchHeader } from '@/components/workbench-header'
 import { cn } from '@/lib/utils'
 import { Link } from '@tanstack/react-router'
 import {
@@ -234,20 +233,36 @@ function RunHeader({
 }) {
   const run = detail.run
   const state = runDisplayState(run)
-  const eyebrow = useMemo(() => (
-    <Link
-      className="hover:text-foreground"
-      params={{ owner: params.owner, repo: params.repo }}
-      to="/$owner/$repo/runs"
-    >
-      Runs /
-    </Link>
-  ), [params.owner, params.repo])
   return (
     <>
-      <WorkbenchHeader
-        actions={(
-          <>
+      <header className="px-5 pb-5 pt-7 sm:px-6 lg:px-8">
+        <Link
+          className="text-xs text-muted-foreground hover:text-foreground"
+          params={{ owner: params.owner, repo: params.repo }}
+          to="/$owner/$repo/runs"
+        >
+          ← Runs
+        </Link>
+        <div className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="flex flex-wrap items-center gap-3 text-[26px] font-semibold leading-[1.15] tracking-[-0.02em] sm:text-[30px]">
+              {run.workflow_name}
+              <span className="flex items-center gap-2 text-sm font-medium capitalize text-muted-foreground">
+                <RunStatusDot state={run.state} />
+                {state}
+              </span>
+            </h1>
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+              <code>{run.git_oid.slice(0, 12)}</code>
+              <span aria-hidden="true">·</span>
+              <span>{formatRunRunnerSelection(run.runner_selection)}</span>
+              <span aria-hidden="true">·</span>
+              <span>
+                Updated <RunTimestamp value={run.updated_at_unix} />
+              </span>
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             {run.can_cancel ? (
               <Button
                 disabled={pendingAction !== null}
@@ -272,30 +287,9 @@ function RunHeader({
                 Run again
               </Button>
             ) : null}
-          </>
-        )}
-        description={(
-          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <code>{run.git_oid.slice(0, 12)}</code>
-            <span aria-hidden="true">·</span>
-            <span>{formatRunRunnerSelection(run.runner_selection)}</span>
-            <span aria-hidden="true">·</span>
-            <span>
-              Updated <RunTimestamp value={run.updated_at_unix} />
-            </span>
-          </span>
-        )}
-        eyebrow={eyebrow}
-        title={(
-          <span className="flex flex-wrap items-center gap-3">
-            <span>{run.workflow_name}</span>
-            <span className="flex items-center gap-2 text-sm font-medium capitalize text-muted-foreground">
-              <RunStatusDot state={run.state} />
-              Overall {state}
-            </span>
-          </span>
-        )}
-      />
+          </div>
+        </div>
+      </header>
       {actionError ? (
         <div className="px-4 pt-5 sm:px-6 lg:px-8">
           <PageErrorAlert title="Run action failed">{actionError}</PageErrorAlert>
@@ -451,7 +445,7 @@ function StepLogs({
   return (
     <section
       aria-label={`${step.name} output`}
-      className="border-t border-border bg-[#090b0e] text-[#eceae5]"
+      className="border-t border-border bg-[var(--terminal-surface)] text-[var(--terminal-foreground)]"
       id={id}
     >
       <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-2 text-xs text-white/60">
@@ -467,7 +461,7 @@ function StepLogs({
       </div>
       {logState.error ? (
         <div
-          className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-3 text-sm text-red-300"
+          className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-3 text-sm text-[var(--terminal-danger)]"
           role="alert"
         >
           <span>{logState.error}</span>
@@ -494,7 +488,7 @@ function StepIcon({ state }: { state: string }) {
     return <X aria-label="Failed" className={cn(iconClass, 'text-destructive')} />
   }
   if (state === 'running') {
-    return <LoaderCircle aria-label="Running" className={cn(iconClass, 'animate-spin text-amber-600')} />
+    return <LoaderCircle aria-label="Running" className={cn(iconClass, 'animate-spin text-warning')} />
   }
   if (state === 'canceled' || state === 'lost') {
     return <Square aria-label={capitalize(state)} className={cn(iconClass, 'text-muted-foreground')} />
@@ -558,13 +552,12 @@ function jobSummary(jobs: readonly RepoRunJobDetail[]) {
 export function RunDetailPagePending() {
   return (
     <>
-      <WorkbenchHeader eyebrow="Runs /" title="Loading run" />
       <output
         aria-busy="true"
-        className="flex items-center gap-2 px-4 py-10 text-sm text-muted-foreground sm:px-6 lg:px-8"
+        className="flex items-center justify-center gap-2 px-5 py-16 text-sm text-muted-foreground"
       >
         <LoaderCircle className="size-4 animate-spin" />
-        Loading run details
+        Loading run
       </output>
     </>
   )
@@ -573,7 +566,6 @@ export function RunDetailPagePending() {
 export function RunDetailPageError({ error }: { error: unknown }) {
   return (
     <>
-      <WorkbenchHeader eyebrow="Runs /" title="Run unavailable" />
       <RouteErrorContent
         error={error}
         fallbackMessage="Unexpected run detail error"

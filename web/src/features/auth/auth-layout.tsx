@@ -5,11 +5,11 @@ export function AuthLayout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <header className="border-b border-border bg-card">
-        <div className="mx-auto flex min-h-16 max-w-[1200px] items-center px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex min-h-14 max-w-[1200px] items-center px-4 sm:px-6 lg:px-8">
           <ScopeLogo className="w-[112px]" />
         </div>
       </header>
-      <main className="mx-auto grid min-h-[calc(100dvh-65px)] max-w-[1200px] items-center gap-12 px-4 py-12 sm:px-6 lg:grid-cols-[minmax(0,1fr)_400px] lg:px-8">
+      <main className="mx-auto grid min-h-[calc(100dvh-var(--app-topbar))] max-w-[1200px] items-center gap-12 px-4 py-12 sm:px-6 lg:grid-cols-[minmax(0,1fr)_400px] lg:px-8">
         <div className="hidden max-w-xl lg:block">
           <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
             Permissioned source control

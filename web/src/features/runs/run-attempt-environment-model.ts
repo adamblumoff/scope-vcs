@@ -41,9 +41,9 @@ export function cacheStateLabel(cache: RepoRunCache) {
 export function cacheStateClass(cache: RepoRunCache) {
   switch (cacheStateLabel(cache)) {
     case 'warm':
-      return 'text-emerald-600'
+      return 'text-success'
     case 'cold':
-      return 'text-amber-600'
+      return 'text-warning'
     default:
       return 'text-muted-foreground'
   }

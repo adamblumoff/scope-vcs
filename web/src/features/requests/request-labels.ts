@@ -61,10 +61,6 @@ export function requestStatusTone(request: RequestLabelSource): BadgeTone {
   return REQUEST_STATES[request.state].tone
 }
 
-export function requestAudienceLabel(request: RequestLabelSource) {
-  return request.audience === 'Private' ? 'Private request' : 'Public request'
-}
-
 export function requestAuthorRoleLabel(request: RequestLabelSource) {
   switch (request.author_role) {
     case 'Owner':
@@ -74,6 +70,10 @@ export function requestAuthorRoleLabel(request: RequestLabelSource) {
     case 'Public':
       return 'Public contributor'
   }
+}
+
+export function requestAudienceLabel(request: RequestLabelSource) {
+  return request.audience === 'Private' ? 'Private request' : 'Public request'
 }
 
 export function eventKindLabel(kind: RequestWorkflowEventKind) {

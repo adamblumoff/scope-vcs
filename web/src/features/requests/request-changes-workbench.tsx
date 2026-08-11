@@ -19,11 +19,11 @@ import {
   writeHistoryCommitCache,
   writeHistoryDiffCache,
 } from '@/features/history/history-resource-cache'
-import {
-  HistoryWorkbench,
-  type CommitDetailState,
-  type CommitFileDiffState,
-} from '@/features/history/history-page'
+import { HistoryWorkbench } from '@/features/history/history-workbench'
+import type {
+  CommitDetailState,
+  CommitFileDiffState,
+} from '@/features/history/history-state'
 import { useCachedResource } from '@/lib/use-cached-resource'
 import { GitCommit, MessageSquare } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'

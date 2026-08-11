@@ -4,7 +4,7 @@ import type {
   RepoParams,
 } from '@/api/types'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
-import { WorkbenchHeader } from '@/components/workbench-header'
+import { WorkbenchBar, WorkbenchPane } from '@/components/page-header'
 import { RepoCloneDropdown } from './repo-clone-dropdown'
 import { useRepoLayout } from './repo-layout-context'
 import { RepositoryCodeView } from './repository-code-view'
@@ -33,8 +33,8 @@ export function RepoDetailPage({
   const { repo } = useRepoLayout()
   const files = content.files
   return (
-    <>
-      <WorkbenchHeader
+    <WorkbenchPane>
+      <WorkbenchBar
         actions={(
           <>
             {repo.lifecycle_state === 'Ready' && (
@@ -51,10 +51,8 @@ export function RepoDetailPage({
             />
           </>
         )}
-        count={`${files.length} ${files.length === 1 ? 'file' : 'files'}`}
-        description="Browse the latest scoped repository view."
-        eyebrow="Browse"
-        title="Repository"
+        summary={`${files.length} ${files.length === 1 ? 'file' : 'files'}`}
+        title="Code"
       />
       <RepositoryCodeView
         files={files}
@@ -67,6 +65,6 @@ export function RepoDetailPage({
         selectedFileRetry={selectedFileRetry}
         selectedPath={selectedPath}
       />
-    </>
+    </WorkbenchPane>
   )
 }

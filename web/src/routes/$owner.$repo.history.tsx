@@ -3,8 +3,8 @@ import type {
   ProjectionPreviewAudience,
   RepoParams,
 } from '@/api/types'
+import { HistoryError } from '@/features/history/history-error'
 import {
-  HistoryError,
   HistoryPage,
   type CommitHistories,
 } from '@/features/history/history-page'

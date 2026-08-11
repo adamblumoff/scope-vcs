@@ -31,7 +31,7 @@ export function RequestDescription({
   }
 
   return (
-    <section className="border-b border-border px-5 py-5 lg:px-7">
+    <section className="px-5 py-5 lg:px-7">
       {canEdit && !editing ? (
         <div className="flex justify-end">
           <Button

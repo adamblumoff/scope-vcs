@@ -13,7 +13,6 @@ export type RequestDiscussionSyncOptions = {
   getCollection: () => DiscussionCollection
   getDataGeneration: () => number
   loadChanges: (after: number) => Promise<RequestDiscussionChanges>
-  onActivity?: () => void
   onCatchUpError?: (error: unknown) => void
   setCollection: (collection: DiscussionCollection) => void
 }
@@ -134,7 +133,6 @@ export function createRequestDiscussionSync(
           changes.through_position,
         )
         options.setCollection(next)
-        if (changes.discussions.length > 0) options.onActivity?.()
 
         const progressed = changes.through_position > after
         if (changes.has_more && progressed) continue

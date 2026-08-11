@@ -119,7 +119,7 @@ const markdownComponents = {
   pre: ({ className, ...props }: ComponentProps<'pre'>) => (
     <pre
       className={cn(
-        'my-6 overflow-x-auto rounded-lg border border-border border-l-2 border-l-[var(--platinum)] bg-[#090b0e] p-4 font-mono text-xs leading-6 text-[#eceae5] shadow-[var(--shadow-card)] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-inherit',
+        'my-6 overflow-x-auto rounded-lg border border-border border-l-2 border-l-[var(--platinum)] bg-[var(--terminal-surface)] p-4 font-mono text-xs leading-6 text-[var(--terminal-foreground)] shadow-[var(--shadow-card)] [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-inherit',
         className,
       )}
       {...props}

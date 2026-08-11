@@ -1,12 +1,7 @@
 import type { RequestParams, RequestSummary } from '@/api/types'
+import { EmptyState } from '@/components/empty-state'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
-import {
-  CircleAlert,
-  MessageSquare,
-  RefreshCw,
-} from 'lucide-react'
+import { CircleAlert, MessageSquare } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   readRequestDiscussionScroll,
@@ -81,31 +76,13 @@ export function RequestDiscussionWorkbench({
     return () => cancelAnimationFrame(frame)
   }, [focusedDiscussionId, store.cacheKey])
 
+  const canStartDiscussion = permissions.canOpenDiscussion &&
+    !['Closed', 'Merged'].includes(request.state)
+
   return (
     <section aria-label="Request discussion">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3 lg:px-7">
-        <div className="flex flex-wrap items-center gap-2">
-          {store.newActivity ? (
-            <Badge variant="info">New activity · order held</Badge>
-          ) : null}
-          <Button
-            className="h-9"
-            disabled={store.refreshing}
-            onClick={() => void store.refresh()}
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            <RefreshCw
-              className={cn(
-                'size-3.5',
-                store.refreshing && 'animate-spin',
-              )}
-            />
-            Refresh
-          </Button>
-        </div>
-        {permissions.canOpenDiscussion && !['Closed', 'Merged'].includes(request.state) ? (
+      {canStartDiscussion ? (
+        <div className="flex justify-end px-5 py-3 lg:px-7">
           <Button
             onClick={() => setActiveComposer('new')}
             size="sm"
@@ -114,8 +91,8 @@ export function RequestDiscussionWorkbench({
           >
             Start discussion
           </Button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
       {activeComposer === 'new' ? (
         <div className="border-b border-border px-5 py-5 lg:px-7">
           <RequestDiscussionComposer
@@ -129,64 +106,59 @@ export function RequestDiscussionWorkbench({
         </div>
       ) : null}
 
-            {store.error ? (
-              <div
-                className="flex items-center gap-2 border-b border-border px-5 py-3 text-sm text-destructive lg:px-7"
-                role="alert"
-              >
-                <CircleAlert className="size-4" />
-                {store.error}
-              </div>
-            ) : null}
+      {store.error ? (
+        <div
+          className="flex items-center gap-2 border-b border-border px-5 py-3 text-sm text-destructive lg:px-7"
+          role="alert"
+        >
+          <CircleAlert className="size-4" />
+          {store.error}
+        </div>
+      ) : null}
 
-            {store.discussions.length > 0 ? (
-              <div>
-                {store.discussions.map((discussion) => (
-                  <RequestDiscussionThread
-                    actions={threadActions}
-                    actor={actor}
-                    canReply={permissions.canReply}
-                    canResolve={canResolve(discussion)}
-                    composerOpen={activeComposer === discussion.id}
-                    discussion={discussion}
-                    key={discussion.id}
-                    onExpandedChange={store.setExpanded}
-                    onMarkRead={store.markRead}
-                    onCloseComposer={() => setActiveComposer(null)}
-                    onOpenComposer={() => setActiveComposer(discussion.id)}
-                    onPatch={store.patch}
-                    onRetryRoot={store.retry}
-                    onResolve={store.resolve}
-                    params={params}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="border-b border-border px-5 py-14 text-center lg:px-7">
-                <MessageSquare className="mx-auto size-5 text-muted-foreground" />
-                <h3 className="mt-3 text-sm font-semibold">
-                  No timeline activity yet
-                </h3>
-                <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">
-                  Updates and conversations will appear here in order.
-                </p>
-              </div>
-            )}
+      {store.discussions.length > 0 ? (
+        <div>
+          {store.discussions.map((discussion) => (
+            <RequestDiscussionThread
+              actions={threadActions}
+              actor={actor}
+              canReply={permissions.canReply}
+              canResolve={canResolve(discussion)}
+              composerOpen={activeComposer === discussion.id}
+              discussion={discussion}
+              key={discussion.id}
+              onExpandedChange={store.setExpanded}
+              onMarkRead={store.markRead}
+              onCloseComposer={() => setActiveComposer(null)}
+              onOpenComposer={() => setActiveComposer(discussion.id)}
+              onPatch={store.patch}
+              onRetryRoot={store.retry}
+              onResolve={store.resolve}
+              params={params}
+            />
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          description="Updates and conversations will appear here in order."
+          icon={<MessageSquare />}
+          title="No timeline activity yet"
+        />
+      )}
 
-            {store.collection.nextCursor ? (
-              <div className="border-t border-border px-5 py-5 text-center lg:px-7">
-                <Button
-                  disabled={store.loadingMore}
-                  onClick={() => void store.loadMore()}
-                  size="sm"
-                  type="button"
-                  variant="secondary"
-                >
-                  {store.loadingMore ? 'Loading…' : 'Load earlier activity'}
-                </Button>
-              </div>
-            ) : null}
-
+      {store.collection.nextCursor ? (
+        <div className="border-t border-border px-5 py-5 text-center lg:px-7">
+          <Button
+            disabled={store.loadingMore}
+            onClick={() => void store.loadMore()}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            {store.loadingMore ? 'Loading…' : 'Load earlier activity'}
+          </Button>
+        </div>
+      ) : null}
     </section>
   )
 }

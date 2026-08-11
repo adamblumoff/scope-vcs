@@ -6,6 +6,7 @@ import type {
   RepoRunWorkflowList,
   RunActionInput,
 } from '@/api/types'
+import { PageContent, WorkbenchPane } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -137,14 +138,12 @@ export function RepositoryRunsPage({
 
   if (!initialResources || !history) {
     return (
-      <>
-        <RunsHeader />
-        <div className="px-4 pb-12 sm:px-6 lg:px-8">
-          <PageErrorAlert title="Runs unavailable">
-            Sign in as the owner or a repository member to view runs.
-          </PageErrorAlert>
-        </div>
-      </>
+      <PageContent>
+        <h1 className="sr-only">Runs</h1>
+        <PageErrorAlert title="Runs unavailable">
+          Sign in as the owner or a repository member to view runs.
+        </PageErrorAlert>
+      </PageContent>
     )
   }
 
@@ -153,7 +152,7 @@ export function RepositoryRunsPage({
     : undefined
 
   return (
-    <>
+    <WorkbenchPane>
       <RunsHeader runCount={history.runs.length} workflowName={selectedWorkflow?.name} />
       <div className="grid min-w-0 border-t border-border lg:grid-cols-[14rem_minmax(0,1fr)]">
         <WorkflowNavigation
@@ -201,7 +200,7 @@ export function RepositoryRunsPage({
           />
         </main>
       </div>
-    </>
+    </WorkbenchPane>
   )
 }
 

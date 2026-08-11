@@ -82,157 +82,144 @@ a {
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
   --color-brand-muted: var(--brand-muted);
-  --color-blue-100: var(--info-soft);
-  --color-blue-400: var(--info-border);
-  --color-blue-700: var(--info);
-  --color-blue-800: var(--info-strong);
-  --color-blue-900: var(--info-strong);
-  --color-green-100: var(--success-soft);
-  --color-green-400: var(--success-border);
-  --color-green-700: var(--success);
-  --color-green-800: var(--success-strong);
-  --color-green-900: var(--success-strong);
-  --color-green-1000: var(--success-foreground);
-  --color-amber-100: var(--warning-soft);
-  --color-amber-400: var(--warning-border);
-  --color-amber-700: var(--warning);
-  --color-amber-900: var(--warning-strong);
-  --color-red-100: var(--danger-soft);
-  --color-red-400: var(--danger-border);
-  --color-red-700: var(--danger);
-  --color-red-800: var(--danger-strong);
-  --color-red-900: var(--danger-strong);
-  --color-chart-1: var(--platinum);
-  --color-chart-2: var(--success);
-  --color-chart-3: var(--warning);
-  --color-chart-4: var(--info);
-  --color-chart-5: var(--danger);
 
+  --color-success: var(--success);
+  --color-success-strong: var(--success-strong);
+  --color-success-soft: var(--success-soft);
+  --color-success-border: var(--success-border);
+  --color-danger: var(--danger);
+  --color-danger-strong: var(--danger-strong);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-border: var(--danger-border);
+  --color-warning: var(--warning);
+  --color-warning-strong: var(--warning-strong);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-border: var(--warning-border);
+  --color-info: var(--info);
+  --color-info-strong: var(--info-strong);
+  --color-info-soft: var(--info-soft);
+  --color-info-border: var(--info-border);
+
+  /* Three steps that read as distinct: chips, controls, surfaces. */
   --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 7px;
-  --radius-xl: 9px;
-  --radius-2xl: 11px;
-  --radius-3xl: 13px;
-  --radius-4xl: 16px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
 }
 
+/*
+ * Neutrals are warm in both themes so surfaces, borders and controls read as
+ * one family. `--destructive` is an alias of `--danger`; danger is the source.
+ */
 :root {
   --background: #f4f3ef;
-  --foreground: #17191d;
+  --foreground: #1b1a17;
   --card: #fffefa;
-  --card-foreground: #17191d;
+  --card-foreground: #1b1a17;
   --popover: #fffefa;
-  --popover-foreground: #17191d;
-  --primary: #eceae5;
-  --primary-foreground: #121417;
-  --secondary: #f8f7f3;
-  --secondary-foreground: #252930;
-  --muted: #e8eaed;
-  --muted-foreground: #686f7a;
-  --accent: #e8eaed;
-  --accent-foreground: #17191d;
-  --destructive: #bc5965;
-  --border: #d5d8dd;
-  --border-strong: #aeb4bf;
-  --input: #c8ccd2;
-  --ring: #747c89;
-  --brand: #747c89;
+  --popover-foreground: #1b1a17;
+  --primary: #2b2822;
+  --primary-foreground: #faf9f5;
+  --secondary: #faf9f5;
+  --secondary-foreground: #2b2822;
+  --muted: #eae8e2;
+  --muted-foreground: #6d6961;
+  --accent: #eae8e2;
+  --accent-foreground: #1b1a17;
+  --border: #dcd9d1;
+  --border-strong: #bab5a8;
+  --input: #cbc7bd;
+  --ring: #7a746a;
+  --brand: #7a746a;
   --brand-foreground: #fffefa;
-  --brand-muted: #e8eaed;
-  --platinum: #747c89;
-  --platinum-bright: #4e5662;
+  --brand-muted: #eae8e2;
+  --platinum: #7a746a;
+  --platinum-bright: #575249;
   --success: #4f8561;
   --success-strong: #386c4a;
   --success-foreground: #244b32;
-  --success-soft: #e2eee5;
-  --success-border: #b6d1bd;
+  --success-soft: #e6efe6;
+  --success-border: #b8cfbb;
   --danger: #bc5965;
   --danger-strong: #9f3f4c;
-  --danger-soft: #f4e1e4;
-  --danger-border: #ddb0b6;
+  --danger-soft: #f6e2e2;
+  --danger-border: #ddb0b3;
   --warning: #8b7044;
   --warning-strong: #72582f;
-  --warning-soft: #eee8dc;
-  --warning-border: #d5c6a9;
-  --info: #667a96;
-  --info-strong: #4a617f;
-  --info-soft: #e4e9ef;
-  --info-border: #bdc8d6;
-  --topbar-start: #fffefa;
-  --topbar-end: #f0efeb;
-  --topbar-rail: rgba(225, 226, 227, 0.72);
-  --topbar-active-start: #fffefa;
-  --topbar-active-end: #e4e5e7;
-  --topbar-shadow: inset 0 1px rgba(255, 255, 255, 0.92), 0 8px 24px -20px rgba(20, 22, 27, 0.42);
-  --topbar-active-shadow: inset 0 1px rgba(255, 255, 255, 0.86), 0 1px 3px rgba(20, 22, 27, 0.14);
-  --chrome-start: #353a43;
-  --chrome-end: #1d2127;
-  --chrome-hover-start: #414751;
-  --chrome-hover-end: #252a31;
-  --chrome-border: #555c68;
-  --workspace-tabs: #e7e8ea;
-  --shadow-card: inset 0 1px rgba(255, 255, 255, 0.72), 0 1px 2px rgba(20, 22, 27, 0.05);
-  --shadow-pop: 0 18px 44px -18px rgba(20, 22, 27, 0.22), 0 7px 18px -10px rgba(20, 22, 27, 0.12);
+  --warning-soft: #f0e9da;
+  --warning-border: #d5c6a6;
+  --info: #6d7a8e;
+  --info-strong: #4f5d73;
+  --info-soft: #e8e9ec;
+  --info-border: #c2c6cf;
+  --workspace-tabs: #e9e7e1;
+  --shadow-card: 0 1px 2px rgba(27, 26, 23, 0.06);
+  --shadow-pop: 0 18px 44px -18px rgba(27, 26, 23, 0.22), 0 7px 18px -10px rgba(27, 26, 23, 0.12);
 }
 
 .dark {
-  --background: #0d0f12;
+  --background: #0e0f11;
   --foreground: #f1f0ec;
-  --card: #12151a;
+  --card: #131417;
   --card-foreground: #f1f0ec;
-  --popover: #171a20;
+  --popover: #191a1e;
   --popover-foreground: #f1f0ec;
   --primary: #eceae5;
-  --primary-foreground: #121417;
-  --secondary: #171a20;
-  --secondary-foreground: #d8dbe1;
-  --muted: #1c2027;
-  --muted-foreground: #9ea3ae;
-  --accent: #1c2027;
+  --primary-foreground: #171613;
+  --secondary: #191a1e;
+  --secondary-foreground: #dbd9d3;
+  --muted: #1d1f23;
+  --muted-foreground: #a09d96;
+  --accent: #1d1f23;
   --accent-foreground: #f1f0ec;
-  --destructive: #d96c75;
-  --border: #292d36;
-  --border-strong: #3a3f4a;
-  --input: #3a3f4a;
-  --ring: #c3c8d1;
-  --brand: #aeb4bf;
-  --brand-foreground: #121417;
-  --brand-muted: #1c2027;
-  --platinum: #aeb4bf;
-  --platinum-bright: #d8dbe1;
+  --border: #33363d;
+  --border-strong: #4a4d55;
+  --input: #4a4d55;
+  --ring: #c9c6bf;
+  --brand: #b5b1a8;
+  --brand-foreground: #171613;
+  --brand-muted: #1d1f23;
+  --platinum: #b5b1a8;
+  --platinum-bright: #dbd9d3;
   --success: #6fa27c;
   --success-strong: #83b28e;
   --success-foreground: #bcd8c3;
-  --success-soft: #16221a;
-  --success-border: #294b32;
+  --success-soft: #17211a;
+  --success-border: #2c4a33;
   --danger: #d96c75;
   --danger-strong: #e4868e;
-  --danger-soft: #29171a;
-  --danger-border: #603039;
+  --danger-soft: #261719;
+  --danger-border: #5e3037;
   --warning: #b49a6b;
   --warning-strong: #c6ae7f;
-  --warning-soft: #241f16;
-  --warning-border: #51452e;
-  --info: #8293aa;
-  --info-strong: #9aa9bb;
-  --info-soft: #171d25;
-  --info-border: #344154;
-  --topbar-start: #181b21;
-  --topbar-end: #101318;
-  --topbar-rail: rgba(8, 10, 13, 0.56);
-  --topbar-active-start: #292e36;
-  --topbar-active-end: #1b1f26;
-  --topbar-shadow: inset 0 1px rgba(255, 255, 255, 0.055), 0 10px 28px -22px rgba(0, 0, 0, 0.9);
-  --topbar-active-shadow: inset 0 1px rgba(255, 255, 255, 0.075), 0 1px 4px rgba(0, 0, 0, 0.48);
-  --chrome-start: #30353e;
-  --chrome-end: #1a1e24;
-  --chrome-hover-start: #3a404a;
-  --chrome-hover-end: #22272e;
-  --chrome-border: #4a505c;
-  --workspace-tabs: #090b0e;
-  --shadow-card: inset 0 1px rgba(255, 255, 255, 0.035), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --warning-soft: #221e16;
+  --warning-border: #4e442e;
+  --info: #8b95a5;
+  --info-strong: #a3abb8;
+  --info-soft: #1a1c20;
+  --info-border: #3b414b;
+  --workspace-tabs: #0a0b0d;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-pop: 0 20px 54px -18px rgba(0, 0, 0, 0.72), 0 8px 20px -10px rgba(0, 0, 0, 0.62);
+}
+
+:root,
+.dark {
+  --destructive: var(--danger);
+
+  /*
+   * Heights of the fixed chrome above scrollable panes. Panes size themselves
+   * from these instead of re-deriving magic pixel offsets per feature.
+   */
+  --app-topbar: 57px;
+  --app-chrome: 113px;
+
+  /*
+   * The run log viewer is a terminal surface: always dark, in both themes.
+   * Its foreground colors are therefore fixed rather than theme-derived.
+   */
+  --terminal-surface: #090b0e;
+  --terminal-foreground: #eceae5;
+  --terminal-danger: #e4868e;
 }
 
 @layer base {
@@ -482,7 +469,7 @@ a {
   z-index: 2;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   background: var(--card);
   box-shadow: 0 30px 70px rgba(0, 0, 0, 0.28);
   transition: opacity 180ms ease;

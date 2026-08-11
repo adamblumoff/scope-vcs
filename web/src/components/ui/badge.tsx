@@ -11,14 +11,10 @@ const badgeVariants = cva(
         outline:
           "border-border bg-background text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground",
         neutral: "border-transparent bg-muted text-muted-foreground",
-        success:
-          "border-green-400 bg-green-100 text-green-900",
-        warning:
-          "border-amber-400 bg-amber-100 text-amber-900",
-        danger:
-          "border-red-400 bg-red-100 text-red-900 dark:border-red-500/60 dark:bg-red-500/15 dark:text-red-300",
-        info:
-          "border-blue-400 bg-blue-100 text-blue-900",
+        success: "border-success-border bg-success-soft text-success-strong",
+        warning: "border-warning-border bg-warning-soft text-warning-strong",
+        danger: "border-danger-border bg-danger-soft text-danger-strong",
+        info: "border-info-border bg-info-soft text-info-strong",
       },
     },
     defaultVariants: {

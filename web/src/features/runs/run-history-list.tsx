@@ -1,7 +1,8 @@
 import type { RepoParams, RepoRunHistoryPage } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, LoaderCircle, TerminalSquare } from 'lucide-react'
+import { EmptyState } from '@/components/empty-state'
+import { LoaderCircle, TerminalSquare } from 'lucide-react'
 import {
   formatRunRunnerSelection,
   runDisplayState,
@@ -25,7 +26,7 @@ export function RunHistoryList({
   showLoadMore: boolean
 }) {
   return (
-    <section aria-labelledby="run-history-heading" className="pt-7 lg:pt-9">
+    <section aria-labelledby="run-history-heading" className="pt-8">
       <div className="flex items-center gap-2">
         <TerminalSquare className="size-4 text-muted-foreground" />
         <h2 className="text-sm font-semibold" id="run-history-heading">
@@ -35,21 +36,18 @@ export function RunHistoryList({
           {runs.length}
         </span>
       </div>
-      <div className="mt-3 divide-y divide-border border-y border-border">
+      <div className="mt-2 divide-y divide-border">
         {runs.length === 0 ? (
-          <div className="px-2 py-7">
-            <p className="text-sm font-medium">
-              {selectedWorkflowName ? `No ${selectedWorkflowName} runs yet` : 'No runs yet'}
-            </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Push to main with a matching trigger, or run a workflow manually from the CLI.
-            </p>
-          </div>
+          <EmptyState
+            description="Push to main with a matching trigger, or run a workflow manually from the CLI."
+            icon={<TerminalSquare />}
+            title={selectedWorkflowName ? `No ${selectedWorkflowName} runs yet` : 'No runs yet'}
+          />
         ) : runs.map((run) => {
           const state = runDisplayState(run)
           return (
             <Link
-              className="group flex min-h-16 min-w-0 items-center gap-3 px-2 py-4 outline-none hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              className="group flex min-w-0 items-center gap-3 rounded-md py-3 outline-none transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               key={run.id}
               params={{ ...params, runId: run.id }}
               to="/$owner/$repo/runs/$runId"
@@ -69,7 +67,6 @@ export function RunHistoryList({
                   <RunTimestamp value={run.updated_at_unix} />
                 </span>
               </span>
-              <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
             </Link>
           )
         })}

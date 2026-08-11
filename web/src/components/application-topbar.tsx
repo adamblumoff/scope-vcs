@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils'
 import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { ScopeLogo, ScopeMark } from '@/components/scope-logo'
-import { SearchControl } from '@/components/ui/search-control'
+import { ThemeToggle } from '@/components/theme-toggle'
 
 export type TopbarItem = {
   active?: boolean
@@ -10,54 +10,70 @@ export type TopbarItem = {
   node: ReactNode
 }
 
+/** Compact repository facts rendered beside the repo name. */
+export type TopbarFact = {
+  id: string
+  label: ReactNode
+  semantic?: 'danger' | 'info' | 'success' | 'warning'
+}
+
 const EMPTY_ITEMS: TopbarItem[] = []
+const EMPTY_FACTS: TopbarFact[] = []
 
 export function ApplicationTopbar({
   children,
   contextLabel,
+  facts = EMPTY_FACTS,
   items = EMPTY_ITEMS,
   repository,
-  searchPreview = false,
 }: {
   children?: ReactNode
   contextLabel?: string
+  facts?: TopbarFact[]
   items?: TopbarItem[]
   repository?: { owner: string; repo: string }
-  searchPreview?: boolean
 }) {
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-[linear-gradient(180deg,var(--topbar-start),var(--topbar-end))] shadow-[var(--topbar-shadow)] backdrop-blur-xl">
-      <div className="mx-auto grid min-h-[68px] max-w-[1440px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 sm:gap-x-6 sm:px-6 lg:px-8">
-        <div className="col-start-1 flex min-w-0 items-center gap-3 sm:gap-5">
-          <Link
-            aria-label="Scope home"
-            className="group flex shrink-0 items-center rounded-md text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            to="/"
-          >
-            <ScopeMark className="size-7 transition-transform duration-150 group-hover:-translate-y-px sm:hidden motion-reduce:transform-none" />
-            <ScopeLogo className="hidden w-[98px] transition-transform duration-150 group-hover:-translate-y-px sm:block motion-reduce:transform-none" />
-          </Link>
-          {repository ? (
-            <div className="min-w-0">
-              <RepositoryIdentity owner={repository.owner} repo={repository.repo} />
-            </div>
-          ) : contextLabel ? (
-            <span className="truncate text-sm text-muted-foreground">{contextLabel}</span>
-          ) : null}
-        </div>
+    <header className="sticky top-0 z-40 border-b border-border bg-card">
+      <div className="mx-auto flex min-h-14 max-w-[1280px] flex-wrap items-center gap-x-3 px-5 sm:px-6 md:flex-nowrap md:gap-x-6 lg:px-8">
+        <Link
+          aria-label="Scope home"
+          className="flex shrink-0 items-center rounded-md text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          to="/"
+        >
+          <ScopeMark className="size-6 sm:hidden" />
+          <ScopeLogo className="hidden w-[86px] sm:block" />
+        </Link>
 
+        {repository ? (
+          <RepositoryIdentity
+            facts={facts}
+            owner={repository.owner}
+            repo={repository.repo}
+          />
+        ) : contextLabel ? (
+          <span className="min-w-0 truncate text-sm text-muted-foreground">
+            {contextLabel}
+          </span>
+        ) : null}
+
+        {/*
+          A single Primary nav for both breakpoints. Below `md` the row wraps
+          and this takes its own full-bleed line; from `md` up it sits inline.
+          Two navs would duplicate the landmark.
+        */}
         {items.length > 0 && (
           <nav
             aria-label="Primary"
-            className="col-span-3 col-start-1 row-start-2 -mx-4 flex h-11 min-w-0 gap-6 overflow-x-auto border-t border-border px-4 sm:col-span-1 sm:col-start-2 sm:row-start-1 sm:mx-0 sm:h-auto sm:w-fit sm:justify-self-center sm:gap-1 sm:overflow-visible sm:rounded-lg sm:border sm:border-border sm:bg-[var(--topbar-rail)] sm:p-1"
+            className="scrollbar-none order-last -mx-5 flex h-11 w-[calc(100%+2.5rem)] items-center gap-5 overflow-x-auto border-t border-border px-5 text-[13px] font-medium md:order-none md:mx-0 md:ml-auto md:h-auto md:w-auto md:gap-1 md:overflow-visible md:border-t-0 md:px-0"
           >
             {items.map((item) => (
               <div
                 className={cn(
-                  'relative flex h-full shrink-0 items-center rounded-md text-[13px] font-medium text-muted-foreground transition-[color,background-color,box-shadow,transform] duration-150 after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent sm:h-8 sm:after:hidden motion-reduce:transition-none',
+                  'relative flex h-full shrink-0 items-center transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full md:h-8 md:rounded-md md:after:hidden',
                   item.active
-                    ? 'text-foreground after:bg-[var(--platinum-bright)] sm:bg-[linear-gradient(180deg,var(--topbar-active-start),var(--topbar-active-end))] sm:shadow-[var(--topbar-active-shadow)]'
-                    : 'hover:text-foreground sm:hover:-translate-y-px sm:hover:bg-accent/60 motion-reduce:transform-none',
+                    ? 'text-foreground after:bg-foreground md:bg-accent'
+                    : 'text-muted-foreground after:bg-transparent hover:text-foreground md:hover:bg-accent/60',
                 )}
                 key={item.label}
               >
@@ -67,8 +83,8 @@ export function ApplicationTopbar({
           </nav>
         )}
 
-        <div className="col-start-3 flex shrink-0 items-center justify-end gap-2">
-          {searchPreview ? <SearchControl /> : null}
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 md:ml-3">
+          <ThemeToggle />
           {children}
         </div>
       </div>
@@ -77,31 +93,56 @@ export function ApplicationTopbar({
 }
 
 function RepositoryIdentity({
+  facts,
   owner,
   repo,
 }: {
+  facts: TopbarFact[]
   owner: string
   repo: string
 }) {
   return (
-    <div className="flex min-w-0 max-w-[calc(100vw-205px)] items-baseline gap-1.5 text-sm sm:max-w-[360px]">
-      <Link
-        className="max-w-[38%] truncate rounded-md py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:max-w-[130px] sm:text-[13px]"
-        params={{ owner }}
-        title={owner}
-        to="/$owner"
-      >
-        {owner}
-      </Link>
-      <span aria-hidden className="text-muted-foreground/45">/</span>
-      <Link
-        className="min-w-0 truncate rounded-md py-2 text-[14px] font-semibold tracking-[-0.015em] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        params={{ owner, repo }}
-        title={`${owner}/${repo}`}
-        to="/$owner/$repo"
-      >
-        {repo}
-      </Link>
+    <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
+      <div className="flex min-w-0 items-baseline gap-1.5">
+        <Link
+          className="hidden max-w-[130px] truncate rounded-md text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:block"
+          params={{ owner }}
+          title={owner}
+          to="/$owner"
+        >
+          {owner}
+        </Link>
+        <span aria-hidden className="hidden text-muted-foreground/50 sm:inline">
+          /
+        </span>
+        <Link
+          className="min-w-0 truncate rounded-md text-[14px] font-semibold tracking-[-0.01em] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          params={{ owner, repo }}
+          title={`${owner}/${repo}`}
+          to="/$owner/$repo"
+        >
+          {repo}
+        </Link>
+      </div>
+      {facts.length > 0 && (
+        <div className="flex min-w-0 items-center gap-2">
+          {facts.map((fact) => (
+            <span
+              className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+              key={fact.id}
+            >
+              {fact.semantic && (
+                <span
+                  aria-hidden
+                  className="size-2 rounded-full"
+                  style={{ background: `var(--${fact.semantic})` }}
+                />
+              )}
+              <span className="truncate">{fact.label}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

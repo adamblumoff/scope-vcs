@@ -42,14 +42,14 @@ export function RepositoryHtmlRenderer({
       </div>
       {mode === 'preview' ? (
         <iframe
-          className="h-[calc(100dvh-356px)] min-h-[32rem] max-h-[70rem] w-full border-0 bg-white"
+          className="h-[calc(100dvh-var(--app-chrome)-132px)] min-h-[32rem] max-h-[70rem] w-full border-0 bg-white"
           referrerPolicy="no-referrer"
           sandbox=""
           srcDoc={document}
           title={`${displayPath} preview`}
         />
       ) : (
-        <pre className="min-h-[32rem] overflow-x-auto bg-[#090b0e] p-5 font-mono text-xs leading-5 whitespace-pre text-[#eceae5] sm:p-7">
+        <pre className="min-h-[32rem] overflow-x-auto bg-[var(--terminal-surface)] p-5 font-mono text-xs leading-5 whitespace-pre text-[var(--terminal-foreground)] sm:p-7">
           <code>{source}</code>
         </pre>
       )}

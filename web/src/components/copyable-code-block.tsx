@@ -68,7 +68,7 @@ export function CopyableCodeBlock({
   return (
     <div
       className={cn(
-        'relative rounded-lg border border-border border-l-2 border-l-[var(--platinum)] bg-[#090b0e] text-[#eceae5] shadow-[var(--shadow-card)]',
+        'relative rounded-lg border border-border border-l-2 border-l-[var(--platinum)] bg-[var(--terminal-surface)] text-[var(--terminal-foreground)] shadow-[var(--shadow-card)]',
         className,
       )}
     >
