@@ -7,7 +7,7 @@ export const REPOSITORY_MARKDOWN_HEADING_PREFIX = 'markdown-'
 
 export function isRepositoryMarkdownPath(path: string) {
   const fileName = path.replace(/^\/+/, '').split('/').at(-1) ?? ''
-  return /\.md$/i.test(fileName) || /^readme$/i.test(fileName)
+  return /\.md$/i.test(fileName)
 }
 
 export function safeMarkdownUrl(url: string) {

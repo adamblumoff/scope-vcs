@@ -13,15 +13,11 @@ const context = {
 }
 
 test('recognizes Markdown documents anywhere in the repository', () => {
-  for (const path of [
-    'README.md',
-    'docs/guide.md',
-    '/notes/PLAN.MD',
-    'README',
-  ]) {
+  for (const path of ['README.md', 'docs/guide.md', '/notes/PLAN.MD']) {
     assert.equal(isRepositoryMarkdownPath(path), true)
   }
   for (const path of [
+    'README',
     'README.txt',
     'docs/guide.markdown',
     'docs/guide.mdx',

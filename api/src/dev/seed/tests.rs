@@ -63,6 +63,10 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     );
 
     let public_demo = catalog.repository("dev", "public-demo").unwrap();
+    assert_eq!(
+        public_demo.graph.commits[0].changes[0].path.as_str(),
+        "/README.html"
+    );
     let readme = public_demo.graph.commits[0].changes[0]
         .new_content
         .as_ref()
@@ -71,7 +75,7 @@ async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     assert!(
         std::str::from_utf8(&readme_bytes)
             .unwrap()
-            .contains("Public Demo")
+            .contains("<h1>Public by design.</h1>")
     );
 
     assert_eq!(catalog.requests.len(), 6);
@@ -164,8 +168,8 @@ async fn seed_catalog_git_segments_restore_raw_repositories() {
         &state,
         &public_demo.git_head.as_ref().unwrap().manifest,
         "public-demo-live",
-        "README.md",
-        PUBLIC_DEMO_README,
+        "README.html",
+        PUBLIC_DEMO_README_HTML,
     );
 
     let update_demo = catalog.repository("dev", "update-demo").unwrap();

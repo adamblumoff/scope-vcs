@@ -1,5 +1,7 @@
 import type { RepoFile, RepoFileContent, RepoParams } from '@/api/types'
 import { FileSystemTree } from '@/components/file-system-tree'
+import { isRepositoryHtmlPath } from '@/components/repository-html'
+import { RepositoryHtmlRenderer } from '@/components/repository-html-renderer'
 import { isRepositoryMarkdownPath } from '@/components/repository-markdown'
 import { RepositoryMarkdownRenderer } from '@/components/repository-markdown-renderer'
 import { Button } from '@/components/ui/button'
@@ -278,6 +280,16 @@ function SourceFileContent({
     return (
       <RepositoryMarkdownRenderer
         repository={{ ...params, markdownPath: file.path }}
+        source={file.content.text}
+      />
+    )
+  }
+
+  if (isRepositoryHtmlPath(file.path)) {
+    return (
+      <RepositoryHtmlRenderer
+        key={file.oid}
+        path={file.path}
         source={file.content.text}
       />
     )
