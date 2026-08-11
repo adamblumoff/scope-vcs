@@ -1,7 +1,7 @@
 use super::{
     RunnerConfig, cache,
     config::{load_runner_config_from, runner_cache_root, runner_config_path, store_runner_config},
-    doctor_local, load_runner_config, runner_client, runner_poll,
+    doctor_local, load_runner_config, runner_client, runner_status,
     systemd::{install_systemd_service, print_linger_status},
     unix_now,
 };
@@ -179,14 +179,14 @@ pub fn doctor() -> anyhow::Result<()> {
     if let Some(config) = config {
         cache::doctor(&config)?;
         println!(
-            "✓ live resources per slot ({} MiB memory, {:.3} CPU, {} PIDs across {} slot(s))",
+            "✓ runner admission ({} MiB minimum memory, {:.3} minimum CPU, {} PIDs per job, {} job ceiling)",
             limits.memory_bytes / (1024 * 1024),
             limits.cpu_millis as f64 / 1000.0,
             limits.pids,
             max_concurrent_jobs.get(),
         );
         let client = runner_client()?;
-        runner_poll(&client, &config.api_url, &config.secret)?;
+        runner_status(&client, &config.api_url, &config.secret)?;
         println!("✓ Scope API");
     }
     println!(

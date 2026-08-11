@@ -36,8 +36,8 @@ pub fn recover(
 
     loop {
         let snapshot = get_runner_protocol_cutover(&client, &config.api_url, &operator_token)?;
-        if snapshot.state == RunnerProtocolCutoverState::V7Open {
-            println!("✓ Runner protocol V7 is open");
+        if snapshot.state == RunnerProtocolCutoverState::V8Open {
+            println!("✓ Runner protocol V8 is open");
             return Ok(());
         }
 
@@ -88,13 +88,13 @@ pub fn recover(
                 &config.api_url,
                 &operator_token,
                 &AdvanceRunnerProtocolCutoverRequest {
-                    state: RunnerProtocolCutoverState::V7Open,
+                    state: RunnerProtocolCutoverState::V8Open,
                 },
             )?;
-            if opened.state != RunnerProtocolCutoverState::V7Open {
+            if opened.state != RunnerProtocolCutoverState::V8Open {
                 bail!("runner protocol cutover did not open");
             }
-            println!("✓ Runner protocol V7 is open");
+            println!("✓ Runner protocol V8 is open");
             return Ok(());
         };
 
@@ -231,9 +231,9 @@ fn canary_request_id(
 
 fn workflow_name(phase: RunnerProtocolCanaryPhase) -> &'static str {
     match phase {
-        RunnerProtocolCanaryPhase::ColdWrite => "v7-canary-cold-write",
-        RunnerProtocolCanaryPhase::WarmRead => "v7-canary-warm-read",
-        RunnerProtocolCanaryPhase::Evict => "v7-canary-evict",
+        RunnerProtocolCanaryPhase::ColdWrite => "v8-canary-cold-write",
+        RunnerProtocolCanaryPhase::WarmRead => "v8-canary-warm-read",
+        RunnerProtocolCanaryPhase::Evict => "v8-canary-evict",
     }
 }
 
@@ -293,7 +293,7 @@ mod tests {
         canaries: Vec<(RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus)>,
     ) -> RunnerProtocolCutoverResponse {
         RunnerProtocolCutoverResponse {
-            state: RunnerProtocolCutoverState::V7Fenced,
+            state: RunnerProtocolCutoverState::V8Fenced,
             generation: 1,
             enabled_runner_count: 1,
             canaries: canaries

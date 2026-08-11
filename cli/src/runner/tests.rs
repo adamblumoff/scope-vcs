@@ -5,6 +5,7 @@ use super::recovery::{
 use super::*;
 use scope_api_contract::StepConclusionRequest;
 use scope_domain::runs::cache::WorkflowCache;
+use scope_domain::runs::resources::JobResources;
 use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
 use scope_domain::runs::workflow::{
     ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
@@ -17,16 +18,25 @@ use std::{
 };
 
 #[test]
-fn recovered_attempts_start_before_any_recovery_can_finish() {
+fn recovered_attempts_share_the_bounded_job_worker_coordinator() {
     let (started_sender, started_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
     let release_receiver = Arc::new(Mutex::new(release_receiver));
     let recovery = thread::spawn(move || {
-        run_recovery_tasks(vec![1, 2], move |attempt| {
-            started_sender.send(attempt).unwrap();
-            release_receiver.lock().unwrap().recv().unwrap();
-            attempt
-        })
+        let mut workers = JobWorkers::new(RunnerMaxConcurrentJobs::new(2).unwrap());
+        for attempt in 1..=3 {
+            workers.wait_for_capacity().unwrap();
+            let started_sender = started_sender.clone();
+            let release_receiver = Arc::clone(&release_receiver);
+            workers
+                .spawn(format!("recovery-{attempt}"), move || {
+                    started_sender.send(attempt).unwrap();
+                    release_receiver.lock().unwrap().recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        }
+        workers.wait_for_all()
     });
 
     let first = started_receiver
@@ -42,102 +52,48 @@ fn recovered_attempts_start_before_any_recovery_can_finish() {
         }
     };
     assert_ne!(first, second);
+    assert!(started_receiver.recv_timeout(Duration::from_millis(100)).is_err());
 
     release_sender.send(()).unwrap();
+    let third = started_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("third recovery did not start after bounded capacity was released");
+    assert!(![first, second].contains(&third));
     release_sender.send(()).unwrap();
-    assert_eq!(recovery.join().unwrap(), [1, 2]);
+    release_sender.send(()).unwrap();
+    recovery.join().unwrap().unwrap();
 }
 
 #[test]
-fn recovery_and_resource_detection_finish_before_slot_workers_start() {
-    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let start_barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
-    initialize_after_recovery(
-        {
-            let events = std::sync::Arc::clone(&events);
-            move || {
-                events.lock().unwrap().push("recovery".to_string());
-                Ok(())
-            }
-        },
-        {
-            let events = std::sync::Arc::clone(&events);
-            move || {
-                events
-                    .lock()
-                    .unwrap()
-                    .push("resource-detection".to_string());
-                Ok(())
-            }
-        },
-    )
-    .unwrap();
-    let error = run_slot_workers(RunnerMaxConcurrentJobs::new(3).unwrap(), {
-        let events = std::sync::Arc::clone(&events);
-        let start_barrier = std::sync::Arc::clone(&start_barrier);
-        move |slot| {
-            let mut events = events.lock().unwrap();
-            assert_eq!(events.first().map(String::as_str), Some("recovery"));
-            assert_eq!(
-                events.get(1).map(String::as_str),
-                Some("resource-detection")
-            );
-            events.push(format!("slot-{slot}"));
-            drop(events);
-            start_barrier.wait();
-            Ok(())
-        }
-    })
-    .unwrap_err();
-    assert!(error.to_string().contains("stopped unexpectedly"));
-
-    let events = events.lock().unwrap();
-    assert_eq!(
-        events.iter().filter(|event| *event == "recovery").count(),
-        1
-    );
-    for slot in 1..=3 {
-        assert!(events.contains(&format!("slot-{slot}")));
-    }
-}
-
-#[test]
-fn preserved_attempts_restart_before_resource_detection() {
-    let resource_detections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let error = initialize_after_recovery(|| Err(RecoveryRestartRequired.into()), {
-        let resource_detections = std::sync::Arc::clone(&resource_detections);
-        move || {
-            resource_detections.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-    })
-    .unwrap_err();
-
+fn preserved_attempt_errors_require_a_runner_restart() {
+    let error = anyhow::Error::from(RecoveryRestartRequired);
     assert!(requires_recovery_restart(&error));
-    assert_eq!(
-        resource_detections.load(std::sync::atomic::Ordering::SeqCst),
-        0
-    );
     assert!(!requires_recovery_restart(&anyhow::anyhow!(
         "ordinary setup failure"
     )));
 }
 
 #[test]
-fn a_later_slot_failure_is_reported_without_waiting_for_an_earlier_slot() {
+fn a_job_failure_wakes_the_coordinator_without_waiting_for_an_earlier_job() {
     let start_barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut workers = JobWorkers::new(RunnerMaxConcurrentJobs::new(2).unwrap());
     let started_at = Instant::now();
-    let error = run_slot_workers(RunnerMaxConcurrentJobs::new(2).unwrap(), move |slot| {
-        start_barrier.wait();
-        if slot == 1 {
+    for attempt in 1..=2 {
+        let start_barrier = Arc::clone(&start_barrier);
+        workers
+            .spawn(format!("attempt-{attempt}"), move || {
+            start_barrier.wait();
+            if attempt == 1 {
             thread::sleep(Duration::from_millis(500));
-        }
-        anyhow::bail!("slot {slot} test failure")
-    })
-    .unwrap_err();
+            }
+            anyhow::bail!("attempt {attempt} test failure")
+        })
+        .unwrap();
+    }
+    let error = workers.wait_for_capacity().unwrap_err();
 
     assert!(started_at.elapsed() < Duration::from_millis(250));
-    assert!(error.to_string().contains("runner slot 2 failed"));
+    assert!(error.to_string().contains("runner attempt attempt-2 failed"));
 }
 
 #[test]
@@ -177,6 +133,39 @@ fn runner_client_sends_cli_compatibility_identity() {
         "x-scope-cli-build: {}\r\n",
         crate::build::BUILD_SHA
     )));
+}
+
+#[test]
+fn runner_status_checks_authentication_without_polling_for_work() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = [0_u8; 8192];
+        let read = stream.read(&mut bytes).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        String::from_utf8(bytes[..read].to_vec()).unwrap()
+    });
+
+    runner_status(
+        &runner_client().unwrap(),
+        &format!("http://{address}"),
+        "runner-secret",
+    )
+    .unwrap();
+
+    let request = server.join().unwrap().to_ascii_lowercase();
+    assert!(request.starts_with("post /v1/runner-protocol/status http/1.1\r\n"));
+    assert!(request.contains("authorization: bearer runner-secret\r\n"));
+    assert!(!request.contains("/poll"));
 }
 
 #[test]
@@ -268,6 +257,7 @@ fn job_container_receives_only_declared_workflow_environment() {
                 vec![],
                 RunnerSelector::Any,
                 ContainerSpec::new("alpine:3.20").unwrap(),
+                JobResources::new(1_000, 1024 * 1024 * 1024).unwrap(),
                 60,
                 vec![WorkflowCache::new("cargo", "/scope/cache/cargo").unwrap()],
                 vec![WorkflowStep::new("Test", "true").unwrap()],
@@ -437,6 +427,7 @@ fn interrupted_attempt_credentials_are_persisted_privately_for_reconciliation() 
                 vec![],
                 RunnerSelector::Any,
                 ContainerSpec::new("alpine:3.20").unwrap(),
+                JobResources::new(1_000, 1024 * 1024 * 1024).unwrap(),
                 60,
                 Vec::new(),
                 vec![WorkflowStep::new("Test", "true").unwrap()],

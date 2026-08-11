@@ -1,5 +1,8 @@
 use anyhow::{Context, bail};
-use scope_domain::runs::runner::RunnerMaxConcurrentJobs;
+use scope_domain::runs::{
+    resources::{JobResources, MIN_JOB_CPU_MILLIS, MIN_JOB_MEMORY_BYTES},
+    runner::RunnerMaxConcurrentJobs,
+};
 use std::{
     fs,
     num::NonZeroUsize,
@@ -9,12 +12,10 @@ use std::{
 
 const MIB: u64 = 1024 * 1024;
 const DAEMON_MEMORY_RESERVE: u64 = 512 * MIB;
-const MIN_JOB_MEMORY: u64 = 512 * MIB;
 const PID_RESERVE: u64 = 64;
 const MIN_JOB_PIDS: u64 = 128;
 const MAX_JOB_PIDS: u64 = 4096;
 const DAEMON_CPU_RESERVE_MILLIS: u64 = 500;
-const MIN_JOB_CPU_MILLIS: u64 = 500;
 const TRANSIENT_DISK_RESERVE: u64 = 5 * 1024 * MIB;
 const MIN_JOB_STORAGE: u64 = 2 * 1024 * MIB;
 const EMERGENCY_DISK_FLOOR: u64 = 2 * 1024 * MIB;
@@ -69,6 +70,19 @@ impl ResourceLimits {
             &pids,
         ]);
     }
+
+    pub(super) fn with_job_resources(&self, resources: JobResources) -> Self {
+        Self {
+            memory_bytes: resources.memory_bytes(),
+            cpu_millis: resources.cpu_millis(),
+            ..self.clone()
+        }
+    }
+}
+
+pub(super) struct ReservedResourceUsage<'a> {
+    pub(super) limits: &'a ResourceLimits,
+    pub(super) usage: ResourceUsage,
 }
 
 impl ResourceCapacity {
@@ -107,21 +121,22 @@ impl ResourceCapacity {
         max_concurrent_jobs: RunnerMaxConcurrentJobs,
     ) -> anyhow::Result<ResourceLimits> {
         let slots = u64::from(max_concurrent_jobs.get());
-        let required_memory = DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY.saturating_mul(slots);
+        let required_memory = DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY_BYTES;
         if self.memory_headroom < required_memory {
             bail!(
-                "runner has {} MiB memory headroom; at least {} MiB is required for {slots} job slot(s)",
+                "runner has {} MiB memory headroom; at least {} MiB is required for one job and the daemon reserve",
                 self.memory_headroom / MIB,
                 required_memory / MIB
             );
         }
-        let memory_bytes = per_slot_budget(
-            self.memory_headroom - DAEMON_MEMORY_RESERVE,
-            MIN_JOB_MEMORY,
-            slots,
-        )
-        .expect("validated memory budget fits every slot");
-        let cpu_millis = job_cpu_millis(self.cpu_millis, slots)?;
+        let required_cpu = DAEMON_CPU_RESERVE_MILLIS + MIN_JOB_CPU_MILLIS;
+        if self.cpu_millis < required_cpu {
+            bail!(
+                "runner has {:.3} CPU capacity; at least {:.3} CPU is required for one job and the daemon reserve",
+                self.cpu_millis as f64 / 1000.0,
+                required_cpu as f64 / 1000.0
+            );
+        }
         let pids = self
             .pid_headroom
             .saturating_sub(PID_RESERVE)
@@ -135,8 +150,8 @@ impl ResourceCapacity {
         let storage_bytes = safe_transient_storage_bytes(self.transient, slots)?;
 
         Ok(ResourceLimits {
-            memory_bytes,
-            cpu_millis,
+            memory_bytes: MIN_JOB_MEMORY_BYTES,
+            cpu_millis: MIN_JOB_CPU_MILLIS,
             pids: per_slot_budget(pids, MIN_JOB_PIDS, slots)
                 .expect("validated PID budget fits every slot"),
             storage_bytes,
@@ -146,42 +161,52 @@ impl ResourceCapacity {
     pub(super) fn ensure_admission(
         self,
         limits: &ResourceLimits,
-        active: &[ResourceUsage],
-        pending: u8,
+        active: &[ReservedResourceUsage<'_>],
     ) -> anyhow::Result<()> {
         // Live headroom reflects current active usage, but Docker limits are
-        // ceilings. Reserve every active job's unconsumed budget plus pending
-        // and newly offered slots so that later growth cannot overcommit.
-        let pending = u64::from(pending) + 1;
-        let active_memory = active.iter().fold(0_u64, |reserved, usage| {
-            reserved.saturating_add(limits.memory_bytes.saturating_sub(usage.memory_bytes))
+        // ceilings. Reserve every active job's unconsumed budget so that later
+        // growth cannot overcommit.
+        let active_memory = active.iter().fold(0_u64, |reserved, active| {
+            reserved.saturating_add(
+                active
+                    .limits
+                    .memory_bytes
+                    .saturating_sub(active.usage.memory_bytes),
+            )
         });
-        let active_pids = active.iter().fold(0_u64, |reserved, usage| {
-            reserved.saturating_add(limits.pids.saturating_sub(usage.pids))
+        let active_cpu = active.iter().fold(0_u64, |reserved, active| {
+            reserved.saturating_add(active.limits.cpu_millis)
         });
-        let active_storage = active.iter().fold(0_u64, |reserved, usage| {
-            reserved.saturating_add(limits.storage_bytes.saturating_sub(usage.storage_bytes))
+        let active_pids = active.iter().fold(0_u64, |reserved, active| {
+            reserved.saturating_add(active.limits.pids.saturating_sub(active.usage.pids))
         });
-        let occupied = active.len() as u64 + pending;
+        let active_storage = active.iter().fold(0_u64, |reserved, active| {
+            reserved.saturating_add(
+                active
+                    .limits
+                    .storage_bytes
+                    .saturating_sub(active.usage.storage_bytes),
+            )
+        });
         require_capacity(
             "memory",
             self.memory_headroom,
-            DAEMON_MEMORY_RESERVE + active_memory + limits.memory_bytes.saturating_mul(pending),
+            DAEMON_MEMORY_RESERVE + active_memory + limits.memory_bytes,
         )?;
         require_capacity(
             "CPU",
             self.cpu_millis,
-            DAEMON_CPU_RESERVE_MILLIS + limits.cpu_millis.saturating_mul(occupied),
+            DAEMON_CPU_RESERVE_MILLIS + active_cpu + limits.cpu_millis,
         )?;
         require_capacity(
             "PIDs",
             self.pid_headroom,
-            PID_RESERVE + active_pids + limits.pids.saturating_mul(pending),
+            PID_RESERVE + active_pids + limits.pids,
         )?;
         require_capacity(
             "transient storage",
             self.transient.available_bytes,
-            TRANSIENT_DISK_RESERVE + active_storage + limits.storage_bytes.saturating_mul(pending),
+            TRANSIENT_DISK_RESERVE + active_storage + limits.storage_bytes,
         )?;
         if let Some(available) = self.transient.available_inodes
             && available < EMERGENCY_INODE_FLOOR
@@ -191,6 +216,34 @@ impl ResourceCapacity {
             );
         }
         Ok(())
+    }
+
+    pub(super) fn available_job_resources(
+        self,
+        active: &[ReservedResourceUsage<'_>],
+    ) -> anyhow::Result<JobResources> {
+        let active_memory = active.iter().fold(0_u64, |reserved, active| {
+            reserved.saturating_add(
+                active
+                    .limits
+                    .memory_bytes
+                    .saturating_sub(active.usage.memory_bytes),
+            )
+        });
+        let active_cpu = active.iter().fold(0_u64, |reserved, active| {
+            reserved.saturating_add(active.limits.cpu_millis)
+        });
+        JobResources::new(
+            self.cpu_millis
+                .saturating_sub(DAEMON_CPU_RESERVE_MILLIS)
+                .saturating_sub(active_cpu)
+                .min(scope_domain::runs::resources::MAX_JOB_CPU_MILLIS),
+            self.memory_headroom
+                .saturating_sub(DAEMON_MEMORY_RESERVE)
+                .saturating_sub(active_memory)
+                .min(scope_domain::runs::resources::MAX_JOB_MEMORY_BYTES),
+        )
+        .map_err(Into::into)
     }
 
     #[cfg(test)]
@@ -435,23 +488,6 @@ fn per_slot_budget(budget: u64, minimum: u64, slots: u64) -> Option<u64> {
     (per_slot >= minimum).then_some(per_slot)
 }
 
-fn job_cpu_millis(capacity: u64, slots: u64) -> anyhow::Result<u64> {
-    let required = DAEMON_CPU_RESERVE_MILLIS + MIN_JOB_CPU_MILLIS.saturating_mul(slots);
-    if capacity < required {
-        bail!(
-            "runner has {:.3} CPU capacity; at least {:.3} CPU is required for {slots} job slot(s) and the daemon reserve",
-            capacity as f64 / 1000.0,
-            required as f64 / 1000.0
-        );
-    }
-    Ok(per_slot_budget(
-        capacity - DAEMON_CPU_RESERVE_MILLIS,
-        MIN_JOB_CPU_MILLIS,
-        slots,
-    )
-    .expect("validated CPU budget fits every slot"))
-}
-
 fn has_emergency_capacity(capacity: TransientCapacity) -> bool {
     capacity.available_bytes >= EMERGENCY_DISK_FLOOR
         && capacity
@@ -691,21 +727,29 @@ mod tests {
     }
 
     #[test]
-    fn cpu_admission_never_oversubscribes_or_consumes_the_daemon_reserve() {
-        assert!(job_cpu_millis(500, 1).is_err());
-        assert!(job_cpu_millis(999, 1).is_err());
-        assert_eq!(job_cpu_millis(1000, 1).unwrap(), 500);
-        assert_eq!(job_cpu_millis(1500, 1).unwrap(), 1000);
-        assert_eq!(job_cpu_millis(4000, 1).unwrap(), 3500);
-        assert_eq!(job_cpu_millis(2500, 4).unwrap(), 500);
-        assert!(job_cpu_millis(2499, 4).is_err());
-    }
-
-    #[test]
     fn per_slot_budget_never_dips_below_the_resource_minimum() {
         assert_eq!(per_slot_budget(2048, 512, 4), Some(512));
         assert_eq!(per_slot_budget(2051, 512, 4), Some(512));
         assert_eq!(per_slot_budget(2047, 512, 4), None);
+    }
+
+    #[test]
+    fn concurrency_ceiling_does_not_divide_job_cpu_or_memory() {
+        let slots = RunnerMaxConcurrentJobs::new(4).unwrap();
+        let capacity = ResourceCapacity {
+            memory_headroom: DAEMON_MEMORY_RESERVE + MIN_JOB_MEMORY_BYTES,
+            cpu_millis: DAEMON_CPU_RESERVE_MILLIS + MIN_JOB_CPU_MILLIS,
+            pid_headroom: PID_RESERVE + MIN_JOB_PIDS * u64::from(slots.get()),
+            transient: TransientCapacity {
+                available_bytes: TRANSIENT_DISK_RESERVE
+                    + MIN_JOB_STORAGE * u64::from(slots.get()),
+                available_inodes: Some(EMERGENCY_INODE_FLOOR),
+            },
+        };
+
+        let limits = capacity.limits(slots).unwrap();
+        assert_eq!(limits.cpu_millis, MIN_JOB_CPU_MILLIS);
+        assert_eq!(limits.memory_bytes, MIN_JOB_MEMORY_BYTES);
     }
 
     #[test]

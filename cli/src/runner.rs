@@ -1,7 +1,7 @@
 use crate::api::{
     AttemptRecoveryLookup, abandon_attempt, append_attempt_log, attempt_heartbeat,
-    attempt_recovery_status, attempt_recovery_status_if_active, complete_attempt, runner_claim,
-    runner_poll,
+    attempt_recovery_status, attempt_recovery_status_if_active, complete_attempt, runner_poll,
+    runner_status,
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
@@ -14,6 +14,10 @@ use scope_domain::runs::{
 };
 use std::{
     process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -51,8 +55,7 @@ pub use management::{
     add_repository, doctor, install, list_caches, prune_caches, remove_repository, status,
 };
 pub use worker_pool::daemon;
-#[cfg(test)]
-use worker_pool::{initialize_after_recovery, run_slot_workers};
+use worker_pool::JobWorkers;
 mod recovery;
 use recovery::{
     RecoveryAttempt, RecoveryProgress, mark_recovery_abandon_pending,
@@ -96,45 +99,39 @@ impl ExecutionOutcome {
 }
 
 fn resume_interrupted_attempts(config: &RunnerConfig) -> anyhow::Result<()> {
-    let restart_required = run_recovery_tasks(recover_runner_state(config)?, |recovery| {
-        let attempt_id = recovery.recovery.claim.attempt_id.clone();
-        let attempt_token = recovery.recovery.claim.attempt_token.clone();
-        let Err(error) = resume_claim(config, recovery) else {
-            return false;
-        };
-        eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
-        if requires_recovery_restart(&error) {
-            return true;
+    let restart_required = Arc::new(AtomicBool::new(false));
+    let mut workers = JobWorkers::new(config.max_concurrent_jobs);
+    for recovery in recover_runner_state(config)? {
+        workers.wait_for_capacity()?;
+        if restart_required.load(Ordering::Acquire) {
+            break;
         }
-        if let Ok(client) = runner_client() {
-            let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
-        }
-        false
-    })
-    .into_iter()
-    .any(|restart_required| restart_required);
-    if restart_required {
+        let config = config.clone();
+        let restart_required = Arc::clone(&restart_required);
+        let worker_name = recovery.recovery.claim.attempt_id.clone();
+        workers.spawn(worker_name, move || {
+            let attempt_id = recovery.recovery.claim.attempt_id.clone();
+            let attempt_token = recovery.recovery.claim.attempt_token.clone();
+            let Err(error) = resume_claim(&config, recovery) else {
+                return Ok(());
+            };
+            eprintln!("Could not resume interrupted attempt {attempt_id}: {error:#}");
+            if requires_recovery_restart(&error) {
+                restart_required.store(true, Ordering::Release);
+                return Ok(());
+            }
+            if let Ok(client) = runner_client() {
+                let _ = abandon_attempt(&client, &config.api_url, &attempt_token, &attempt_id);
+            }
+            Ok(())
+        })?;
+    }
+    workers.wait_for_all()?;
+    if restart_required.load(Ordering::Acquire) {
         Err(RecoveryRestartRequired.into())
     } else {
         Ok(())
     }
-}
-
-fn run_recovery_tasks<T: Send, R: Send>(tasks: Vec<T>, recover: impl Fn(T) -> R + Sync) -> Vec<R> {
-    thread::scope(|scope| {
-        let recover = &recover;
-        tasks
-            .into_iter()
-            .map(|task| scope.spawn(move || recover(task)))
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(|worker| {
-                worker
-                    .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
-            .collect()
-    })
 }
 
 fn run_claim(

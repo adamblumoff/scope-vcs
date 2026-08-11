@@ -830,6 +830,7 @@ fn command_success(command: &mut Command, context: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scope_domain::runs::resources::JobResources;
     use scope_domain::runs::workflow::{
         ContainerSpec, RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowStep,
     };
@@ -841,6 +842,7 @@ mod tests {
             vec![],
             RunnerSelector::Any,
             ContainerSpec::new("alpine:3.20").unwrap(),
+            JobResources::new(1_000, 1024 * 1024 * 1024).unwrap(),
             60,
             Vec::new(),
             vec![

@@ -7,13 +7,14 @@ use reqwest::{
 use scope_api_contract::{
     AdvanceRunnerProtocolCutoverRequest, AppendAttemptLogRequest, AttachRunnerRepositoryRequest,
     AttemptCacheFinalizationRequest, AttemptHeartbeatRequest, AttemptRecoveryStatusResponse,
-    AttemptStatusResponse, ClaimRunResponse, CompleteAttemptRequest, CompleteAttemptStepRequest,
-    CreateManualRunQuery, CreateRunnerProtocolCanaryRequest, PinAttemptContainerImageRequest,
+    AttemptStatusResponse, CompleteAttemptRequest, CompleteAttemptStepRequest, CreateManualRunQuery,
+    CreateRunnerProtocolCanaryRequest, PinAttemptContainerImageRequest,
     PinAttemptContainerImageResponse, PushTriggerEvaluationResponse, RegisterRunnerRequest,
     RegisterRunnerResponse, ReportAttemptCacheFinalizationsRequest,
     ReportAttemptCachePreparationsRequest, RepositoryRunDetailResponse, RunEventsQuery,
-    RunLogResponse, RunResponse, RunnerPollResponse, RunnerProtocolCutoverResponse, RunnerResponse,
-    UpgradeRunnerRegistrationRequest, UpgradeRunnerRegistrationResponse,
+    RunLogResponse, RunResponse, RunnerPollRequest, RunnerPollResponse,
+    RunnerProtocolCutoverResponse, RunnerResponse, UpgradeRunnerRegistrationRequest,
+    UpgradeRunnerRegistrationResponse,
 };
 use std::io::BufRead;
 
@@ -459,35 +460,35 @@ pub fn runner_poll(
     client: &Client,
     api_url: &str,
     runner_secret: &str,
+    request: &RunnerPollRequest,
 ) -> anyhow::Result<RunnerPollResponse> {
     parse_json(
         client
             .post(format!("{api_url}{}", routes::RUNNER_POLL))
             .bearer_auth(runner_secret)
+            .json(request)
             .send()
             .context("poll Scope runner queue")?,
         "poll Scope runner queue",
     )
 }
 
-pub fn runner_claim(
-    client: &Client,
-    api_url: &str,
-    runner_secret: &str,
-    run_id: &str,
-    job_key: &str,
-) -> anyhow::Result<ClaimRunResponse> {
-    parse_json(
+pub fn runner_status(client: &Client, api_url: &str, runner_secret: &str) -> anyhow::Result<()> {
+    let response = successful(
         client
             .post(format!(
                 "{api_url}{}",
-                routes::runner_claim(run_id, job_key)
+                routes::RUNNER_PROTOCOL_STATUS
             ))
             .bearer_auth(runner_secret)
             .send()
-            .context("claim Scope run")?,
-        "claim Scope run",
-    )
+            .context("check Scope runner authentication")?,
+        "check Scope runner authentication",
+    )?;
+    if response.status() != StatusCode::NO_CONTENT {
+        anyhow::bail!("check Scope runner authentication: expected an empty response");
+    }
+    Ok(())
 }
 
 pub fn attempt_source(

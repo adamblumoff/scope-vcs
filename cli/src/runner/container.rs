@@ -21,7 +21,7 @@ pub(super) fn doctor_local(
     max_concurrent_jobs: scope_domain::runs::runner::RunnerMaxConcurrentJobs,
 ) -> anyhow::Result<(DockerCapabilities, ResourceLimits)> {
     if env::consts::OS != "linux" || env::consts::ARCH != "x86_64" {
-        bail!("V7 runners require Linux on amd64");
+        bail!("V8 runners require Linux on amd64");
     }
     command_success(Command::new("docker").args(["info"]), "connect to Docker")?;
     let limits = ResourceLimits::detect(max_concurrent_jobs)?;
@@ -102,7 +102,7 @@ pub(super) fn probe_storage_quota_support(
 pub(super) fn require_runner_image_tools(image: &str) -> anyhow::Result<()> {
     let mut probe = Command::new("docker");
     configure_runner_image_tool_probe(&mut probe, image);
-    command_success(&mut probe, "validate Scope V7 workflow image tools")
+    command_success(&mut probe, "validate Scope V8 workflow image tools")
 }
 
 fn configure_runner_image_tool_probe(command: &mut Command, image: &str) {
@@ -115,7 +115,7 @@ fn configure_runner_image_tool_probe(command: &mut Command, image: &str) {
         "sh",
         image,
         "-c",
-        "for tool in sh rm mv sleep mkfifo dd cat tail head setsid; do command -v \"$tool\" >/dev/null || { echo \"missing required Scope V7 tool: $tool\" >&2; exit 1; }; done",
+        "for tool in sh rm mv sleep mkfifo dd cat tail head setsid; do command -v \"$tool\" >/dev/null || { echo \"missing required Scope V8 tool: $tool\" >&2; exit 1; }; done",
     ]);
 }
 
@@ -336,7 +336,7 @@ pub(super) fn require_root_image(image: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         bail!(
-            "workflow image runs as {user:?}; Scope V7 images must run as root because the runner populates /workspace and manages step state inside the container"
+            "workflow image runs as {user:?}; Scope V8 images must run as root because the runner populates /workspace and manages step state inside the container"
         )
     }
 }
