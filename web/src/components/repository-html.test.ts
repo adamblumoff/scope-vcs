@@ -22,8 +22,9 @@ test('prefixes the repository policy ahead of authored markup', () => {
 
   assert.match(
     document,
-    /^<!doctype html><meta http-equiv="Content-Security-Policy"/,
+    /^<!doctype html><meta charset="utf-8">/,
   )
+  assert.match(document, /<meta http-equiv="Content-Security-Policy"/)
   assert.match(document, /<base target="_blank"><html><head><title>Project<\/title>/)
   assert.match(document, /<body>Hello<\/body>/)
 })
@@ -36,11 +37,36 @@ test('enforces the policy when authored markup contains misleading head text', (
 
   assert.match(
     withRoot,
-    /^<!doctype html><meta http-equiv="Content-Security-Policy"[^>]+><base target="_blank"><!-- <head> -->/,
+    /<base target="_blank"><!-- <head> --><html lang="en">/,
   )
   assert.match(
     fragment,
-    /^<!doctype html><meta http-equiv="Content-Security-Policy"[^>]+><base target="_blank"><main>/,
+    /<base target="_blank"><main>/,
+  )
+})
+
+test('neutralizes authored meta elements that could navigate the preview', () => {
+  const document = repositoryHtmlDocument(`
+    <html>
+      <head>
+        <META HTTP-EQUIV="refresh" content="0;url=https://example.com">
+        <meta/name="theme-color" content="red">
+      </head>
+      <body>Hello</body>
+    </html>
+  `)
+
+  assert.doesNotMatch(document, /<meta http-equiv="refresh"/i)
+  assert.match(document, /&lt;meta HTTP-EQUIV="refresh"/)
+  assert.match(document, /&lt;meta\/name="theme-color"/)
+  assert.match(document, /<meta charset="utf-8">/)
+  assert.match(
+    document,
+    /<meta name="viewport" content="width=device-width, initial-scale=1">/,
+  )
+  assert.match(
+    document,
+    /<meta http-equiv="x-dns-prefetch-control" content="off">/,
   )
 })
 
