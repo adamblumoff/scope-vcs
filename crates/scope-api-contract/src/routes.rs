@@ -24,6 +24,7 @@ pub const RUNNER: &str = "/v1/runners/{runner_id}";
 pub const RUNNER_UPGRADE: &str = "/v1/runners/{runner_id}/upgrade";
 pub const RUNNER_REPOSITORY: &str = "/v1/runners/{runner_id}/repos/{owner}/{repo}";
 pub const RUNNER_POLL: &str = "/v1/runner-protocol/poll";
+pub const RUNNER_PROTOCOL_STATUS: &str = "/v1/runner-protocol/status";
 pub const ATTEMPT_HEARTBEAT: &str = "/v1/runner-protocol/attempts/{attempt_id}/heartbeat";
 pub const ATTEMPT_CACHE_FINALIZATION: &str =
     "/v1/runner-protocol/attempts/{attempt_id}/cache-finalization";
