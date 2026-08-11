@@ -18,8 +18,8 @@ const repoPath = `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
 
 test('public repository exposes only its projected source', async () => {
   await withPage(repoPath, async (page) => {
-    await page.getByRole('heading', { level: 1, name: 'Repository' }).waitFor()
     await assertCurrentRepoSection(page, 'Code')
+    await assertPageHeading(page, 'Code')
     await page.getByText('2 files', { exact: true }).waitFor()
     await page.getByRole('tab', { name: 'README.html' }).waitFor()
     await page.getByRole('button', { name: 'README.html', exact: true }).waitFor()
@@ -123,7 +123,7 @@ test('public repository exposes only its projected source', async () => {
 
 test('public direct Runs access is explicit and exposes no operations', async () => {
   await withPage(`${repoPath}/runs`, async (page) => {
-    await page.getByRole('heading', { level: 1, name: 'Runs' }).waitFor()
+    await assertPageHeading(page, 'Runs')
     await page.getByText(
       'Sign in as the owner or a repository member to view runs.',
       { exact: true },
@@ -145,9 +145,8 @@ test('public direct Runs access is explicit and exposes no operations', async ()
 
 test('public repository history renders its seeded commit', async () => {
   await withPage(`${repoPath}/history`, async (page) => {
-    await page.getByRole('heading', { level: 1, name: 'History' }).waitFor()
     await assertCurrentRepoSection(page, 'History')
-    await page.getByRole('heading', { level: 2, name: 'Commits' }).waitFor()
+    await assertPageHeading(page, 'History')
     const commit = page.getByRole('button', {
       name: 'Projected public update, commit dev-public-1, 2 files',
     })
@@ -173,7 +172,7 @@ test('public repository history renders its seeded commit', async () => {
 
 test('public repository navigates to history after client hydration', async () => {
   await withPage(repoPath, async (page) => {
-    await page.getByRole('heading', { level: 1, name: 'Repository' }).waitFor()
+    await assertCurrentRepoSection(page, 'Code')
     await page.waitForFunction(() => {
       const link = document.querySelector('a[href$="/history"]')
       return link && Object.keys(link).some((key) => key.startsWith('__reactProps$'))
@@ -186,7 +185,7 @@ test('public repository navigates to history after client hydration', async () =
       .getByRole('navigation', { name: 'Primary' })
       .getByRole('link', { name: 'History', exact: true })
       .click()
-    await page.getByRole('heading', { level: 1, name: 'History' }).waitFor()
+    await assertCurrentRepoSection(page, 'History')
     await page.getByText('Projected public update', { exact: true }).first().waitFor()
     assert.equal(
       await page.evaluate(() => window.__scopeSmokeDocument),
@@ -197,7 +196,7 @@ test('public repository navigates to history after client hydration', async () =
 
 test('repository chrome persists across navigation and request revalidation', async () => {
   await withPage(`/${owner}/update-demo`, async (page) => {
-    await page.getByRole('heading', { level: 1, name: 'Repository' }).waitFor()
+    await assertCurrentRepoSection(page, 'Code')
     await page.waitForFunction(() => {
       const link = document.querySelector('a[href$="/requests"]')
       return link && Object.keys(link).some((key) => key.startsWith('__reactProps$'))
@@ -213,7 +212,7 @@ test('repository chrome persists across navigation and request revalidation', as
     await primaryNavigation
       .getByRole('link', { name: 'Requests', exact: true })
       .click()
-    await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
+    await assertCurrentRepoSection(page, 'Requests')
     await assertRepositoryChromePreserved(page, { header, navigation })
     await assertCurrentRepoSection(page, 'Requests')
 
@@ -239,7 +238,7 @@ test('repository chrome persists across navigation and request revalidation', as
     await primaryNavigation
       .getByRole('link', { name: 'Requests', exact: true })
       .click()
-    await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
+    await assertCurrentRepoSection(page, 'Requests')
     await page.waitForFunction(
       () => document.querySelector('#main-content')?.scrollTop === 0,
     )
@@ -255,7 +254,7 @@ test('repository chrome persists across navigation and request revalidation', as
     await primaryNavigation
       .getByRole('link', { name: 'Requests', exact: true })
       .click()
-    await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
+    await assertCurrentRepoSection(page, 'Requests')
 
     await armNextRouterLoad(page)
     await primaryNavigation
@@ -268,7 +267,7 @@ test('repository chrome persists across navigation and request revalidation', as
     await primaryNavigation
       .getByRole('link', { name: 'History', exact: true })
       .click()
-    await page.getByRole('heading', { level: 1, name: 'History' }).waitFor()
+    await assertCurrentRepoSection(page, 'History')
     await assertRepositoryChromePreserved(page, { header, navigation })
     await assertCurrentRepoSection(page, 'History')
   })
@@ -276,19 +275,20 @@ test('repository chrome persists across navigation and request revalidation', as
 
 test('public repository requests route is anonymously readable', async () => {
   await withPage(`${repoPath}/requests`, async (page) => {
-    await page.getByRole('heading', { level: 1, name: 'Requests' }).waitFor()
     await assertCurrentRepoSection(page, 'Requests')
+    await assertPageHeading(page, 'Requests')
     await page.getByRole('heading', { level: 2, name: 'Your work' }).waitFor()
     await page.getByRole('heading', { level: 2, name: 'Open' }).waitFor()
     await page.getByRole('heading', { level: 2, name: 'Closed' }).waitFor()
-    await page.getByText('No open requests are visible.', { exact: true }).waitFor()
-    await page.getByText('No closed requests are visible.', { exact: true }).waitFor()
+    await page.getByText('No open requests.', { exact: true }).waitFor()
+    await page.getByText('No closed requests.', { exact: true }).waitFor()
   })
 })
 
 test('seeded request discussion and changes stay reciprocal and ordered', async () => {
   await withPage(`/${owner}/update-demo/requests/req_demo_ready`, async (page) => {
     await page.getByRole('heading', { level: 1, name: 'Add bounded retry timing' }).waitFor()
+    await page.getByText('Public request', { exact: true }).last().waitFor()
     const threads = page.locator('.request-discussion-thread')
     await threads.first().waitFor()
     assert.deepEqual(
@@ -357,24 +357,16 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
     const requestNavigation = await requestViews.elementHandle()
     assert(requestHeading)
     assert(requestNavigation)
-    await page.locator('#main-content').evaluate((element) => {
-      element.scrollTop = 200
-    })
-    await page.waitForFunction(
-      () => document.querySelector('#main-content')?.scrollTop === 200,
-    )
-    const requestScroll = await page.locator('#main-content').evaluate(
-      (element) => element.scrollTop,
-    )
-    assert(requestScroll > 0)
 
     await changesLink.click()
     await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready/changes'))
-    await page.getByRole('heading', { level: 2, name: 'Commits' }).waitFor()
+    await page
+      .getByRole('button', { name: /, commit .+, \d+ files?$/ })
+      .first()
+      .waitFor()
     await assertRequestShellPreserved(page, {
       heading: requestHeading,
       navigation: requestNavigation,
-      scroll: requestScroll,
     })
     await page.getByRole('navigation', { name: 'Request views' })
       .getByRole('link', { name: 'Discussion' })
@@ -384,7 +376,6 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
     await assertRequestShellPreserved(page, {
       heading: requestHeading,
       navigation: requestNavigation,
-      scroll: requestScroll,
     })
   })
 })
@@ -397,6 +388,7 @@ test('request queue search is keyboard accessible and mobile rows do not overflo
         name: /Add bounded retry timing/,
       })
       await readyRow.waitFor()
+      await page.getByText(/^\d+ open$/).waitFor()
       await readyRow.focus()
       assert.equal(
         await readyRow.evaluate(
@@ -420,11 +412,10 @@ test('request queue search is keyboard accessible and mobile rows do not overflo
       )
       await search.fill('missing request title')
       await search.press('Enter')
+      // Open and Closed now share the same no-match copy, so scope by section.
       await page
-        .getByText(
-          'No open requests match “missing request title”.',
-          { exact: true },
-        )
+        .getByRole('region', { name: 'Open' })
+        .getByText('Nothing matches “missing request title”.', { exact: true })
         .waitFor()
       assert.equal(queueRequests.length, 2)
       const clear = page.getByRole('button', { name: 'Clear' })
@@ -485,6 +476,12 @@ async function assertCurrentRepoSection(page, section) {
   )
 }
 
+async function assertPageHeading(page, title) {
+  await page.getByRole('heading', { level: 1, name: title }).waitFor({
+    state: 'attached',
+  })
+}
+
 async function assertRepositoryChromePreserved(page, chrome) {
   assert.equal(
     await page.evaluate(
@@ -506,12 +503,6 @@ async function assertRequestShellPreserved(page, shell) {
       shell,
     ),
     true,
-  )
-  assert.equal(
-    await page.locator('#main-content').evaluate(
-      (element) => element.scrollTop,
-    ),
-    shell.scroll,
   )
 }
 

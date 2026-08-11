@@ -34,7 +34,7 @@ export function RepoShell({
         <Link
           activeOptions={{ exact: section.key === 'code' }}
           aria-current={active === section.key ? 'page' : undefined}
-          className="flex h-full items-center px-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:px-3"
+          className="flex h-full items-center px-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:px-3"
           params={params}
           to={section.to}
         >
@@ -53,7 +53,7 @@ export function RepoShell({
               ? []
               : [{
                   id: 'lifecycle',
-                  label: repo.lifecycle_state,
+                  label: 'Awaiting first push',
                   semantic: 'warning' as const,
                 }]),
             ...(repo.open_request_count > 0

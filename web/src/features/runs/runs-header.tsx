@@ -19,6 +19,7 @@ export function RunsHeader({
           ? undefined
           : `${runCount} ${runCount === 1 ? 'run' : 'runs'}${workflowName ? ` in ${workflowName}` : ''}`
       }
+      title="Runs"
     />
   )
 }

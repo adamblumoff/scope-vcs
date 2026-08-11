@@ -104,6 +104,7 @@ export function RepoSettingsPage({
   return (
     <>
       <PageContent>
+        <h1 className="sr-only">Settings</h1>
         {deleteError && (
           <PageErrorAlert title="Repository deletion failed">
             {deleteError}

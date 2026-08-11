@@ -139,6 +139,7 @@ export function RepositoryRunsPage({
   if (!initialResources || !history) {
     return (
       <PageContent>
+        <h1 className="sr-only">Runs</h1>
         <PageErrorAlert title="Runs unavailable">
           Sign in as the owner or a repository member to view runs.
         </PageErrorAlert>

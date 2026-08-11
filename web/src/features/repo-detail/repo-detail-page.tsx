@@ -52,6 +52,7 @@ export function RepoDetailPage({
           </>
         )}
         summary={`${files.length} ${files.length === 1 ? 'file' : 'files'}`}
+        title="Code"
       />
       <RepositoryCodeView
         files={files}

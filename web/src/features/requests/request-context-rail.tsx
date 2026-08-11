@@ -6,6 +6,7 @@ import { RequestRatingsSection } from './request-ratings-section'
 import type { RateRequestInput } from '@/api/requests'
 import {
   formatUnixDate,
+  requestAudienceLabel,
   requestAuthorRoleLabel,
   shortOid,
 } from './request-labels'
@@ -29,6 +30,7 @@ export function RequestContextRail({
       <div className="grid min-w-0 gap-7">
         <RailSection title="Lifecycle">
           <RailValue label="Author" value={requestAuthorRoleLabel(request)} />
+          <RailValue label="Audience" value={requestAudienceLabel(request)} />
           <RailValue label="Submitted" value={formatUnixDate(request.submitted_at_unix)} />
           {request.closed_at_unix !== null && (
             <RailValue label="Closed" value={formatUnixDate(request.closed_at_unix)} />

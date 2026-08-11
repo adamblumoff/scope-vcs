@@ -91,6 +91,7 @@ export function HistoryPage(props: HistoryPageProps) {
           />
         ) : undefined}
         summary={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
+        title="History"
       />
       <HistoryWorkbench
         commitState={commitState}

@@ -87,20 +87,20 @@ export function PageHeader({
 }
 
 /**
- * Thin utility bar for repo section routes: a plain-language summary on the
- * left, controls on the right. No title, no eyebrow — the nav supplies those.
+ * Thin utility bar for repo section routes: a semantic page title for screen
+ * readers, a plain-language summary on the left, and controls on the right.
  */
 export function WorkbenchBar({
   actions,
   className,
   summary,
+  title,
 }: {
   actions?: ReactNode
   className?: string
   summary?: ReactNode
+  title: ReactNode
 }) {
-  if (!actions && !summary) return null
-
   return (
     <div
       className={cn(
@@ -108,9 +108,12 @@ export function WorkbenchBar({
         className,
       )}
     >
-      <div className="min-w-0 text-sm text-muted-foreground">{summary}</div>
+      <h1 className="sr-only">{title}</h1>
+      {summary && (
+        <div className="min-w-0 text-sm text-muted-foreground">{summary}</div>
+      )}
       {actions && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
           {actions}
         </div>
       )}

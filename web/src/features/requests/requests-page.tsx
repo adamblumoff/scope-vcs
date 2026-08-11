@@ -25,6 +25,7 @@ import {
 } from './request-list-model'
 import {
   formatUnixDate,
+  requestAudienceLabel,
   requestAuthorRoleLabel,
   requestMergeabilityLabel,
   requestStatusLabel,
@@ -156,6 +157,7 @@ export function RequestsPage({
 
   return (
     <PageContent className="pb-16">
+      <h1 className="sr-only">Requests</h1>
       <QueueSearch
         busy={Boolean(loadingSection) || searching}
         error={searchError}
@@ -367,6 +369,8 @@ function RequestQueueRow({
             {requestStatusLabel(request)}
           </Badge>
         )}
+        <span aria-hidden="true">·</span>
+        <span>{requestAudienceLabel(request)}</span>
         <span aria-hidden="true">·</span>
         <span>{requestAuthorRoleLabel(request)}</span>
         <span aria-hidden="true">·</span>

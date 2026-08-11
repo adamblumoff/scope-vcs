@@ -72,6 +72,10 @@ export function requestAuthorRoleLabel(request: RequestLabelSource) {
   }
 }
 
+export function requestAudienceLabel(request: RequestLabelSource) {
+  return request.audience === 'Private' ? 'Private request' : 'Public request'
+}
+
 export function eventKindLabel(kind: RequestWorkflowEventKind) {
   return EVENT_LABELS[kind]
 }
