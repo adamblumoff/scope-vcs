@@ -1,6 +1,7 @@
 use scope_domain::runs::{
     cache::{CacheColdReason, CacheFinalState, CachePreparation},
     cutover::{RunnerProtocolCanaryPhase, RunnerProtocolCanaryStatus, RunnerProtocolCutoverState},
+    resources::JobResources,
     run::{AttemptState, AttemptTerminalReason, RunJobState, RunState, StepState},
     runner::{RunnerCapabilities, RunnerMaxConcurrentJobs},
     trigger::PushTriggerEvaluationState,
@@ -446,17 +447,13 @@ pub struct PushTriggerEvaluationResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RunnerPollResponse {
-    pub run: Option<RunnerRunOffer>,
+pub struct RunnerPollRequest {
+    pub available_resources: JobResources,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RunnerRunOffer {
-    pub run_id: String,
-    pub job_key: String,
-    pub repository_id: String,
-    pub workflow_name: String,
-    pub git_oid: String,
+pub struct RunnerPollResponse {
+    pub claim: Option<ClaimRunResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -611,7 +608,7 @@ mod tests {
     #[test]
     fn cutover_contract_uses_stable_kebab_case_domain_values() {
         let response = RunnerProtocolCutoverResponse {
-            state: RunnerProtocolCutoverState::V7Fenced,
+            state: RunnerProtocolCutoverState::V8Fenced,
             generation: 2,
             enabled_runner_count: 1,
             canaries: vec![RunnerProtocolCanaryResponse {
@@ -623,7 +620,7 @@ mod tests {
             }],
         };
         let json = serde_json::to_value(&response).unwrap();
-        assert_eq!(json["state"], "v7-fenced");
+        assert_eq!(json["state"], "v8-fenced");
         assert_eq!(json["canaries"][0]["phase"], "warm-read");
         assert_eq!(json["canaries"][0]["status"], "running");
         assert_eq!(
@@ -668,6 +665,7 @@ mod tests {
                     "needs": [],
                     "runner": { "kind": "any" },
                     "container": { "image": "image" },
+                    "resources": { "cpu_millis": 1000, "memory_bytes": 1073741824_u64 },
                     "timeout_seconds": 60,
                     "environment": {},
                     "caches": [],

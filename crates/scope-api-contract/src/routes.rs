@@ -24,7 +24,6 @@ pub const RUNNER: &str = "/v1/runners/{runner_id}";
 pub const RUNNER_UPGRADE: &str = "/v1/runners/{runner_id}/upgrade";
 pub const RUNNER_REPOSITORY: &str = "/v1/runners/{runner_id}/repos/{owner}/{repo}";
 pub const RUNNER_POLL: &str = "/v1/runner-protocol/poll";
-pub const RUNNER_CLAIM: &str = "/v1/runner-protocol/runs/{run_id}/jobs/{job_key}/claim";
 pub const ATTEMPT_HEARTBEAT: &str = "/v1/runner-protocol/attempts/{attempt_id}/heartbeat";
 pub const ATTEMPT_CACHE_FINALIZATION: &str =
     "/v1/runner-protocol/attempts/{attempt_id}/cache-finalization";
@@ -141,14 +140,6 @@ pub fn runner_repository(runner_id: &str, owner: &str, repo: &str) -> String {
         runner(runner_id),
         path_segment(owner),
         path_segment(repo)
-    )
-}
-
-pub fn runner_claim(run_id: &str, job_key: &str) -> String {
-    format!(
-        "/v1/runner-protocol/runs/{}/jobs/{}/claim",
-        path_segment(run_id),
-        path_segment(job_key)
     )
 }
 
