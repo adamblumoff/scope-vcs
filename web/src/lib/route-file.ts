@@ -22,8 +22,8 @@ export function selectedRouteFilePath(
 }
 
 export function defaultReadmePath(files: ReadonlyArray<{ path: string }>) {
-  const readme = files.find((file) =>
-    /^\/?readme(?:\.[^/]+)?$/i.test(file.path),
+  const readme = files.find(
+    (file) => file.path === 'README.html' || file.path === '/README.html',
   )
   return readme ? displayRouteFilePath(readme.path) : undefined
 }

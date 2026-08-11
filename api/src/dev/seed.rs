@@ -33,8 +33,119 @@ use std::{
 static SEED_TEMP_REPO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) const DEV_SEED_USER_ID: &str = "scope_usr_dev_seed";
-const PUBLIC_DEMO_README: &str =
-    "# Public Demo\n\nThis seeded repository is ready to browse locally.\n";
+const PUBLIC_DEMO_README_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scope public demo</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      color: #17201d;
+      background: #f4f1e9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top right, rgba(76, 115, 93, .2), transparent 42rem),
+        #f4f1e9;
+    }
+
+    main {
+      width: min(100% - 2rem, 62rem);
+      margin-inline: auto;
+      padding: clamp(4rem, 10vw, 8rem) 0;
+    }
+
+    .eyebrow {
+      margin: 0 0 1rem;
+      color: #4c735d;
+      font-size: .75rem;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 12ch;
+      margin: 0;
+      font-family: Georgia, serif;
+      font-size: clamp(3.25rem, 10vw, 7.5rem);
+      font-weight: 500;
+      letter-spacing: -.055em;
+      line-height: .9;
+    }
+
+    .intro {
+      max-width: 42rem;
+      margin: 2rem 0 0;
+      color: #4d5a55;
+      font-size: clamp(1rem, 2vw, 1.25rem);
+      line-height: 1.7;
+    }
+
+    .details {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-top: clamp(4rem, 9vw, 7rem);
+      padding-top: 1.5rem;
+      border-top: 1px solid rgba(23, 32, 29, .22);
+    }
+
+    .details p { margin: .45rem 0 0; line-height: 1.5; }
+    .details strong { font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; }
+    code { font: .9em ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+    @media (max-width: 40rem) {
+      .details { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root { color: #e7ece8; background: #111614; }
+      body {
+        background:
+          radial-gradient(circle at top right, rgba(116, 170, 139, .16), transparent 36rem),
+          #111614;
+      }
+      .eyebrow { color: #8fc5a6; }
+      .intro { color: #aebbb4; }
+      .details { border-color: rgba(231, 236, 232, .2); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Scope public demo</p>
+    <h1>Public by design.</h1>
+    <p class="intro">
+      A repository can publish a clear, expressive front door without exposing the work that
+      belongs behind it. This page is the committed <code>README.html</code>, rendered as-is.
+    </p>
+    <section class="details" aria-label="Repository details">
+      <div>
+        <strong>Visible</strong>
+        <p>The homepage and a tiny TypeScript example.</p>
+      </div>
+      <div>
+        <strong>Private</strong>
+        <p>Internal planning stays out of the public projection.</p>
+      </div>
+      <div>
+        <strong>Portable</strong>
+        <p>No build, scripts, SDK, or remote assets required.</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"#;
 const PUBLIC_DEMO_APP: &str =
     "export function greet(name: string) {\n  return `hello ${name}`\n}\n";
 const PUBLIC_DEMO_PLAN: &str =
@@ -106,7 +217,7 @@ fn published_demo(
     owner: &UserAccount,
 ) -> Result<StoredRepository, ApiError> {
     let mut repo = repo(owner, "public-demo", Visibility::Public)?;
-    let readme = blob(object_store, PUBLIC_DEMO_README)?;
+    let readme = blob(object_store, PUBLIC_DEMO_README_HTML)?;
     let app = blob(object_store, PUBLIC_DEMO_APP)?;
     let private_plan = blob(object_store, PUBLIC_DEMO_PLAN)?;
     let private_path = ScopePath::parse("/internal/plan.md").map_err(ApiError::internal)?;
@@ -118,7 +229,7 @@ fn published_demo(
         "dev-public-1",
         "Seed public demo",
         vec![
-            add_change("/README.md", readme, Visibility::Public)?,
+            add_change("/README.html", readme, Visibility::Public)?,
             add_change("/src/app.ts", app, Visibility::Public)?,
             add_change(private_path.as_str(), private_plan, Visibility::Private)?,
         ],
@@ -130,7 +241,7 @@ fn published_demo(
         "public-demo-live",
         &[SeedGitCommit {
             files: &[
-                ("README.md", PUBLIC_DEMO_README),
+                ("README.html", PUBLIC_DEMO_README_HTML),
                 ("src/app.ts", PUBLIC_DEMO_APP),
                 ("internal/plan.md", PUBLIC_DEMO_PLAN),
             ],

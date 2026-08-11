@@ -21,8 +21,89 @@ test('public repository exposes only its projected source', async () => {
     await page.getByRole('heading', { level: 1, name: 'Repository' }).waitFor()
     await assertCurrentRepoSection(page, 'Code')
     await page.getByText('2 files', { exact: true }).waitFor()
-    await page.getByRole('tab', { name: 'README.md' }).waitFor()
-    await page.getByRole('button', { name: 'README.md', exact: true }).waitFor()
+    await page.getByRole('tab', { name: 'README.html' }).waitFor()
+    await page.getByRole('button', { name: 'README.html', exact: true }).waitFor()
+    const previewButton = page.getByRole('radio', { name: 'Preview', exact: true })
+    const sourceButton = page.getByRole('radio', { name: 'Source', exact: true })
+    await previewButton.waitFor()
+    await sourceButton.waitFor()
+
+    const preview = page.locator('iframe[title="README.html preview"]')
+    await preview.waitFor()
+    const sandbox = await preview.getAttribute('sandbox')
+    assert.notEqual(sandbox, null)
+    const sandboxCapabilities = sandbox.split(/\s+/)
+    for (const capability of [
+      'allow-forms',
+      'allow-popups',
+      'allow-popups-to-escape-sandbox',
+      'allow-same-origin',
+      'allow-scripts',
+      'allow-top-navigation',
+    ]) {
+      assert.equal(sandboxCapabilities.includes(capability), false)
+    }
+
+    const previewDocument = page.frameLocator('iframe[title="README.html preview"]')
+    await previewDocument
+      .getByRole('heading', { level: 1, name: 'Public by design.' })
+      .waitFor()
+    const contentSecurityPolicy = await previewDocument
+      .locator('meta[http-equiv="Content-Security-Policy"]')
+      .getAttribute('content')
+    assert.match(contentSecurityPolicy, /script-src 'none'/)
+    assert.match(contentSecurityPolicy, /connect-src 'none'/)
+
+    const previewElement = await preview.elementHandle()
+    assert(previewElement)
+    const previewFrame = await previewElement.contentFrame()
+    assert(previewFrame)
+
+    let networkRequests = 0
+    const networkProbeUrl = 'https://example.com/README-sandbox-check'
+    await page.route(networkProbeUrl, async (route) => {
+      networkRequests += 1
+      await route.fulfill({ status: 204 })
+    })
+    assert.equal(
+      await previewFrame.evaluate(async (url) => {
+        try {
+          await fetch(url, { mode: 'no-cors' })
+          return 'allowed'
+        } catch {
+          return 'blocked'
+        }
+      }, networkProbeUrl),
+      'blocked',
+    )
+    assert.equal(networkRequests, 0)
+    await previewFrame.evaluate(() => {
+      const script = document.createElement('script')
+      script.textContent = 'document.documentElement.dataset.scriptRan = "true"'
+      document.head.append(script)
+    })
+    assert.equal(
+      await previewFrame.evaluate(() => document.documentElement.dataset.scriptRan),
+      undefined,
+    )
+    assert.equal(
+      await previewFrame.evaluate(() => {
+        try {
+          return parent.document.body !== null
+        } catch {
+          return false
+        }
+      }),
+      false,
+    )
+
+    await sourceButton.click()
+    await page.locator('pre code').filter({ hasText: '<!doctype html>' }).waitFor()
+    assert.equal(await preview.count(), 0)
+    await previewButton.click()
+    await previewDocument
+      .getByRole('heading', { level: 1, name: 'Public by design.' })
+      .waitFor()
     assert.equal(await page.getByText('internal', { exact: true }).count(), 0)
     assert.equal(await page.getByText('plan.md', { exact: true }).count(), 0)
     assert.equal(
