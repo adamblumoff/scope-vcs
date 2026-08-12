@@ -3,6 +3,7 @@ import {
   parseRepoParams,
 } from '@/api/repos'
 import { RepoShell } from '@/components/repo-shell'
+import { RepositoryHtmlPreviewProvider } from '@/components/repository-html-preview-store'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { RepoLayoutProvider } from '@/features/repo-detail/repo-layout-context'
 import { useRepoLiveRefresh } from '@/features/repo-detail/repo-live-refresh'
@@ -38,9 +39,11 @@ function RepoLayoutRoute() {
   const subscribe = useRepoLiveRefresh(live, invalidate)
   return (
     <RepoLayoutProvider live={live} subscribe={subscribe}>
-      <RepoShell params={params}>
-        <Outlet />
-      </RepoShell>
+      <RepositoryHtmlPreviewProvider>
+        <RepoShell params={params}>
+          <Outlet />
+        </RepoShell>
+      </RepositoryHtmlPreviewProvider>
     </RepoLayoutProvider>
   )
 }

@@ -97,13 +97,41 @@ test('public repository exposes only its projected source', async () => {
       false,
     )
 
+    await previewFrame.evaluate(() => {
+      document.documentElement.dataset.persistenceProbe = 'same-document'
+    })
+
     await sourceButton.click()
     await page.locator('pre code').filter({ hasText: '<!doctype html>' }).waitFor()
-    assert.equal(await preview.count(), 0)
+    assert.equal(await preview.isVisible(), false)
     await previewButton.click()
     await previewDocument
       .getByRole('heading', { level: 1, name: 'Public by design.' })
       .waitFor()
+    assert.equal(
+      await previewFrame.evaluate(() =>
+        document.documentElement.dataset.persistenceProbe
+      ),
+      'same-document',
+    )
+
+    await page
+      .getByRole('navigation', { name: 'Primary' })
+      .getByRole('link', { name: 'History', exact: true })
+      .click()
+    await assertPageHeading(page, 'History')
+    await page
+      .getByRole('navigation', { name: 'Primary' })
+      .getByRole('link', { name: 'Code', exact: true })
+      .click()
+    await assertPageHeading(page, 'Code')
+    await preview.waitFor()
+    assert.equal(
+      await previewFrame.evaluate(() =>
+        document.documentElement.dataset.persistenceProbe
+      ),
+      'same-document',
+    )
     assert.equal(await page.getByText('internal', { exact: true }).count(), 0)
     assert.equal(await page.getByText('plan.md', { exact: true }).count(), 0)
     assert.equal(
