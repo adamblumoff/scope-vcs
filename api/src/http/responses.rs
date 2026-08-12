@@ -40,32 +40,6 @@ pub(crate) fn request_actor_summary_response(
     })
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-#[cfg_attr(feature = "type-export", ts(rename_all = "lowercase"))]
-pub(crate) enum RepositoryRunnerState {
-    Online,
-    Offline,
-    Disabled,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct RepositoryRunnerResponse {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) version: String,
-    pub(crate) state: RepositoryRunnerState,
-    pub(crate) last_seen_at_unix: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct RepositoryRunnersResponse {
-    pub(crate) runners: Vec<RepositoryRunnerResponse>,
-}
-
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepositoryRunWorkflowResponse {

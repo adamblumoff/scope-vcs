@@ -1,0 +1,24 @@
+[package]
+name = "scope-runner-runtime"
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+repository = "https://github.com/adamblumoff/scope-vcs"
+
+[[bin]]
+name = "scope-runner-runtime"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+hex = "0.4.3"
+libc = "0.2.177"
+reqwest = { version = "0.12.26", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+scope-api-contract = { package = "scope-api-contract", path = "../crates/scope-api-contract" }
+scope-domain = { package = "scope-domain", path = "../crates/scope-domain" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+tar = "0.4.44"
+tempfile = "3.23.0"
+zstd = "0.13.3"

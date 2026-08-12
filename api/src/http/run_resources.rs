@@ -5,12 +5,10 @@ use crate::{
     http::{
         responses::{
             RepositoryRunHistoryPageResponse, RepositoryRunWorkflowListResponse,
-            RepositoryRunWorkflowResponse, RepositoryRunnerResponse, RepositoryRunnerState,
-            RepositoryRunnersResponse,
+            RepositoryRunWorkflowResponse,
         },
         run_response::repository_run_summary,
     },
-    persistence::unix_now,
     repo_access::find_repo,
     state::AppState,
 };
@@ -29,7 +27,6 @@ use serde::Deserialize;
 
 const DEFAULT_RUN_HISTORY_PAGE_SIZE: usize = 20;
 const MAX_RUN_HISTORY_PAGE_SIZE: usize = 100;
-const RUNNER_ONLINE_WINDOW_SECONDS: u64 = 90;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RepositoryRunHistoryQuery {
@@ -115,41 +112,6 @@ pub(crate) async fn get_repository_run_history(
         .map(|entry| repository_run_summary(&entry.run, &entry.jobs))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(RepositoryRunHistoryPageResponse { runs, next_cursor }))
-}
-
-pub(crate) async fn get_repository_runners(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name)): Path<(String, String)>,
-) -> Result<Json<RepositoryRunnersResponse>, ApiError> {
-    let repo = require_repository_member(&state, &headers, &owner, &repo_name).await?;
-    let now_unix = unix_now()?;
-    let runners = state
-        .metadata
-        .runs()
-        .repository_runners(&repo.record.id)
-        .await?
-        .into_iter()
-        .map(|entry| {
-            let state = if !entry.runner.supports_dispatch() {
-                RepositoryRunnerState::Disabled
-            } else if entry.runner.last_seen_at_unix.is_some_and(|last_seen| {
-                last_seen >= now_unix.saturating_sub(RUNNER_ONLINE_WINDOW_SECONDS)
-            }) {
-                RepositoryRunnerState::Online
-            } else {
-                RepositoryRunnerState::Offline
-            };
-            RepositoryRunnerResponse {
-                id: entry.runner.id,
-                name: entry.grant.name.as_str().to_string(),
-                version: entry.runner.version,
-                state,
-                last_seen_at_unix: entry.runner.last_seen_at_unix,
-            }
-        })
-        .collect();
-    Ok(Json(RepositoryRunnersResponse { runners }))
 }
 
 async fn current_workflows(

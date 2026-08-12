@@ -1,10 +1,10 @@
 use super::{
     job::RunJob,
-    runner::{required, validate_sha256_hash},
     step::{interrupt_steps, skip_pending_steps},
-    workflow::{RunnerSelector, WorkflowIdentity, WorkflowJobId, WorkflowRevision},
+    workflow::{WorkflowIdentity, WorkflowJobId, WorkflowRevision},
 };
 use crate::error::DomainError;
+use serde::{Deserialize, Serialize};
 
 pub use super::log::{MAX_RUN_LOG_BYTES_PER_ATTEMPT, MAX_RUN_LOG_CHUNK_BYTES, RunLogChunk};
 pub use super::source::{RunSource, RunTrigger};
@@ -13,6 +13,12 @@ pub use super::state::{AttemptState, RunState, StepState};
 pub use super::step::{AttemptConclusion, AttemptTerminalReason, RunAttemptStep, StepConclusion};
 
 pub const MAX_RUN_ATTEMPTS: u32 = 100;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecutionProvider {
+    Northflank,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinnedContainerImage(String);
@@ -62,7 +68,6 @@ pub struct Run {
     pub trigger: RunTrigger,
     pub requested_by_user_id: Option<String>,
     pub source: RunSource,
-    pub runner_override: Option<RunnerSelector>,
     pub state: RunState,
     pub cancellation_requested: bool,
     pub created_at_unix: u64,
@@ -80,18 +85,12 @@ impl Run {
         trigger: RunTrigger,
         requested_by_user_id: Option<String>,
         source: RunSource,
-        runner_override: Option<RunnerSelector>,
         now_unix: u64,
     ) -> Result<Self, DomainError> {
         let id = required("run id", id.into())?;
         let idempotency_key = required("run idempotency key", idempotency_key.into())?;
         let workflow_revision_digest = workflow_revision_digest.into();
         validate_sha256_hash("workflow revision digest", &workflow_revision_digest)?;
-        if let Some(runner) = &runner_override {
-            runner
-                .validate()
-                .map_err(|error| DomainError::invalid_input(error.to_string()))?;
-        }
         if requested_by_user_id
             .as_deref()
             .is_some_and(|id| id.trim().is_empty())
@@ -117,7 +116,6 @@ impl Run {
             trigger,
             requested_by_user_id,
             source,
-            runner_override,
             state: RunState::Queued,
             cancellation_requested: false,
             created_at_unix: now_unix,
@@ -135,7 +133,6 @@ impl Run {
         trigger: RunTrigger,
         requested_by_user_id: Option<String>,
         source: RunSource,
-        runner_override: Option<RunnerSelector>,
         state: RunState,
         cancellation_requested: bool,
         created_at_unix: u64,
@@ -150,7 +147,6 @@ impl Run {
             trigger,
             requested_by_user_id,
             source,
-            runner_override,
             created_at_unix,
         )?;
         run.state = state;
@@ -205,22 +201,6 @@ impl Run {
                 "run trigger is not enabled by the workflow revision",
             ));
         }
-        if self.trigger == RunTrigger::PushMain && self.runner_override.is_some() {
-            return Err(DomainError::invalid_input(
-                "push runs cannot override workflow job runners",
-            ));
-        }
-        if self.runner_override == Some(RunnerSelector::Any)
-            && revision
-                .definition()
-                .jobs()
-                .iter()
-                .any(|job| matches!(job.runner(), RunnerSelector::Named(_)))
-        {
-            return Err(DomainError::invalid_input(
-                "run runner selection is not allowed by the workflow revision",
-            ));
-        }
         Ok(())
     }
 
@@ -268,8 +248,9 @@ pub struct RunAttempt {
     pub run_id: String,
     pub job_key: WorkflowJobId,
     pub number: u32,
-    pub runner_id: String,
-    pub runner_name: String,
+    pub execution_provider: ExecutionProvider,
+    pub external_run_id: Option<String>,
+    pub runtime_version: String,
     pub token_hash: String,
     pub token_expires_at_unix: u64,
     pub state: AttemptState,
@@ -290,8 +271,9 @@ impl RunAttempt {
         run_id: impl Into<String>,
         job_key: WorkflowJobId,
         number: u32,
-        runner_id: impl Into<String>,
-        runner_name: impl Into<String>,
+        execution_provider: ExecutionProvider,
+        external_run_id: Option<String>,
+        runtime_version: impl Into<String>,
         token_hash: impl Into<String>,
         token_expires_at_unix: u64,
         state: AttemptState,
@@ -311,8 +293,11 @@ impl RunAttempt {
             run_id: required("run attempt run id", run_id.into())?,
             job_key,
             number,
-            runner_id: required("run attempt runner id", runner_id.into())?,
-            runner_name: required("run attempt runner name", runner_name.into())?,
+            execution_provider,
+            external_run_id: external_run_id
+                .map(|value| required("external run id", value))
+                .transpose()?,
+            runtime_version: required("runtime version", runtime_version.into())?,
             token_hash,
             token_expires_at_unix,
             state,
@@ -333,18 +318,12 @@ impl RunAttempt {
         &mut self,
         run: &Run,
         job: &mut RunJob,
-        runner_id: &str,
         token_hash: &str,
         now_unix: u64,
     ) -> Result<(), DomainError> {
-        self.authenticate(job, runner_id, token_hash, now_unix)?;
-        if self.state != AttemptState::Leased || job.state != RunJobState::Leased {
-            return Err(DomainError::conflict("attempt is not leased"));
-        }
-        if job.pinned_container_image.is_none() {
-            return Err(DomainError::conflict(
-                "run container image must be pinned before execution starts",
-            ));
+        self.authenticate(job, token_hash, now_unix)?;
+        if self.state != AttemptState::Dispatching || job.state != RunJobState::Dispatching {
+            return Err(DomainError::conflict("attempt is not dispatching"));
         }
         if run.cancellation_requested {
             return Err(DomainError::conflict("run cancellation is requested"));
@@ -358,16 +337,46 @@ impl RunAttempt {
         Ok(())
     }
 
+    pub fn claim_runtime(
+        &mut self,
+        job: &RunJob,
+        bootstrap_token_hash: &str,
+        attempt_token_hash: impl Into<String>,
+        now_unix: u64,
+        lease_expires_at_unix: u64,
+    ) -> Result<(), DomainError> {
+        self.authenticate(job, bootstrap_token_hash, now_unix)?;
+        if self.state != AttemptState::Dispatching {
+            return Err(DomainError::conflict("attempt is not dispatching"));
+        }
+        if lease_expires_at_unix <= now_unix {
+            return Err(DomainError::invalid_input(
+                "attempt lease expiry must be in the future",
+            ));
+        }
+        let attempt_token_hash = attempt_token_hash.into();
+        validate_sha256_hash("attempt token hash", &attempt_token_hash)?;
+        if attempt_token_hash == self.token_hash {
+            return Err(DomainError::invalid_input(
+                "attempt token must differ from the bootstrap token",
+            ));
+        }
+        self.token_hash = attempt_token_hash;
+        self.last_heartbeat_at_unix = now_unix;
+        self.token_expires_at_unix = lease_expires_at_unix;
+        self.lease_expires_at_unix = lease_expires_at_unix;
+        Ok(())
+    }
+
     pub fn heartbeat(
         &mut self,
         run: &Run,
         job: &RunJob,
-        runner_id: &str,
         token_hash: &str,
         now_unix: u64,
         lease_expires_at_unix: u64,
     ) -> Result<bool, DomainError> {
-        self.authenticate(job, runner_id, token_hash, now_unix)?;
+        self.authenticate(job, token_hash, now_unix)?;
         if self.state.is_terminal() {
             return Err(DomainError::conflict("attempt is terminal"));
         }
@@ -459,7 +468,7 @@ impl RunAttempt {
         token_hash: &str,
         now_unix: u64,
     ) -> Result<(), DomainError> {
-        self.authenticate(job, &self.runner_id, token_hash, now_unix)
+        self.authenticate(job, token_hash, now_unix)
     }
 
     pub fn authenticate_cache_observation_report(
@@ -486,14 +495,13 @@ impl RunAttempt {
         run: &Run,
         job: &mut RunJob,
         steps: &mut [RunAttemptStep],
-        runner_id: &str,
         token_hash: &str,
         conclusion: AttemptConclusion,
         logs_truncated: bool,
         now_unix: u64,
     ) -> Result<(), DomainError> {
         if self.state.is_terminal() || job.state.is_terminal() {
-            self.authenticate_identity(job, runner_id, token_hash)?;
+            self.authenticate_identity(job, token_hash)?;
             return if self.matches_conclusion(&conclusion) {
                 Ok(())
             } else {
@@ -502,7 +510,7 @@ impl RunAttempt {
                 ))
             };
         }
-        self.authenticate(job, runner_id, token_hash, now_unix)?;
+        self.authenticate(job, token_hash, now_unix)?;
         self.validate_steps(steps)?;
         if logs_truncated && self.first_truncated_step_index.is_none() {
             let step_index = steps
@@ -519,26 +527,26 @@ impl RunAttempt {
         job.ensure_time_not_before_update(now_unix)?;
         let (attempt_state, job_state, terminal_reason) = match conclusion {
             AttemptConclusion::SetupFailed { exit_code, message } => {
-                if self.state != AttemptState::Leased {
+                if self.state != AttemptState::Dispatching {
                     return Err(DomainError::conflict(
-                        "runner setup can only fail before execution starts",
+                        "runtime setup can only fail before execution starts",
                     ));
                 }
                 if exit_code == 0 {
                     return Err(DomainError::invalid_input(
-                        "runner setup failure exit code cannot be zero",
+                        "runtime setup failure exit code cannot be zero",
                     ));
                 }
                 if !super::step::valid_setup_failure_message(&message) {
                     return Err(DomainError::invalid_input(
-                        "runner setup failure message is required and must not exceed 2048 bytes",
+                        "runtime setup failure message is required and must not exceed 2048 bytes",
                     ));
                 }
                 skip_pending_steps(steps, now_unix);
                 (
                     AttemptState::Failed,
                     RunJobState::Failed,
-                    AttemptTerminalReason::RunnerSetupFailed { exit_code, message },
+                    AttemptTerminalReason::RuntimeSetupFailed { exit_code, message },
                 )
             }
             AttemptConclusion::TimedOut => {
@@ -575,7 +583,7 @@ impl RunAttempt {
         match (conclusion, &self.terminal_reason) {
             (
                 AttemptConclusion::SetupFailed { exit_code, message },
-                Some(AttemptTerminalReason::RunnerSetupFailed {
+                Some(AttemptTerminalReason::RuntimeSetupFailed {
                     exit_code: existing,
                     message: existing_message,
                 }),
@@ -616,15 +624,47 @@ impl RunAttempt {
         run: &Run,
         job: &mut RunJob,
         steps: &mut [RunAttemptStep],
-        runner_id: &str,
         token_hash: &str,
         now_unix: u64,
     ) -> Result<(), DomainError> {
-        self.authenticate(job, runner_id, token_hash, now_unix)?;
+        self.authenticate(job, token_hash, now_unix)?;
         if self.state.is_terminal() {
             return Ok(());
         }
         self.finish_lost_or_requeue(run, job, steps, now_unix)
+    }
+
+    pub fn confirm_provider_cancellation(
+        &mut self,
+        run: &Run,
+        job: &mut RunJob,
+        steps: &mut [RunAttemptStep],
+        now_unix: u64,
+    ) -> Result<(), DomainError> {
+        if self.state == AttemptState::Canceled
+            && job.state == RunJobState::Canceled
+            && job.current_attempt_id.is_none()
+        {
+            return Ok(());
+        }
+        job.ensure_current_attempt(self)?;
+        if self.state.is_terminal() {
+            return Err(DomainError::conflict("attempt is terminal"));
+        }
+        if !run.cancellation_requested {
+            return Err(DomainError::conflict("run cancellation was not requested"));
+        }
+        self.validate_steps(steps)?;
+        job.ensure_time_not_before_update(now_unix)?;
+        let step_index = interrupt_steps(steps, StepState::Canceled, now_unix);
+        self.state = AttemptState::Canceled;
+        self.terminal_reason = Some(AttemptTerminalReason::Canceled { step_index });
+        self.completed_at_unix = Some(now_unix);
+        job.state = RunJobState::Canceled;
+        job.current_attempt_id = None;
+        job.updated_at_unix = now_unix;
+        job.completed_at_unix = Some(now_unix);
+        Ok(())
     }
 
     fn finish_lost_or_requeue(
@@ -640,7 +680,7 @@ impl RunAttempt {
         let was_running = self.state == AttemptState::Running;
         let step_index = interrupt_steps(steps, StepState::Lost, now_unix);
         self.state = AttemptState::Lost;
-        self.terminal_reason = Some(AttemptTerminalReason::RunnerLost { step_index });
+        self.terminal_reason = Some(AttemptTerminalReason::ExecutionLost { step_index });
         self.completed_at_unix = Some(now_unix);
         job.current_attempt_id = None;
         job.updated_at_unix = now_unix;
@@ -659,11 +699,10 @@ impl RunAttempt {
     pub(crate) fn authenticate(
         &self,
         job: &RunJob,
-        runner_id: &str,
         token_hash: &str,
         now_unix: u64,
     ) -> Result<(), DomainError> {
-        self.authenticate_identity(job, runner_id, token_hash)?;
+        self.authenticate_identity(job, token_hash)?;
         job.ensure_current_attempt(self)?;
         if now_unix >= self.token_expires_at_unix {
             return Err(DomainError::authentication_failed(
@@ -676,13 +715,12 @@ impl RunAttempt {
     pub(crate) fn authenticate_identity(
         &self,
         job: &RunJob,
-        runner_id: &str,
         token_hash: &str,
     ) -> Result<(), DomainError> {
         job.ensure_latest_attempt(self)?;
         let states_align = matches!(
             (job.state, self.state),
-            (RunJobState::Leased, AttemptState::Leased)
+            (RunJobState::Dispatching, AttemptState::Dispatching)
                 | (RunJobState::Running, AttemptState::Running)
                 | (RunJobState::Succeeded, AttemptState::Succeeded)
                 | (RunJobState::Failed, AttemptState::Failed)
@@ -694,7 +732,7 @@ impl RunAttempt {
                 "run and attempt states disagree",
             ));
         }
-        if self.runner_id != runner_id || self.token_hash != token_hash {
+        if self.token_hash != token_hash {
             return Err(DomainError::authentication_failed(
                 "attempt credentials are invalid",
             ));
@@ -769,7 +807,7 @@ impl RunAttempt {
                     "unsuccessful terminal attempt must have a terminal reason",
                 ));
             }
-            AttemptState::Leased | AttemptState::Running if self.terminal_reason.is_some() => {
+            AttemptState::Dispatching | AttemptState::Running if self.terminal_reason.is_some() => {
                 return Err(DomainError::invariant_violation(
                     "active attempt cannot have a terminal reason",
                 ));
@@ -779,5 +817,23 @@ impl RunAttempt {
         Ok(())
     }
 }
+
+pub(crate) fn validate_sha256_hash(label: &str, value: &str) -> Result<(), DomainError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DomainError::invalid_input(format!(
+            "{label} must be a SHA-256 hex digest"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn required(label: &str, value: String) -> Result<String, DomainError> {
+    if value.trim().is_empty() {
+        Err(DomainError::invalid_input(format!("{label} is required")))
+    } else {
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 mod job_tests;

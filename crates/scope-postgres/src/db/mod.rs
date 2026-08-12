@@ -35,8 +35,6 @@ mod migration_tests;
 mod request_activity_migration_tests;
 #[cfg(test)]
 mod request_submission_migration_tests;
-#[cfg(test)]
-mod runner_protocol_cutover_migration_tests;
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
 mod history_rows;
@@ -75,6 +73,7 @@ mod request_submission_transactions;
 mod requests;
 mod run_attempt_mutations;
 mod run_attempt_persistence;
+mod run_cache_objects;
 mod run_cache_observations;
 mod run_details;
 mod run_dispatch;
@@ -84,21 +83,14 @@ mod run_log_writes;
 mod run_operations;
 mod run_retention;
 mod run_step_operations;
-mod runner_protocol_cutover;
-#[cfg(test)]
-mod runner_protocol_cutover_tests;
 mod runs;
+pub use run_cache_objects::RunCacheObject;
 pub use run_cache_observations::{AttemptCacheFinalizationCommand, AttemptCachePreparationCommand};
 pub use run_details::{RunAttemptDetail, RunDetail};
+pub use run_dispatch::CloudAttemptAbort;
 pub use run_history::{RepositoryRun, RunHistoryCursor, RunHistoryPageQuery};
 pub use run_log_reads::{RecentRunLogs, StoredAttemptStepLogs, StoredRunLog};
-pub use run_operations::RepositoryRunner;
-pub use runner_protocol_cutover::RunnerProtocolCutoverSnapshot;
-pub use runs::{DispatchClaim, UpgradeRunnerRegistrationCommand};
-#[cfg(test)]
-mod run_concurrency_tests;
-#[cfg(test)]
-mod runs_tests;
+pub use runs::DispatchClaim;
 #[cfg(any(test, feature = "local-dev", feature = "test-support"))]
 mod test_support;
 mod visibility_changes;

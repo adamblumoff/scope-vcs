@@ -1,126 +1,5 @@
 use super::*;
 
-pub mod runner {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_runners")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub id: String,
-        pub owner_user_id: String,
-        #[sea_orm(unique)]
-        pub secret_hash: String,
-        pub version: String,
-        pub protocol_version: i32,
-        pub capabilities: Json,
-        pub max_concurrent_jobs: i32,
-        pub enabled: bool,
-        pub created_at_unix: i64,
-        pub last_seen_at_unix: Option<i64>,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-
-    impl Model {
-        pub fn from_domain(runner: &Runner) -> Result<Self, PostgresError> {
-            Ok(Self {
-                id: runner.id.clone(),
-                owner_user_id: runner.owner_user_id.clone(),
-                secret_hash: runner.secret_hash.clone(),
-                version: runner.version.clone(),
-                protocol_version: u32_to_i32(runner.protocol_version, "runner protocol version")?,
-                capabilities: encode_json(&runner.capabilities)?,
-                max_concurrent_jobs: i32::from(runner.max_concurrent_jobs.get()),
-                enabled: runner.enabled,
-                created_at_unix: u64_to_i64(runner.created_at_unix, "runner creation time")?,
-                last_seen_at_unix: runner
-                    .last_seen_at_unix
-                    .map(|value| u64_to_i64(value, "runner last-seen time"))
-                    .transpose()?,
-            })
-        }
-
-        pub fn try_into_domain(self) -> Result<Runner, PostgresError> {
-            Runner::restore(
-                self.id,
-                self.owner_user_id,
-                self.secret_hash,
-                self.version,
-                i32_to_u32(self.protocol_version, "runner protocol version")?,
-                decode_json::<RunnerCapabilities>(self.capabilities)?,
-                scope_domain::runs::runner::RunnerMaxConcurrentJobs::new(
-                    u8::try_from(self.max_concurrent_jobs).map_err(|_| {
-                        PostgresError::invalid_input("persisted runner capacity is invalid")
-                    })?,
-                )
-                .map_err(PostgresError::invalid_input)?,
-                self.enabled,
-                i64_to_u64(self.created_at_unix, "runner creation time")?,
-                self.last_seen_at_unix
-                    .map(|value| i64_to_u64(value, "runner last-seen time"))
-                    .transpose()?,
-            )
-            .map_err(PostgresError::invalid_input)
-        }
-    }
-}
-
-pub mod runner_grant {
-    use super::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_runner_grants")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub repo_id: String,
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub runner_id: String,
-        pub name: String,
-        pub granted_by_user_id: String,
-        pub created_at_unix: i64,
-        pub revoked_at_unix: Option<i64>,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-
-    impl Model {
-        pub fn from_domain(grant: &RunnerGrant) -> Result<Self, PostgresError> {
-            Ok(Self {
-                repo_id: grant.repository_id.clone(),
-                runner_id: grant.runner_id.clone(),
-                name: grant.name.as_str().to_string(),
-                granted_by_user_id: grant.granted_by_user_id.clone(),
-                created_at_unix: u64_to_i64(grant.created_at_unix, "runner grant creation time")?,
-                revoked_at_unix: grant
-                    .revoked_at_unix
-                    .map(|value| u64_to_i64(value, "runner grant revocation time"))
-                    .transpose()?,
-            })
-        }
-
-        pub fn try_into_domain(self) -> Result<RunnerGrant, PostgresError> {
-            RunnerGrant::restore(
-                self.repo_id,
-                self.runner_id,
-                RunnerName::parse(self.name).map_err(PostgresError::invalid_input)?,
-                self.granted_by_user_id,
-                i64_to_u64(self.created_at_unix, "runner grant creation time")?,
-                self.revoked_at_unix
-                    .map(|value| i64_to_u64(value, "runner grant revocation time"))
-                    .transpose()?,
-            )
-            .map_err(PostgresError::invalid_input)
-        }
-    }
-}
-
 pub mod workflow_revision {
     use super::*;
 
@@ -247,7 +126,6 @@ pub mod run {
         pub trigger: String,
         pub requested_by_user_id: Option<String>,
         pub source: Json,
-        pub runner_override_name: Option<String>,
         pub state: String,
         pub cancellation_requested: bool,
         pub created_at_unix: i64,
@@ -271,12 +149,6 @@ pub mod run {
                 trigger: encode_enum(run.trigger)?,
                 requested_by_user_id: run.requested_by_user_id.clone(),
                 source: encode_json(&run.source)?,
-                runner_override_name: run.runner_override.as_ref().and_then(
-                    |runner| match runner {
-                        RunnerSelector::Any => None,
-                        RunnerSelector::Named(name) => Some(name.clone()),
-                    },
-                ),
                 state: encode_enum(run.state)?,
                 cancellation_requested: run.cancellation_requested,
                 created_at_unix: u64_to_i64(run.created_at_unix, "run creation time")?,
@@ -294,11 +166,6 @@ pub mod run {
                 WorkflowPath::parse(self.workflow_path).map_err(PostgresError::invalid_input)?,
             )
             .map_err(PostgresError::invalid_input)?;
-            let runner_override = self
-                .runner_override_name
-                .map(RunnerSelector::named)
-                .transpose()
-                .map_err(PostgresError::invalid_input)?;
             Run::restore(
                 self.id,
                 self.idempotency_key,
@@ -307,7 +174,6 @@ pub mod run {
                 decode_enum::<RunTrigger>(self.trigger)?,
                 self.requested_by_user_id,
                 decode_json::<RunSource>(self.source)?,
-                runner_override,
                 decode_enum::<RunState>(self.state)?,
                 self.cancellation_requested,
                 i64_to_u64(self.created_at_unix, "run creation time")?,
@@ -331,8 +197,7 @@ pub mod run_job {
         pub run_id: String,
         #[sea_orm(primary_key, auto_increment = false)]
         pub job_key: String,
-        pub desired_runner_name: Option<String>,
-        pub pinned_container_image: Option<String>,
+        pub pinned_container_image: String,
         pub state: String,
         pub last_attempt_number: i32,
         pub current_attempt_id: Option<String>,
@@ -351,14 +216,7 @@ pub mod run_job {
             Ok(Self {
                 run_id: job.run_id.clone(),
                 job_key: job.key.as_str().to_string(),
-                desired_runner_name: match &job.desired_runner {
-                    RunnerSelector::Any => None,
-                    RunnerSelector::Named(name) => Some(name.clone()),
-                },
-                pinned_container_image: job
-                    .pinned_container_image
-                    .as_ref()
-                    .map(|image| image.as_str().to_string()),
+                pinned_container_image: job.pinned_container_image.as_str().to_string(),
                 state: encode_enum(job.state)?,
                 last_attempt_number: u32_to_i32(
                     job.last_attempt_number,
@@ -375,17 +233,10 @@ pub mod run_job {
         }
 
         pub fn try_into_domain(self) -> Result<RunJob, PostgresError> {
-            let desired_runner = match self.desired_runner_name {
-                Some(name) => RunnerSelector::named(name).map_err(PostgresError::invalid_input)?,
-                None => RunnerSelector::Any,
-            };
             RunJob::restore(
                 self.run_id,
                 WorkflowJobId::parse(self.job_key).map_err(PostgresError::invalid_input)?,
-                desired_runner,
-                self.pinned_container_image
-                    .map(PinnedContainerImage::parse)
-                    .transpose()
+                PinnedContainerImage::parse(self.pinned_container_image)
                     .map_err(PostgresError::invalid_input)?,
                 decode_enum::<RunJobState>(self.state)?,
                 i32_to_u32(self.last_attempt_number, "run job last attempt number")?,
@@ -412,8 +263,9 @@ pub mod run_attempt {
         pub run_id: String,
         pub job_key: String,
         pub number: i32,
-        pub runner_id: String,
-        pub runner_name: String,
+        pub execution_provider: String,
+        pub external_run_id: Option<String>,
+        pub runtime_version: String,
         #[sea_orm(unique)]
         pub token_hash: String,
         pub token_expires_at_unix: i64,
@@ -440,8 +292,9 @@ pub mod run_attempt {
                 run_id: attempt.run_id.clone(),
                 job_key: attempt.job_key.as_str().to_string(),
                 number: u32_to_i32(attempt.number, "run attempt number")?,
-                runner_id: attempt.runner_id.clone(),
-                runner_name: attempt.runner_name.clone(),
+                execution_provider: encode_enum(attempt.execution_provider)?,
+                external_run_id: attempt.external_run_id.clone(),
+                runtime_version: attempt.runtime_version.clone(),
                 token_hash: attempt.token_hash.clone(),
                 token_expires_at_unix: u64_to_i64(
                     attempt.token_expires_at_unix,
@@ -484,8 +337,9 @@ pub mod run_attempt {
                 self.run_id,
                 WorkflowJobId::parse(self.job_key).map_err(PostgresError::invalid_input)?,
                 i32_to_u32(self.number, "run attempt number")?,
-                self.runner_id,
-                self.runner_name,
+                decode_enum::<ExecutionProvider>(self.execution_provider)?,
+                self.external_run_id,
+                self.runtime_version,
                 self.token_hash,
                 i64_to_u64(self.token_expires_at_unix, "attempt token expiry time")?,
                 decode_enum::<AttemptState>(self.state)?,

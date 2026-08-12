@@ -54,6 +54,116 @@ pub struct S3ObjectStore {
     request_timeout: Duration,
 }
 
+#[derive(Clone)]
+pub struct S3Presigner {
+    endpoint: String,
+    bucket: String,
+    region: String,
+    access_key_id: String,
+    secret_access_key: String,
+    force_path_style: bool,
+}
+
+impl S3Presigner {
+    pub fn new(settings: &S3ObjectStoreSettings) -> Self {
+        Self {
+            endpoint: settings.endpoint.trim_end_matches('/').to_string(),
+            bucket: settings.bucket.clone(),
+            region: settings.region.clone(),
+            access_key_id: settings.access_key_id.clone(),
+            secret_access_key: settings.secret_access_key.clone(),
+            force_path_style: settings.force_path_style,
+        }
+    }
+
+    pub fn presign(
+        &self,
+        method: &str,
+        key: &str,
+        expires_seconds: u32,
+    ) -> Result<String, ObjectStoreError> {
+        if !matches!(method, "GET" | "PUT") || expires_seconds == 0 || expires_seconds > 3600 {
+            return Err(ObjectStoreError::internal_message(
+                "invalid presigned object request",
+            ));
+        }
+        let now = OffsetDateTime::now_utc();
+        let amz_date = format!(
+            "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+            now.year(),
+            u8::from(now.month()),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second()
+        );
+        let date_stamp = &amz_date[..8];
+        let base = if self.force_path_style {
+            format!("{}/{}/{}", self.endpoint, self.bucket, key)
+        } else {
+            let scheme_end = self
+                .endpoint
+                .find("://")
+                .map(|index| index + 3)
+                .unwrap_or(0);
+            let (scheme, host) = self.endpoint.split_at(scheme_end);
+            format!(
+                "{scheme}{}.{}/{}",
+                self.bucket,
+                host.trim_start_matches('/'),
+                key
+            )
+        };
+        let host = S3ObjectStore::request_host(&base)?;
+        let canonical_uri = if self.force_path_style {
+            format!("/{}/{}", self.bucket, key)
+        } else {
+            format!("/{key}")
+        };
+        let credential_scope = format!("{date_stamp}/{}/s3/aws4_request", self.region);
+        let mut query = [
+            ("X-Amz-Algorithm", "AWS4-HMAC-SHA256".to_string()),
+            (
+                "X-Amz-Credential",
+                format!("{}/{}", self.access_key_id, credential_scope),
+            ),
+            ("X-Amz-Date", amz_date.clone()),
+            ("X-Amz-Expires", expires_seconds.to_string()),
+            ("X-Amz-SignedHeaders", "host".to_string()),
+        ];
+        query.sort_by_key(|(name, _)| *name);
+        let canonical_query = query
+            .iter()
+            .map(|(name, value)| format!("{}={}", aws_encode(name), aws_encode(value)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let canonical_request = format!(
+            "{method}\n{canonical_uri}\n{canonical_query}\nhost:{host}\n\nhost\nUNSIGNED-PAYLOAD"
+        );
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
+            hex::encode(Sha256::digest(canonical_request.as_bytes()))
+        );
+        let signing_key = signing_key(&self.secret_access_key, date_stamp, &self.region)?;
+        let signature = hex::encode(hmac_sha256(&signing_key, string_to_sign.as_bytes())?);
+        Ok(format!(
+            "{base}?{canonical_query}&X-Amz-Signature={signature}"
+        ))
+    }
+}
+
+fn aws_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
 impl S3ObjectStore {
     pub fn new(settings: S3ObjectStoreSettings) -> Result<Self, ObjectStoreError> {
         Ok(Self {
@@ -400,6 +510,39 @@ mod tests {
             S3ObjectStore::request_host("https://scope-bucket.storage.example?list-type=2")
                 .unwrap(),
             "scope-bucket.storage.example"
+        );
+    }
+
+    #[test]
+    fn cache_presigner_produces_bounded_path_style_urls_without_exposing_the_secret() {
+        let mut settings = S3ObjectStoreSettings::new(
+            "https://storage.example".into(),
+            "scope-bucket".into(),
+            "us-test-1".into(),
+            "test-access".into(),
+            "test-secret".into(),
+        );
+        settings.force_path_style = true;
+        let url = S3Presigner::new(&settings)
+            .presign("PUT", "run-caches/v1/abc/1.tar.zst", 900)
+            .unwrap();
+
+        assert!(
+            url.starts_with("https://storage.example/scope-bucket/run-caches/v1/abc/1.tar.zst?")
+        );
+        assert!(url.contains("X-Amz-Expires=900"));
+        assert!(url.contains("X-Amz-Credential=test-access%2F"));
+        assert!(url.contains("X-Amz-Signature="));
+        assert!(!url.contains("test-secret"));
+        assert!(
+            S3Presigner::new(&settings)
+                .presign("DELETE", "key", 900)
+                .is_err()
+        );
+        assert!(
+            S3Presigner::new(&settings)
+                .presign("GET", "key", 3_601)
+                .is_err()
         );
     }
 

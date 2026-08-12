@@ -1,8 +1,8 @@
 use scope_domain::runs::{
     cache::WorkflowCache,
     workflow::{
-        CompiledWorkflow, ContainerSpec, RunnerSelector, WorkflowError, WorkflowIdentity,
-        WorkflowJob, WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
+        CompiledWorkflow, ContainerSpec, WorkflowError, WorkflowIdentity, WorkflowJob,
+        WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
     },
 };
 use serde::{Deserialize, Deserializer, de::MapAccess, de::Visitor};
@@ -72,11 +72,6 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
         }
     };
     let triggers = WorkflowTriggers::new(manual, push_main)?;
-    let runner = if raw.runs_on == "any" {
-        RunnerSelector::Any
-    } else {
-        RunnerSelector::named(raw.runs_on)?
-    };
     let container = ContainerSpec::new(raw.container.image)?;
     let timeout_seconds = parse_timeout_seconds(&raw.timeout)?;
     let caches = raw
@@ -96,11 +91,6 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
                 .into_iter()
                 .map(WorkflowJobId::parse)
                 .collect::<Result<Vec<_>, _>>()?;
-            let job_runner = match job.runs_on {
-                Some(name) if name == "any" => RunnerSelector::Any,
-                Some(name) => RunnerSelector::named(name)?,
-                None => runner.clone(),
-            };
             let job_container = match job.container {
                 Some(container) => ContainerSpec::new(container.image)?,
                 None => container.clone(),
@@ -128,7 +118,6 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
             WorkflowJob::new(
                 id,
                 needs,
-                job_runner,
                 job_container,
                 job_timeout_seconds,
                 job_caches,
@@ -186,8 +175,6 @@ struct RawWorkflow {
     name: String,
     #[serde(rename = "on")]
     on: RawTriggers,
-    #[serde(rename = "runs-on")]
-    runs_on: String,
     container: RawContainer,
     timeout: String,
     #[serde(default)]
@@ -237,8 +224,6 @@ struct RawContainer {
 struct RawJob {
     #[serde(default)]
     needs: Vec<String>,
-    #[serde(default, rename = "runs-on")]
-    runs_on: Option<String>,
     #[serde(default)]
     container: Option<RawContainer>,
     #[serde(default)]
@@ -301,9 +286,8 @@ on:
   push:
     branches:
       - main
-runs-on: any
 container:
-  image: rust:1.90
+  image: rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 timeout: 20m
 caches:
   - name: cargo-target
@@ -335,7 +319,10 @@ jobs:
         let job = definition.only_job().unwrap();
         assert_eq!(job.id().as_str(), "checks");
         assert_eq!(job.timeout_seconds(), 20 * 60);
-        assert_eq!(job.container().image(), "rust:1.90");
+        assert_eq!(
+            job.container().image(),
+            "rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
         assert_eq!(job.environment()["RUSTUP_TOOLCHAIN"], "stable");
         assert_eq!(job.environment()["TEST_MODE"], "strict");
         assert_eq!(
@@ -353,8 +340,7 @@ jobs:
         let compact = r#"
 name: Test
 on: { push: true, manual: true }
-runs-on: any
-container: { image: "rust:1.90" }
+container: { image: "rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 timeout: 1200s
 caches:
   - { name: cargo, path: /scope/cache/cargo }
@@ -438,57 +424,11 @@ jobs:
 
     #[test]
     fn scope_workflows_use_the_current_contract() {
-        for (path, bytes) in [
-            (
-                "/.scope/runs/checks.yml",
-                include_bytes!("../../../.scope/runs/checks.yml").as_slice(),
-            ),
-            (
-                "/.scope/runs/v7-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-cold-write.yml").as_slice(),
-            ),
-            (
-                "/.scope/runs/v7-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-warm-read.yml").as_slice(),
-            ),
-            (
-                "/.scope/runs/v7-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-evict.yml").as_slice(),
-            ),
-        ] {
-            parse_workflow(path, bytes).unwrap_or_else(|error| {
-                panic!("{path} must follow the current workflow contract: {error}")
-            });
-        }
-    }
-
-    #[test]
-    fn checked_in_cutover_workflows_are_canonical_canaries() {
-        use scope_domain::runs::cutover::{
-            RunnerProtocolCanaryPhase, validate_runner_protocol_canary_workflow,
-        };
-
-        for (phase, path, bytes) in [
-            (
-                RunnerProtocolCanaryPhase::ColdWrite,
-                "/.scope/runs/v7-canary-cold-write.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-cold-write.yml").as_slice(),
-            ),
-            (
-                RunnerProtocolCanaryPhase::WarmRead,
-                "/.scope/runs/v7-canary-warm-read.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-warm-read.yml").as_slice(),
-            ),
-            (
-                RunnerProtocolCanaryPhase::Evict,
-                "/.scope/runs/v7-canary-evict.yml",
-                include_bytes!("../../../.scope/runs/v7-canary-evict.yml").as_slice(),
-            ),
-        ] {
-            let parsed = parse_workflow(path, bytes).unwrap();
-            validate_runner_protocol_canary_workflow(parsed.definition(), phase)
-                .unwrap_or_else(|error| panic!("{path} must be a canonical canary: {error}"));
-        }
+        parse_workflow(
+            "/.scope/runs/checks.yml",
+            include_bytes!("../../../.scope/runs/checks.yml").as_slice(),
+        )
+        .expect("checked-in workflow must follow the cloud execution contract");
     }
 
     #[test]
@@ -567,8 +507,7 @@ jobs:
         let workflow = r#"
 name: Graph
 on: { manual: true }
-runs-on: remote-linux
-container: { image: rust:1.90 }
+container: { image: rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa }
 timeout: 20m
 caches: [{ name: cargo, path: /scope/cache/cargo }]
 env: { SHARED: workflow, WORKFLOW_ONLY: yes }
@@ -579,8 +518,7 @@ jobs:
       - { name: Backend, run: cargo test }
   web:
     needs: [backend]
-    runs-on: browser-runner
-    container: { image: node:24 }
+    container: { image: node:24@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb }
     timeout: 5m
     caches: []
     steps:
@@ -592,10 +530,9 @@ jobs:
             .job(&WorkflowJobId::parse("backend").unwrap())
             .unwrap();
         assert_eq!(
-            backend.runner(),
-            &RunnerSelector::named("remote-linux").unwrap()
+            backend.container().image(),
+            "rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(backend.container().image(), "rust:1.90");
         assert_eq!(backend.timeout_seconds(), 20 * 60);
         assert_eq!(backend.caches()[0].as_str(), "cargo");
         assert_eq!(backend.environment()["SHARED"], "backend");
@@ -606,10 +543,9 @@ jobs:
             .unwrap();
         assert_eq!(web.needs()[0].as_str(), "backend");
         assert_eq!(
-            web.runner(),
-            &RunnerSelector::named("browser-runner").unwrap()
+            web.container().image(),
+            "node:24@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
-        assert_eq!(web.container().image(), "node:24");
         assert_eq!(web.timeout_seconds(), 5 * 60);
         assert!(web.caches().is_empty());
         assert_eq!(web.environment()["SHARED"], "workflow");

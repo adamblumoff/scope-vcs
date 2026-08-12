@@ -1,12 +1,11 @@
 use super::{
     GeneratedIdSource, RunStore, cleanup_queue::queue_pending_source_blob_deletion_rows, entities,
-    runner_protocol_cutover::allows_run_retention,
 };
 use crate::error::PostgresError;
 use scope_domain::store::SourceBlob;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Statement, TransactionTrait, sea_query::Query,
+    ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    sea_query::Query,
 };
 use std::collections::BTreeSet;
 
@@ -20,21 +19,6 @@ impl RunStore {
     ) -> Result<usize, PostgresError> {
         let cutoff = entities::u64_to_i64(completed_before_unix, "run retention cutoff")?;
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        if !allows_run_retention(&tx).await? {
-            tx.commit().await.map_err(PostgresError::internal)?;
-            return Ok(0);
-        }
-        let protected_canary_runs = tx
-            .query_all(Statement::from_string(
-                DatabaseBackend::Postgres,
-                "SELECT run_id FROM scope_runner_protocol_canaries".to_string(),
-            ))
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(|row| row.try_get::<String>("", "run_id"))
-            .collect::<Result<BTreeSet<_>, _>>()
-            .map_err(PostgresError::internal)?;
         let models = entities::run::Entity::find()
             .filter(entities::run::Column::State.is_in([
                 "succeeded".to_string(),
@@ -52,7 +36,6 @@ impl RunStore {
             .map_err(PostgresError::internal)?;
         let runs = models
             .into_iter()
-            .filter(|model| !protected_canary_runs.contains(&model.id))
             .map(entities::run::Model::try_into_domain)
             .collect::<Result<Vec<_>, _>>()?;
         let run_ids = runs.iter().map(|run| run.id.clone()).collect::<Vec<_>>();

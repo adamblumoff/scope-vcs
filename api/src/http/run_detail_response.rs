@@ -6,10 +6,7 @@ use crate::{
         RepositoryRunJobResponse, RepositoryRunStepResponse, RepositoryRunSummaryResponse,
     },
 };
-use scope_domain::runs::{
-    cache::{AttemptCacheObservation, WorkflowCache},
-    workflow::RunnerSelector,
-};
+use scope_domain::runs::cache::{AttemptCacheObservation, WorkflowCache};
 use scope_postgres::db::RunDetail;
 use std::collections::BTreeMap;
 
@@ -62,8 +59,9 @@ pub(super) fn build_run_detail_response(
             .or_default()
             .push(RepositoryRunAttemptResponse {
                 id: attempt.id,
-                runner_id: attempt.runner_id,
-                runner_name: attempt.runner_name,
+                execution_provider: attempt.execution_provider.into(),
+                external_run_id: attempt.external_run_id,
+                runtime_version: attempt.runtime_version,
                 state: attempt.state.into(),
                 created_at_unix: attempt.created_at_unix,
                 started_at_unix: attempt.started_at_unix,
@@ -95,14 +93,7 @@ pub(super) fn build_run_detail_response(
                         .iter()
                         .map(|dependency| dependency.as_str().to_string())
                         .collect(),
-                    desired_runner: match &job.desired_runner {
-                        RunnerSelector::Any => None,
-                        RunnerSelector::Named(name) => Some(name.clone()),
-                    },
-                    pinned_container_image: job
-                        .pinned_container_image
-                        .as_ref()
-                        .map(|image| image.as_str().to_string()),
+                    pinned_container_image: job.pinned_container_image.as_str().to_string(),
                     state: job.state.into(),
                     created_at_unix: job.created_at_unix,
                     updated_at_unix: job.updated_at_unix,

@@ -319,9 +319,6 @@ fn rewrite_definition(definition: Value) -> Result<(Value, String), DbErr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_domain::runs::workflow::{
-        CompiledWorkflow, WorkflowIdentity, WorkflowPath, WorkflowRevision,
-    };
     use serde_json::json;
 
     #[test]
@@ -346,17 +343,7 @@ mod tests {
             json!({ "name": "cargo", "path": "/scope/cache/cargo" })
         );
         assert_eq!(definition["jobs"][0]["environment"], json!({}));
+        assert_eq!(definition["jobs"][0]["runner"], json!({ "kind": "any" }));
         assert_eq!(digest.len(), 64);
-        let compiled: CompiledWorkflow = serde_json::from_value(definition).unwrap();
-        let revision = WorkflowRevision::new(
-            WorkflowIdentity::new(
-                "repo-1",
-                WorkflowPath::parse("/.scope/runs/checks.yml").unwrap(),
-            )
-            .unwrap(),
-            compiled,
-        )
-        .unwrap();
-        assert_eq!(revision.digest(), digest);
     }
 }

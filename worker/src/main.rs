@@ -1,10 +1,12 @@
 mod compaction;
+mod execution;
 mod git_repo;
 mod health;
 mod settings;
 
 use crate::{
     compaction::{CompactionOutcome, compact_one_git_repository},
+    execution::CloudExecutionCoordinator,
     health::WorkerHealth,
     settings::WorkerSettings,
 };
@@ -72,6 +74,11 @@ async fn run() -> anyhow::Result<()> {
 async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::Result<()> {
     let metadata = MetadataStore::connect_worker(settings.database_url.clone()).await?;
     let object_store = object_store_from_env(&settings.data_dir)?;
+    let execution = settings
+        .execution
+        .clone()
+        .map(|cloud| CloudExecutionCoordinator::new(metadata.clone(), cloud))
+        .transpose()?;
 
     let mut next_compaction_attempt = Instant::now();
     let mut next_cleanup_attempt = Instant::now();
@@ -120,6 +127,20 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
                 failed = summary.failed,
                 "processed outbox jobs"
             );
+        }
+        if let Some(execution) = &execution {
+            if let Err(error) = execution.abort_canceled(unix_now()?).await {
+                tracing::error!(error = %error, "cloud run cancellation reconciliation failed");
+            }
+            match execution.dispatch_available(unix_now()?).await {
+                Ok(dispatched) if dispatched > 0 => {
+                    tracing::info!(dispatched, "processed cloud run dispatches");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(error = %error, "cloud run dispatch failed; continuing worker loop");
+                }
+            }
         }
         if Instant::now() >= next_compaction_attempt {
             match compact_one_git_repository(

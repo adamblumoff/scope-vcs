@@ -7,13 +7,12 @@ impl RunStore {
     pub async fn start_attempt_step(
         &self,
         attempt_id: &str,
-        runner_id: &str,
         token_hash: &str,
         step_index: u32,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
         self.mutate_active_attempt(attempt_id, |run, job, attempt, steps| {
-            attempt.start_step(run, job, steps, runner_id, token_hash, step_index, now_unix)
+            attempt.start_step(run, job, steps, token_hash, step_index, now_unix)
         })
         .await
     }
@@ -39,11 +38,9 @@ impl RunStore {
             == Some(step_count);
         if matches!(conclusion, StepConclusion::Failed { .. }) || last_step {
             self.mutate_attempt(attempt_id, |_, job, attempt, steps| {
-                let runner_id = attempt.runner_id.clone();
                 attempt.complete_step(
                     job,
                     steps,
-                    &runner_id,
                     token_hash,
                     step_index,
                     conclusion,
@@ -54,11 +51,9 @@ impl RunStore {
             .await
         } else {
             self.mutate_active_attempt(attempt_id, |_, job, attempt, steps| {
-                let runner_id = attempt.runner_id.clone();
                 attempt.complete_step(
                     job,
                     steps,
-                    &runner_id,
                     token_hash,
                     step_index,
                     conclusion,

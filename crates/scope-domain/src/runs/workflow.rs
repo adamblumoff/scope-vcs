@@ -1,7 +1,4 @@
-use super::{
-    cache::{CacheError, WorkflowCache},
-    runner::RunnerName,
-};
+use super::cache::{CacheError, WorkflowCache};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,7 +20,7 @@ pub const MAX_STEP_COMMAND_BYTES: usize = 64 * 1024;
 pub const MAX_WORKFLOW_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
 
 const WORKFLOW_PATH_PREFIX: &str = "/.scope/runs/";
-const WORKFLOW_DIGEST_VERSION: u8 = 4;
+const WORKFLOW_DIGEST_VERSION: u8 = 5;
 
 #[derive(Debug, Error)]
 pub enum WorkflowError {
@@ -35,9 +32,9 @@ pub enum WorkflowError {
     InvalidName,
     #[error("workflow must enable at least one trigger")]
     MissingTrigger,
-    #[error("runner name is invalid")]
-    InvalidRunnerName,
-    #[error("container image must contain between 1 and {MAX_CONTAINER_IMAGE_BYTES} bytes")]
+    #[error(
+        "container image must be pinned with an immutable sha256 digest and contain at most {MAX_CONTAINER_IMAGE_BYTES} bytes"
+    )]
     InvalidContainerImage,
     #[error("workflow timeout must be between 1 and {MAX_WORKFLOW_TIMEOUT_SECONDS} seconds")]
     InvalidTimeout,
@@ -190,37 +187,6 @@ impl WorkflowTriggers {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", content = "name", rename_all = "kebab-case")]
-pub enum RunnerSelector {
-    Any,
-    Named(String),
-}
-
-impl RunnerSelector {
-    pub fn named(name: impl Into<String>) -> Result<Self, WorkflowError> {
-        RunnerName::parse(name.into())
-            .map(|name| Self::Named(name.as_str().to_string()))
-            .map_err(|_| WorkflowError::InvalidRunnerName)
-    }
-
-    pub fn matches_name(&self, name: &str) -> bool {
-        match self {
-            Self::Any => true,
-            Self::Named(expected) => expected == name,
-        }
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), WorkflowError> {
-        match self {
-            Self::Any => Ok(()),
-            Self::Named(name) => RunnerName::parse(name.clone())
-                .map(|_| ())
-                .map_err(|_| WorkflowError::InvalidRunnerName),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ContainerSpec {
     image: String,
 }
@@ -228,13 +194,21 @@ pub struct ContainerSpec {
 impl ContainerSpec {
     pub fn new(image: impl Into<String>) -> Result<Self, WorkflowError> {
         let image = image.into();
-        if image.is_empty()
+        let Some((repository, digest)) = image.rsplit_once("@sha256:") else {
+            return Err(WorkflowError::InvalidContainerImage);
+        };
+        if repository.is_empty()
             || image.len() > MAX_CONTAINER_IMAGE_BYTES
+            || repository.contains('@')
             || image.chars().any(char::is_whitespace)
+            || digest.len() != 64
+            || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
             return Err(WorkflowError::InvalidContainerImage);
         }
-        Ok(Self { image })
+        Ok(Self {
+            image: format!("{repository}@sha256:{}", digest.to_ascii_lowercase()),
+        })
     }
 
     pub fn image(&self) -> &str {
@@ -295,7 +269,6 @@ impl WorkflowJobId {
 pub struct WorkflowJob {
     id: WorkflowJobId,
     needs: Vec<WorkflowJobId>,
-    runner: RunnerSelector,
     container: ContainerSpec,
     timeout_seconds: u64,
     caches: Vec<WorkflowCache>,
@@ -308,7 +281,6 @@ impl WorkflowJob {
     pub fn new(
         id: WorkflowJobId,
         mut needs: Vec<WorkflowJobId>,
-        runner: RunnerSelector,
         container: ContainerSpec,
         timeout_seconds: u64,
         mut caches: Vec<WorkflowCache>,
@@ -317,7 +289,6 @@ impl WorkflowJob {
         if timeout_seconds == 0 || timeout_seconds > MAX_WORKFLOW_TIMEOUT_SECONDS {
             return Err(WorkflowError::InvalidTimeout);
         }
-        runner.validate()?;
         needs.sort();
         if needs.binary_search(&id).is_ok() {
             return Err(WorkflowError::SelfDependency {
@@ -371,7 +342,6 @@ impl WorkflowJob {
         Ok(Self {
             id,
             needs,
-            runner,
             container,
             timeout_seconds,
             caches,
@@ -395,10 +365,6 @@ impl WorkflowJob {
 
     pub fn needs(&self) -> &[WorkflowJobId] {
         &self.needs
-    }
-
-    pub fn runner(&self) -> &RunnerSelector {
-        &self.runner
     }
 
     pub fn container(&self) -> &ContainerSpec {
@@ -445,13 +411,6 @@ struct PersistedWorkflowTriggers {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", content = "name", rename_all = "kebab-case")]
-enum PersistedRunnerSelector {
-    Any,
-    Named(String),
-}
-
-#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedContainerSpec {
     image: String,
@@ -462,7 +421,6 @@ struct PersistedContainerSpec {
 struct PersistedWorkflowJob {
     id: String,
     needs: Vec<String>,
-    runner: PersistedRunnerSelector,
     container: PersistedContainerSpec,
     timeout_seconds: u64,
     caches: Vec<PersistedWorkflowCache>,
@@ -490,12 +448,6 @@ impl<'de> Deserialize<'de> for WorkflowJob {
             .map(WorkflowJobId::parse)
             .collect::<Result<Vec<_>, _>>()
             .map_err(D::Error::custom)?;
-        let runner = match job.runner {
-            PersistedRunnerSelector::Any => RunnerSelector::Any,
-            PersistedRunnerSelector::Named(name) => {
-                RunnerSelector::named(name).map_err(D::Error::custom)?
-            }
-        };
         let container = ContainerSpec::new(job.container.image).map_err(D::Error::custom)?;
         let caches = job
             .caches
@@ -510,17 +462,9 @@ impl<'de> Deserialize<'de> for WorkflowJob {
             .collect::<Result<Vec<_>, _>>()
             .map_err(D::Error::custom)?;
         let environment = job.environment;
-        WorkflowJob::new(
-            id,
-            needs,
-            runner,
-            container,
-            job.timeout_seconds,
-            caches,
-            steps,
-        )
-        .and_then(|job| job.with_environment(environment))
-        .map_err(D::Error::custom)
+        WorkflowJob::new(id, needs, container, job.timeout_seconds, caches, steps)
+            .and_then(|job| job.with_environment(environment))
+            .map_err(D::Error::custom)
     }
 }
 
@@ -550,10 +494,6 @@ impl<'de> Deserialize<'de> for CompiledWorkflow {
                     .into_iter()
                     .map(WorkflowJobId::parse)
                     .collect::<Result<Vec<_>, _>>()?;
-                let runner = match job.runner {
-                    PersistedRunnerSelector::Any => RunnerSelector::Any,
-                    PersistedRunnerSelector::Named(name) => RunnerSelector::named(name)?,
-                };
                 let container = ContainerSpec::new(job.container.image)?;
                 let caches = job
                     .caches
@@ -566,16 +506,8 @@ impl<'de> Deserialize<'de> for CompiledWorkflow {
                     .map(|step| WorkflowStep::new(step.name, step.run))
                     .collect::<Result<Vec<_>, _>>()?;
                 let environment = job.environment;
-                WorkflowJob::new(
-                    id,
-                    needs,
-                    runner,
-                    container,
-                    job.timeout_seconds,
-                    caches,
-                    steps,
-                )
-                .and_then(|job| job.with_environment(environment))
+                WorkflowJob::new(id, needs, container, job.timeout_seconds, caches, steps)
+                    .and_then(|job| job.with_environment(environment))
             })
             .collect::<Result<Vec<_>, WorkflowError>>()
             .map_err(D::Error::custom)?;
@@ -791,4 +723,45 @@ fn is_kebab_name(name: &str, max_bytes: usize) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn container_images_must_be_immutable() {
+        assert!(ContainerSpec::new("rust:1.90").is_err());
+        let image = ContainerSpec::new(format!("rust:1.90@sha256:{DIGEST}")).unwrap();
+        assert_eq!(image.image(), format!("rust:1.90@sha256:{DIGEST}"));
+    }
+
+    #[test]
+    fn cloud_workflow_preserves_jobs_dependencies_and_steps() {
+        let build = WorkflowJob::new(
+            WorkflowJobId::parse("build").unwrap(),
+            vec![],
+            ContainerSpec::new(format!("rust@sha256:{DIGEST}")).unwrap(),
+            600,
+            vec![],
+            vec![WorkflowStep::new("Build", "cargo build").unwrap()],
+        )
+        .unwrap();
+        let test = WorkflowJob::new(
+            WorkflowJobId::parse("test").unwrap(),
+            vec![WorkflowJobId::parse("build").unwrap()],
+            ContainerSpec::new(format!("rust@sha256:{DIGEST}")).unwrap(),
+            600,
+            vec![],
+            vec![WorkflowStep::new("Test", "cargo test").unwrap()],
+        )
+        .unwrap();
+        let workflow = CompiledWorkflow::new(
+            "Checks",
+            WorkflowTriggers::new(true, true).unwrap(),
+            vec![test, build],
+        )
+        .unwrap();
+        assert_eq!(workflow.serial_jobs()[0].id().as_str(), "build");
+        assert_eq!(workflow.serial_jobs()[1].id().as_str(), "test");
+    }
+}

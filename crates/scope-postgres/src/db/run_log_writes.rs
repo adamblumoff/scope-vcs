@@ -14,17 +14,8 @@ impl RunStore {
         now_unix: u64,
     ) -> Result<StoredRunLog, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (guard_run_id, guard_runner_id) =
-            super::run_attempt_persistence::attempt_target(&tx, &chunk.attempt_id).await?;
-        super::runner_protocol_cutover::guard_attempt_operation(
-            &tx,
-            &guard_runner_id,
-            &guard_run_id,
-        )
-        .await?;
         let (run, job, mut attempt, steps) =
             super::run_attempt_persistence::locked_attempt_context(&tx, &chunk.attempt_id).await?;
-        super::run_attempt_persistence::ensure_runner_authorized(&tx, &run, &attempt).await?;
         attempt
             .authenticate_access(&job, token_hash, now_unix)
             .map_err(PostgresError::from)?;

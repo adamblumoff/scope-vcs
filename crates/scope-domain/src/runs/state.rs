@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum RunState {
     Queued,
-    Leased,
+    Dispatching,
     Running,
     Succeeded,
     Failed,
@@ -17,7 +17,7 @@ pub enum RunState {
 pub enum RunJobState {
     Blocked,
     Queued,
-    Leased,
+    Dispatching,
     Running,
     Succeeded,
     Failed,
@@ -47,7 +47,7 @@ impl RunState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AttemptState {
-    Leased,
+    Dispatching,
     Running,
     Succeeded,
     Failed,

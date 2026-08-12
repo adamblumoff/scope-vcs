@@ -4,7 +4,6 @@ use crate::{
         run_detail, stream_run_events,
     },
     auth::cached_cli_session,
-    clone::parse_repo_spec,
     git_repo::{GitRepo, ensure_git_repo_ready, head_oid, warn_if_dirty_working_tree},
     git_transport::{ScopeRemote, select_scope_fetch_remote},
     login::session_from_cache_or_browser,
@@ -13,7 +12,6 @@ use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{
     CliSuccessEnvelope, CreateManualRunQuery, RepositoryRunDetailResponse, RunResponse,
-    RunRunnerSelection,
 };
 use scope_domain::runs::run::RunState;
 use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
@@ -22,13 +20,8 @@ const MAX_PARTIAL_JOB_LINE_BYTES: usize = 8 * 1_024;
 
 mod output;
 
-pub fn start(
-    workflow: &str,
-    runner: Option<&str>,
-    remote: Option<&str>,
-    no_watch: bool,
-) -> anyhow::Result<()> {
-    let queued = queue(workflow, runner, remote)?;
+pub fn start(workflow: &str, remote: Option<&str>, no_watch: bool) -> anyhow::Result<()> {
+    let queued = queue(workflow, remote)?;
     print_queued(&queued.run);
     if no_watch {
         return Ok(());
@@ -45,24 +38,13 @@ pub(crate) struct QueuedRun {
     run: RunResponse,
 }
 
-impl QueuedRun {
-    pub(crate) fn id(&self) -> &str {
-        &self.run.id
-    }
-}
-
-pub(crate) fn queue(
-    workflow: &str,
-    runner: Option<&str>,
-    remote: Option<&str>,
-) -> anyhow::Result<QueuedRun> {
+pub(crate) fn queue(workflow: &str, remote: Option<&str>) -> anyhow::Result<QueuedRun> {
     let repo = ensure_git_repo_ready("scope run")?;
     warn_if_dirty_working_tree(&repo)?;
     let api_url = api_url();
     let target = scope_target(&repo, &api_url, remote)?;
     queue_from_checkout(
         workflow,
-        runner,
         &repo,
         &target.owner,
         &target.repo,
@@ -72,7 +54,6 @@ pub(crate) fn queue(
 
 pub(crate) fn queue_from_checkout(
     workflow: &str,
-    runner: Option<&str>,
     checkout: &GitRepo,
     owner: &str,
     repo: &str,
@@ -94,7 +75,6 @@ pub(crate) fn queue_from_checkout(
             workflow: workflow.to_string(),
             git_oid,
             request_id: request_id.to_string(),
-            runner: runner.map(str::to_string),
         },
         bundle,
     )?;
@@ -109,11 +89,7 @@ pub(crate) fn queue_from_checkout(
 }
 
 fn print_queued(run: &RunResponse) {
-    println!(
-        "Queued {} on {}",
-        run.workflow_name,
-        runner_selection_label(&run.runner_selection)
-    );
+    println!("Queued {} in Scope Cloud", run.workflow_name,);
     println!("Run ID: {}", run.id);
 }
 
@@ -177,21 +153,6 @@ pub fn show(run_id: &str, remote: Option<&str>, json: bool) -> anyhow::Result<()
         print_detail(&detail);
     }
     Ok(())
-}
-
-pub(crate) fn watch_repository(run_id: &str, repository: &str) -> anyhow::Result<()> {
-    let target = parse_repo_spec(repository)?;
-    let api_url = api_url();
-    let client = run_client()?;
-    let session = session_from_cache_or_browser(&client, &api_url)?;
-    watch_run(
-        &client,
-        &api_url,
-        &session.token,
-        &target.owner,
-        &target.repo,
-        run_id,
-    )
 }
 
 pub fn cancel(run_id: &str, remote: Option<&str>) -> anyhow::Result<()> {
@@ -310,10 +271,9 @@ fn advance_log_cursor(cursor: &mut u64, position: u64) -> bool {
 
 fn print_terminal(run: &RunResponse, detail: Option<&RepositoryRunDetailResponse>) {
     println!(
-        "\nRun {} · {} · {}",
+        "\nRun {} · {}",
         state_label(run.state),
         short_oid(&run.git_oid),
-        runner_selection_label(&run.runner_selection)
     );
     if run.logs_truncated {
         eprintln!("Warning: this run exceeded the stored log limit; earlier output was truncated.");
@@ -479,20 +439,12 @@ fn run_summary_client() -> anyhow::Result<Client> {
 fn state_label(state: RunState) -> &'static str {
     match state {
         RunState::Queued => "queued",
-        RunState::Leased => "leased",
+        RunState::Dispatching => "dispatching",
         RunState::Running => "running",
         RunState::Succeeded => "succeeded",
         RunState::Failed => "failed",
         RunState::Canceled => "canceled",
         RunState::Lost => "lost",
-    }
-}
-
-fn runner_selection_label(selection: &RunRunnerSelection) -> &str {
-    match selection {
-        RunRunnerSelection::Any => "any runner",
-        RunRunnerSelection::Named { name } => name,
-        RunRunnerSelection::Mixed => "multiple runners",
     }
 }
 
@@ -534,16 +486,6 @@ mod tests {
     #[test]
     fn run_labels_and_oids_are_stable() {
         assert_eq!(state_label(RunState::Canceled), "canceled");
-        assert_eq!(
-            runner_selection_label(&RunRunnerSelection::Named {
-                name: "linux-one".to_string()
-            }),
-            "linux-one"
-        );
-        assert_eq!(
-            runner_selection_label(&RunRunnerSelection::Mixed),
-            "multiple runners"
-        );
         assert_eq!(short_oid("1234567890"), "1234567");
         assert_eq!(short_oid("short"), "short");
     }

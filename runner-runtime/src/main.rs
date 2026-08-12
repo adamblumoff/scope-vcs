@@ -1,0 +1,55 @@
+mod api;
+mod cache;
+mod checkout;
+mod execute;
+mod settings;
+
+use anyhow::Context as _;
+use settings::RuntimeSettings;
+
+fn main() -> anyhow::Result<()> {
+    let settings = RuntimeSettings::from_env()?;
+    let client = api::RuntimeClient::new(&settings)?;
+    let claim = client.claim(&settings.bootstrap_token)?;
+    let setup_heartbeat = api::SetupHeartbeat::start(client.clone());
+    let setup_result = setup(&settings, &client, &claim);
+    let setup_heartbeat_result = setup_heartbeat.finish();
+    match setup_heartbeat_result {
+        Ok(true) => {
+            client.complete_canceled()?;
+            return Ok(());
+        }
+        Ok(false) => {}
+        Err(error) => return Err(error),
+    }
+    let (workspace, caches) = match setup_result {
+        Ok(value) => value,
+        Err(error) => {
+            let message = format!("{error:#}");
+            let _ = client.complete_setup_failure(&message);
+            return Err(error);
+        }
+    };
+    if let Err(error) = execute::run_steps(&client, &claim.job.definition, &workspace) {
+        let message = format!("{error:#}");
+        eprintln!("runtime execution transport failed: {message}");
+        return Err(error);
+    }
+    cache::save_caches(&client, &caches)?;
+    Ok(())
+}
+
+fn setup(
+    settings: &RuntimeSettings,
+    client: &api::RuntimeClient,
+    claim: &scope_api_contract::ClaimRuntimeResponse,
+) -> anyhow::Result<(std::path::PathBuf, Vec<cache::PreparedCache>)> {
+    let work = settings.prepare_work_directory()?;
+    let bundle = work.join("source.bundle");
+    client.download_source(&claim.job.source_digest, &bundle)?;
+    let workspace = work.join("workspace");
+    checkout::checkout_exact_commit(&bundle, &workspace, &claim.job.git_oid)?;
+    std::env::set_current_dir(&workspace).context("enter run workspace")?;
+    let caches = cache::prepare_caches(client, &claim.job)?;
+    Ok((workspace, caches))
+}

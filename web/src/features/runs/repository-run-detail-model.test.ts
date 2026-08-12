@@ -9,7 +9,7 @@ import {
 
 describe('repository run detail model', () => {
   it('polls only while a run can still change', () => {
-    for (const state of ['queued', 'leased', 'running'] as const) {
+    for (const state of ['queued', 'dispatching', 'running'] as const) {
       assert.equal(runNeedsPolling(state), true)
     }
     for (const state of ['succeeded', 'failed', 'canceled', 'lost'] as const) {

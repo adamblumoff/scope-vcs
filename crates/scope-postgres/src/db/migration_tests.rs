@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 mod maintenance_cutover;
 mod request_revisions;
-mod run_jobs;
 
 const V6_SCHEMA: &str = include_str!("../migrations/v6.sql");
 const RETIRED_V6_TABLES: &[&str] = &[
@@ -38,6 +37,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0017_run_history_indexes",
     "m0018_truthful_run_log_truncation",
     "m0019_run_attempt_cache_observations",
+    "m0020_cloud_execution",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -238,7 +238,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 44);
+    assert_eq!(scope_table_count, 41);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
     assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
     let review_columns = db
@@ -397,50 +397,29 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
             .unwrap()["Closed"]["head_oid"],
         "e".repeat(40)
     );
-    let rewritten = db
+    let run_count = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
-            "SELECT definition, digest FROM scope_workflow_revisions".to_string(),
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    let rewritten_definition = rewritten
-        .try_get::<serde_json::Value>("", "definition")
-        .unwrap();
-    assert_eq!(rewritten_definition["jobs"][0]["id"], "checks");
-    assert_eq!(
-        rewritten_definition["jobs"][0]["caches"],
-        serde_json::json!([])
-    );
-    assert!(rewritten_definition.get("steps").is_none());
-    assert_ne!(
-        rewritten.try_get::<String>("", "digest").unwrap(),
-        "a".repeat(64)
-    );
-    let cutover = db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "SELECT state FROM scope_runner_protocol_cutover WHERE key = 'current'".to_string(),
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(cutover.try_get::<String>("", "state").unwrap(), "v7-fenced");
-    let run_digest = db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "SELECT workflow_revision_digest FROM scope_runs WHERE id = 'run_legacy'".to_string(),
+            "SELECT count(*) AS count FROM scope_runs".to_string(),
         ))
         .await
         .unwrap()
         .unwrap()
-        .try_get::<String>("", "workflow_revision_digest")
+        .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(
-        run_digest,
-        rewritten.try_get::<String>("", "digest").unwrap()
-    );
+    let workflow_count = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count FROM scope_workflow_revisions".to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(run_count, 0);
+    assert_eq!(workflow_count, 0);
+    assert!(!relation_exists(db.as_ref(), "scope_runners").await);
     assert!(
         db.query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -593,45 +572,9 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
 
     migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
-    let run = db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "
-                SELECT state, cancellation_requested, completed_at_unix
-                FROM scope_runs
-                WHERE id = 'run_active'
-            "
-            .to_string(),
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(run.try_get::<String>("", "state").unwrap(), "queued");
-    assert!(!run.try_get::<bool>("", "cancellation_requested").unwrap());
-    let job = db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "SELECT job_key, state, last_attempt_number, current_attempt_id
-             FROM scope_run_jobs WHERE run_id = 'run_active'"
-                .to_string(),
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(job.try_get::<String>("", "job_key").unwrap(), "checks");
-    assert_eq!(job.try_get::<String>("", "state").unwrap(), "queued");
-    assert_eq!(job.try_get::<i32>("", "last_attempt_number").unwrap(), 0);
-    assert!(
-        job.try_get::<Option<String>>("", "current_attempt_id")
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        run.try_get::<Option<i64>>("", "completed_at_unix")
-            .unwrap()
-            .is_none()
-    );
     for table in [
+        "scope_runs",
+        "scope_run_jobs",
         "scope_run_attempts",
         "scope_run_attempt_steps",
         "scope_run_logs",
@@ -646,54 +589,15 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
             .unwrap()
             .try_get::<i64>("", "count")
             .unwrap();
-        assert_eq!(count, 0, "{table} should start empty after the reset");
+        assert_eq!(
+            count, 0,
+            "{table} should be purged by the cloud execution cutover"
+        );
     }
-    for index in [
-        "idx_scope_run_attempts_active",
-        "idx_scope_run_attempts_runner",
-        "idx_scope_run_attempts_expiring",
-        "idx_scope_run_jobs_dispatch",
-        "idx_scope_run_logs_run_position",
-        "idx_scope_run_logs_step_position",
-    ] {
-        assert!(relation_exists(db.as_ref(), index).await, "missing {index}");
-    }
-    let constraints = db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "
-                SELECT
-                    count(*) FILTER (
-                        WHERE conname IN (
-                            'fk_scope_run_attempts_run',
-                            'fk_scope_run_attempts_job',
-                            'fk_scope_run_attempts_runner',
-                            'fk_scope_run_attempt_steps_attempt',
-                            'fk_scope_run_logs_run',
-                            'fk_scope_run_logs_step',
-                            'fk_scope_run_jobs_run',
-                            'fk_scope_run_jobs_current_attempt'
-                        )
-                    ) AS foreign_keys,
-                    bool_or(
-                        conname = 'scope_run_attempts_values' AND
-                        pg_get_constraintdef(oid) LIKE '%last_heartbeat_at_unix < lease_expires_at_unix%'
-                    ) AS lease_check,
-                    bool_or(
-                        conname = 'scope_run_logs_values' AND
-                        pg_get_constraintdef(oid) LIKE '%octet_length(text)%'
-                    ) AS byte_check
-                FROM pg_constraint
-                WHERE connamespace = current_schema()::regnamespace
-            "
-            .to_string(),
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(constraints.try_get::<i64>("", "foreign_keys").unwrap(), 8);
-    assert!(constraints.try_get::<bool>("", "lease_check").unwrap());
-    assert!(constraints.try_get::<bool>("", "byte_check").unwrap());
+    assert!(relation_exists(db.as_ref(), "idx_scope_run_attempts_provider_state").await);
+    assert!(relation_exists(db.as_ref(), "idx_scope_run_attempts_external_run").await);
+    assert!(relation_exists(db.as_ref(), "scope_run_cache_objects").await);
+    assert!(!relation_exists(db.as_ref(), "scope_runners").await);
 }
 
 #[tokio::test]

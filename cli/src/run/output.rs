@@ -1,15 +1,14 @@
 use scope_api_contract::{
     RepositoryRunAttemptResponse, RepositoryRunCacheColdReason, RepositoryRunCacheFinalState,
     RepositoryRunCachePreparation, RepositoryRunCacheResponse, RepositoryRunDetailResponse,
-    RepositoryRunJobState, RepositoryRunState, RunRunnerSelection,
+    RepositoryRunJobState, RepositoryRunState,
 };
 
 pub(super) fn detail_lines(detail: &RepositoryRunDetailResponse) -> Vec<String> {
     let mut lines = vec![format!(
-        "Run {} · {} · {}",
+        "Run {} · {}",
         run_state_label(detail.run.state),
         short_oid(&detail.run.git_oid),
-        runner_selection_label(&detail.run.runner_selection),
     )];
     lines.push("Jobs:".to_string());
     for job_detail in &detail.jobs {
@@ -20,13 +19,13 @@ pub(super) fn detail_lines(detail: &RepositoryRunDetailResponse) -> Vec<String> 
         ));
         for attempt in &job_detail.attempts {
             lines.push(format!(
-                "    {} · {} · {}",
+                "    {} · {} · {:?}",
                 attempt.id,
                 attempt_state_label(attempt),
-                attempt.runner_name,
+                attempt.execution_provider,
             ));
             lines.extend(environment_lines(
-                job_detail.job.pinned_container_image.as_deref(),
+                Some(job_detail.job.pinned_container_image.as_str()),
                 attempt,
             ));
         }
@@ -143,18 +142,10 @@ fn short_oid(oid: &str) -> &str {
     oid.get(..7).unwrap_or(oid)
 }
 
-fn runner_selection_label(selection: &RunRunnerSelection) -> &str {
-    match selection {
-        RunRunnerSelection::Any => "any runner",
-        RunRunnerSelection::Named { name } => name,
-        RunRunnerSelection::Mixed => "multiple runners",
-    }
-}
-
 fn run_state_label(state: RepositoryRunState) -> &'static str {
     match state {
         RepositoryRunState::Queued => "queued",
-        RepositoryRunState::Leased => "leased",
+        RepositoryRunState::Dispatching => "dispatching",
         RepositoryRunState::Running => "running",
         RepositoryRunState::Succeeded => "succeeded",
         RepositoryRunState::Failed => "failed",
@@ -167,7 +158,7 @@ fn job_state_label(state: RepositoryRunJobState) -> &'static str {
     match state {
         RepositoryRunJobState::Blocked => "blocked",
         RepositoryRunJobState::Queued => "queued",
-        RepositoryRunJobState::Leased => "leased",
+        RepositoryRunJobState::Dispatching => "dispatching",
         RepositoryRunJobState::Running => "running",
         RepositoryRunJobState::Succeeded => "succeeded",
         RepositoryRunJobState::Failed => "failed",
@@ -179,7 +170,7 @@ fn job_state_label(state: RepositoryRunJobState) -> &'static str {
 
 fn attempt_state_label(attempt: &RepositoryRunAttemptResponse) -> &'static str {
     match attempt.state {
-        scope_api_contract::RepositoryRunAttemptState::Leased => "leased",
+        scope_api_contract::RepositoryRunAttemptState::Dispatching => "dispatching",
         scope_api_contract::RepositoryRunAttemptState::Running => "running",
         scope_api_contract::RepositoryRunAttemptState::Succeeded => "succeeded",
         scope_api_contract::RepositoryRunAttemptState::Failed => "failed",
@@ -203,7 +194,6 @@ mod tests {
                 id: "run-1".to_string(),
                 workflow_name: "checks".to_string(),
                 git_oid: "1234567890".to_string(),
-                runner_selection: RunRunnerSelection::Any,
                 state: RepositoryRunState::Succeeded,
                 cancellation_requested: false,
                 created_at_unix: 1,
@@ -216,11 +206,7 @@ mod tests {
                 job: scope_api_contract::RepositoryRunJobResponse {
                     key: "backend".to_string(),
                     needs: vec![],
-                    desired_runner: None,
-                    pinned_container_image: Some(format!(
-                        "registry/scope@sha256:{}",
-                        "a".repeat(64),
-                    )),
+                    pinned_container_image: format!("registry/scope@sha256:{}", "a".repeat(64),),
                     state: RepositoryRunJobState::Succeeded,
                     created_at_unix: 1,
                     updated_at_unix: 2,
@@ -228,8 +214,9 @@ mod tests {
                 },
                 attempts: vec![RepositoryRunAttemptResponse {
                     id: "attempt-1".to_string(),
-                    runner_id: "runner-1".to_string(),
-                    runner_name: "linux".to_string(),
+                    execution_provider: scope_api_contract::RepositoryExecutionProvider::Northflank,
+                    external_run_id: Some("nf-run-1".to_string()),
+                    runtime_version: "0.1.0".to_string(),
                     state: RepositoryRunAttemptState::Succeeded,
                     created_at_unix: 1,
                     started_at_unix: Some(1),

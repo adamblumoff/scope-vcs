@@ -1,8 +1,10 @@
 use super::{
-    run::{MAX_RUN_ATTEMPTS, PinnedContainerImage, Run, RunAttempt, RunAttemptStep},
-    runner::{Runner, RunnerGrant, required, validate_sha256_hash},
+    run::{
+        ExecutionProvider, MAX_RUN_ATTEMPTS, PinnedContainerImage, Run, RunAttempt, RunAttemptStep,
+        required, validate_sha256_hash,
+    },
     state::{RunJobState, RunState},
-    workflow::{RunnerSelector, WorkflowJob, WorkflowJobId, WorkflowRevision},
+    workflow::{WorkflowJob, WorkflowJobId, WorkflowRevision},
 };
 use crate::error::DomainError;
 use std::collections::BTreeMap;
@@ -11,8 +13,7 @@ use std::collections::BTreeMap;
 pub struct RunJob {
     pub run_id: String,
     pub key: WorkflowJobId,
-    pub desired_runner: RunnerSelector,
-    pub pinned_container_image: Option<PinnedContainerImage>,
+    pub pinned_container_image: PinnedContainerImage,
     pub state: RunJobState,
     pub last_attempt_number: u32,
     pub current_attempt_id: Option<String>,
@@ -21,49 +22,12 @@ pub struct RunJob {
     pub completed_at_unix: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RunRunnerSummary {
-    Any,
-    Named(String),
-    Mixed,
-}
-
-pub fn summarize_run_runners(run: &Run, jobs: &[RunJob]) -> Result<RunRunnerSummary, DomainError> {
-    let first = jobs.first().ok_or_else(|| {
-        DomainError::invariant_violation("run runner summary requires persisted jobs")
-    })?;
-    if jobs.iter().any(|job| job.run_id != run.id) {
-        return Err(DomainError::invariant_violation(
-            "run runner summary contains a job from another run",
-        ));
-    }
-    if jobs
-        .iter()
-        .skip(1)
-        .any(|job| job.desired_runner != first.desired_runner)
-    {
-        return Ok(RunRunnerSummary::Mixed);
-    }
-    Ok(match &first.desired_runner {
-        RunnerSelector::Any => RunRunnerSummary::Any,
-        RunnerSelector::Named(name) => RunRunnerSummary::Named(name.clone()),
-    })
-}
-
 impl RunJob {
     pub fn new(run: &Run, definition: &WorkflowJob) -> Result<Self, DomainError> {
-        let desired_runner = run
-            .runner_override
-            .clone()
-            .unwrap_or_else(|| definition.runner().clone());
-        desired_runner
-            .validate()
-            .map_err(|error| DomainError::invalid_input(error.to_string()))?;
         Ok(Self {
             run_id: run.id.clone(),
             key: definition.id().clone(),
-            desired_runner,
-            pinned_container_image: None,
+            pinned_container_image: PinnedContainerImage::parse(definition.container().image())?,
             state: if definition.needs().is_empty() {
                 RunJobState::Queued
             } else {
@@ -81,8 +45,7 @@ impl RunJob {
     pub fn restore(
         run_id: impl Into<String>,
         key: WorkflowJobId,
-        desired_runner: RunnerSelector,
-        pinned_container_image: Option<PinnedContainerImage>,
+        pinned_container_image: PinnedContainerImage,
         state: RunJobState,
         last_attempt_number: u32,
         current_attempt_id: Option<String>,
@@ -93,7 +56,6 @@ impl RunJob {
         let job = Self {
             run_id: required("run job run id", run_id.into())?,
             key,
-            desired_runner,
             pinned_container_image,
             state,
             last_attempt_number,
@@ -107,14 +69,14 @@ impl RunJob {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn claim(
+    pub fn dispatch(
         &mut self,
         run: &Run,
         definition: &WorkflowJob,
-        runner: &Runner,
-        grant: &RunnerGrant,
         attempt_id: impl Into<String>,
         token_hash: impl Into<String>,
+        execution_provider: ExecutionProvider,
+        runtime_version: impl Into<String>,
         now_unix: u64,
         lease_expires_at_unix: u64,
     ) -> Result<(RunAttempt, Vec<RunAttemptStep>), DomainError> {
@@ -128,20 +90,6 @@ impl RunJob {
         }
         if run.cancellation_requested {
             return Err(DomainError::conflict("run cancellation is requested"));
-        }
-        if !runner.supports_dispatch() {
-            return Err(DomainError::conflict(
-                "runner does not support the V7 dispatch protocol",
-            ));
-        }
-        if !grant.is_active()
-            || grant.repository_id != run.workflow.repository_id()
-            || grant.runner_id != runner.id
-            || !self.desired_runner.matches_name(grant.name.as_str())
-        {
-            return Err(DomainError::forbidden(
-                "runner is not eligible for this run job",
-            ));
         }
         if lease_expires_at_unix <= now_unix {
             return Err(DomainError::invalid_input(
@@ -164,11 +112,12 @@ impl RunJob {
             run_id: run.id.clone(),
             job_key: self.key.clone(),
             number,
-            runner_id: runner.id.clone(),
-            runner_name: grant.name.as_str().to_string(),
+            execution_provider,
+            external_run_id: None,
+            runtime_version: required("runtime version", runtime_version.into())?,
             token_hash,
             token_expires_at_unix: lease_expires_at_unix,
-            state: super::state::AttemptState::Leased,
+            state: super::state::AttemptState::Dispatching,
             lease_expires_at_unix,
             last_heartbeat_at_unix: now_unix,
             created_at_unix: now_unix,
@@ -188,35 +137,11 @@ impl RunJob {
                 RunAttemptStep::pending(attempt_id.clone(), index)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.state = RunJobState::Leased;
+        self.state = RunJobState::Dispatching;
         self.last_attempt_number = number;
         self.current_attempt_id = Some(attempt_id);
         self.updated_at_unix = now_unix;
         Ok((attempt, steps))
-    }
-
-    pub fn pin_container_image(
-        &mut self,
-        image: PinnedContainerImage,
-        now_unix: u64,
-    ) -> Result<bool, DomainError> {
-        if self.state != RunJobState::Leased {
-            return Err(DomainError::conflict(
-                "container image can only be pinned for a leased run job",
-            ));
-        }
-        self.ensure_time_not_before_update(now_unix)?;
-        if let Some(existing) = &self.pinned_container_image {
-            if existing != &image {
-                return Err(DomainError::conflict(
-                    "run job container image is already pinned to a different digest",
-                ));
-            }
-            return Ok(false);
-        }
-        self.pinned_container_image = Some(image);
-        self.updated_at_unix = now_unix;
-        Ok(true)
     }
 
     pub(crate) fn ensure_current_attempt(&self, attempt: &RunAttempt) -> Result<(), DomainError> {
@@ -251,7 +176,7 @@ impl RunJob {
     }
 
     fn validate_facts(&self) -> Result<(), DomainError> {
-        let active = matches!(self.state, RunJobState::Leased | RunJobState::Running);
+        let active = matches!(self.state, RunJobState::Dispatching | RunJobState::Running);
         if active != self.current_attempt_id.is_some() {
             return Err(DomainError::invariant_violation(
                 "run job active state and current attempt disagree",
@@ -265,13 +190,6 @@ impl RunJob {
         if self.last_attempt_number > MAX_RUN_ATTEMPTS {
             return Err(DomainError::invariant_violation(
                 "run job attempt history exceeds its bounded limit",
-            ));
-        }
-        if matches!(self.state, RunJobState::Running | RunJobState::Succeeded)
-            && self.pinned_container_image.is_none()
-        {
-            return Err(DomainError::invariant_violation(
-                "an executed run job must have an immutable container image",
             ));
         }
         if self.updated_at_unix < self.created_at_unix
@@ -488,8 +406,8 @@ fn derive_run_state(run: &mut Run, jobs: &mut [RunJob], now_unix: u64) -> Result
         || jobs.iter().any(|job| job.state == RunJobState::Running)
     {
         RunState::Running
-    } else if jobs.iter().any(|job| job.state == RunJobState::Leased) {
-        RunState::Leased
+    } else if jobs.iter().any(|job| job.state == RunJobState::Dispatching) {
+        RunState::Dispatching
     } else {
         RunState::Queued
     };

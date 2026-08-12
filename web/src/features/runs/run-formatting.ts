@@ -1,7 +1,4 @@
-import type {
-  RepositoryRunState,
-  RunRunnerSelection,
-} from '@/api/types.generated'
+import type { RepositoryRunState } from '@/api/types.generated'
 import { runNeedsPolling } from './repository-run-detail-model'
 
 export function createRunTimeFormatter(timeZone?: string) {
@@ -14,17 +11,6 @@ export function createRunTimeFormatter(timeZone?: string) {
 
 export function runUnixTimeDate(value: number) {
   return new Date(value * 1_000)
-}
-
-export function formatRunRunnerSelection(selection: RunRunnerSelection) {
-  switch (selection.kind) {
-    case 'any':
-      return 'any runner'
-    case 'named':
-      return selection.name
-    case 'mixed':
-      return 'multiple runners'
-  }
 }
 
 export function runDisplayState(run: {

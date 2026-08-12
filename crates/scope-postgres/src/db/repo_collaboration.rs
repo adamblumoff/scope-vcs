@@ -1,6 +1,6 @@
 use super::{
     GeneratedIdSource, RepositoryStore, acquire_aggregate_lock, auth::load_user_by_id, entities,
-    repo_effects::save_repo_mutation, repository_from_model, runs::revoke_runner_grants_owned_by,
+    repo_effects::save_repo_mutation, repository_from_model,
 };
 use crate::error::PostgresError;
 use scope_domain::{
@@ -202,7 +202,6 @@ impl RepositoryStore {
             generated_ids,
         )
         .await?;
-        revoke_runner_grants_owned_by(&tx, &repo_id, member_user_id, now_unix).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(removed)
     }

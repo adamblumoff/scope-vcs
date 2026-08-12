@@ -1,5 +1,15 @@
 # syntax=docker/dockerfile:1.7
 
+FROM --platform=linux/amd64 rust:1.94.0-bookworm@sha256:4673f78db88b71f09d5451bbc404734807918161241215ba0a50bbbe9b448117 AS scope-runtime-builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates crates
+COPY api api
+COPY worker worker
+COPY runner-runtime runner-runtime
+RUN cargo build --locked --release -p scope-runner-runtime
+
 FROM --platform=linux/amd64 rust:1.94.0-bookworm@sha256:4673f78db88b71f09d5451bbc404734807918161241215ba0a50bbbe9b448117
 
 ARG NODE_VERSION=24.18.0
@@ -12,6 +22,8 @@ ARG DEBIAN_SNAPSHOT=20260518T000000Z
 ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
     RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu
+
+COPY --from=scope-runtime-builder /build/target/release/scope-runner-runtime /scope/bin/scope-runner-runtime
 
 RUN sed -i \
         -e "s|http://deb.debian.org/debian-security|https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
@@ -47,6 +59,7 @@ ARG PLAYWRIGHT_CHROMIUM_VERSION=149.0.7827.55
 ARG PLAYWRIGHT_CHROMIUM_REVISION=1228
 
 RUN test "$(rustc --version | cut -d' ' -f2)" = "1.94.0" \
+    && test -x /scope/bin/scope-runner-runtime \
     && test "$(node --version)" = "v${NODE_VERSION}" \
     && test "$(pnpm --version)" = "${PNPM_VERSION}" \
     && test "$(psql --version | cut -d' ' -f3)" = "15.18" \

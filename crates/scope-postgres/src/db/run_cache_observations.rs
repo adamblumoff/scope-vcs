@@ -43,11 +43,7 @@ impl RunStore {
             .ok_or_else(|| {
                 PostgresError::internal_message("run attempt job definition is missing")
             })?;
-        let image = claim
-            .job
-            .pinned_container_image
-            .as_ref()
-            .ok_or_else(|| PostgresError::conflict("run job container image is not pinned"))?;
+        let image = &claim.job.pinned_container_image;
         let namespace = CacheNamespace::workflow(&workflow_path, &claim.job.key);
 
         // authenticated_attempt holds the attempt row lock until this transaction
@@ -159,12 +155,8 @@ async fn authenticated_attempt(
     token_hash: &str,
     now_unix: u64,
 ) -> Result<super::DispatchClaim, PostgresError> {
-    let (run_id, runner_id) =
-        super::run_attempt_persistence::attempt_target(tx, attempt_id).await?;
-    super::runner_protocol_cutover::guard_attempt_operation(tx, &runner_id, &run_id).await?;
     let (run, job, attempt, steps) =
         super::run_attempt_persistence::locked_attempt_context(tx, attempt_id).await?;
-    super::run_attempt_persistence::ensure_runner_authorized(tx, &run, &attempt).await?;
     attempt
         .authenticate_cache_observation_report(&job, token_hash, now_unix)
         .map_err(PostgresError::from)?;
@@ -175,6 +167,5 @@ async fn authenticated_attempt(
         attempt,
         steps,
         workflow_revision,
-        canary_phase: None,
     })
 }

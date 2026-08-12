@@ -7,15 +7,12 @@ use scope_domain::runs::{
     cache::{AttemptCacheObservation, CacheColdReason, CacheFinalState, CachePreparation},
     job::RunJob,
     run::{
-        AttemptState, AttemptTerminalReason, PinnedContainerImage, Run, RunAttempt, RunAttemptStep,
-        RunJobState, RunLogChunk, RunSource, RunState, RunTrigger, StepState,
+        AttemptState, AttemptTerminalReason, ExecutionProvider, PinnedContainerImage, Run,
+        RunAttempt, RunAttemptStep, RunJobState, RunLogChunk, RunSource, RunState, RunTrigger,
+        StepState,
     },
-    runner::{Runner, RunnerCapabilities, RunnerGrant, RunnerName},
     trigger::PushTriggerEvaluation,
-    workflow::{
-        CompiledWorkflow, RunnerSelector, WorkflowIdentity, WorkflowJobId, WorkflowPath,
-        WorkflowRevision,
-    },
+    workflow::{CompiledWorkflow, WorkflowIdentity, WorkflowJobId, WorkflowPath, WorkflowRevision},
 };
 use scope_domain::store::{
     DEFAULT_GIT_FILE_MODE, FirstPushToken, GitHead, GitPushToken, GitSegment, RepoLifecycleState,
@@ -101,7 +98,7 @@ pub use requests::{
 };
 pub use runs::{
     push_trigger_evaluation, run, run_attempt, run_attempt_cache, run_attempt_step, run_job,
-    run_log, runner, runner_grant, workflow_revision,
+    run_log, workflow_revision,
 };
 
 #[cfg(test)]
