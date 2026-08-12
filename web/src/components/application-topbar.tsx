@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils'
 import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-import { ScopeLogo, ScopeMark } from '@/components/scope-logo'
+import { ScopeMark } from '@/components/scope-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
 
 export type TopbarItem = {
@@ -41,8 +41,7 @@ export function ApplicationTopbar({
           className="flex shrink-0 items-center rounded-md text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           to="/"
         >
-          <ScopeMark className="size-6 sm:hidden" />
-          <ScopeLogo className="hidden w-[86px] sm:block" />
+          <ScopeMark className="size-6" />
         </Link>
 
         {repository ? (
