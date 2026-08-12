@@ -62,12 +62,10 @@ function RepoIndexRoute() {
   const search = Route.useSearch()
   const { repo } = useRepoLayout()
   const navigate = useNavigate({ from: Route.fullPath })
-  const selectedPath = search.empty
-    ? null
-    : selectedRouteFilePath(
-        content.files,
-        search.file ?? defaultReadmePath(content.files),
-      )
+  const selectedPath = selectedRouteFilePath(
+    content.files,
+    search.file ?? defaultReadmePath(content.files),
+  )
   const selectedMeta = content.files.find((file) => file.path === selectedPath)
   const identity = selectedMeta && selectedPath
     ? repoFileCacheKey({
@@ -103,9 +101,7 @@ function RepoIndexRoute() {
       onSelectFilePath={(path) => {
         void navigate({
           resetScroll: false,
-          search: path
-            ? { empty: undefined, file: displayRouteFilePath(path) }
-            : { empty: true, file: undefined },
+          search: { file: displayRouteFilePath(path) },
         })
       }}
       params={params}
@@ -159,12 +155,9 @@ function abortableDelay(delay: number, signal: AbortSignal) {
   })
 }
 
-type RepoCodeSearch = { empty?: true; file?: string }
+type RepoCodeSearch = { file?: string }
 type RepoFileInput = RepoParams & { path: string }
 
 function parseRepoCodeSearch(search: Record<string, unknown>): RepoCodeSearch {
-  return {
-    empty: search.empty === true || search.empty === 'true' ? true : undefined,
-    file: parseRouteFileSearch(search.file),
-  }
+  return { file: parseRouteFileSearch(search.file) }
 }

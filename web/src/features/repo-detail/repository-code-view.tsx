@@ -12,6 +12,7 @@ import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
 import {
   workspaceTabDomIds,
   workspaceTabPanelId,
+  type WorkspaceTabItem,
 } from '@/components/workspace-tab-model'
 import { FileQuestion, LoaderCircle, TriangleAlert } from 'lucide-react'
 import { useLayoutEffect, useMemo, useRef } from 'react'
@@ -34,7 +35,7 @@ export function RepositoryCodeView({
   selectedPath,
 }: {
   files: RepoFile[]
-  onSelectFilePath: (path: string | null) => void
+  onSelectFilePath: (path: string) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
   selectedFileError: string | null
@@ -55,14 +56,23 @@ export function RepositoryCodeView({
   const workspaceTabs = useWorkspaceTabs({
     activeId: selectedPath,
     items: tabItems,
-    storageKey: `code:${params.owner}/${params.repo}`,
   })
   const fileNavigatorRef = useRef<HTMLDivElement>(null)
+  const openPath = workspaceTabs.tabs.some((tab) => tab.id === selectedPath)
+    ? selectedPath
+    : null
 
+  // Closing the last tab keeps the route pointing at the file it was showing:
+  // an empty workspace is this session's state, not something worth sharing.
   function closeTab(id: string) {
     const result = workspaceTabs.close(id)
-    if (id === selectedPath) onSelectFilePath(result.activeId)
+    if (id === selectedPath && result.activeId) onSelectFilePath(result.activeId)
     return result.focusId
+  }
+
+  function selectFile(path: string, pinned: boolean) {
+    workspaceTabs.open(path, pinned)
+    onSelectFilePath(path)
   }
 
   return (
@@ -86,11 +96,9 @@ export function RepositoryCodeView({
               files={files}
               getFileMeta={fileStatus}
               metaColumnLabel="Status"
-              onSelectFile={(file) => {
-                workspaceTabs.prepareOpen(file.path)
-                onSelectFilePath(file.path)
-              }}
-              selectedFilePath={selectedPath}
+              onActivateFile={(file) => selectFile(file.path, true)}
+              onSelectFile={(file) => selectFile(file.path, false)}
+              selectedFilePath={openPath}
             />
           </div>
           <SourcePane
@@ -100,10 +108,12 @@ export function RepositoryCodeView({
             onActivateTab={onSelectFilePath}
             onCloseTab={closeTab}
             onEmptyTabFocus={() => fileNavigatorRef.current?.focus()}
+            onPinTab={(path) => workspaceTabs.open(path, true)}
             params={params}
+            previewId={workspaceTabs.previewId}
             retry={selectedFileRetry}
             scrollKey={selectedFileIdentity}
-            selectedPath={selectedPath}
+            selectedPath={openPath}
             tabs={workspaceTabs.tabs}
           />
         </div>
@@ -119,7 +129,9 @@ function SourcePane({
   onActivateTab,
   onCloseTab,
   onEmptyTabFocus,
+  onPinTab,
   params,
+  previewId,
   retry,
   scrollKey,
   selectedPath,
@@ -131,16 +143,25 @@ function SourcePane({
   onActivateTab: (path: string) => void
   onCloseTab: (path: string) => string | null
   onEmptyTabFocus: () => void
+  onPinTab: (path: string) => void
   params: RepoParams
+  previewId: string | null
   retry: () => void
   scrollKey: string | null
   selectedPath: string | null
-  tabs: Array<{ id: string; label: string; title?: string }>
+  tabs: WorkspaceTabItem[]
 }) {
-  const activeTabDomIds = selectedPath && tabs.some((tab) => tab.id === selectedPath)
+  const activeTabDomIds = selectedPath
     ? workspaceTabDomIds(CODE_TAB_SET_ID, selectedPath)
     : null
   const contentRef = useRef<HTMLDivElement>(null)
+  const meta = useMemo(
+    () =>
+      file && selectedPath && !loading && !error ? (
+        <FileMeta file={file} />
+      ) : undefined,
+    [error, file, loading, selectedPath],
+  )
 
   useLayoutEffect(() => {
     if (contentRef.current) {
@@ -153,9 +174,12 @@ function SourcePane({
       <WorkspaceTabStrip
         activeId={selectedPath}
         ariaLabel="Open repository files"
+        meta={meta}
         onActivate={onActivateTab}
         onClose={onCloseTab}
         onEmptyFocus={onEmptyTabFocus}
+        onPin={onPinTab}
+        previewId={previewId}
         tabSetId={CODE_TAB_SET_ID}
         tabs={tabs}
       />
@@ -238,16 +262,17 @@ function SourceContent({
     )
   }
 
+  return <SourceFileContent file={file} params={params} />
+}
+
+function FileMeta({ file }: { file: RepoFileContent }) {
   return (
-    <div className="min-w-0">
-      <div className="flex min-h-11 min-w-0 items-center gap-3 border-b border-border px-5 py-2 sm:px-8">
-        <div className="min-w-0 flex-1 font-mono text-[11px] text-muted-foreground">
-          {formatBytes(file.size_bytes)} · {file.oid.slice(0, 12)}
-        </div>
-        <VisibilityBadge compact visibility={file.visibility} />
-      </div>
-      <SourceFileContent file={file} params={params} />
-    </div>
+    <>
+      <span>
+        {formatBytes(file.size_bytes)} · {file.oid.slice(0, 12)}
+      </span>
+      <VisibilityBadge compact visibility={file.visibility} />
+    </>
   )
 }
 

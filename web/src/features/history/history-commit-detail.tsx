@@ -4,12 +4,6 @@ import { FileSystemTree } from '@/components/file-system-tree'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  workspaceTabDomIds,
-  workspaceTabPanelId,
-  type WorkspaceTabItem,
-} from '@/components/workspace-tab-model'
-import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
 import { historyCommitTitle } from '@/features/history/history-row-labels'
 import type {
   CommitDetailState,
@@ -19,17 +13,13 @@ import { GitCommit, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 
-const HISTORY_TAB_SET_ID = 'history-file-diffs'
-
 export function CommitDetailPanel({
   commitContext,
   commitState,
   diffIdentity,
   diffScrollTop,
   fileDiffState,
-  fileTabs,
-  onActivateFileTab,
-  onCloseFileTab,
+  onCloseDiff,
   onDiffScroll,
   onRetryCommit,
   onRetryDiff,
@@ -41,9 +31,7 @@ export function CommitDetailPanel({
   diffIdentity: string | null
   diffScrollTop: number
   fileDiffState: CommitFileDiffState
-  fileTabs: WorkspaceTabItem[]
-  onActivateFileTab: (path: string) => void
-  onCloseFileTab: (path: string) => string | null
+  onCloseDiff: () => void
   onDiffScroll: (scrollTop: number) => void
   onRetryCommit?: () => void
   onRetryDiff?: () => void
@@ -81,12 +69,8 @@ export function CommitDetailPanel({
 
   const commit = commitState.commit
   const diffOpen = selectedFilePath !== null
-  const activeTabDomIds = selectedFilePath && fileTabs.some((tab) => tab.id === selectedFilePath)
-    ? workspaceTabDomIds(HISTORY_TAB_SET_ID, selectedFilePath)
-    : null
-  function closeUnavailableDiff() {
-    if (!selectedFilePath) return
-    onCloseFileTab(selectedFilePath)
+  function closeDiff() {
+    onCloseDiff()
     requestAnimationFrame(() => fileNavigatorRef.current?.focus())
   }
 
@@ -129,45 +113,23 @@ export function CommitDetailPanel({
           )}
         </div>
         <div className="h-[70vh] min-h-[340px] max-h-[720px] min-w-0 overflow-hidden border-border xl:border-l">
-          <div className="flex h-full min-h-[340px] min-w-0 flex-col">
-            <WorkspaceTabStrip
-              activeId={selectedFilePath}
-              ariaLabel="Open history diffs"
-              onActivate={onActivateFileTab}
-              onClose={onCloseFileTab}
-              onEmptyFocus={() => fileNavigatorRef.current?.focus()}
-              tabSetId={HISTORY_TAB_SET_ID}
-              tabs={fileTabs}
+          {diffOpen ? (
+            <ReviewFileDiffDrawer
+              cacheKey={diffIdentity}
+              diff={fileDiffState.diff}
+              error={fileDiffState.error}
+              loading={fileDiffState.status === 'loading'}
+              onClose={closeDiff}
+              onRetry={fileDiffState.status === 'failed' ? onRetryDiff : undefined}
+              onScrollTopChange={onDiffScroll}
+              scrollTop={diffScrollTop}
+              selectedPath={selectedFilePath}
             />
-            <div
-              aria-label={fileTabs.length > 0 && !activeTabDomIds ? 'History diff viewer' : undefined}
-              aria-labelledby={activeTabDomIds?.tabId}
-              className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              id={workspaceTabPanelId(HISTORY_TAB_SET_ID)}
-              role={fileTabs.length > 0 ? 'tabpanel' : undefined}
-              tabIndex={fileTabs.length > 0 ? 0 : undefined}
-            >
-              {diffOpen ? (
-                <ReviewFileDiffDrawer
-                  cacheKey={diffIdentity}
-                  className="min-h-0"
-                  diff={fileDiffState.diff}
-                  error={fileDiffState.error}
-                  loading={fileDiffState.status === 'loading'}
-                  onClose={fileTabs.length === 0 ? closeUnavailableDiff : undefined}
-                  onRetry={fileDiffState.status === 'failed' ? onRetryDiff : undefined}
-                  onScrollTopChange={onDiffScroll}
-                  scrollTop={diffScrollTop}
-                  selectedPath={selectedFilePath}
-                  showHeader={fileTabs.length === 0}
-                />
-              ) : (
-                <PanelState>
-                  <span>Select a changed file</span>
-                </PanelState>
-              )}
-            </div>
-          </div>
+          ) : (
+            <PanelState>
+              <span>Select a changed file</span>
+            </PanelState>
+          )}
         </div>
       </div>
     </div>

@@ -8,7 +8,6 @@ import type {
   ReviewFileDiff,
 } from '@/api/types'
 import type { LoadRequestRevisionCommitInput } from '@/api/requests'
-import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import {
   historyCommitCacheKey,
   historyDiffCacheKey,
@@ -132,9 +131,7 @@ export function RequestChangesWorkbench({
       emptyDescription={emptyDescription}
       emptyTitle={emptyTitle}
       fileDiffState={model.fileDiffState}
-      fileTabs={model.fileTabs}
-      onActivateFileTab={model.activateFileTab}
-      onCloseFileTab={model.closeFileTab}
+      onCloseDiff={model.closeDiff}
       onRetryCommit={model.retryCommit}
       onRetryDiff={model.retryDiff}
       onSelectCommit={model.selectCommit}
@@ -373,15 +370,6 @@ function useRequestChangesModel({
     read: readHistoryDiffCache,
     write: writeHistoryDiffCache,
   })
-  const fileTabs = useWorkspaceTabs({
-    activeId: selectedFilePath,
-    items: (selectedCommit?.files ?? []).map((file) => ({
-      id: file.path,
-      label: fileName(file.path),
-      title: file.path.replace(/^\/+/, ''),
-    })),
-    storageKey: `request-history:${repoId}:${selectedRevision?.id ?? 'none'}:${selectedCommitOid ?? 'none'}`,
-  })
   const commitState: CommitDetailState = selection.error
     ? { commit: null, error: selection.error, status: 'failed' }
     : resourceToCommitState(commitResource)
@@ -403,23 +391,11 @@ function useRequestChangesModel({
   }
 
   return {
-    activateFileTab: (path: string) => replaceSelection(selectedRevision, selectedCommitOid, path),
-    closeFileTab: (path: string) => {
-      if (!fileTabs.tabs.some((tab) => tab.id === path)) {
-        replaceSelection(selectedRevision, selectedCommitOid, null)
-        return null
-      }
-      const result = fileTabs.close(path)
-      if (path === selectedFilePath) {
-        replaceSelection(selectedRevision, selectedCommitOid, result.activeId)
-      }
-      return result.focusId
-    },
+    closeDiff: () => replaceSelection(selectedRevision, selectedCommitOid, null),
     commits,
     commitState,
     diffIdentity,
     fileDiffState,
-    fileTabs: fileTabs.tabs,
     retryCommit: selection.error ? undefined : commitResource.retry,
     retryDiff: selectedFilePath && selectedCommit && !selectedFile
       ? undefined
@@ -428,10 +404,8 @@ function useRequestChangesModel({
       const selected = requestCommitForListId(orderedRevisions, commit.projected_id)
       replaceSelection(selected?.revision ?? null, selected?.commitOid ?? null, null)
     },
-    selectFile: (file: CommitFile) => {
-      fileTabs.prepareOpen(file.path)
-      replaceSelection(selectedRevision, selectedCommitOid, file.path)
-    },
+    selectFile: (file: CommitFile) =>
+      replaceSelection(selectedRevision, selectedCommitOid, file.path),
     selectedCommitId,
     selectedCommitOid,
     selectedFilePath,
@@ -574,11 +548,6 @@ function discussionHref(
 ) {
   const search = new URLSearchParams({ discussion: discussionId })
   return `/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/requests/${encodeURIComponent(params.request_id)}?${search}#discussion-${encodeURIComponent(discussionId)}`
-}
-
-function fileName(path: string) {
-  const displayPath = path.replace(/^\/+/, '')
-  return displayPath.split('/').at(-1) ?? displayPath
 }
 
 function shortOid(oid: string) {

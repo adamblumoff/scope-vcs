@@ -1,6 +1,5 @@
 import type { CommitFile, CommitSummary } from '@/api/types'
 import { EmptyState } from '@/components/empty-state'
-import type { WorkspaceTabItem } from '@/components/workspace-tab-model'
 import { CommitDetailPanel } from '@/features/history/history-commit-detail'
 import { CommitList } from '@/features/history/history-commit-list'
 import {
@@ -22,9 +21,7 @@ export function HistoryWorkbench({
   emptyDescription,
   emptyTitle,
   fileDiffState,
-  fileTabs,
-  onActivateFileTab,
-  onCloseFileTab,
+  onCloseDiff,
   onRetryCommit,
   onRetryDiff,
   onSelectCommit,
@@ -39,9 +36,7 @@ export function HistoryWorkbench({
   emptyDescription: string
   emptyTitle: string
   fileDiffState: CommitFileDiffState
-  fileTabs: WorkspaceTabItem[]
-  onActivateFileTab: (path: string) => void
-  onCloseFileTab: (path: string) => string | null
+  onCloseDiff: () => void
   onRetryCommit?: () => void
   onRetryDiff?: () => void
   onSelectCommit: (commit: CommitSummary) => void
@@ -70,9 +65,7 @@ export function HistoryWorkbench({
             diffIdentity={diffIdentity}
             diffScrollTop={readHistoryDiffScroll(diffIdentity)}
             fileDiffState={fileDiffState}
-            fileTabs={fileTabs}
-            onActivateFileTab={onActivateFileTab}
-            onCloseFileTab={onCloseFileTab}
+            onCloseDiff={onCloseDiff}
             onDiffScroll={(scrollTop) => writeHistoryDiffScroll(diffIdentity, scrollTop)}
             onRetryCommit={onRetryCommit}
             onRetryDiff={onRetryDiff}

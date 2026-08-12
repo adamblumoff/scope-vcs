@@ -21,7 +21,7 @@ export function RepoDetailPage({
   selectedPath,
 }: {
   content: RepoContent
-  onSelectFilePath: (path: string | null) => void
+  onSelectFilePath: (path: string) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
   selectedFileError: string | null
