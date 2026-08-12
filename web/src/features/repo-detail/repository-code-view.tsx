@@ -283,6 +283,7 @@ function SourceFileContent({
   if (isRepositoryHtmlPath(file.path)) {
     return (
       <RepositoryHtmlRenderer
+        identity={`${file.path}\0${file.oid}`}
         key={`${file.path}:${file.oid}`}
         path={file.path}
         source={file.content.text}

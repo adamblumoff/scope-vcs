@@ -1,13 +1,16 @@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useMemo, useState } from 'react'
 import { repositoryHtmlDocument } from './repository-html'
+import { PersistentRepositoryHtmlPreview } from './repository-html-preview-store'
 
 type RepositoryHtmlMode = 'preview' | 'source'
 
 export function RepositoryHtmlRenderer({
+  identity,
   path,
   source,
 }: {
+  identity: string
   path: string
   source: string
 }) {
@@ -41,10 +44,9 @@ export function RepositoryHtmlRenderer({
         </ToggleGroup>
       </div>
       {mode === 'preview' ? (
-        <iframe
+        <PersistentRepositoryHtmlPreview
           className="h-[calc(100dvh-var(--app-chrome)-132px)] min-h-[32rem] max-h-[70rem] w-full border-0 bg-white"
-          referrerPolicy="no-referrer"
-          sandbox=""
+          identity={identity}
           srcDoc={document}
           title={`${displayPath} preview`}
         />
