@@ -1,4 +1,5 @@
 import { PageErrorAlert } from '@/components/page-error-alert'
+import { PageRail } from '@/components/page-header'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { Link } from '@tanstack/react-router'
@@ -10,9 +11,9 @@ export function RouteErrorPage({
   title,
 }: RouteErrorProps) {
   return (
-    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6">
+    <main className="min-h-screen bg-background py-8 text-foreground">
       <RouteErrorContent
-        className="px-0 py-6 sm:px-0"
+        className="py-6"
         error={error}
         fallbackMessage={fallbackMessage}
         title={title}
@@ -30,22 +31,19 @@ export function RouteErrorContent({
   const message = error instanceof Error ? error.message : fallbackMessage
 
   return (
-    <div
-      className={cn(
-        'mx-auto max-w-[760px] px-4 py-14 sm:px-6',
-        className,
-      )}
-    >
-      <PageErrorAlert className="mt-0" title={title}>
-        {message}
-      </PageErrorAlert>
-      <Button asChild className="mt-5" size="sm" variant="secondary">
-        <Link to="/">
-          <ArrowLeft className="size-3.5" />
-          <span>Home</span>
-        </Link>
-      </Button>
-    </div>
+    <PageRail className={cn('py-14', className)}>
+      <div className="mx-auto max-w-[760px]">
+        <PageErrorAlert className="mt-0" title={title}>
+          {message}
+        </PageErrorAlert>
+        <Button asChild className="mt-5" size="sm" variant="secondary">
+          <Link to="/">
+            <ArrowLeft className="size-3.5" />
+            <span>Home</span>
+          </Link>
+        </Button>
+      </div>
+    </PageRail>
   )
 }
 

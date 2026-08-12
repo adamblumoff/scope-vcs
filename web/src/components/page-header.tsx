@@ -1,6 +1,54 @@
 import { cn } from '@/lib/utils'
 import type { ReactNode } from 'react'
 
+type RailElement = 'div' | 'header' | 'main' | 'section'
+type RailProps = {
+  as?: RailElement
+  children: ReactNode
+  className?: string
+  id?: string
+  tabIndex?: number
+}
+
+/** The app-wide width boundary. Keep its maximum width owned here. */
+function AppRail({
+  as: Component = 'div',
+  children,
+  className,
+  id,
+  tabIndex,
+}: RailProps) {
+  return (
+    <Component
+      className={cn('mx-auto w-full max-w-[1280px]', className)}
+      id={id}
+      tabIndex={tabIndex}
+    >
+      {children}
+    </Component>
+  )
+}
+
+/** The app rail with standard responsive page gutters. */
+export function PageRail({
+  as,
+  children,
+  className,
+  id,
+  tabIndex,
+}: RailProps) {
+  return (
+    <AppRail
+      as={as}
+      className={cn('px-5 sm:px-6 lg:px-8', className)}
+      id={id}
+      tabIndex={tabIndex}
+    >
+      {children}
+    </AppRail>
+  )
+}
+
 /**
  * Padded reading column for list and prose routes. Shares the app rail width
  * with the topbar so page content lines up with the logo and nav.
@@ -13,14 +61,9 @@ export function PageContent({
   className?: string
 }) {
   return (
-    <section
-      className={cn(
-        'mx-auto w-full max-w-[1280px] px-5 py-8 sm:px-6 lg:px-8 lg:py-10',
-        className,
-      )}
-    >
+    <PageRail as="section" className={cn('py-8 lg:py-10', className)}>
       {children}
-    </section>
+    </PageRail>
   )
 }
 
@@ -36,9 +79,9 @@ export function WorkbenchPane({
   className?: string
 }) {
   return (
-    <div className={cn('mx-auto w-full max-w-[1280px]', className)}>
+    <AppRail className={className}>
       {children}
-    </div>
+    </AppRail>
   )
 }
 

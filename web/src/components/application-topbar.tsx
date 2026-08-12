@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { ScopeMark } from '@/components/scope-logo'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { PageRail } from '@/components/page-header'
 
 export type TopbarItem = {
   active?: boolean
@@ -35,7 +36,7 @@ export function ApplicationTopbar({
 }) {
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-card">
-      <div className="mx-auto flex min-h-14 max-w-[1280px] flex-wrap items-center gap-x-3 px-5 sm:px-6 md:flex-nowrap md:gap-x-6 lg:px-8">
+      <PageRail className="flex min-h-14 flex-wrap items-center gap-x-3 md:flex-nowrap md:gap-x-6">
         <Link
           aria-label="Scope home"
           className="flex shrink-0 items-center rounded-md text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
@@ -86,7 +87,7 @@ export function ApplicationTopbar({
           <ThemeToggle />
           {children}
         </div>
-      </div>
+      </PageRail>
     </header>
   )
 }

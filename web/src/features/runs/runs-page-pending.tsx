@@ -1,9 +1,10 @@
 import { LoaderCircle } from 'lucide-react'
+import { WorkbenchPane } from '@/components/page-header'
 import { RunsHeader } from './runs-header'
 
 export function RunsPagePending() {
   return (
-    <>
+    <WorkbenchPane>
       <RunsHeader />
       <output
         aria-busy="true"
@@ -12,6 +13,6 @@ export function RunsPagePending() {
         <LoaderCircle className="size-4 animate-spin" />
         Loading workflows and runs
       </output>
-    </>
+    </WorkbenchPane>
   )
 }

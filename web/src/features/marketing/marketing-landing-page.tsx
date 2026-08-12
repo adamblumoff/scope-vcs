@@ -1,4 +1,5 @@
 import type { CliInstallCommands, CliPlatform } from '@/api/types'
+import { PageRail } from '@/components/page-header'
 import { ScopeLogo } from '@/components/scope-logo'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
@@ -8,9 +9,6 @@ import { RepositoryProjection } from './repository-projection'
 
 const authParams = { _splat: '' }
 const authRedirect = { redirect_url: '/' }
-const marketingContainerClassName =
-  'mx-auto w-[min(calc(100%-2rem),1280px)] sm:w-[min(calc(100%-3rem),1280px)]'
-
 export function MarketingLandingPage({
   cliInstallCommands,
   initialCliPlatform,
@@ -30,8 +28,9 @@ export function MarketingLandingPage({
       <div className="grid min-h-dvh grid-rows-[66px_1fr] overflow-hidden sm:grid-rows-[74px_1fr]">
         <MarketingHeader />
 
-        <main
-          className={`${marketingContainerClassName} marketing-arena relative min-h-[1080px] py-10 outline-none sm:py-14`}
+        <PageRail
+          as="main"
+          className="marketing-arena relative min-h-[1080px] py-10 outline-none sm:py-14"
           id="main-content"
           tabIndex={-1}
         >
@@ -63,7 +62,7 @@ export function MarketingLandingPage({
           </section>
 
           <RepositoryProjection />
-        </main>
+        </PageRail>
       </div>
     </div>
   )
@@ -71,9 +70,7 @@ export function MarketingLandingPage({
 
 function MarketingHeader(): ReactElement {
   return (
-    <header
-      className={`${marketingContainerClassName} flex items-center justify-between border-b border-border/80`}
-    >
+    <PageRail as="header" className="flex h-full items-center justify-between border-b border-border/80">
       <Link
         aria-label="Scope home"
         className="group flex items-center rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
@@ -89,6 +86,6 @@ function MarketingHeader(): ReactElement {
           </Link>
         </Button>
       </nav>
-    </header>
+    </PageRail>
   )
 }

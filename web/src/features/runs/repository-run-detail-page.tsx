@@ -7,6 +7,7 @@ import type {
   RunActionInput,
   RunStepLogsInput,
 } from '@/api/types'
+import { WorkbenchPane } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { RouteErrorContent } from '@/components/route-error-page'
 import { Button } from '@/components/ui/button'
@@ -77,7 +78,7 @@ export function RepositoryRunDetailPage({
   })
 
   return (
-    <>
+    <WorkbenchPane>
       <RunHeader
         actionError={actionError}
         detail={detail}
@@ -143,7 +144,7 @@ export function RepositoryRunDetailPage({
           ) : null}
         </section>
       </main>
-    </>
+    </WorkbenchPane>
   )
 }
 
@@ -248,7 +249,7 @@ function RunHeader({
             <h1 className="flex flex-wrap items-center gap-3 text-[26px] font-semibold leading-[1.15] tracking-[-0.02em] sm:text-[30px]">
               {run.workflow_name}
               <span className="flex items-center gap-2 text-sm font-medium capitalize text-muted-foreground">
-                <RunStatusDot state={run.state} />
+                <RunStatusDot state={state} />
                 {state}
               </span>
             </h1>
@@ -551,7 +552,7 @@ function jobSummary(jobs: readonly RepoRunJobDetail[]) {
 
 export function RunDetailPagePending() {
   return (
-    <>
+    <WorkbenchPane>
       <output
         aria-busy="true"
         className="flex items-center justify-center gap-2 px-5 py-16 text-sm text-muted-foreground"
@@ -559,18 +560,18 @@ export function RunDetailPagePending() {
         <LoaderCircle className="size-4 animate-spin" />
         Loading run
       </output>
-    </>
+    </WorkbenchPane>
   )
 }
 
 export function RunDetailPageError({ error }: { error: unknown }) {
   return (
-    <>
+    <WorkbenchPane>
       <RouteErrorContent
         error={error}
         fallbackMessage="Unexpected run detail error"
         title="Run unavailable"
       />
-    </>
+    </WorkbenchPane>
   )
 }
