@@ -26,6 +26,10 @@ describe('run formatting', () => {
       runDisplayState({ cancellation_requested: false, state: 'running' }),
       'running',
     )
+    assert.equal(
+      runDisplayState({ cancellation_requested: true, state: 'canceled' }),
+      'canceled',
+    )
   })
 
   it('formats the same run instant in the requested timezone', () => {

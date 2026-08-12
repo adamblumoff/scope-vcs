@@ -2,6 +2,7 @@ import type {
   RepositoryRunState,
   RunRunnerSelection,
 } from '@/api/types.generated'
+import { runNeedsPolling } from './repository-run-detail-model'
 
 export function createRunTimeFormatter(timeZone?: string) {
   return new Intl.DateTimeFormat('en-US', {
@@ -30,5 +31,7 @@ export function runDisplayState(run: {
   cancellation_requested: boolean
   state: RepositoryRunState
 }): RepositoryRunState | 'canceling' {
-  return run.cancellation_requested ? 'canceling' : run.state
+  return run.cancellation_requested && runNeedsPolling(run.state)
+    ? 'canceling'
+    : run.state
 }
