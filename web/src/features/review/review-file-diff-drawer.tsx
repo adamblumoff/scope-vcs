@@ -43,7 +43,6 @@ export function ReviewFileDiffDrawer({
   onScrollTopChange,
   scrollTop = 0,
   selectedPath,
-  showHeader = true,
 }: {
   cacheKey?: string | null
   className?: string
@@ -55,7 +54,6 @@ export function ReviewFileDiffDrawer({
   onScrollTopChange?: (scrollTop: number) => void
   scrollTop?: number
   selectedPath: string | null
-  showHeader?: boolean
 }) {
   const themeType = useThemeType()
   const fileDiff = useMemo(
@@ -91,37 +89,35 @@ export function ReviewFileDiffDrawer({
       className={cn('h-full min-h-[340px] bg-background', className)}
     >
       <div className="flex h-full min-h-0 flex-col">
-        {showHeader ? (
-          <div className="flex min-h-14 items-center gap-3 border-b border-border px-3 py-2.5">
-            <FileText className="size-4 shrink-0 text-muted-foreground" />
-            <div className="min-w-0 flex-1">
-              <div
-                className="truncate font-mono text-xs font-medium leading-5"
-                title={displayName}
-              >
-                {displayName || 'Diff'}
-              </div>
-              <div className="text-xs leading-4 text-muted-foreground">
-                {loading
-                  ? 'Loading diff…'
-                  : error
-                    ? 'Diff unavailable'
-                    : modeChangeLabel(diff) ?? 'Diff'}
-              </div>
+        <div className="flex min-h-14 items-center gap-3 border-b border-border px-3 py-2.5">
+          <FileText className="size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1">
+            <div
+              className="truncate font-mono text-xs font-medium leading-5"
+              title={displayName}
+            >
+              {displayName || 'Diff'}
             </div>
-            {onClose && (
-              <Button
-                aria-label="Close diff viewer"
-                onClick={onClose}
-                size="icon-xs"
-                type="button"
-                variant="ghost"
-              >
-                <X className="size-3.5" />
-              </Button>
-            )}
+            <div className="text-xs leading-4 text-muted-foreground">
+              {loading
+                ? 'Loading diff…'
+                : error
+                  ? 'Diff unavailable'
+                  : modeChangeLabel(diff) ?? 'Diff'}
+            </div>
           </div>
-        ) : null}
+          {onClose && (
+            <Button
+              aria-label="Close diff viewer"
+              onClick={onClose}
+              size="icon-xs"
+              type="button"
+              variant="ghost"
+            >
+              <X className="size-3.5" />
+            </Button>
+          )}
+        </div>
 
         <div
           className="min-h-0 flex-1 overflow-auto"

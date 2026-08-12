@@ -29,6 +29,7 @@ export function FileSystemTree<TFile extends FileSystemTreeFileBase>({
   files,
   getFileMeta,
   metaColumnLabel = 'Status',
+  onActivateFile,
   onSelectFile,
   selectedFilePath = null,
 }: {
@@ -36,6 +37,7 @@ export function FileSystemTree<TFile extends FileSystemTreeFileBase>({
   files: TFile[]
   getFileMeta?: (file: TFile) => ReactNode
   metaColumnLabel?: ReactNode
+  onActivateFile?: (file: TFile) => void
   onSelectFile?: (file: TFile) => void
   selectedFilePath?: string | null
 }) {
@@ -54,6 +56,7 @@ export function FileSystemTree<TFile extends FileSystemTreeFileBase>({
       compactVisibility={compactVisibility}
       getFileMeta={getFileMeta}
       key={treeKey}
+      onActivateFile={onActivateFile}
       onSelectFile={onSelectFile}
       root={root}
       selectedFilePath={selectedFilePath}
@@ -67,6 +70,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
   compactVisibility,
   getFileMeta,
   metaColumnLabel,
+  onActivateFile,
   onSelectFile,
   root,
   selectedFilePath,
@@ -75,6 +79,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
   compactVisibility: boolean
   getFileMeta?: (file: TFile) => ReactNode
   metaColumnLabel: ReactNode
+  onActivateFile?: (file: TFile) => void
   onSelectFile?: (file: TFile) => void
   root: Extract<FileSystemTreeNode<TFile>, { type: 'folder' }>
   selectedFilePath: string | null
@@ -136,6 +141,7 @@ function FileSystemTreeRows<TFile extends FileSystemTreeFileBase>({
             getFileMeta={getFileMeta}
             key={node.key}
             node={node}
+            onActivateFile={onActivateFile}
             onSelectFile={onSelectFile}
             onToggleFolder={toggleFolder}
             selectedAncestorKeys={selectedAncestorKeys}
@@ -154,6 +160,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
   depth,
   getFileMeta,
   node,
+  onActivateFile,
   onSelectFile,
   onToggleFolder,
   selectedAncestorKeys,
@@ -165,6 +172,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
   depth: number
   getFileMeta?: (file: TFile) => ReactNode
   node: FileSystemTreeNode<TFile>
+  onActivateFile?: (file: TFile) => void
   onSelectFile?: (file: TFile) => void
   onToggleFolder: (key: string) => void
   selectedAncestorKeys: ReadonlySet<string>
@@ -192,13 +200,16 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
               aria-current={selected ? 'true' : undefined}
               className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               onClick={() => onSelectFile(node.file)}
+              onDoubleClick={
+                onActivateFile ? () => onActivateFile(node.file) : undefined
+              }
               type="button"
             >
-              <FilePathLabel path={node.path} />
+              <FilePathLabel name={node.name} path={node.path} />
             </button>
           ) : (
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <FilePathLabel path={node.path} />
+              <FilePathLabel name={node.name} path={node.path} />
             </div>
           )}
         </div>
@@ -285,6 +296,7 @@ function FileSystemTreeNodeRow<TFile extends FileSystemTreeFileBase>({
             getFileMeta={getFileMeta}
             key={child.key}
             node={child}
+            onActivateFile={onActivateFile}
             onSelectFile={onSelectFile}
             onToggleFolder={onToggleFolder}
             selectedAncestorKeys={selectedAncestorKeys}
@@ -313,13 +325,13 @@ function folderIsCollapsed(
   )
 }
 
-function FilePathLabel({ path }: { path: string }) {
+function FilePathLabel({ name, path }: { name: string; path: string }) {
   return (
     <>
       <span className="size-6 shrink-0" />
       <File className="size-4 shrink-0 text-[var(--platinum)]" strokeWidth={1.7} />
-      <span className="min-w-0 truncate font-mono text-xs" title={path}>
-        {displayPath(path)}
+      <span className="min-w-0 truncate font-mono text-xs" title={displayPath(path)}>
+        {name}
       </span>
     </>
   )

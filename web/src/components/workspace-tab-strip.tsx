@@ -1,6 +1,13 @@
 import { cn } from '@/lib/utils'
-import { FileCode2, X } from 'lucide-react'
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { X } from 'lucide-react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import {
   workspaceTabDomIds,
   workspaceTabVisibleLabels,
@@ -10,17 +17,23 @@ import {
 export function WorkspaceTabStrip({
   activeId,
   ariaLabel,
+  meta,
   onActivate,
   onClose,
   onEmptyFocus,
+  onPin,
+  previewId,
   tabSetId,
   tabs,
 }: {
   activeId: string | null
   ariaLabel: string
+  meta?: ReactNode
   onActivate: (id: string) => void
   onClose: (id: string) => string | null
   onEmptyFocus: () => void
+  onPin: (id: string) => void
+  previewId: string | null
   tabSetId: string
   tabs: WorkspaceTabItem[]
 }) {
@@ -34,12 +47,7 @@ export function WorkspaceTabStrip({
     ? activeId
     : tabs[0]?.id
   const visibleLabels = useMemo(() => workspaceTabVisibleLabels(tabs), [tabs])
-
-  useLayoutEffect(() => {
-    if (!activeId) return
-    const button = tabRefs.get(activeId)
-    if (button && tabListRef.current) revealTab(button, tabListRef.current)
-  }, [activeId, tabRefs, tabs])
+  const hiddenTabs = useStripOverflow({ activeId, tabListRef, tabRefs, tabs })
 
   function tabRef(id: string) {
     let callback = refCallbacks.get(id)
@@ -78,75 +86,221 @@ export function WorkspaceTabStrip({
     })
   }
 
-  // An empty strip is just a hollow bar; render nothing until a tab exists.
-  if (tabs.length === 0) return null
-
   return (
-    <div
-      aria-label={ariaLabel}
-      className="scrollbar-none flex min-h-10 min-w-0 overflow-x-auto border-b border-border bg-[var(--workspace-tabs)]"
-      ref={tabListRef}
-      role="tablist"
-    >
-      {tabs.map((tab) => {
-        const active = tab.id === activeId
-        const accessibleLabel = tab.title ?? tab.label
-        const domIds = workspaceTabDomIds(tabSetId, tab.id)
-        const visibleLabel = visibleLabels.get(tab.id) ?? tab.label
-        return (
-          <div
-            className={cn(
-              'group/tab relative flex w-[180px] shrink-0 items-center border-r border-border text-muted-foreground transition-[background-color,color,box-shadow] duration-150 sm:w-[200px]',
-              active &&
-                'bg-card text-foreground shadow-[inset_0_2px_0_0_var(--platinum-bright)]',
-            )}
-            key={tab.id}
-          >
-            <button
-              aria-controls={domIds.panelId}
-              aria-label={accessibleLabel}
-              aria-selected={active}
-              className="flex h-10 min-w-0 flex-1 items-center gap-2 px-3 text-left font-mono text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
-              onClick={() => onActivate(tab.id)}
-              onKeyDown={(event) => moveFocus(event, tab.id)}
-              id={domIds.tabId}
-              ref={tabRef(tab.id)}
-              role="tab"
-              tabIndex={tab.id === tabStopId ? 0 : -1}
-              title={accessibleLabel}
-              type="button"
+    <div className="flex min-h-10 items-stretch gap-1 border-b border-border pr-3">
+      <div
+        aria-label={ariaLabel}
+        className="scrollbar-none flex min-w-0 flex-1 items-stretch overflow-x-auto"
+        ref={tabListRef}
+        role="tablist"
+      >
+        {tabs.map((tab) => {
+          const active = tab.id === activeId
+          const accessibleLabel = tab.title ?? tab.label
+          const domIds = workspaceTabDomIds(tabSetId, tab.id)
+          return (
+            <div
+              className="group/tab relative flex shrink-0 items-center"
+              key={tab.id}
+              onAuxClick={(event) => {
+                if (event.button !== 1) return
+                event.preventDefault()
+                closeTab(tab.id)
+              }}
+              role="presentation"
             >
-              <FileCode2 className="size-3.5 shrink-0" strokeWidth={1.7} />
-              <span className="truncate">{visibleLabel}</span>
-            </button>
-            <button
-              aria-label={`Close ${accessibleLabel}`}
-              className={cn(
-                'workspace-tab-close mr-1.5 flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-[color,background-color,opacity] hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring sm:opacity-0 sm:group-hover/tab:opacity-100 sm:focus-visible:opacity-100',
-                active && 'sm:opacity-60',
+              <button
+                aria-controls={domIds.panelId}
+                aria-label={accessibleLabel}
+                aria-selected={active}
+                className={cn(
+                  'flex h-10 min-w-0 max-w-[200px] items-center gap-2 py-2 pl-3 text-left font-mono text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring',
+                  active && 'text-foreground',
+                )}
+                id={domIds.tabId}
+                onClick={() => onActivate(tab.id)}
+                onDoubleClick={() => onPin(tab.id)}
+                onKeyDown={(event) => moveFocus(event, tab.id)}
+                ref={tabRef(tab.id)}
+                role="tab"
+                tabIndex={tab.id === tabStopId ? 0 : -1}
+                title={accessibleLabel}
+                type="button"
+              >
+                {/* Buttons reset font-style, so the preview marker lives on the label. */}
+                <span className={cn('truncate', tab.id === previewId && 'italic')}>
+                  {visibleLabels.get(tab.id) ?? tab.label}
+                </span>
+              </button>
+              <button
+                aria-label={`Close ${accessibleLabel}`}
+                className={cn(
+                  'mr-1.5 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-[color,background-color,opacity] hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring sm:opacity-0 sm:group-hover/tab:opacity-100 sm:focus-visible:opacity-100',
+                  active && 'sm:opacity-60',
+                )}
+                onClick={() => closeTab(tab.id)}
+                type="button"
+              >
+                <X className="size-3.5" />
+              </button>
+              {active && (
+                <span
+                  aria-hidden
+                  className="absolute inset-x-1.5 bottom-0 h-0.5 bg-[var(--platinum-bright)]"
+                />
               )}
-              onClick={() => closeTab(tab.id)}
-              type="button"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        )
-      })}
+            </div>
+          )
+        })}
+      </div>
+      {hiddenTabs.length > 0 && (
+        <OverflowMenu
+          onActivate={onActivate}
+          tabs={hiddenTabs}
+          visibleLabels={visibleLabels}
+        />
+      )}
+      {meta && (
+        <div className="flex shrink-0 items-center gap-2 pl-2 font-mono text-[11px] text-muted-foreground">
+          {meta}
+        </div>
+      )}
     </div>
   )
 }
 
-function revealTab(button: HTMLButtonElement, tabList: HTMLDivElement) {
-  const tab = button.parentElement
-  if (!tab) return
+function OverflowMenu({
+  onActivate,
+  tabs,
+  visibleLabels,
+}: {
+  onActivate: (id: string) => void
+  tabs: WorkspaceTabItem[]
+  visibleLabels: Map<string, string>
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
 
-  if (tab.offsetLeft < tabList.scrollLeft) {
-    tabList.scrollLeft = tab.offsetLeft
-  } else if (
-    tab.offsetLeft + tab.offsetWidth >
-    tabList.scrollLeft + tabList.clientWidth
-  ) {
-    tabList.scrollLeft = tab.offsetLeft + tab.offsetWidth - tabList.clientWidth
-  }
+  useEffect(() => {
+    if (!open) return
+    function closeOnOutsidePointer(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', closeOnOutsidePointer)
+    return () =>
+      document.removeEventListener('mousedown', closeOnOutsidePointer)
+  }, [open])
+
+  return (
+    <div className="relative flex shrink-0 items-center" ref={rootRef}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`${tabs.length} more open ${tabs.length === 1 ? 'file' : 'files'}`}
+        className="rounded border border-border px-2 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+        onClick={() => setOpen(!open)}
+        type="button"
+      >
+        +{tabs.length}
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-full z-20 mt-1 min-w-[200px] max-w-[320px] border border-border bg-popover py-1 shadow-[var(--shadow-pop)]"
+          role="menu"
+        >
+          {tabs.map((tab) => (
+            <button
+              className="flex w-full items-center px-3 py-1.5 text-left font-mono text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              key={tab.id}
+              onClick={() => {
+                setOpen(false)
+                onActivate(tab.id)
+              }}
+              role="menuitem"
+              title={tab.title ?? tab.label}
+              type="button"
+            >
+              <span className="truncate">{visibleLabels.get(tab.id) ?? tab.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Keeps the active tab in view and reports the tabs scrolled out of it, so the
+ * overflow menu can reach them. The strip is re-measured on resize because file
+ * metadata appearing beside the tabs narrows it after the active tab changes.
+ */
+function useStripOverflow({
+  activeId,
+  tabListRef,
+  tabRefs,
+  tabs,
+}: {
+  activeId: string | null
+  tabListRef: React.RefObject<HTMLDivElement | null>
+  tabRefs: Map<string, HTMLButtonElement>
+  tabs: WorkspaceTabItem[]
+}) {
+  const [hiddenIds, setHiddenIds] = useState<string[]>([])
+
+  useLayoutEffect(() => {
+    const list = tabListRef.current
+    if (!list) return
+
+    function tabRect(id: string) {
+      return tabRefs.get(id)?.parentElement?.getBoundingClientRect()
+    }
+
+    function measure() {
+      if (!list) return
+      const bounds = list.getBoundingClientRect()
+      const hidden: string[] = []
+      for (const tab of tabs) {
+        const rect = tabRect(tab.id)
+        if (!rect) continue
+        if (rect.left < bounds.left - 1 || rect.right > bounds.right + 1) {
+          hidden.push(tab.id)
+        }
+      }
+      setHiddenIds((current) =>
+        current.length === hidden.length &&
+        current.every((id, index) => id === hidden[index])
+          ? current
+          : hidden,
+      )
+    }
+
+    function revealActive() {
+      if (!list || !activeId) return
+      const rect = tabRect(activeId)
+      const bounds = list.getBoundingClientRect()
+      if (!rect) return
+      if (rect.left < bounds.left) list.scrollLeft -= bounds.left - rect.left
+      else if (rect.right > bounds.right) list.scrollLeft += rect.right - bounds.right
+    }
+
+    revealActive()
+    measure()
+    const observer = new ResizeObserver(() => {
+      revealActive()
+      measure()
+    })
+    observer.observe(list)
+    list.addEventListener('scroll', measure, { passive: true })
+    return () => {
+      observer.disconnect()
+      list.removeEventListener('scroll', measure)
+    }
+  }, [activeId, tabListRef, tabRefs, tabs])
+
+  return useMemo(
+    () => tabs.filter((tab) => hiddenIds.includes(tab.id)),
+    [hiddenIds, tabs],
+  )
 }

@@ -5,11 +5,7 @@ import type {
   ProjectionPreviewAudience,
   RepoParams,
 } from '@/api/types'
-import { EmptyState } from '@/components/empty-state'
 import { WorkbenchBar, WorkbenchPane } from '@/components/page-header'
-import { RouteErrorContent } from '@/components/route-error-page'
-import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
-import type { WorkspaceTabItem } from '@/components/workspace-tab-model'
 import { AudienceToggle } from '@/features/history/history-audience-toggle'
 import { HistoryWorkbench } from '@/features/history/history-workbench'
 import {
@@ -19,10 +15,8 @@ import {
   peekHistoryDiffCache,
   readHistoryCommitCache,
   readHistoryDiffCache,
-  readHistoryDiffScroll,
   writeHistoryCommitCache,
   writeHistoryDiffCache,
-  writeHistoryDiffScroll,
 } from '@/features/history/history-resource-cache'
 import {
   resourceToCommitState,
@@ -36,11 +30,8 @@ import {
   loadCommitFileDiff,
 } from '@/routes/-repo-history-actions'
 import { useNavigate } from '@tanstack/react-router'
-import { History } from 'lucide-react'
-import { type ReactNode, useCallback, useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { changeCountLabel } from '../review/review-labels'
-
-const HISTORY_TAB_SET_ID = 'history-file-diffs'
 
 export type CommitHistories = {
   private: CommitHistory | null
@@ -58,18 +49,14 @@ type HistoryPageProps = {
 }
 
 export function HistoryPage(props: HistoryPageProps) {
-  const { params } = props
   const {
     audience,
-    activateFileTab,
     availableAudiences,
-    closeFileTab,
+    closeDiff,
     commitState,
     commits,
     diffIdentity,
     fileDiffState,
-    fileTabs,
-    repoId,
     retryCommit,
     retryDiff,
     selectAudience,
@@ -100,9 +87,7 @@ export function HistoryPage(props: HistoryPageProps) {
         emptyDescription="History appears here once Scope has applied commits."
         emptyTitle="No commits yet"
         fileDiffState={fileDiffState}
-        fileTabs={fileTabs}
-        onActivateFileTab={activateFileTab}
-        onCloseFileTab={closeFileTab}
+        onCloseDiff={closeDiff}
         onRetryCommit={retryCommit}
         onRetryDiff={retryDiff}
         onSelectCommit={selectCommit}
@@ -215,20 +200,6 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
     selectedFilePath && selectedCommit && !selectedFile
       ? { diff: null, error: 'This file is not part of the selected commit.', status: 'failed' }
       : resourceToDiffState(diffResource)
-  const fileTabItems = useMemo(
-    () =>
-      (selectedCommit?.files ?? []).map((file) => ({
-        id: file.path,
-        label: fileName(file.path),
-        title: file.path.replace(/^\/+/, ''),
-      })),
-    [selectedCommit?.files],
-  )
-  const fileTabs = useWorkspaceTabs({
-    activeId: selectedFilePath,
-    items: fileTabItems,
-    storageKey: `history:${repoId}:${audience}:${selectedCommitId ?? 'none'}`,
-  })
 
   function replaceHistorySearch(
     nextAudience: ProjectionPreviewAudience,
@@ -249,27 +220,13 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
   }
 
   return {
-    activateFileTab: (path: string) =>
-      replaceHistorySearch(audience, selectedCommitId, path),
     audience,
     availableAudiences,
-    closeFileTab: (path: string) => {
-      if (!fileTabs.tabs.some((tab) => tab.id === path)) {
-        replaceHistorySearch(audience, selectedCommitId)
-        return null
-      }
-      const result = fileTabs.close(path)
-      if (path === selectedFilePath) {
-        replaceHistorySearch(audience, selectedCommitId, result.activeId)
-      }
-      return result.focusId
-    },
+    closeDiff: () => replaceHistorySearch(audience, selectedCommitId),
     commitState,
     commits,
     diffIdentity,
     fileDiffState,
-    fileTabs: fileTabs.tabs,
-    repoId,
     retryCommit: requestedCommitUnavailable ? undefined : commitResource.retry,
     retryDiff: selectedFilePath && selectedCommit && !selectedFile
       ? undefined
@@ -282,10 +239,8 @@ function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
     },
     selectCommit: (commit: CommitSummary) =>
       replaceHistorySearch(audience, commit.projected_id),
-    selectFile: (file: CommitFile) => {
-      fileTabs.prepareOpen(file.path)
-      replaceHistorySearch(audience, selectedCommitId, file.path)
-    },
+    selectFile: (file: CommitFile) =>
+      replaceHistorySearch(audience, selectedCommitId, file.path),
     selectedCommit,
     selectedCommitId,
     selectedFilePath,
@@ -304,9 +259,4 @@ function selectedAudience(
 
 function latestCommitId(history: CommitHistory | null) {
   return history?.commits.at(-1)?.projected_id ?? null
-}
-
-function fileName(path: string) {
-  const displayPath = path.replace(/^\/+/, '')
-  return displayPath.split('/').at(-1) ?? displayPath
 }
