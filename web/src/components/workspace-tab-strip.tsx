@@ -127,8 +127,9 @@ export function WorkspaceTabStrip({
                 title={accessibleLabel}
                 type="button"
               >
-                {/* Buttons reset font-style, so the preview marker lives on the label. */}
-                <span className={cn('truncate', tab.id === previewId && 'italic')}>
+                {/* Buttons reset font-style, so the preview marker lives on the
+                    label. The slanted last glyph needs room inside the clip. */}
+                <span className={cn('truncate', tab.id === previewId && 'italic pr-0.5')}>
                   {visibleLabels.get(tab.id) ?? tab.label}
                 </span>
               </button>
@@ -180,6 +181,7 @@ function OverflowMenu({
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -193,32 +195,38 @@ function OverflowMenu({
       document.removeEventListener('mousedown', closeOnOutsidePointer)
   }, [open])
 
+  function closeOnEscape(event: React.KeyboardEvent) {
+    if (event.key !== 'Escape') return
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+
+  // A disclosure rather than an ARIA menu: the buttons below sit next in tab
+  // order, so they need no roving focus of their own.
   return (
     <div className="relative flex shrink-0 items-center" ref={rootRef}>
       <button
         aria-expanded={open}
-        aria-haspopup="menu"
         aria-label={`${tabs.length} more open ${tabs.length === 1 ? 'file' : 'files'}`}
         className="rounded border border-border px-2 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
         onClick={() => setOpen(!open)}
+        onKeyDown={closeOnEscape}
+        ref={triggerRef}
         type="button"
       >
         +{tabs.length}
       </button>
       {open && (
-        <div
-          className="absolute right-0 top-full z-20 mt-1 min-w-[200px] max-w-[320px] border border-border bg-popover py-1 shadow-[var(--shadow-pop)]"
-          role="menu"
-        >
+        <div className="absolute right-0 top-full z-20 mt-1 min-w-[200px] max-w-[320px] border border-border bg-popover py-1 shadow-[var(--shadow-pop)]">
           {tabs.map((tab) => (
             <button
-              className="flex w-full items-center px-3 py-1.5 text-left font-mono text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="flex w-full items-center px-3 py-1.5 text-left font-mono text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
               key={tab.id}
               onClick={() => {
                 setOpen(false)
                 onActivate(tab.id)
               }}
-              role="menuitem"
+              onKeyDown={closeOnEscape}
               title={tab.title ?? tab.label}
               type="button"
             >
