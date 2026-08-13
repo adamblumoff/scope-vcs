@@ -101,6 +101,16 @@ test('public repository exposes only its projected source', async () => {
       document.documentElement.dataset.persistenceProbe = 'same-document'
     })
 
+    await page.getByRole('tab', { name: 'README.html', exact: true }).dblclick()
+    await page.waitForURL((url) => url.searchParams.get('file') === 'README.html')
+    await preview.waitFor()
+    assert.equal(
+      await previewFrame.evaluate(() =>
+        document.documentElement.dataset.persistenceProbe
+      ),
+      'same-document',
+    )
+
     await sourceButton.click()
     await page.locator('pre code').filter({ hasText: '<!doctype html>' }).waitFor()
     assert.equal(await preview.isVisible(), false)

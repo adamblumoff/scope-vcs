@@ -49,7 +49,7 @@ export function PersistentRepositoryHtmlPreview({
   const store = useRepositoryHtmlPreviewStore()
   const hostRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const renderFrame = !store.has(identity)
+  const renderFrame = useRef(!store.has(identity)).current
 
   useLayoutEffect(() => {
     const host = hostRef.current
@@ -119,7 +119,16 @@ function createPreviewStore() {
 
 function movePreview(parent: HTMLElement, frame: HTMLIFrameElement) {
   if (frame.parentElement === parent) return
-  if ('moveBefore' in parent && typeof parent.moveBefore === 'function') {
+  const canPreserveState =
+    parent.isConnected &&
+    frame.isConnected &&
+    parent.getRootNode({ composed: true }) ===
+      frame.getRootNode({ composed: true })
+  if (
+    canPreserveState &&
+    'moveBefore' in parent &&
+    typeof parent.moveBefore === 'function'
+  ) {
     parent.moveBefore(frame, null)
   } else {
     parent.append(frame)
