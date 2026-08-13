@@ -400,12 +400,24 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
     assert(requestHeading)
     assert(requestNavigation)
 
+    const transitionServerFunctions = []
+    const recordServerFunction = (request) => {
+      if (request.url().includes('/_serverFn/')) {
+        transitionServerFunctions.push(new URL(request.url()).pathname)
+      }
+    }
+    page.on('request', recordServerFunction)
     await changesLink.click()
     await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready/changes'))
     await page
       .getByRole('button', { name: /, commit .+, \d+ files?$/ })
       .first()
       .waitFor()
+    page.off('request', recordServerFunction)
+    const repeatedServerFunctions = transitionServerFunctions.filter(
+      (url, index, requests) => requests.indexOf(url) !== index,
+    )
+    assert.deepEqual(repeatedServerFunctions, [])
     await assertRequestShellPreserved(page, {
       heading: requestHeading,
       navigation: requestNavigation,
