@@ -13,18 +13,24 @@ import {
   requestChangeSelection,
   requestRevisionPin,
 } from '@/features/requests/request-changes-model'
+import { createRequestRevisionRedirectHandoff } from '@/features/requests/request-revision-navigation'
 import { requestParamsForRoute } from '@/features/requests/request-route-data'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import { createFileRoute, getRouteApi, redirect } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 
+type LoadRequestRevisionsInput = ReturnType<typeof requestParamsForRoute> & {
+  commit_oid?: string
+  revision_id?: string
+}
+
 const requestRoute = getRouteApi('/$owner/$repo/requests/$requestId')
+const revisionRedirectHandoff = typeof window === 'undefined'
+  ? null
+  : createRequestRevisionRedirectHandoff()
 
 const loadRevisions = createServerFn({ method: 'GET' })
-  .validator((data: ReturnType<typeof requestParamsForRoute> & {
-    commit_oid?: string
-    revision_id?: string
-  }) => data)
+  .validator((data: LoadRequestRevisionsInput) => data)
   .handler(async ({ data }) => {
     try {
       return await loadRequestRevisionsForRequest(data)
@@ -55,13 +61,13 @@ export const Route = createFileRoute(
     revision: search.revision,
   }),
   loader: async ({ deps, params }) => {
-    const revisions = await loadRevisions({
-      data: {
-        ...requestParamsForRoute(params),
-        commit_oid: deps.commit,
-        revision_id: deps.revision,
-      },
-    })
+    const input = {
+      ...requestParamsForRoute(params),
+      commit_oid: deps.commit,
+      revision_id: deps.revision,
+    }
+    const revisions = revisionRedirectHandoff?.take(input)
+      ?? await loadRevisions({ data: input })
     if (!revisions) return null
     const selection = requestChangeSelection(
       revisions.revisions,
@@ -74,6 +80,11 @@ export const Route = createFileRoute(
       deps.revision,
     )
     if (pin) {
+      revisionRedirectHandoff?.stage({
+        ...requestParamsForRoute(params),
+        commit_oid: pin.commit,
+        revision_id: pin.revision,
+      }, revisions)
       throw redirect({
         params,
         replace: true,
