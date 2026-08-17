@@ -6,8 +6,12 @@ import {
 } from '@/api/repos'
 import type { RepoParams } from '@/api/types'
 import { RepoDetailPage } from '@/features/repo-detail/repo-detail-page'
-import { createRepoCodeRouteHandoff } from '@/features/repo-detail/repo-code-route-handoff'
-import { loadRepoCodeRouteData } from '@/features/repo-detail/repo-code-route-data'
+import {
+  DEFAULT_REPO_FILE_PATH,
+  loadRepoCodeRouteData,
+  loadRepoFileWhenReady,
+  type RepoFileLoadResult,
+} from '@/features/repo-detail/repo-code-route-data'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import {
   displayRouteFilePath,
@@ -16,11 +20,8 @@ import {
 import { RepoContentError } from '@/components/repo-content-error'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { useEffect } from 'react'
 
-const repoCodeRouteHandoff = typeof window === 'undefined'
-  ? null
-  : createRepoCodeRouteHandoff()
+const PROJECTION_REBUILDING_MESSAGE = 'repository projection is rebuilding; retry shortly'
 
 const loadRepoContent = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
@@ -28,25 +29,42 @@ const loadRepoContent = createServerFn({ method: 'GET' })
 
 const loadRepoFile = createServerFn({ method: 'GET' })
   .validator((data: RepoFileInput) => data)
-  .handler(async ({ data }) => {
+  .handler(async ({ data }): Promise<RepoFileLoadResult> => {
     try {
-      return await loadRepoFileForRequest(data)
+      return { file: await loadRepoFileForRequest(data), status: 'ready' }
     } catch (error) {
-      if (error instanceof HttpError && error.status === 404) return null
+      if (error instanceof HttpError && error.status === 404) {
+        return { status: 'missing' }
+      }
+      if (
+        error instanceof HttpError &&
+        error.status === 503 &&
+        error.message === PROJECTION_REBUILDING_MESSAGE
+      ) {
+        return { status: 'rebuilding' }
+      }
       throw error
     }
   })
 
 export const Route = createFileRoute('/$owner/$repo/')({
   validateSearch: parseRepoCodeSearch,
-  loaderDeps: ({ search }) => ({ file: search.file }),
+  loaderDeps: ({ search }) => ({
+    file: search.file ?? DEFAULT_REPO_FILE_PATH,
+  }),
   staleTime: Infinity,
-  loader: ({ deps, params }) =>
-    repoCodeRouteHandoff?.take({ ...params, path: deps.file })
-    ?? loadRepoCodeRouteData({
-      loadContent: () => loadRepoContent({ data: params }),
-      loadFile: (path) => loadRepoFile({
-        data: { ...params, path },
+  loader: ({ abortController, deps, params }) =>
+    loadRepoCodeRouteData({
+      loadContent: () => loadRepoContent({
+        data: params,
+        signal: abortController.signal,
+      }),
+      loadFile: (path) => loadRepoFileWhenReady({
+        load: () => loadRepoFile({
+          data: { ...params, path },
+          signal: abortController.signal,
+        }),
+        signal: abortController.signal,
       }),
       requestedPath: deps.file,
     }),
@@ -58,7 +76,6 @@ function RepoIndexRoute() {
   const routeData = Route.useLoaderData()
   const { content, selectedFile, selectedPath } = routeData
   const params = Route.useParams()
-  const search = Route.useSearch()
   const { repo } = useRepoLayout()
   const navigate = useNavigate({ from: Route.fullPath })
   const identity = selectedFile
@@ -70,13 +87,6 @@ function RepoIndexRoute() {
         selectedFile.oid,
       ].join('\0')
     : null
-
-  useEffect(() => {
-    repoCodeRouteHandoff?.stage(
-      { ...params, path: search.file },
-      routeData,
-    )
-  }, [params, routeData, search.file])
 
   return (
     <RepoDetailPage

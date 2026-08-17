@@ -119,7 +119,7 @@ export function WorkspaceTabStrip({
                 )}
                 id={domIds.tabId}
                 onClick={(event) => {
-                  if (event.detail === 1) onActivate(tab.id)
+                  if (event.detail <= 1) onActivate(tab.id)
                 }}
                 onDoubleClick={() => onPin(tab.id)}
                 onKeyDown={(event) => moveFocus(event, tab.id)}
