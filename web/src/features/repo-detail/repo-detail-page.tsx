@@ -5,6 +5,7 @@ import type {
 } from '@/api/types'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { WorkbenchBar, WorkbenchPane } from '@/components/page-header'
+import { Await } from '@tanstack/react-router'
 import { RepoCloneDropdown } from './repo-clone-dropdown'
 import { useRepoLayout } from './repo-layout-context'
 import { RepositoryCodeView } from './repository-code-view'
@@ -14,35 +15,30 @@ export function RepoDetailPage({
   onSelectFilePath,
   params,
   selectedFile,
-  selectedFileError,
   selectedFileIdentity,
-  selectedFileLoading,
-  selectedFileRetry,
   selectedPath,
 }: {
-  content: RepoContent
+  content: Promise<RepoContent>
   onSelectFilePath: (path: string) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
-  selectedFileError: string | null
   selectedFileIdentity: string | null
-  selectedFileLoading: boolean
-  selectedFileRetry: () => void
   selectedPath: string | null
 }) {
   const { repo } = useRepoLayout()
-  const files = content.files
   return (
     <WorkbenchPane>
       <WorkbenchBar
         actions={(
           <>
-            {repo.lifecycle_state === 'Ready' && (
-              <RepoCloneDropdown
-                cloneRemoteUrl={content.clone_remote_url}
-                repo={repo}
-              />
-            )}
+            <Await promise={content} fallback={null}>
+              {(resolved) => repo.lifecycle_state === 'Ready' && (
+                <RepoCloneDropdown
+                  cloneRemoteUrl={resolved.clone_remote_url}
+                  repo={repo}
+                />
+              )}
+            </Await>
             <RepoPrimaryActionButton
               includeOpen={false}
               repo={repo}
@@ -51,18 +47,19 @@ export function RepoDetailPage({
             />
           </>
         )}
-        summary={`${files.length} ${files.length === 1 ? 'file' : 'files'}`}
+        summary={(
+          <Await promise={content} fallback="Loading files…">
+            {(resolved) => `${resolved.files.length} ${resolved.files.length === 1 ? 'file' : 'files'}`}
+          </Await>
+        )}
         title="Code"
       />
       <RepositoryCodeView
-        files={files}
+        content={content}
         onSelectFilePath={onSelectFilePath}
         params={params}
         selectedFile={selectedFile}
-        selectedFileError={selectedFileError}
         selectedFileIdentity={selectedFileIdentity}
-        selectedFileLoading={selectedFileLoading}
-        selectedFileRetry={selectedFileRetry}
         selectedPath={selectedPath}
       />
     </WorkbenchPane>

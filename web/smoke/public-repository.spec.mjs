@@ -101,6 +101,10 @@ test('public repository exposes only its projected source', async () => {
       document.documentElement.dataset.persistenceProbe = 'same-document'
     })
 
+    await page.waitForFunction(() => {
+      const tab = document.querySelector('[role="tab"][aria-label="README.html"]')
+      return tab && Object.keys(tab).some((key) => key.startsWith('__reactProps$'))
+    })
     await page.getByRole('tab', { name: 'README.html', exact: true }).dblclick()
     await page.waitForURL((url) => url.searchParams.get('file') === 'README.html')
     await preview.waitFor()

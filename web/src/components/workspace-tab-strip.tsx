@@ -118,7 +118,9 @@ export function WorkspaceTabStrip({
                   active && 'text-foreground',
                 )}
                 id={domIds.tabId}
-                onClick={() => onActivate(tab.id)}
+                onClick={(event) => {
+                  if (event.detail === 1) onActivate(tab.id)
+                }}
                 onDoubleClick={() => onPin(tab.id)}
                 onKeyDown={(event) => moveFocus(event, tab.id)}
                 ref={tabRef(tab.id)}
