@@ -46,6 +46,7 @@ test('starts the tree before awaiting the primary file and leaves it deferred', 
 
   assert.deepEqual(calls, ['content', `file:${DEFAULT_REPO_FILE_PATH}`])
   assert.equal(result.content, contentPromise)
+  assert.equal(result.requestedPath, DEFAULT_REPO_FILE_PATH)
   assert.equal(result.selectedFile, readme)
   assert.equal(result.selectedPath, readme.path)
 
@@ -65,6 +66,7 @@ test('does not open files that are absent from the projection', async () => {
   const defaulted = await loadRepoCodeRouteData({ loadContent, loadFile })
 
   assert.equal(explicit.selectedPath, null)
+  assert.equal(explicit.requestedPath, 'missing.txt')
   assert.equal(defaulted.selectedPath, null)
 })
 

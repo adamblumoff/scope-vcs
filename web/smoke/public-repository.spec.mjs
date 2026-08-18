@@ -146,6 +146,25 @@ test('public repository exposes only its projected source', async () => {
       ),
       'same-document',
     )
+    const navigator = page.getByLabel('Repository file navigator')
+    await navigator.evaluate((element) => {
+      element.dataset.persistenceProbe = 'same-route'
+    })
+    await page.getByRole('button', { name: 'Expand src' }).click()
+    await page.getByRole('button', { name: 'app.ts', exact: true }).click()
+    await page.waitForURL((url) => url.searchParams.get('file') === 'src/app.ts')
+    await page.locator('pre code').filter({ hasText: 'export function greet' }).waitFor()
+    assert.equal(
+      await navigator.getAttribute('data-persistence-probe'),
+      'same-route',
+    )
+    await page.goBack()
+    await page.waitForURL((url) => !url.searchParams.has('file'))
+    await preview.waitFor()
+    assert.equal(
+      await navigator.getAttribute('data-persistence-probe'),
+      'same-route',
+    )
     assert.equal(await page.getByText('internal', { exact: true }).count(), 0)
     assert.equal(await page.getByText('plan.md', { exact: true }).count(), 0)
     assert.equal(

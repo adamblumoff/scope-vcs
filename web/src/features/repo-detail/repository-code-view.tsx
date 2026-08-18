@@ -10,6 +10,7 @@ import { isRepositoryHtmlPath } from '@/components/repository-html'
 import { RepositoryHtmlRenderer } from '@/components/repository-html-renderer'
 import { isRepositoryMarkdownPath } from '@/components/repository-markdown'
 import { RepositoryMarkdownRenderer } from '@/components/repository-markdown-renderer'
+import { Button } from '@/components/ui/button'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
@@ -20,7 +21,7 @@ import {
   type WorkspaceTabItem,
 } from '@/components/workspace-tab-model'
 import { Await } from '@tanstack/react-router'
-import { FileQuestion, LoaderCircle } from 'lucide-react'
+import { FileQuestion, LoaderCircle, TriangleAlert } from 'lucide-react'
 import { useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import {
   readRepositorySourceScroll,
@@ -34,14 +35,20 @@ export function RepositoryCodeView({
   onSelectFilePath,
   params,
   selectedFile,
+  selectedFileError,
   selectedFileIdentity,
+  selectedFileLoading,
+  selectedFileRetry,
   selectedPath,
 }: {
   content: Promise<RepoContent>
   onSelectFilePath: (path: string) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
+  selectedFileError: string | null
   selectedFileIdentity: string | null
+  selectedFileLoading: boolean
+  selectedFileRetry: () => void
   selectedPath: string | null
 }) {
   const workspaceTabs = useWorkspaceTabs({
@@ -80,11 +87,14 @@ export function RepositoryCodeView({
         </div>
         <SourcePane
           content={content}
+          error={selectedFileError}
           file={selectedFile}
+          loading={selectedFileLoading}
           onActivateTab={onSelectFilePath}
           onEmptyTabFocus={() => fileNavigatorRef.current?.focus()}
           onPinTab={(path) => workspaceTabs.open(path, true)}
           params={params}
+          retry={selectedFileRetry}
           scrollKey={selectedFileIdentity}
           selectedPath={openPath}
           workspaceTabs={workspaceTabs}
@@ -137,21 +147,27 @@ function FileNavigatorPending() {
 
 function SourcePane({
   content,
+  error,
   file,
+  loading,
   onActivateTab,
   onEmptyTabFocus,
   onPinTab,
   params,
+  retry,
   scrollKey,
   selectedPath,
   workspaceTabs,
 }: {
   content: Promise<RepoContent>
+  error: string | null
   file: RepoFileContent | null
+  loading: boolean
   onActivateTab: (path: string) => void
   onEmptyTabFocus: () => void
   onPinTab: (path: string) => void
   params: RepoParams
+  retry: () => void
   scrollKey: string | null
   selectedPath: string | null
   workspaceTabs: ReturnType<typeof useWorkspaceTabs>
@@ -162,10 +178,10 @@ function SourcePane({
   const contentRef = useRef<HTMLDivElement>(null)
   const meta = useMemo(
     () =>
-      file && selectedPath ? (
+      file && selectedPath && !loading && !error ? (
         <FileMeta file={file} />
       ) : undefined,
-    [file, selectedPath],
+    [error, file, loading, selectedPath],
   )
 
   useLayoutEffect(() => {
@@ -215,8 +231,11 @@ function SourcePane({
         tabIndex={selectedPath ? 0 : undefined}
       >
         <SourceContent
+          error={error}
           file={file}
+          loading={loading}
           params={params}
+          retry={retry}
           selectedPath={selectedPath}
         />
       </div>
@@ -273,12 +292,18 @@ function RepositoryTabStrip({
 }
 
 function SourceContent({
+  error,
   file,
+  loading,
   params,
+  retry,
   selectedPath,
 }: {
+  error: string | null
   file: RepoFileContent | null
+  loading: boolean
   params: RepoParams
+  retry: () => void
   selectedPath: string | null
 }) {
   if (!selectedPath) {
@@ -286,6 +311,27 @@ function SourceContent({
       <PanelState>
         <FileQuestion className="size-5" />
         <span>Select a file to inspect its projected contents.</span>
+      </PanelState>
+    )
+  }
+
+  if (loading) {
+    return (
+      <PanelState busy>
+        <LoaderCircle className="size-5 animate-spin" />
+        <span>Loading {displayPath(selectedPath)}</span>
+      </PanelState>
+    )
+  }
+
+  if (error) {
+    return (
+      <PanelState role="alert" tone="error">
+        <TriangleAlert className="size-5" />
+        <span>{error}</span>
+        <Button onClick={retry} size="sm" type="button" variant="secondary">
+          Retry
+        </Button>
       </PanelState>
     )
   }
