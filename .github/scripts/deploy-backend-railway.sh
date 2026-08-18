@@ -249,17 +249,24 @@ scale_service() {
 const replicas = Number(process.env.REPLICA_COUNT);
 if (!Number.isInteger(replicas) || replicas < 0) process.exit(2);
 console.log(JSON.stringify({
-  query: `mutation ScaleService($serviceId: String!, $environmentId: String!, $input: ServiceInstanceUpdateInput!) {
-    serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
+  query: `mutation ScaleService($environmentId: String!, $patch: EnvironmentConfig!, $commitMessage: String) {
+    environmentPatchCommit(environmentId: $environmentId, patch: $patch, commitMessage: $commitMessage)
   }`,
   variables: {
-    serviceId: process.env.SERVICE_ID,
     environmentId: process.env.ENVIRONMENT_ID,
-    input: {
-      multiRegionConfig: {
-        [process.env.RAILWAY_REGION]: {numReplicas: replicas},
+    patch: {
+      services: {
+        [process.env.SERVICE_ID]: {
+          deploy: {
+            // Railway represents zero replicas by removing the region from the environment config.
+            multiRegionConfig: {
+              [process.env.RAILWAY_REGION]: replicas === 0 ? null : {numReplicas: replicas},
+            },
+          },
+        },
       },
     },
+    commitMessage: `Scale service ${process.env.SERVICE_ID}`,
   },
 }));
 '
@@ -274,7 +281,7 @@ console.log(JSON.stringify({
   )"
   RAILWAY_GRAPHQL_RESPONSE="$response" node -e '
 const response = JSON.parse(process.env.RAILWAY_GRAPHQL_RESPONSE || "{}");
-if (response.data?.serviceInstanceUpdate !== true) {
+if (response.data?.environmentPatchCommit !== true) {
   const messages = Array.isArray(response.errors)
     ? response.errors.map(({message}) => message).filter(Boolean).join("; ")
     : "";
