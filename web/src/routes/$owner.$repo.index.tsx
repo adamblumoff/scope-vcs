@@ -20,6 +20,7 @@ import { RepoContentError } from '@/components/repo-content-error'
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useEffect, useRef } from 'react'
+import { toast } from 'sonner'
 
 const PROJECTION_REBUILDING_MESSAGE = 'repository projection is rebuilding; retry shortly'
 
@@ -95,8 +96,16 @@ function RepoIndexRoute() {
     const selection = ++latestSelection.current
     const search = { file: displayRouteFilePath(path) }
     let committed = false
-    await router.preloadRoute({ params, search, to: '/$owner/$repo' })
-    if (selection === latestSelection.current) {
+    const matches = await router.preloadRoute({
+      params,
+      search,
+      to: '/$owner/$repo',
+    })
+    const current = selection === latestSelection.current
+    const ready = matches?.every(
+      (match) => router.getMatch(match.id)?.status === 'success',
+    )
+    if (current && ready) {
       await router.navigate({
         params,
         resetScroll: false,
@@ -104,6 +113,8 @@ function RepoIndexRoute() {
         to: '/$owner/$repo',
       })
       committed = true
+    } else if (current) {
+      toast.error('File could not be opened. Try again.')
     }
     return committed
   }
