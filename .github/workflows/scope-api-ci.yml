@@ -114,7 +114,7 @@ jobs:
           done
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli@5.23.1
+        run: npm install -g @railway/cli@5.41.2
 
       - name: Deploy to Railway
         shell: bash
@@ -126,6 +126,7 @@ jobs:
           SCOPE_RAILWAY_API_SERVICE_ID: 9456cd8d-40bd-489a-a181-72b7f777c4a8
           SCOPE_RAILWAY_WORKER_SERVICE_ID: a474a0d1-3000-4a95-9ca3-cd3a7f3ef669
           SCOPE_RAILWAY_DATABASE_SERVICE_ID: 44c41a90-2d1a-4a1b-85c9-6af85d179be3
+          SCOPE_RAILWAY_REGION_ID: us-east4-eqdc4a
           SCOPE_RAILWAY_API_REPLICAS: 1
           SCOPE_RAILWAY_WORKER_REPLICAS: 1
         run: bash .github/scripts/deploy-backend-railway.sh .railway-upload/api .railway-upload/worker
