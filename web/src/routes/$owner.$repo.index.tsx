@@ -12,22 +12,15 @@ import {
   loadRepoFileWhenReady,
   type RepoFileLoadResult,
 } from '@/features/repo-detail/repo-code-route-data'
-import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
-import {
-  peekRepoFileCache,
-  readRepoFileCache,
-  repoFileCacheKey,
-  writeRepoFileCache,
-} from '@/features/repo-detail/repo-file-cache'
 import {
   displayRouteFilePath,
   parseRouteFileSearch,
 } from '@/lib/route-file'
-import { useCachedResource } from '@/lib/use-cached-resource'
 import { RepoContentError } from '@/components/repo-content-error'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { useCallback } from 'react'
+import { useEffect, useRef } from 'react'
+import { toast } from 'sonner'
 
 const PROJECTION_REBUILDING_MESSAGE = 'repository projection is rebuilding; retry shortly'
 
@@ -57,12 +50,12 @@ const loadRepoFile = createServerFn({ method: 'GET' })
 
 export const Route = createFileRoute('/$owner/$repo/')({
   validateSearch: parseRepoCodeSearch,
-  beforeLoad: ({ search }) => ({
-    initialFilePath: search.file ?? DEFAULT_REPO_FILE_PATH,
+  loaderDeps: ({ search }) => ({
+    file: search.file ?? DEFAULT_REPO_FILE_PATH,
   }),
   staleTime: Infinity,
-  loader: ({ abortController, context, params }) =>
-    loadRepoCodeRouteData({
+  loader: async ({ abortController, cause, deps, params }) => {
+    const data = await loadRepoCodeRouteData({
       loadContent: () => loadRepoContent({
         data: params,
         signal: abortController.signal,
@@ -74,97 +67,65 @@ export const Route = createFileRoute('/$owner/$repo/')({
         }),
         signal: abortController.signal,
       }),
-      requestedPath: context.initialFilePath,
-    }),
+      requestedPath: deps.file,
+    })
+
+    // Initial entry can reveal the primary file before the tree. Preloads wait
+    // for both so the cached navigation can replace the screen in one pass.
+    if (cause !== 'enter') await data.content
+    return data
+  },
   errorComponent: RepoContentError,
   component: RepoIndexRoute,
 })
 
 function RepoIndexRoute() {
-  const routeData = Route.useLoaderData()
-  const {
-    content,
-    requestedPath: initialRequestedPath,
-    selectedFile: initialFile,
-    selectedPath: initialPath,
-  } = routeData
+  const { content, selectedFile, selectedPath } = Route.useLoaderData()
   const params = Route.useParams()
-  const search = Route.useSearch()
-  const { repo } = useRepoLayout()
-  const navigate = useNavigate({ from: Route.fullPath })
-  const requestedPath = search.file ?? DEFAULT_REPO_FILE_PATH
-  const identity = repoFileCacheKey({
-    audience: repo.access.can_read_private_files ? 'private' : 'public',
-    changeVersion: repo.change_version,
-    path: requestedPath,
-    repoId: repo.id,
-  })
-  const initialIdentity = repoFileCacheKey({
-    audience: repo.access.can_read_private_files ? 'private' : 'public',
-    changeVersion: repo.change_version,
-    path: initialRequestedPath,
-    repoId: repo.id,
-  })
-  const readFile = useCallback(
-    (key: string) => readRepoFileCache(key)
-      ?? (key === initialIdentity ? initialFile : null),
-    [initialFile, initialIdentity],
-  )
-  const peekFile = useCallback(
-    (key: string) => peekRepoFileCache(key)
-      ?? (key === initialIdentity ? initialFile : null),
-    [initialFile, initialIdentity],
-  )
-  const loadSelectedFile = useCallback(
-    async (signal: AbortSignal) => {
-      const file = await loadRepoFileWhenReady({
-        load: () => loadRepoFile({
-          data: {
-            owner: params.owner,
-            path: requestedPath,
-            repo: params.repo,
-          },
-          signal,
-        }),
-        signal,
+  const router = useRouter()
+  const latestSelection = useRef(0)
+  const identity = selectedFile
+    ? `${params.owner}\0${params.repo}\0${selectedFile.path}\0${selectedFile.oid}`
+    : null
+
+  useEffect(() => () => {
+    latestSelection.current += 1
+  }, [params.owner, params.repo])
+
+  async function selectFile(path: string) {
+    const selection = ++latestSelection.current
+    const search = { file: displayRouteFilePath(path) }
+    let committed = false
+    const matches = await router.preloadRoute({
+      params,
+      search,
+      to: '/$owner/$repo',
+    })
+    const current = selection === latestSelection.current
+    const ready = matches?.every(
+      (match) => router.getMatch(match.id)?.status === 'success',
+    )
+    if (current && ready) {
+      await router.navigate({
+        params,
+        resetScroll: false,
+        search,
+        to: '/$owner/$repo',
       })
-      if (!file) {
-        throw new Error('This file is no longer available in the current scoped view.')
-      }
-      return file
-    },
-    [params.owner, params.repo, requestedPath],
-  )
-  const resourceIdentity = identity === initialIdentity && !initialFile
-    ? null
-    : identity
-  const selectedResource = useCachedResource({
-    fallbackError: 'File content is unavailable.',
-    identity: resourceIdentity,
-    load: loadSelectedFile,
-    peek: peekFile,
-    read: readFile,
-    write: writeRepoFileCache,
-  })
-  const selectedPath = identity === initialIdentity
-    ? initialPath
-    : selectedResource.value?.path ?? `/${displayRouteFilePath(requestedPath)}`
+      committed = true
+    } else if (current) {
+      toast.error('File could not be opened. Try again.')
+    }
+    return committed
+  }
 
   return (
     <RepoDetailPage
       content={content}
-      onSelectFilePath={(path) => {
-        void navigate({
-          resetScroll: false,
-          search: { file: displayRouteFilePath(path) },
-        })
-      }}
+      onSelectFilePath={selectFile}
       params={params}
-      selectedFile={selectedResource.value}
-      selectedFileError={selectedResource.error}
-      selectedFileIdentity={resourceIdentity}
-      selectedFileLoading={selectedResource.status === 'loading'}
-      selectedFileRetry={selectedResource.retry}
+      selectedFile={selectedFile}
+      selectedFileIdentity={identity}
       selectedPath={selectedPath}
     />
   )

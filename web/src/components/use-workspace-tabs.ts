@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import {
   closeWorkspaceTab,
   emptyWorkspaceTabState,
@@ -22,7 +22,7 @@ export function useWorkspaceTabs({
   // A file reached without opening a tab — a deep link or browser history entry
   // — becomes the preview tab. Closing never routes to a closed file, so this
   // cannot resurrect one.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!activeId) return
     setState((current) => openWorkspaceTab(current, activeId, false))
   }, [activeId])

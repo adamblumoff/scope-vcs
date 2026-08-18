@@ -150,10 +150,60 @@ test('public repository exposes only its projected source', async () => {
     await navigator.evaluate((element) => {
       element.dataset.persistenceProbe = 'same-route'
     })
+    let releaseFileRequest = () => undefined
+    let markFileRequestStarted = () => undefined
+    const fileRequestStarted = new Promise((resolve) => {
+      markFileRequestStarted = resolve
+    })
+    const fileRequestReleased = new Promise((resolve) => {
+      releaseFileRequest = resolve
+    })
+    await page.route('**/_serverFn/**', async (route) => {
+      if (!decodeURIComponent(route.request().url()).includes('"src/app.ts"')) {
+        await route.continue()
+        return
+      }
+      markFileRequestStarted()
+      await fileRequestReleased
+      await route.continue()
+    })
+    await page.evaluate(() => {
+      globalThis.__scopeEmptyViewerFrame = false
+      globalThis.__scopeTrackEmptyViewer = true
+      const sample = () => {
+        if (!globalThis.__scopeTrackEmptyViewer) return
+        if (document.body.textContent?.includes(
+          'Select a file to inspect its projected contents.',
+        )) {
+          globalThis.__scopeEmptyViewerFrame = true
+        }
+        requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    })
     await page.getByRole('button', { name: 'Expand src' }).click()
-    await page.getByRole('button', { name: 'app.ts', exact: true }).click()
+    const openFile = page.getByRole('button', { name: 'app.ts', exact: true }).click()
+    await fileRequestStarted
+    assert.equal(await preview.isVisible(), true)
+    assert.equal(
+      await previewFrame.evaluate(() =>
+        document.documentElement.dataset.persistenceProbe
+      ),
+      'same-document',
+    )
+    assert.equal(
+      await navigator.getAttribute('data-persistence-probe'),
+      'same-route',
+    )
+    assert.equal(new URL(page.url()).searchParams.has('file'), false)
+    releaseFileRequest()
+    await openFile
     await page.waitForURL((url) => url.searchParams.get('file') === 'src/app.ts')
     await page.locator('pre code').filter({ hasText: 'export function greet' }).waitFor()
+    assert.equal(await page.evaluate(() => {
+      globalThis.__scopeTrackEmptyViewer = false
+      return globalThis.__scopeEmptyViewerFrame
+    }), false)
     assert.equal(
       await navigator.getAttribute('data-persistence-probe'),
       'same-route',
@@ -161,6 +211,36 @@ test('public repository exposes only its projected source', async () => {
     await page.goBack()
     await page.waitForURL((url) => !url.searchParams.has('file'))
     await preview.waitFor()
+    assert.equal(
+      await navigator.getAttribute('data-persistence-probe'),
+      'same-route',
+    )
+    const restoredPreview = await preview.elementHandle()
+    assert(restoredPreview)
+    const restoredPreviewFrame = await restoredPreview.contentFrame()
+    assert(restoredPreviewFrame)
+    await restoredPreviewFrame.evaluate(() => {
+      document.documentElement.dataset.failedNavigationProbe = 'preserved'
+    })
+    await page.evaluate(() => globalThis.__TSR_ROUTER__.clearCache())
+    await page.unroute('**/_serverFn/**')
+    await page.route('**/_serverFn/**', async (route) => {
+      if (!decodeURIComponent(route.request().url()).includes('"src/app.ts"')) {
+        await route.continue()
+        return
+      }
+      await route.fulfill({ body: 'file unavailable', status: 500 })
+    })
+    await page.getByRole('button', { name: 'app.ts', exact: true }).click()
+    await page.getByText('File could not be opened. Try again.').waitFor()
+    assert.equal(new URL(page.url()).searchParams.has('file'), false)
+    assert.equal(await preview.isVisible(), true)
+    assert.equal(
+      await restoredPreviewFrame.evaluate(() =>
+        document.documentElement.dataset.failedNavigationProbe
+      ),
+      'preserved',
+    )
     assert.equal(
       await navigator.getAttribute('data-persistence-probe'),
       'same-route',
