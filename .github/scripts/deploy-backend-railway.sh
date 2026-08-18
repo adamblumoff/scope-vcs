@@ -11,18 +11,19 @@ database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SE
 railway_region="${SCOPE_RAILWAY_REGION_ID:?SCOPE_RAILWAY_REGION_ID is required}"
 recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
 
-if [[ -z "${RAILWAY_API_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
-  echo "RAILWAY_API_TOKEN and RAILWAY_PROJECT_ID are required for backend deployment." >&2
-  exit 1
-fi
-if [[ -n "${RAILWAY_TOKEN:-}" ]]; then
-  echo "RAILWAY_TOKEN must not be set for backend deployment; scaling requires a workspace-scoped RAILWAY_API_TOKEN." >&2
+if [[ -z "${RAILWAY_TOKEN:-}" || -z "${RAILWAY_API_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
+  echo "RAILWAY_TOKEN, RAILWAY_API_TOKEN, and RAILWAY_PROJECT_ID are required for backend deployment." >&2
   exit 1
 fi
 if [[ ! -x "$maintenance_binary" ]]; then
   echo "Maintenance binary is not executable: $maintenance_binary" >&2
   exit 1
 fi
+
+# The Railway CLI accepts project tokens but currently rejects workspace tokens. Keep the
+# workspace token out of its environment and use it only for the scaling API mutation below.
+railway_api_token="$RAILWAY_API_TOKEN"
+unset RAILWAY_API_TOKEN
 
 railway_scope=(--project "$RAILWAY_PROJECT_ID" --environment "$environment")
 cutover_committed=0
@@ -238,9 +239,49 @@ process.exit(Array.isArray(deployments) && deployments.length > 0 ? 0 : 1);
 scale_service() {
   local service_name="$1"
   local replicas="$2"
-  railway scale --service "$service_name" \
-    "${railway_region}=${replicas}" \
-    --json
+  local request response
+  request="$(
+    SERVICE_ID="$service_name" \
+      ENVIRONMENT_ID="$environment" \
+      RAILWAY_REGION="$railway_region" \
+      REPLICA_COUNT="$replicas" \
+      node -e '
+const replicas = Number(process.env.REPLICA_COUNT);
+if (!Number.isInteger(replicas) || replicas < 0) process.exit(2);
+console.log(JSON.stringify({
+  query: `mutation ScaleService($serviceId: String!, $environmentId: String!, $input: ServiceInstanceUpdateInput!) {
+    serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
+  }`,
+  variables: {
+    serviceId: process.env.SERVICE_ID,
+    environmentId: process.env.ENVIRONMENT_ID,
+    input: {
+      multiRegionConfig: {
+        [process.env.RAILWAY_REGION]: {numReplicas: replicas},
+      },
+    },
+  },
+}));
+'
+  )"
+  response="$(
+    printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "$railway_api_token" \
+      | curl --silent --show-error --fail-with-body \
+        --request POST \
+        --url https://backboard.railway.com/graphql/v2 \
+        --header @- \
+        --data-binary "$request"
+  )"
+  RAILWAY_GRAPHQL_RESPONSE="$response" node -e '
+const response = JSON.parse(process.env.RAILWAY_GRAPHQL_RESPONSE || "{}");
+if (response.data?.serviceInstanceUpdate !== true) {
+  const messages = Array.isArray(response.errors)
+    ? response.errors.map(({message}) => message).filter(Boolean).join("; ")
+    : "";
+  console.error(`Railway scaling mutation failed${messages ? `: ${messages}` : "."}`);
+  process.exit(1);
+}
+'
 }
 
 quiesce_writers() {
@@ -311,10 +352,6 @@ leave_failure_state() {
 trap 'leave_failure_state $?' EXIT
 
 validate_production_target
-railway link \
-  --project "$RAILWAY_PROJECT_ID" \
-  --environment "$environment" \
-  --json >/dev/null
 
 api_rollback_replicas="$(
   configured_or_declared_replicas "$api_service" SCOPE_RAILWAY_API_REPLICAS

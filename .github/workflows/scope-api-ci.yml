@@ -120,6 +120,7 @@ jobs:
         shell: bash
         env:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
           RAILWAY_PROJECT_ID: 45dd67fa-6d69-48ad-9680-1313d41b4490
           SCOPE_RAILWAY_ENVIRONMENT_ID: 2f21f6b6-6817-4338-9e08-cf18e78b8f46
