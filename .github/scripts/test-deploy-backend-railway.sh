@@ -243,7 +243,8 @@ run_cutover() {
     FAKE_FAIL_FIRST_PLAN="$fail_first_plan" \
     FAKE_DENY_SCALE_SERVICE="$deny_scale_service" \
     RAILWAY_PROJECT_ID="project-test" \
-    RAILWAY_TOKEN="token-test" \
+    RAILWAY_API_TOKEN="token-test" \
+    RAILWAY_TOKEN="" \
     SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
     SCOPE_RAILWAY_API_SERVICE_ID="scope-api" \
     SCOPE_RAILWAY_WORKER_SERVICE_ID="scope-worker" \

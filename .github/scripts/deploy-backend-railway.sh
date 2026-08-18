@@ -11,12 +11,12 @@ database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SE
 railway_region="${SCOPE_RAILWAY_REGION_ID:?SCOPE_RAILWAY_REGION_ID is required}"
 recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
 
-if [[ -z "${RAILWAY_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
-  echo "RAILWAY_TOKEN and RAILWAY_PROJECT_ID are required for backend deployment." >&2
+if [[ -z "${RAILWAY_API_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
+  echo "RAILWAY_API_TOKEN and RAILWAY_PROJECT_ID are required for backend deployment." >&2
   exit 1
 fi
-if [[ -n "${RAILWAY_API_TOKEN:-}" ]]; then
-  echo "RAILWAY_API_TOKEN must not be set for backend deployment; use only RAILWAY_TOKEN." >&2
+if [[ -n "${RAILWAY_TOKEN:-}" ]]; then
+  echo "RAILWAY_TOKEN must not be set for backend deployment; scaling requires a workspace-scoped RAILWAY_API_TOKEN." >&2
   exit 1
 fi
 if [[ ! -x "$maintenance_binary" ]]; then
