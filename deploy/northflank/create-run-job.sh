@@ -20,7 +20,7 @@ payload="$(jq -cn \
   '{
     name: "Scope cloud runs",
     description: "Reusable Scope run-once execution primitive",
-    billing: {buildPlan: $plan, deploymentPlan: $plan},
+    billing: {deploymentPlan: $plan},
     deployment: {
       docker: {configType: "customEntrypoint", customEntrypoint: "/scope/bin/scope-runner-runtime"},
       storage: {ephemeralStorage: {storageSize: 20480}},
