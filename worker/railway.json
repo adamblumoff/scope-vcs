@@ -3,6 +3,7 @@
   "build": {
     "watchPatterns": [
       "/worker/**",
+      "/runner-runtime/**",
       "/crates/**",
       "/Cargo.toml",
       "/Cargo.lock",
