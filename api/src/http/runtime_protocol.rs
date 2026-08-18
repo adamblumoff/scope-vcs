@@ -390,6 +390,7 @@ pub(crate) async fn complete(
 ) -> Result<Json<AttemptStatusResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
     let conclusion = match input.conclusion {
+        AttemptConclusionRequest::Succeeded => AttemptConclusion::Succeeded,
         AttemptConclusionRequest::SetupFailed { exit_code, message } => {
             AttemptConclusion::SetupFailed { exit_code, message }
         }

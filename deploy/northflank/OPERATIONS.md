@@ -12,8 +12,9 @@ image digest. Northflank retries are disabled because Scope owns retry and idemp
 3. Export `NORTHFLANK_API_TOKEN`, `NORTHFLANK_PROJECT_ID`, `NORTHFLANK_DEPLOYMENT_PLAN`, and
    `SCOPE_WORKFLOW_IMAGE`, then run `deploy/northflank/create-run-job.sh`.
 4. Copy the returned job `data.id` into the worker as `NORTHFLANK_JOB_ID`.
-5. Give the Northflank token only the project job read/run/abort permissions documented by
-   Northflank. Store it in the backend secret manager, never in a workflow or repository.
+5. Give the Northflank token only `Project > Jobs > General > Read`, `Run job`, and `Update`.
+   Northflank requires `Update` to abort an active run. Store the token in the backend secret
+   manager, never in a workflow or repository.
 
 ## Worker configuration
 

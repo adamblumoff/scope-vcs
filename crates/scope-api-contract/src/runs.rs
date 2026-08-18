@@ -496,6 +496,7 @@ pub struct CompleteAttemptRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum AttemptConclusionRequest {
+    Succeeded,
     SetupFailed { exit_code: i32, message: String },
     TimedOut,
     Canceled,

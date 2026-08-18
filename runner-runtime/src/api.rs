@@ -247,6 +247,10 @@ impl RuntimeClient {
         self.complete(AttemptConclusionRequest::TimedOut)
     }
 
+    pub fn complete_succeeded(&self) -> anyhow::Result<()> {
+        self.complete(AttemptConclusionRequest::Succeeded)
+    }
+
     pub fn complete_canceled(&self) -> anyhow::Result<()> {
         self.complete(AttemptConclusionRequest::Canceled)
     }
@@ -328,14 +332,14 @@ impl RuntimeClient {
     }
 }
 
-pub struct SetupHeartbeat {
+pub struct RuntimeHeartbeat {
     stop: mpsc::Sender<()>,
     canceled: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
-impl SetupHeartbeat {
+impl RuntimeHeartbeat {
     pub fn start(client: RuntimeClient) -> Self {
         let (stop, receiver) = mpsc::channel();
         let canceled = Arc::new(AtomicBool::new(false));
@@ -353,7 +357,7 @@ impl SetupHeartbeat {
                         }
                         Ok(_) => {}
                         Err(error) => {
-                            eprintln!("runtime setup heartbeat failed: {error:#}");
+                            eprintln!("runtime heartbeat failed: {error:#}");
                             failed_in_thread.store(true, Ordering::Release);
                             break;
                         }
@@ -374,16 +378,16 @@ impl SetupHeartbeat {
         if let Some(thread) = self.thread.take() {
             thread
                 .join()
-                .map_err(|_| anyhow::anyhow!("runtime setup heartbeat thread panicked"))?;
+                .map_err(|_| anyhow::anyhow!("runtime heartbeat thread panicked"))?;
         }
         if self.failed.load(Ordering::Acquire) {
-            bail!("runtime setup lost contact with the Scope API");
+            bail!("runtime lost contact with the Scope API");
         }
         Ok(self.canceled.load(Ordering::Acquire))
     }
 }
 
-impl Drop for SetupHeartbeat {
+impl Drop for RuntimeHeartbeat {
     fn drop(&mut self) {
         let _ = self.stop.send(());
         if let Some(thread) = self.thread.take() {

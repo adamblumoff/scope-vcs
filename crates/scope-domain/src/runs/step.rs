@@ -10,6 +10,7 @@ pub const MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES: usize = 2 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttemptConclusion {
+    Succeeded,
     SetupFailed { exit_code: i32, message: String },
     TimedOut,
     Canceled,
@@ -276,14 +277,6 @@ impl RunAttempt {
             StepConclusion::Succeeded => {
                 steps[index].succeed(now_unix);
                 job.updated_at_unix = now_unix;
-                if index + 1 == steps.len() {
-                    self.state = AttemptState::Succeeded;
-                    self.completed_at_unix = Some(now_unix);
-                    self.terminal_reason = None;
-                    job.state = RunJobState::Succeeded;
-                    job.current_attempt_id = None;
-                    job.completed_at_unix = Some(now_unix);
-                }
             }
             StepConclusion::Failed { exit_code } => {
                 if exit_code == 0 {
