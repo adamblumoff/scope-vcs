@@ -150,8 +150,40 @@ test('public repository exposes only its projected source', async () => {
     await navigator.evaluate((element) => {
       element.dataset.persistenceProbe = 'same-route'
     })
+    let releaseFileRequest = () => undefined
+    let markFileRequestStarted = () => undefined
+    const fileRequestStarted = new Promise((resolve) => {
+      markFileRequestStarted = resolve
+    })
+    const fileRequestReleased = new Promise((resolve) => {
+      releaseFileRequest = resolve
+    })
+    await page.route('**/_serverFn/**', async (route) => {
+      if (!decodeURIComponent(route.request().url()).includes('"src/app.ts"')) {
+        await route.continue()
+        return
+      }
+      markFileRequestStarted()
+      await fileRequestReleased
+      await route.continue()
+    })
     await page.getByRole('button', { name: 'Expand src' }).click()
-    await page.getByRole('button', { name: 'app.ts', exact: true }).click()
+    const openFile = page.getByRole('button', { name: 'app.ts', exact: true }).click()
+    await fileRequestStarted
+    assert.equal(await preview.isVisible(), true)
+    assert.equal(
+      await previewFrame.evaluate(() =>
+        document.documentElement.dataset.persistenceProbe
+      ),
+      'same-document',
+    )
+    assert.equal(
+      await navigator.getAttribute('data-persistence-probe'),
+      'same-route',
+    )
+    assert.equal(new URL(page.url()).searchParams.has('file'), false)
+    releaseFileRequest()
+    await openFile
     await page.waitForURL((url) => url.searchParams.get('file') === 'src/app.ts')
     await page.locator('pre code').filter({ hasText: 'export function greet' }).waitFor()
     assert.equal(
