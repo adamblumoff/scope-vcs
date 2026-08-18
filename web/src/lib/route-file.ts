@@ -9,21 +9,3 @@ export function parseRouteFileSearch(value: unknown) {
     ? path
     : undefined
 }
-
-export function selectedRouteFilePath(
-  files: ReadonlyArray<{ path: string }>,
-  selected?: string,
-) {
-  if (!selected) return null
-  return (
-    files.find((file) => displayRouteFilePath(file.path) === selected)?.path ??
-    null
-  )
-}
-
-export function defaultReadmePath(files: ReadonlyArray<{ path: string }>) {
-  const readme = files.find(
-    (file) => file.path === 'README.html' || file.path === '/README.html',
-  )
-  return readme ? displayRouteFilePath(readme.path) : undefined
-}
