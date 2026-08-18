@@ -197,8 +197,10 @@ done
 read -r service replicas < <(
   REQUEST_JSON="$request" node -e '
 const request = JSON.parse(process.env.REQUEST_JSON || "{}");
-const region = request.variables?.input?.multiRegionConfig?.["us-east4-eqdc4a"];
-console.log(`${request.variables?.serviceId || ""} ${region?.numReplicas ?? ""}`);
+const services = request.variables?.patch?.services || {};
+const [service, config] = Object.entries(services)[0] || [];
+const region = config?.deploy?.multiRegionConfig?.["us-east4-eqdc4a"];
+console.log(`${service || ""} ${region === null ? 0 : region?.numReplicas ?? ""}`);
 '
 )
 printf 'graphql scale %s %s\n' "$service" "$replicas" >> "$FAKE_RAILWAY_TRACE"
@@ -211,7 +213,7 @@ if [[ "$replicas" == "0" ]]; then
 else
   rm -f "$FAKE_RAILWAY_STATE/stopped-${service}" "$FAKE_RAILWAY_STATE/crashed-${service}"
 fi
-echo '{"data":{"serviceInstanceUpdate":true}}'
+echo '{"data":{"environmentPatchCommit":true}}'
 FAKE
 chmod +x "$test_dir/bin/curl"
 
