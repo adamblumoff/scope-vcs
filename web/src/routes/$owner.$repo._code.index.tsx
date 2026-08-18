@@ -1,14 +1,10 @@
 import { HttpError } from '@/api/client'
-import {
-  loadRepoContentForRequest,
-  loadRepoFileForRequest,
-  parseRepoParams,
-} from '@/api/repos'
+import { loadRepoFileForRequest } from '@/api/repos'
 import type { RepoParams } from '@/api/types'
+import { RepoContentError } from '@/components/repo-content-error'
 import { RepoDetailPage } from '@/features/repo-detail/repo-detail-page'
 import {
   DEFAULT_REPO_FILE_PATH,
-  loadRepoCodeRouteData,
   loadRepoFileWhenReady,
   type RepoFileLoadResult,
 } from '@/features/repo-detail/repo-code-route-data'
@@ -16,17 +12,17 @@ import {
   displayRouteFilePath,
   parseRouteFileSearch,
 } from '@/lib/route-file'
-import { RepoContentError } from '@/components/repo-content-error'
-import { createFileRoute, useRouter } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  getRouteApi,
+  useRouter,
+} from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 
 const PROJECTION_REBUILDING_MESSAGE = 'repository projection is rebuilding; retry shortly'
-
-const loadRepoContent = createServerFn({ method: 'GET' })
-  .validator(parseRepoParams)
-  .handler(({ data }) => loadRepoContentForRequest(data))
+const codeRoute = getRouteApi('/$owner/$repo/_code')
 
 const loadRepoFile = createServerFn({ method: 'GET' })
   .validator((data: RepoFileInput) => data)
@@ -48,39 +44,33 @@ const loadRepoFile = createServerFn({ method: 'GET' })
     }
   })
 
-export const Route = createFileRoute('/$owner/$repo/')({
+export const Route = createFileRoute('/$owner/$repo/_code/')({
   validateSearch: parseRepoCodeSearch,
   loaderDeps: ({ search }) => ({
     file: search.file ?? DEFAULT_REPO_FILE_PATH,
   }),
   staleTime: Infinity,
-  loader: async ({ abortController, cause, deps, params }) => {
-    const data = await loadRepoCodeRouteData({
-      loadContent: () => loadRepoContent({
-        data: params,
+  loader: async ({ abortController, deps, params }) => {
+    const selectedFile = await loadRepoFileWhenReady({
+      load: () => loadRepoFile({
+        data: { ...params, path: deps.file },
         signal: abortController.signal,
       }),
-      loadFile: (path) => loadRepoFileWhenReady({
-        load: () => loadRepoFile({
-          data: { ...params, path },
-          signal: abortController.signal,
-        }),
-        signal: abortController.signal,
-      }),
-      requestedPath: deps.file,
+      signal: abortController.signal,
     })
 
-    // Initial entry can reveal the primary file before the tree. Preloads wait
-    // for both so the cached navigation can replace the screen in one pass.
-    if (cause !== 'enter') await data.content
-    return data
+    return {
+      selectedFile,
+      selectedPath: selectedFile?.path ?? null,
+    }
   },
   errorComponent: RepoContentError,
   component: RepoIndexRoute,
 })
 
 function RepoIndexRoute() {
-  const { content, selectedFile, selectedPath } = Route.useLoaderData()
+  const { selectedFile, selectedPath } = Route.useLoaderData()
+  const { content } = codeRoute.useLoaderData()
   const params = Route.useParams()
   const router = useRouter()
   const latestSelection = useRef(0)
@@ -95,7 +85,6 @@ function RepoIndexRoute() {
   async function selectFile(path: string) {
     const selection = ++latestSelection.current
     const search = { file: displayRouteFilePath(path) }
-    let committed = false
     const matches = await router.preloadRoute({
       params,
       search,
@@ -112,11 +101,10 @@ function RepoIndexRoute() {
         search,
         to: '/$owner/$repo',
       })
-      committed = true
-    } else if (current) {
-      toast.error('File could not be opened. Try again.')
+      return true
     }
-    return committed
+    if (current) toast.error('File could not be opened. Try again.')
+    return false
   }
 
   return (

@@ -168,14 +168,23 @@ test('public repository exposes only its projected source', async () => {
       await route.continue()
     })
     await page.evaluate(() => {
-      globalThis.__scopeEmptyViewerFrame = false
-      globalThis.__scopeTrackEmptyViewer = true
+      globalThis.__scopeTransitionFrames = {
+        emptyViewer: false,
+        hiddenRepository: false,
+      }
+      globalThis.__scopeTrackTransitionFrames = true
       const sample = () => {
-        if (!globalThis.__scopeTrackEmptyViewer) return
+        if (!globalThis.__scopeTrackTransitionFrames) return
         if (document.body.textContent?.includes(
           'Select a file to inspect its projected contents.',
         )) {
-          globalThis.__scopeEmptyViewerFrame = true
+          globalThis.__scopeTransitionFrames.emptyViewer = true
+        }
+        const navigator = document.querySelector(
+          '[aria-label="Repository file navigator"]',
+        )
+        if (!navigator || navigator.getClientRects().length === 0) {
+          globalThis.__scopeTransitionFrames.hiddenRepository = true
         }
         requestAnimationFrame(sample)
       }
@@ -200,10 +209,12 @@ test('public repository exposes only its projected source', async () => {
     await openFile
     await page.waitForURL((url) => url.searchParams.get('file') === 'src/app.ts')
     await page.locator('pre code').filter({ hasText: 'export function greet' }).waitFor()
-    assert.equal(await page.evaluate(() => {
-      globalThis.__scopeTrackEmptyViewer = false
-      return globalThis.__scopeEmptyViewerFrame
-    }), false)
+    const transitionFrames = await page.evaluate(() => {
+      globalThis.__scopeTrackTransitionFrames = false
+      return globalThis.__scopeTransitionFrames
+    })
+    assert.equal(transitionFrames.emptyViewer, false)
+    assert.equal(transitionFrames.hiddenRepository, false)
     assert.equal(
       await navigator.getAttribute('data-persistence-probe'),
       'same-route',
