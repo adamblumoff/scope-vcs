@@ -1,4 +1,4 @@
-import type { RepoContent, RepoFileContent } from '@/api/types'
+import type { RepoFileContent } from '@/api/types'
 
 export const DEFAULT_REPO_FILE_PATH = 'README.html'
 
@@ -7,31 +7,6 @@ const REBUILD_RETRY_DELAYS = [0, 250, 500, 1_000, 2_000] as const
 export type RepoFileLoadResult =
   | { file: RepoFileContent; status: 'ready' }
   | { status: 'missing' | 'rebuilding' }
-
-export type RepoCodeRouteData = Awaited<
-  ReturnType<typeof loadRepoCodeRouteData>
->
-
-export async function loadRepoCodeRouteData({
-  loadContent,
-  loadFile,
-  requestedPath,
-}: {
-  loadContent: () => Promise<RepoContent>
-  loadFile: (path: string) => Promise<RepoFileContent | null>
-  requestedPath?: string
-}) {
-  const primaryPath = requestedPath ?? DEFAULT_REPO_FILE_PATH
-  const content = loadContent()
-  const selectedFile = await loadFile(primaryPath)
-
-  return {
-    content,
-    requestedPath: primaryPath,
-    selectedFile,
-    selectedPath: selectedFile?.path ?? null,
-  }
-}
 
 export async function loadRepoFileWhenReady({
   load,
