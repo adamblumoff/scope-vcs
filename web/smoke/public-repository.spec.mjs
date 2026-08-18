@@ -105,8 +105,20 @@ test('public repository exposes only its projected source', async () => {
       const tab = document.querySelector('[role="tab"][aria-label="README.html"]')
       return tab && Object.keys(tab).some((key) => key.startsWith('__reactProps$'))
     })
+    const readmeHistoryLength = await page.evaluate(() => history.length)
+    const selectedReadmeRequests = []
+    const recordSelectedReadmeRequest = (request) => {
+      if (request.url().includes('/_serverFn/')) {
+        selectedReadmeRequests.push(request.url())
+      }
+    }
+    page.on('request', recordSelectedReadmeRequest)
+    await page.getByRole('button', { name: 'README.html', exact: true }).click()
     await page.getByRole('tab', { name: 'README.html', exact: true }).dblclick()
-    await page.waitForURL((url) => url.searchParams.get('file') === 'README.html')
+    page.off('request', recordSelectedReadmeRequest)
+    assert.deepEqual(selectedReadmeRequests, [])
+    assert.equal(new URL(page.url()).searchParams.has('file'), false)
+    assert.equal(await page.evaluate(() => history.length), readmeHistoryLength)
     await preview.waitFor()
     assert.equal(
       await previewFrame.evaluate(() =>
@@ -131,15 +143,44 @@ test('public repository exposes only its projected source', async () => {
 
     await page
       .getByRole('navigation', { name: 'Primary' })
-      .getByRole('link', { name: 'History', exact: true })
+      .getByRole('link', { name: 'Requests', exact: true })
       .click()
-    await assertPageHeading(page, 'History')
+    await assertPageHeading(page, 'Requests')
+    const codeReturnRequests = []
+    const recordCodeReturnRequest = (request) => {
+      if (request.url().includes('/_serverFn/')) {
+        codeReturnRequests.push(decodeURIComponent(request.url()))
+      }
+    }
+    page.on('request', recordCodeReturnRequest)
+    await page.evaluate(() => {
+      globalThis.__scopeCodeReturnSawLoading = false
+      globalThis.__scopeTrackCodeReturn = true
+      const sample = () => {
+        if (!globalThis.__scopeTrackCodeReturn) return
+        if (document.body.textContent?.includes('Loading repository files')) {
+          globalThis.__scopeCodeReturnSawLoading = true
+        }
+        requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    })
     await page
       .getByRole('navigation', { name: 'Primary' })
       .getByRole('link', { name: 'Code', exact: true })
       .click()
     await assertPageHeading(page, 'Code')
     await preview.waitFor()
+    const sawCodeReturnLoading = await page.evaluate(() => {
+      globalThis.__scopeTrackCodeReturn = false
+      return globalThis.__scopeCodeReturnSawLoading
+    })
+    page.off('request', recordCodeReturnRequest)
+    assert.equal(sawCodeReturnLoading, false)
+    assert.equal(
+      codeReturnRequests.some((request) => request.includes('loadRepoContent')),
+      false,
+    )
     assert.equal(
       await previewFrame.evaluate(() =>
         document.documentElement.dataset.persistenceProbe
@@ -150,6 +191,7 @@ test('public repository exposes only its projected source', async () => {
     await navigator.evaluate((element) => {
       element.dataset.persistenceProbe = 'same-route'
     })
+    let appFileRequests = 0
     let releaseFileRequest = () => undefined
     let markFileRequestStarted = () => undefined
     const fileRequestStarted = new Promise((resolve) => {
@@ -159,10 +201,11 @@ test('public repository exposes only its projected source', async () => {
       releaseFileRequest = resolve
     })
     await page.route('**/_serverFn/**', async (route) => {
-      if (!decodeURIComponent(route.request().url()).includes('"src/app.ts"')) {
+      if (!decodeURIComponent(route.request().url()).includes('src/app.ts')) {
         await route.continue()
         return
       }
+      appFileRequests += 1
       markFileRequestStarted()
       await fileRequestReleased
       await route.continue()
@@ -190,25 +233,25 @@ test('public repository exposes only its projected source', async () => {
       }
       requestAnimationFrame(sample)
     })
-    await page.getByRole('button', { name: 'Expand src' }).click()
-    const openFile = page.getByRole('button', { name: 'app.ts', exact: true }).click()
-    await fileRequestStarted
-    assert.equal(await preview.isVisible(), true)
-    assert.equal(
-      await previewFrame.evaluate(() =>
-        document.documentElement.dataset.persistenceProbe
-      ),
-      'same-document',
+    const expandSrc = page.getByRole('button', { name: 'Expand src' })
+    await page.waitForFunction(
+      (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
+      await expandSrc.elementHandle(),
     )
+    await expandSrc.click()
+    const openFile = page.getByRole('button', { name: 'app.ts', exact: true }).click()
+    await within(fileRequestStarted, 10_000, 'file request did not start')
+    await page.waitForURL((url) => url.searchParams.get('file') === 'src/app.ts')
+    await page.getByText('Loading src/app.ts', { exact: true }).waitFor()
+    assert.equal(await preview.isVisible(), false)
     assert.equal(
       await navigator.getAttribute('data-persistence-probe'),
       'same-route',
     )
-    assert.equal(new URL(page.url()).searchParams.has('file'), false)
     releaseFileRequest()
     await openFile
-    await page.waitForURL((url) => url.searchParams.get('file') === 'src/app.ts')
     await page.locator('pre code').filter({ hasText: 'export function greet' }).waitFor()
+    assert.equal(appFileRequests, 1)
     const transitionFrames = await page.evaluate(() => {
       globalThis.__scopeTrackTransitionFrames = false
       return globalThis.__scopeTransitionFrames
@@ -226,35 +269,44 @@ test('public repository exposes only its projected source', async () => {
       await navigator.getAttribute('data-persistence-probe'),
       'same-route',
     )
-    const restoredPreview = await preview.elementHandle()
-    assert(restoredPreview)
-    const restoredPreviewFrame = await restoredPreview.contentFrame()
-    assert(restoredPreviewFrame)
-    await restoredPreviewFrame.evaluate(() => {
-      document.documentElement.dataset.failedNavigationProbe = 'preserved'
+    assert.equal(
+      await previewFrame.evaluate(() =>
+        document.documentElement.dataset.persistenceProbe
+      ),
+      'same-document',
+    )
+    await page.getByRole('button', { name: 'app.ts', exact: true }).click()
+    await page.locator('pre code').filter({ hasText: 'export function greet' }).waitFor()
+    assert.equal(appFileRequests, 1)
+    await page.goBack()
+    await page.waitForURL((url) => !url.searchParams.has('file'))
+    await preview.waitFor()
+    await page.reload()
+    await preview.waitFor()
+    const failedNavigator = page.getByLabel('Repository file navigator')
+    const expandFailedSrc = page.getByRole('button', { name: 'Expand src' })
+    await page.waitForFunction(
+      (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
+      await expandFailedSrc.elementHandle(),
+    )
+    await failedNavigator.evaluate((element) => {
+      element.dataset.persistenceProbe = 'failed-file-local'
     })
-    await page.evaluate(() => globalThis.__TSR_ROUTER__.clearCache())
     await page.unroute('**/_serverFn/**')
     await page.route('**/_serverFn/**', async (route) => {
-      if (!decodeURIComponent(route.request().url()).includes('"src/app.ts"')) {
+      if (!decodeURIComponent(route.request().url()).includes('src/app.ts')) {
         await route.continue()
         return
       }
       await route.fulfill({ body: 'file unavailable', status: 500 })
     })
+    await expandFailedSrc.click()
     await page.getByRole('button', { name: 'app.ts', exact: true }).click()
-    await page.getByText('File could not be opened. Try again.').waitFor()
-    assert.equal(new URL(page.url()).searchParams.has('file'), false)
-    assert.equal(await preview.isVisible(), true)
+    await page.waitForURL((url) => url.searchParams.get('file') === 'src/app.ts')
+    await page.getByRole('button', { name: 'Retry', exact: true }).waitFor()
     assert.equal(
-      await restoredPreviewFrame.evaluate(() =>
-        document.documentElement.dataset.failedNavigationProbe
-      ),
-      'preserved',
-    )
-    assert.equal(
-      await navigator.getAttribute('data-persistence-probe'),
-      'same-route',
+      await failedNavigator.getAttribute('data-persistence-probe'),
+      'failed-file-local',
     )
     assert.equal(await page.getByText('internal', { exact: true }).count(), 0)
     assert.equal(await page.getByText('plan.md', { exact: true }).count(), 0)
@@ -622,6 +674,20 @@ async function withPage(path, assertion, pageOptions = {}) {
     assert.deepEqual(pageErrors, [])
   } finally {
     await browser.close()
+  }
+}
+
+async function within(promise, timeoutMs, message) {
+  let timeout
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs)
+      }),
+    ])
+  } finally {
+    clearTimeout(timeout)
   }
 }
 

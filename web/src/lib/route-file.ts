@@ -9,3 +9,14 @@ export function parseRouteFileSearch(value: unknown) {
     ? path
     : undefined
 }
+
+export function selectedRouteFilePath(
+  files: ReadonlyArray<{ path: string }>,
+  selected?: string,
+) {
+  if (!selected) return null
+  return (
+    files.find((file) => displayRouteFilePath(file.path) === selected)?.path ??
+    null
+  )
+}

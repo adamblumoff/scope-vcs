@@ -2,43 +2,55 @@ import type {
   RepoContent,
   RepoFileContent,
   RepoParams,
+  RepoSummary,
 } from '@/api/types'
 import { RepoPrimaryActionButton } from '@/components/repo-primary-action'
 import { WorkbenchBar, WorkbenchPane } from '@/components/page-header'
-import { Await } from '@tanstack/react-router'
 import { RepoCloneDropdown } from './repo-clone-dropdown'
-import { useRepoLayout } from './repo-layout-context'
 import { RepositoryCodeView } from './repository-code-view'
 
 export function RepoDetailPage({
   content,
+  contentError,
+  contentLoading,
+  contentRetry,
+  initialFile,
   onSelectFilePath,
   params,
+  repo,
   selectedFile,
+  selectedFileError,
   selectedFileIdentity,
+  selectedFileLoading,
+  selectedFileRetry,
   selectedPath,
 }: {
-  content: Promise<RepoContent>
-  onSelectFilePath: (path: string) => Promise<boolean>
+  content: RepoContent | null
+  contentError: string | null
+  contentLoading: boolean
+  contentRetry: () => void
+  initialFile: RepoFileContent | null
+  onSelectFilePath: (path: string) => void
   params: RepoParams
+  repo: RepoSummary
   selectedFile: RepoFileContent | null
+  selectedFileError: string | null
   selectedFileIdentity: string | null
+  selectedFileLoading: boolean
+  selectedFileRetry: () => void
   selectedPath: string | null
 }) {
-  const { repo } = useRepoLayout()
   return (
     <WorkbenchPane>
       <WorkbenchBar
         actions={(
           <>
-            <Await promise={content} fallback={null}>
-              {(resolved) => repo.lifecycle_state === 'Ready' && (
-                <RepoCloneDropdown
-                  cloneRemoteUrl={resolved.clone_remote_url}
-                  repo={repo}
-                />
-              )}
-            </Await>
+            {content && repo.lifecycle_state === 'Ready' && (
+              <RepoCloneDropdown
+                cloneRemoteUrl={content.clone_remote_url}
+                repo={repo}
+              />
+            )}
             <RepoPrimaryActionButton
               includeOpen={false}
               repo={repo}
@@ -47,19 +59,24 @@ export function RepoDetailPage({
             />
           </>
         )}
-        summary={(
-          <Await promise={content} fallback="Loading files…">
-            {(resolved) => `${resolved.files.length} ${resolved.files.length === 1 ? 'file' : 'files'}`}
-          </Await>
-        )}
+        summary={content
+          ? `${content.files.length} ${content.files.length === 1 ? 'file' : 'files'}`
+          : contentLoading ? 'Loading files…' : 'Files unavailable'}
         title="Code"
       />
       <RepositoryCodeView
         content={content}
+        contentError={contentError}
+        contentLoading={contentLoading}
+        contentRetry={contentRetry}
+        initialFile={initialFile}
         onSelectFilePath={onSelectFilePath}
         params={params}
         selectedFile={selectedFile}
+        selectedFileError={selectedFileError}
         selectedFileIdentity={selectedFileIdentity}
+        selectedFileLoading={selectedFileLoading}
+        selectedFileRetry={selectedFileRetry}
         selectedPath={selectedPath}
       />
     </WorkbenchPane>
