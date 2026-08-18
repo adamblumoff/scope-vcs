@@ -1,7 +1,6 @@
-use super::{DispatchClaim, RunStore, entities};
+use super::{DispatchClaim, RunStore};
 use crate::error::PostgresError;
 use scope_domain::runs::run::StepConclusion;
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
 impl RunStore {
     pub async fn start_attempt_step(
@@ -27,16 +26,7 @@ impl RunStore {
         logs_truncated: bool,
         now_unix: u64,
     ) -> Result<DispatchClaim, PostgresError> {
-        let step_count = entities::run_attempt_step::Entity::find()
-            .filter(entities::run_attempt_step::Column::AttemptId.eq(attempt_id))
-            .count(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?;
-        let last_step = usize::try_from(step_index)
-            .ok()
-            .and_then(|index| u64::try_from(index + 1).ok())
-            == Some(step_count);
-        if matches!(conclusion, StepConclusion::Failed { .. }) || last_step {
+        if matches!(conclusion, StepConclusion::Failed { .. }) {
             self.mutate_attempt(attempt_id, |_, job, attempt, steps| {
                 attempt.complete_step(
                     job,

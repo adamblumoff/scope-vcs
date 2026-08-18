@@ -114,14 +114,15 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
         .unwrap();
     assert_eq!(started.status(), StatusCode::OK);
 
-    let completed = app
+    let completed_step = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri(scope_api_contract::routes::attempt_step_complete(
                     attempt_id, 0,
                 ))
-                .header(AUTHORIZATION, attempt_auth)
+                .header(AUTHORIZATION, &attempt_auth)
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     serde_json::to_vec(&CompleteAttemptStepRequest {
@@ -134,6 +135,27 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
         )
         .await
         .unwrap();
-    assert_eq!(completed.status(), StatusCode::OK);
-    assert_eq!(response_json(completed).await["state"], "succeeded");
+    assert_eq!(completed_step.status(), StatusCode::OK);
+    assert_eq!(response_json(completed_step).await["state"], "running");
+
+    let completed_attempt = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(scope_api_contract::routes::attempt_complete(attempt_id))
+                .header(AUTHORIZATION, &attempt_auth)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&scope_api_contract::CompleteAttemptRequest {
+                        conclusion: scope_api_contract::AttemptConclusionRequest::Succeeded,
+                        logs_truncated: false,
+                    })
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed_attempt.status(), StatusCode::OK);
+    assert_eq!(response_json(completed_attempt).await["state"], "succeeded");
 }

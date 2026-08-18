@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
     let settings = RuntimeSettings::from_env()?;
     let client = api::RuntimeClient::new(&settings)?;
     let claim = client.claim(&settings.bootstrap_token)?;
-    let setup_heartbeat = api::SetupHeartbeat::start(client.clone());
+    let setup_heartbeat = api::RuntimeHeartbeat::start(client.clone());
     let setup_result = setup(&settings, &client, &claim);
     let setup_heartbeat_result = setup_heartbeat.finish();
     match setup_heartbeat_result {
@@ -30,13 +30,25 @@ fn main() -> anyhow::Result<()> {
             return Err(error);
         }
     };
-    if let Err(error) = execute::run_steps(&client, &claim.job.definition, &workspace) {
-        let message = format!("{error:#}");
-        eprintln!("runtime execution transport failed: {message}");
-        return Err(error);
+    let execution =
+        execute::run_steps(&client, &claim.job.definition, &workspace).map_err(|error| {
+            eprintln!("runtime execution transport failed: {error:#}");
+            error
+        })?;
+    if matches!(execution, execute::ExecutionOutcome::Terminal) {
+        return Ok(());
     }
-    cache::save_caches(&client, &caches)?;
-    Ok(())
+    let finalization_heartbeat = api::RuntimeHeartbeat::start(client.clone());
+    if let Err(error) = cache::save_caches(&client, &caches) {
+        eprintln!("runtime cache finalization failed: {error:#}");
+    }
+    let cancellation_requested =
+        finalization_heartbeat.finish()? || client.heartbeat()?.cancellation_requested;
+    if cancellation_requested {
+        client.complete_canceled()
+    } else {
+        client.complete_succeeded()
+    }
 }
 
 fn setup(

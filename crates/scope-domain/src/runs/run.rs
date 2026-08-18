@@ -526,6 +526,24 @@ impl RunAttempt {
         self.ensure_time_not_before_heartbeat(now_unix)?;
         job.ensure_time_not_before_update(now_unix)?;
         let (attempt_state, job_state, terminal_reason) = match conclusion {
+            AttemptConclusion::Succeeded => {
+                if self.state != AttemptState::Running
+                    || steps.iter().any(|step| step.state != StepState::Succeeded)
+                {
+                    return Err(DomainError::conflict(
+                        "runtime can only succeed after every workflow step succeeds",
+                    ));
+                }
+                if run.cancellation_requested {
+                    (
+                        AttemptState::Canceled,
+                        RunJobState::Canceled,
+                        Some(AttemptTerminalReason::Canceled { step_index: None }),
+                    )
+                } else {
+                    (AttemptState::Succeeded, RunJobState::Succeeded, None)
+                }
+            }
             AttemptConclusion::SetupFailed { exit_code, message } => {
                 if self.state != AttemptState::Dispatching {
                     return Err(DomainError::conflict(
@@ -546,7 +564,7 @@ impl RunAttempt {
                 (
                     AttemptState::Failed,
                     RunJobState::Failed,
-                    AttemptTerminalReason::RuntimeSetupFailed { exit_code, message },
+                    Some(AttemptTerminalReason::RuntimeSetupFailed { exit_code, message }),
                 )
             }
             AttemptConclusion::TimedOut => {
@@ -554,7 +572,7 @@ impl RunAttempt {
                 (
                     AttemptState::Failed,
                     RunJobState::Failed,
-                    AttemptTerminalReason::TimedOut { step_index },
+                    Some(AttemptTerminalReason::TimedOut { step_index }),
                 )
             }
             AttemptConclusion::Canceled => {
@@ -565,12 +583,12 @@ impl RunAttempt {
                 (
                     AttemptState::Canceled,
                     RunJobState::Canceled,
-                    AttemptTerminalReason::Canceled { step_index },
+                    Some(AttemptTerminalReason::Canceled { step_index }),
                 )
             }
         };
         self.state = attempt_state;
-        self.terminal_reason = Some(terminal_reason);
+        self.terminal_reason = terminal_reason;
         self.completed_at_unix = Some(now_unix);
         job.state = job_state;
         job.current_attempt_id = None;
@@ -581,6 +599,10 @@ impl RunAttempt {
 
     fn matches_conclusion(&self, conclusion: &AttemptConclusion) -> bool {
         match (conclusion, &self.terminal_reason) {
+            (AttemptConclusion::Succeeded, None) => self.state == AttemptState::Succeeded,
+            (AttemptConclusion::Succeeded, Some(AttemptTerminalReason::Canceled { .. })) => {
+                self.state == AttemptState::Canceled
+            }
             (
                 AttemptConclusion::SetupFailed { exit_code, message },
                 Some(AttemptTerminalReason::RuntimeSetupFailed {

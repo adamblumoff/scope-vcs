@@ -14,18 +14,23 @@ use std::{
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const LOG_CHUNK_BYTES: usize = 48 * 1024;
 
+pub enum ExecutionOutcome {
+    Succeeded,
+    Terminal,
+}
+
 pub fn run_steps(
     client: &RuntimeClient,
     job: &WorkflowJob,
     workspace: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ExecutionOutcome> {
     let deadline = Instant::now() + Duration::from_secs(job.timeout_seconds());
     let mut sequence = 1_u64;
     for (index, step) in job.steps().iter().enumerate() {
         let index = u32::try_from(index).context("step index overflow")?;
         if client.start_step(index)?.cancellation_requested {
             client.complete_canceled()?;
-            return Ok(());
+            return Ok(ExecutionOutcome::Terminal);
         }
         let mut command = Command::new("sh");
         command
@@ -107,7 +112,7 @@ pub fn run_steps(
                 let code = status.code().unwrap_or(128);
                 client.complete_step(index, code)?;
                 if code != 0 {
-                    return Ok(());
+                    return Ok(ExecutionOutcome::Terminal);
                 }
                 break;
             }
@@ -115,21 +120,21 @@ pub fn run_steps(
                 kill_group(pid);
                 let _ = child.wait();
                 client.complete_timeout()?;
-                return Ok(());
+                return Ok(ExecutionOutcome::Terminal);
             }
             if Instant::now() >= next_heartbeat {
                 if client.heartbeat()?.cancellation_requested {
                     kill_group(pid);
                     let _ = child.wait();
                     client.complete_canceled()?;
-                    return Ok(());
+                    return Ok(ExecutionOutcome::Terminal);
                 }
                 next_heartbeat = Instant::now() + HEARTBEAT_INTERVAL;
             }
             thread::sleep(Duration::from_millis(100));
         }
     }
-    Ok(())
+    Ok(ExecutionOutcome::Succeeded)
 }
 
 fn kill_group(pid: i32) {

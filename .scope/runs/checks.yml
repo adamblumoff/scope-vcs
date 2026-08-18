@@ -18,8 +18,6 @@ jobs:
     caches:
       - name: cargo
         path: /scope/cache/cargo
-      - name: cargo-target
-        path: /workspace/target
     env:
       SCOPE_TEST_DATABASE_URL: postgres://scope:scope@127.0.0.1:5432/scope_test
     steps:
@@ -39,8 +37,6 @@ jobs:
     caches:
       - name: cargo
         path: /scope/cache/cargo
-      - name: cargo-target
-        path: /workspace/target
       - name: pnpm-store
         path: /root/.local/share/pnpm/store
     steps:
@@ -93,8 +89,6 @@ jobs:
     caches:
       - name: cargo
         path: /scope/cache/cargo
-      - name: cargo-target
-        path: /workspace/target
       - name: pnpm-store
         path: /root/.local/share/pnpm/store
     steps:
