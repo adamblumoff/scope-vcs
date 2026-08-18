@@ -27,8 +27,8 @@ pub enum AttemptTerminalReason {
     StepFailed { step_index: u32, exit_code: i32 },
     TimedOut { step_index: Option<u32> },
     Canceled { step_index: Option<u32> },
-    RunnerLost { step_index: Option<u32> },
-    RunnerSetupFailed { exit_code: i32, message: String },
+    ExecutionLost { step_index: Option<u32> },
+    RuntimeSetupFailed { exit_code: i32, message: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,15 +185,14 @@ impl RunAttempt {
         run: &Run,
         job: &mut RunJob,
         steps: &mut [RunAttemptStep],
-        runner_id: &str,
         token_hash: &str,
         step_index: u32,
         now_unix: u64,
     ) -> Result<(), DomainError> {
-        if self.state == AttemptState::Leased && step_index == 0 {
-            self.start(run, job, runner_id, token_hash, now_unix)?;
+        if self.state == AttemptState::Dispatching && step_index == 0 {
+            self.start(run, job, token_hash, now_unix)?;
         } else {
-            self.authenticate(job, runner_id, token_hash, now_unix)?;
+            self.authenticate(job, token_hash, now_unix)?;
         }
         if self.state != AttemptState::Running || job.state != RunJobState::Running {
             return Err(DomainError::conflict("attempt is not running"));
@@ -233,7 +232,6 @@ impl RunAttempt {
         &mut self,
         job: &mut RunJob,
         steps: &mut [RunAttemptStep],
-        runner_id: &str,
         token_hash: &str,
         step_index: u32,
         conclusion: StepConclusion,
@@ -243,7 +241,7 @@ impl RunAttempt {
         let index = usize::try_from(step_index)
             .map_err(|_| DomainError::invalid_input("step index is too large"))?;
         if self.state.is_terminal() || job.state.is_terminal() {
-            self.authenticate_identity(job, runner_id, token_hash)?;
+            self.authenticate_identity(job, token_hash)?;
             return if step_matches_conclusion(steps.get(index), conclusion) {
                 Ok(())
             } else {
@@ -252,7 +250,7 @@ impl RunAttempt {
                 ))
             };
         }
-        self.authenticate(job, runner_id, token_hash, now_unix)?;
+        self.authenticate(job, token_hash, now_unix)?;
         self.validate_steps(steps)?;
         let Some(step) = steps.get(index) else {
             return Err(DomainError::invalid_input("workflow step does not exist"));
@@ -345,7 +343,7 @@ impl RunAttempt {
             ));
         }
         let aggregate_matches = match (&self.state, &self.terminal_reason) {
-            (AttemptState::Leased, None) => {
+            (AttemptState::Dispatching, None) => {
                 steps.iter().all(|step| step.state == StepState::Pending)
             }
             (AttemptState::Running, None) => steps.iter().all(|step| {
@@ -366,7 +364,7 @@ impl RunAttempt {
             ) => terminal_step_matches(steps, *step_index, StepState::Failed, Some(*exit_code)),
             (
                 AttemptState::Failed,
-                Some(AttemptTerminalReason::RunnerSetupFailed { exit_code, message }),
+                Some(AttemptTerminalReason::RuntimeSetupFailed { exit_code, message }),
             ) => {
                 *exit_code != 0
                     && valid_setup_failure_message(message)
@@ -376,7 +374,7 @@ impl RunAttempt {
             | (AttemptState::Canceled, Some(AttemptTerminalReason::Canceled { step_index })) => {
                 interrupted_step_matches(steps, *step_index, StepState::Canceled)
             }
-            (AttemptState::Lost, Some(AttemptTerminalReason::RunnerLost { step_index })) => {
+            (AttemptState::Lost, Some(AttemptTerminalReason::ExecutionLost { step_index })) => {
                 interrupted_step_matches(steps, *step_index, StepState::Lost)
             }
             _ => false,

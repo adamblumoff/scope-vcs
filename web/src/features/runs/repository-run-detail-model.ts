@@ -17,7 +17,7 @@ const MAX_CACHED_STEP_LOG_CHARACTERS = 512 * 1_024
 export function runNeedsPolling(state: RepoRunState): boolean {
   switch (state) {
     case 'queued':
-    case 'leased':
+    case 'dispatching':
     case 'running':
       return true
     case 'succeeded':

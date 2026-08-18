@@ -3,9 +3,6 @@ pub const HEALTH: &str = "/healthz";
 pub const READINESS: &str = "/readyz";
 pub const ADMIN_CLEANUP: &str = "/v1/admin/cleanup";
 pub const ADMIN_CLEANUP_DRAIN: &str = "/v1/admin/cleanup/drain";
-pub const ADMIN_RUNNER_CUTOVER: &str = "/v1/admin/runner-cutover";
-pub const ADMIN_RUNNER_CUTOVER_ADVANCE: &str = "/v1/admin/runner-cutover/advance";
-pub const ADMIN_RUNNER_CUTOVER_CANARY: &str = "/v1/admin/runner-cutover/canary";
 pub const CLI_BROWSER_LOGIN: &str = "/v1/cli/browser-login";
 pub const CLI_BROWSER_LOGIN_COMPLETE: &str = "/v1/cli/browser-login/{request_id}/complete";
 pub const CLI_BROWSER_LOGIN_EXCHANGE: &str = "/v1/cli/browser-login/{request_id}/exchange";
@@ -19,35 +16,31 @@ pub const CLI_SESSIONS: &str = "/v1/cli/sessions";
 pub const CLI_SESSION_BY_ID: &str = "/v1/cli/sessions/{session_id}";
 pub const REPOS: &str = "/v1/repos";
 pub const OWNER_REPOSITORIES: &str = "/v1/users/{handle}/repos";
-pub const RUNNERS: &str = "/v1/runners";
-pub const RUNNER: &str = "/v1/runners/{runner_id}";
-pub const RUNNER_UPGRADE: &str = "/v1/runners/{runner_id}/upgrade";
-pub const RUNNER_REPOSITORY: &str = "/v1/runners/{runner_id}/repos/{owner}/{repo}";
-pub const RUNNER_POLL: &str = "/v1/runner-protocol/poll";
-pub const RUNNER_CLAIM: &str = "/v1/runner-protocol/runs/{run_id}/jobs/{job_key}/claim";
-pub const ATTEMPT_HEARTBEAT: &str = "/v1/runner-protocol/attempts/{attempt_id}/heartbeat";
-pub const ATTEMPT_CACHE_FINALIZATION: &str =
-    "/v1/runner-protocol/attempts/{attempt_id}/cache-finalization";
+pub const ATTEMPT_CLAIM: &str = "/v1/runtime-protocol/attempts/{attempt_id}/claim";
+pub const ATTEMPT_HEARTBEAT: &str = "/v1/runtime-protocol/attempts/{attempt_id}/heartbeat";
 pub const ATTEMPT_CACHE_PREPARATIONS: &str =
-    "/v1/runner-protocol/attempts/{attempt_id}/cache-observations/preparations";
+    "/v1/runtime-protocol/attempts/{attempt_id}/cache-observations/preparations";
 pub const ATTEMPT_CACHE_FINALIZATIONS: &str =
-    "/v1/runner-protocol/attempts/{attempt_id}/cache-observations/finalizations";
+    "/v1/runtime-protocol/attempts/{attempt_id}/cache-observations/finalizations";
+pub const ATTEMPT_CACHE_OBJECT: &str =
+    "/v1/runtime-protocol/attempts/{attempt_id}/caches/{identity_digest}";
+pub const ATTEMPT_CACHE_UPLOAD: &str =
+    "/v1/runtime-protocol/attempts/{attempt_id}/caches/{identity_digest}/upload";
+pub const ATTEMPT_CACHE_COMMIT: &str =
+    "/v1/runtime-protocol/attempts/{attempt_id}/caches/{identity_digest}/commit";
 pub const ATTEMPT_RECOVERY_STATUS: &str =
-    "/v1/runner-protocol/attempts/{attempt_id}/recovery-status";
-pub const ATTEMPT_CONTAINER_IMAGE: &str =
-    "/v1/runner-protocol/attempts/{attempt_id}/container-image";
-pub const ATTEMPT_SOURCE: &str = "/v1/runner-protocol/attempts/{attempt_id}/source";
-pub const ATTEMPT_LOGS: &str = "/v1/runner-protocol/attempts/{attempt_id}/logs";
-pub const ATTEMPT_COMPLETE: &str = "/v1/runner-protocol/attempts/{attempt_id}/complete";
-pub const ATTEMPT_ABANDON: &str = "/v1/runner-protocol/attempts/{attempt_id}/abandon";
+    "/v1/runtime-protocol/attempts/{attempt_id}/recovery-status";
+pub const ATTEMPT_SOURCE: &str = "/v1/runtime-protocol/attempts/{attempt_id}/source";
+pub const ATTEMPT_LOGS: &str = "/v1/runtime-protocol/attempts/{attempt_id}/logs";
+pub const ATTEMPT_COMPLETE: &str = "/v1/runtime-protocol/attempts/{attempt_id}/complete";
+pub const ATTEMPT_ABANDON: &str = "/v1/runtime-protocol/attempts/{attempt_id}/abandon";
 pub const ATTEMPT_STEP_START: &str =
-    "/v1/runner-protocol/attempts/{attempt_id}/steps/{step_index}/start";
+    "/v1/runtime-protocol/attempts/{attempt_id}/steps/{step_index}/start";
 pub const ATTEMPT_STEP_COMPLETE: &str =
-    "/v1/runner-protocol/attempts/{attempt_id}/steps/{step_index}/complete";
+    "/v1/runtime-protocol/attempts/{attempt_id}/steps/{step_index}/complete";
 pub const REPO: &str = "/v1/repos/{owner}/{repo}";
 pub const REPO_RUNS: &str = "/v1/repos/{owner}/{repo}/runs";
 pub const REPO_RUN_WORKFLOWS: &str = "/v1/repos/{owner}/{repo}/run-workflows";
-pub const REPO_RUNNERS: &str = "/v1/repos/{owner}/{repo}/run-runners";
 pub const REPO_RUN: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}";
 pub const REPO_RUN_DETAIL: &str = "/v1/repos/{owner}/{repo}/runs/{run_id}/detail";
 pub const REPO_RUN_STEP_LOGS: &str =
@@ -127,37 +120,12 @@ pub fn owner_repositories(handle: &str) -> String {
     format!("/v1/users/{}/repos", path_segment(handle))
 }
 
-pub fn runner(runner_id: &str) -> String {
-    format!("/v1/runners/{}", path_segment(runner_id))
-}
-
-pub fn runner_upgrade(runner_id: &str) -> String {
-    format!("{}/upgrade", runner(runner_id))
-}
-
-pub fn runner_repository(runner_id: &str, owner: &str, repo: &str) -> String {
-    format!(
-        "{}/repos/{}/{}",
-        runner(runner_id),
-        path_segment(owner),
-        path_segment(repo)
-    )
-}
-
-pub fn runner_claim(run_id: &str, job_key: &str) -> String {
-    format!(
-        "/v1/runner-protocol/runs/{}/jobs/{}/claim",
-        path_segment(run_id),
-        path_segment(job_key)
-    )
+pub fn attempt_claim(attempt_id: &str) -> String {
+    attempt_action(attempt_id, "claim")
 }
 
 pub fn attempt_heartbeat(attempt_id: &str) -> String {
     attempt_action(attempt_id, "heartbeat")
-}
-
-pub fn attempt_cache_finalization(attempt_id: &str) -> String {
-    attempt_action(attempt_id, "cache-finalization")
 }
 
 pub fn attempt_cache_preparations(attempt_id: &str) -> String {
@@ -174,12 +142,30 @@ pub fn attempt_cache_finalizations(attempt_id: &str) -> String {
     )
 }
 
-pub fn attempt_recovery_status(attempt_id: &str) -> String {
-    attempt_action(attempt_id, "recovery-status")
+pub fn attempt_cache_object(attempt_id: &str, identity_digest: &str) -> String {
+    format!(
+        "{}/caches/{}",
+        attempt_root(attempt_id),
+        path_segment(identity_digest)
+    )
 }
 
-pub fn attempt_container_image(attempt_id: &str) -> String {
-    attempt_action(attempt_id, "container-image")
+pub fn attempt_cache_upload(attempt_id: &str, identity_digest: &str) -> String {
+    format!(
+        "{}/upload",
+        attempt_cache_object(attempt_id, identity_digest)
+    )
+}
+
+pub fn attempt_cache_commit(attempt_id: &str, identity_digest: &str) -> String {
+    format!(
+        "{}/commit",
+        attempt_cache_object(attempt_id, identity_digest)
+    )
+}
+
+pub fn attempt_recovery_status(attempt_id: &str) -> String {
+    attempt_action(attempt_id, "recovery-status")
 }
 
 pub fn attempt_source(attempt_id: &str) -> String {
@@ -211,12 +197,12 @@ fn attempt_action(attempt_id: &str, action: &str) -> String {
 }
 
 fn attempt_root(attempt_id: &str) -> String {
-    format!("/v1/runner-protocol/attempts/{}", path_segment(attempt_id))
+    format!("/v1/runtime-protocol/attempts/{}", path_segment(attempt_id))
 }
 
 fn attempt_step_action(attempt_id: &str, step_index: u32, action: &str) -> String {
     format!(
-        "/v1/runner-protocol/attempts/{}/steps/{step_index}/{action}",
+        "/v1/runtime-protocol/attempts/{}/steps/{step_index}/{action}",
         path_segment(attempt_id),
     )
 }
@@ -227,10 +213,6 @@ pub fn repo_runs(owner: &str, repo: &str) -> String {
 
 pub fn repo_run_workflows(owner: &str, repo: &str) -> String {
     format!("{}/run-workflows", self::repo(owner, repo))
-}
-
-pub fn repo_runners(owner: &str, repo: &str) -> String {
-    format!("{}/run-runners", self::repo(owner, repo))
 }
 
 pub fn repo_run(owner: &str, repo: &str, run_id: &str) -> String {
@@ -385,20 +367,16 @@ mod tests {
     fn dynamic_routes_encode_each_path_segment() {
         let routes = [
             (
-                runner_upgrade("runner/with space"),
-                "/v1/runners/runner%2Fwith%20space/upgrade",
-            ),
-            (
-                attempt_cache_finalization("attempt/with space"),
-                "/v1/runner-protocol/attempts/attempt%2Fwith%20space/cache-finalization",
-            ),
-            (
                 attempt_cache_preparations("attempt/with space"),
-                "/v1/runner-protocol/attempts/attempt%2Fwith%20space/cache-observations/preparations",
+                "/v1/runtime-protocol/attempts/attempt%2Fwith%20space/cache-observations/preparations",
             ),
             (
                 attempt_cache_finalizations("attempt/with space"),
-                "/v1/runner-protocol/attempts/attempt%2Fwith%20space/cache-observations/finalizations",
+                "/v1/runtime-protocol/attempts/attempt%2Fwith%20space/cache-observations/finalizations",
+            ),
+            (
+                attempt_step_complete("attempt/with space", 3),
+                "/v1/runtime-protocol/attempts/attempt%2Fwith%20space/steps/3/complete",
             ),
             (
                 repo_request("an owner", "r/name", "request?#1"),

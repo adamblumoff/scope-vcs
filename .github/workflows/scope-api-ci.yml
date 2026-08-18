@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - ".github/scripts/deploy-railway.sh"
-      - ".github/scripts/verify-runner-cutover.sh"
       - ".github/scripts/deploy-backend-railway.sh"
       - ".github/scripts/test-deploy-backend-railway.sh"
       - ".github/workflows/scope-api-ci.yml"
@@ -21,7 +20,6 @@ on:
       - main
     paths:
       - ".github/scripts/deploy-railway.sh"
-      - ".github/scripts/verify-runner-cutover.sh"
       - ".github/scripts/deploy-backend-railway.sh"
       - ".github/scripts/test-deploy-backend-railway.sh"
       - ".github/workflows/scope-api-ci.yml"
@@ -130,34 +128,4 @@ jobs:
           SCOPE_RAILWAY_DATABASE_SERVICE_ID: 44c41a90-2d1a-4a1b-85c9-6af85d179be3
           SCOPE_RAILWAY_API_REPLICAS: 1
           SCOPE_RAILWAY_WORKER_REPLICAS: 1
-          SCOPE_RECOVER_CLOSED_CUTOVER: ${{ github.run_attempt > 1 && '1' || '0' }}
         run: bash .github/scripts/deploy-backend-railway.sh .railway-upload/api .railway-upload/worker
-
-  verify-runner-cutover:
-    name: Verify runner protocol cutover
-    needs: deploy-backend
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    environment: production
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli@5.23.1
-
-      - name: Verify production runner cutover
-        shell: bash
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RAILWAY_PROJECT_ID: 45dd67fa-6d69-48ad-9680-1313d41b4490
-          SCOPE_RAILWAY_ENVIRONMENT_ID: 2f21f6b6-6817-4338-9e08-cf18e78b8f46
-          SCOPE_RAILWAY_API_SERVICE_ID: 9456cd8d-40bd-489a-a181-72b7f777c4a8
-        run: bash .github/scripts/verify-runner-cutover.sh

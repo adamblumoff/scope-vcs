@@ -276,7 +276,6 @@ pub enum CacheNamespace {
         workflow_path: String,
         job_key: String,
     },
-    RunnerProtocolCanary,
 }
 
 impl CacheNamespace {
@@ -288,21 +287,18 @@ impl CacheNamespace {
     }
 
     fn validate(&self) -> Result<(), DomainError> {
-        if let Self::Workflow {
+        let Self::Workflow {
             workflow_path,
             job_key,
-        } = self
-        {
-            WorkflowPath::parse(workflow_path.clone()).map_err(DomainError::invalid_input)?;
-            WorkflowJobId::parse(job_key.clone()).map_err(DomainError::invalid_input)?;
-        }
+        } = self;
+        WorkflowPath::parse(workflow_path.clone()).map_err(DomainError::invalid_input)?;
+        WorkflowJobId::parse(job_key.clone()).map_err(DomainError::invalid_input)?;
         Ok(())
     }
 
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Workflow { .. } => "workflow",
-            Self::RunnerProtocolCanary => "runner-protocol-canary",
         }
     }
 
@@ -312,7 +308,6 @@ impl CacheNamespace {
                 workflow_path,
                 job_key,
             } => vec!["workflow", workflow_path, job_key],
-            Self::RunnerProtocolCanary => vec!["runner-protocol-canary"],
         }
     }
 }
@@ -512,14 +507,6 @@ mod tests {
             CachePlatform::LinuxAmd64,
         )
         .unwrap();
-        let canary = CacheIdentity::new(
-            "repo-1",
-            CacheNamespace::RunnerProtocolCanary,
-            cache("cargo"),
-            &image('a'),
-            CachePlatform::LinuxAmd64,
-        )
-        .unwrap();
         let other_path = CacheIdentity::new(
             "repo-1",
             workflow_namespace("/.scope/runs/test.yml", "checks"),
@@ -536,7 +523,6 @@ mod tests {
         assert_ne!(base.digest(), other_image.digest());
         assert_ne!(base.digest(), other_workflow.digest());
         assert_ne!(base.digest(), other_job.digest());
-        assert_ne!(base.digest(), canary.digest());
         assert_ne!(base.digest(), other_path.digest());
         assert!(
             CacheIdentity::new(

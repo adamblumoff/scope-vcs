@@ -262,23 +262,23 @@ export type MarkRequestDiscussionReadRequest = { through_position: number, };
 
 export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestTimelineChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } };
 
-export type RunRunnerSelection = { "kind": "any" } | { "kind": "named", name: string, } | { "kind": "mixed" };
+export type RepositoryExecutionProvider = "northflank";
 
-export type RepositoryRunState = "queued" | "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
+export type RepositoryRunState = "queued" | "dispatching" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
-export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, runner_selection: RunRunnerSelection, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
+export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
 
-export type RepositoryRunJobState = "blocked" | "queued" | "leased" | "running" | "succeeded" | "failed" | "skipped" | "canceled" | "lost";
+export type RepositoryRunJobState = "blocked" | "queued" | "dispatching" | "running" | "succeeded" | "failed" | "skipped" | "canceled" | "lost";
 
-export type RepositoryRunJobResponse = { key: string, needs: Array<string>, desired_runner: string | null, pinned_container_image: string | null, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
+export type RepositoryRunJobResponse = { key: string, needs: Array<string>, pinned_container_image: string, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
 
 export type RepositoryRunJobDetailResponse = { job: RepositoryRunJobResponse, attempts: Array<RepositoryRunAttemptResponse>, };
 
-export type RepositoryRunAttemptState = "leased" | "running" | "succeeded" | "failed" | "canceled" | "lost";
+export type RepositoryRunAttemptState = "dispatching" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
 export type RepositoryRunStepState = "pending" | "running" | "succeeded" | "failed" | "canceled" | "lost" | "skipped";
 
-export type RepositoryRunTerminalReason = { "kind": "step-failed", step_index: number, exit_code: number, } | { "kind": "timed-out", step_index: number | null, } | { "kind": "canceled", step_index: number | null, } | { "kind": "runner-lost", step_index: number | null, } | { "kind": "runner-setup-failed", exit_code: number, message: string, };
+export type RepositoryRunTerminalReason = { "kind": "step-failed", step_index: number, exit_code: number, } | { "kind": "timed-out", step_index: number | null, } | { "kind": "canceled", step_index: number | null, } | { "kind": "execution-lost", step_index: number | null, } | { "kind": "runtime-setup-failed", exit_code: number, message: string, };
 
 export type RepositoryRunCacheColdReason = "metadata-missing" | "metadata-invalid" | "metadata-not-ready" | "volume-missing" | "volume-invalid" | "backing-directory-missing";
 
@@ -292,13 +292,7 @@ export type RepositoryRunCacheResponse = { name: string, path: string, observati
 
 export type RepositoryRunStepResponse = { index: number, name: string, command: string, state: RepositoryRunStepState, started_at_unix: number | null, completed_at_unix: number | null, exit_code: number | null, };
 
-export type RepositoryRunAttemptResponse = { id: string, runner_id: string, runner_name: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, caches: Array<RepositoryRunCacheResponse>, steps: Array<RepositoryRunStepResponse>, };
-
-export type RepositoryRunnerState = "online" | "offline" | "disabled";
-
-export type RepositoryRunnerResponse = { id: string, name: string, version: string, state: RepositoryRunnerState, last_seen_at_unix: number | null, };
-
-export type RepositoryRunnersResponse = { runners: Array<RepositoryRunnerResponse>, };
+export type RepositoryRunAttemptResponse = { id: string, execution_provider: RepositoryExecutionProvider, external_run_id: string | null, runtime_version: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, caches: Array<RepositoryRunCacheResponse>, steps: Array<RepositoryRunStepResponse>, };
 
 export type RepositoryRunWorkflowResponse = { key: string, name: string, path: string, manual: boolean, push_main: boolean, job_count: number, };
 
@@ -324,7 +318,6 @@ export const ApiRouteTemplates = {
   repo: "/v1/repos/{owner}/{repo}",
   repoConfig: "/v1/repos/{owner}/{repo}/config",
   repoRunWorkflows: "/v1/repos/{owner}/{repo}/run-workflows",
-  repoRunners: "/v1/repos/{owner}/{repo}/run-runners",
   repoRuns: "/v1/repos/{owner}/{repo}/runs",
   repoRunDetail: "/v1/repos/{owner}/{repo}/runs/{run_id}/detail",
   repoRunStepLogs: "/v1/repos/{owner}/{repo}/runs/{run_id}/attempts/{attempt_id}/steps/{step_index}/logs",

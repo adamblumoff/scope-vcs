@@ -9,7 +9,6 @@ use sha2::{Digest, Sha256};
 const TOKEN_BYTES: usize = 32;
 const FIRST_PUSH_TOKEN_TTL_SECS: u64 = 5 * 60;
 const REPOSITORY_INVITE_TOKEN_PREFIX: &str = "scope_invite_";
-const RUNNER_TOKEN_PREFIX: &str = "scope_runner_";
 const ATTEMPT_TOKEN_PREFIX: &str = "scope_attempt_";
 
 pub(crate) fn generate_first_push_token(
@@ -53,10 +52,6 @@ pub(crate) fn generate_repository_invite_token() -> Result<(String, String), Api
     )?;
     let hash = token_hash(&secret);
     Ok((secret, hash))
-}
-
-pub(crate) fn generate_runner_token() -> Result<(String, String), ApiError> {
-    generate_machine_token(RUNNER_TOKEN_PREFIX, "failed to generate runner token")
 }
 
 pub(crate) fn generate_attempt_token() -> Result<(String, String), ApiError> {

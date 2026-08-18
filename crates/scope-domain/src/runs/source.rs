@@ -1,4 +1,4 @@
-use super::runner::validate_sha256_hash;
+use super::run::validate_sha256_hash;
 use crate::{
     content_ref::ContentRef, error::DomainError, projection::ProjectionViewKey, store::SourceBlob,
 };

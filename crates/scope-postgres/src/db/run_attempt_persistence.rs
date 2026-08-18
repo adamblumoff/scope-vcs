@@ -3,7 +3,6 @@ use crate::error::PostgresError;
 use scope_domain::runs::{
     job::RunJob,
     run::{Run, RunAttempt, RunAttemptStep},
-    runner::{Runner, RunnerGrant},
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter,
@@ -124,16 +123,16 @@ pub(super) async fn jobs_for_run(
         .collect()
 }
 
-pub(super) async fn attempt_target(
+pub(super) async fn attempt_run_id(
     tx: &DatabaseTransaction,
     attempt_id: &str,
-) -> Result<(String, String), PostgresError> {
+) -> Result<String, PostgresError> {
     let attempt = entities::run_attempt::Entity::find_by_id(attempt_id.to_string())
         .one(tx)
         .await
         .map_err(PostgresError::internal)?
         .ok_or_else(|| PostgresError::not_found("run attempt not found"))?;
-    Ok((attempt.run_id, attempt.runner_id))
+    Ok(attempt.run_id)
 }
 
 pub(super) async fn locked_attempt_steps(
@@ -150,50 +149,6 @@ pub(super) async fn locked_attempt_steps(
         .into_iter()
         .map(entities::run_attempt_step::Model::try_into_domain)
         .collect()
-}
-
-pub(super) async fn runner_by_id(
-    tx: &DatabaseTransaction,
-    runner_id: &str,
-) -> Result<Runner, PostgresError> {
-    entities::runner::Entity::find_by_id(runner_id.to_string())
-        .lock_exclusive()
-        .one(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::not_found("runner not found"))?
-        .try_into_domain()
-}
-
-pub(super) async fn grant_by_ids(
-    tx: &DatabaseTransaction,
-    repository_id: &str,
-    runner_id: &str,
-) -> Result<RunnerGrant, PostgresError> {
-    entities::runner_grant::Entity::find_by_id((repository_id.to_string(), runner_id.to_string()))
-        .lock_exclusive()
-        .one(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| {
-            PostgresError::permission_denied("runner is not attached to the repository")
-        })?
-        .try_into_domain()
-}
-
-pub(super) async fn ensure_runner_authorized(
-    tx: &DatabaseTransaction,
-    run: &Run,
-    attempt: &RunAttempt,
-) -> Result<Runner, PostgresError> {
-    let runner = runner_by_id(tx, &attempt.runner_id).await?;
-    let grant = grant_by_ids(tx, run.workflow.repository_id(), &attempt.runner_id).await?;
-    if !runner.enabled || !grant.is_active() {
-        return Err(PostgresError::permission_denied(
-            "runner or repository grant is revoked",
-        ));
-    }
-    Ok(runner)
 }
 
 pub(super) async fn save_run(tx: &DatabaseTransaction, run: &Run) -> Result<(), PostgresError> {
@@ -259,20 +214,5 @@ pub(super) async fn save_attempt_steps(
         .await
         .map_err(PostgresError::internal)?;
     }
-    Ok(())
-}
-
-pub(super) async fn save_runner(
-    tx: &DatabaseTransaction,
-    runner: &Runner,
-) -> Result<(), PostgresError> {
-    entities::runner::Entity::update(
-        entities::runner::Model::from_domain(runner)?
-            .into_active_model()
-            .reset_all(),
-    )
-    .exec(tx)
-    .await
-    .map_err(PostgresError::internal)?;
     Ok(())
 }

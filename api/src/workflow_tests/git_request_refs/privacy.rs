@@ -40,7 +40,7 @@ async fn workflow_intermediate_tree_cannot_enter_public_request_history() {
     fs::create_dir_all(&forbidden_dir).unwrap();
     fs::write(
         forbidden_dir.join("test.yml"),
-        "name: Test\non: { manual: true }\nruns-on: any\ncontainer: { image: rust:1.90 }\ntimeout: 20m\nsteps: [{ name: Test, run: cargo test }]\n",
+        "name: Test\non: { manual: true }\ncontainer: { image: rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa }\ntimeout: 20m\nsteps: [{ name: Test, run: cargo test }]\n",
     )
     .unwrap();
     run_git(

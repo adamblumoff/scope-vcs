@@ -13,6 +13,7 @@ const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_GIT_COMPACTION_TIMEOUT_SECS: u64 = 120;
+const MAX_CLOUD_RUN_CONCURRENCY: usize = 100;
 
 pub(crate) struct WorkerSettings {
     pub(crate) database_url: String,
@@ -24,6 +25,20 @@ pub(crate) struct WorkerSettings {
     pub(crate) git_compaction_timeout: Duration,
     pub(crate) git_storage_limits: GitStorageLimits,
     pub(crate) data_dir: PathBuf,
+    pub(crate) execution: Option<CloudExecutionSettings>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CloudExecutionSettings {
+    pub(crate) api_url: String,
+    pub(crate) northflank_api_url: String,
+    pub(crate) northflank_api_token: String,
+    pub(crate) northflank_project_id: String,
+    pub(crate) northflank_job_id: String,
+    pub(crate) northflank_deployment_plan: String,
+    pub(crate) northflank_registry_credentials_id: Option<String>,
+    pub(crate) runtime_version: String,
+    pub(crate) max_concurrency: usize,
 }
 
 impl WorkerSettings {
@@ -66,6 +81,7 @@ impl WorkerSettings {
         let data_dir = non_empty_env(SCOPE_DATA_DIR_ENV)
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(".scope"));
+        let execution = cloud_execution_from_env()?;
         Ok(Self {
             database_url,
             health_port,
@@ -76,8 +92,44 @@ impl WorkerSettings {
             git_compaction_timeout: Duration::from_secs(git_compaction_timeout_secs),
             git_storage_limits,
             data_dir,
+            execution,
         })
     }
+}
+
+fn cloud_execution_from_env() -> anyhow::Result<Option<CloudExecutionSettings>> {
+    let enabled = non_empty_env("SCOPE_CLOUD_RUNS_ENABLED")
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
+    if !enabled {
+        return Ok(None);
+    }
+    let api_url = required_env("SCOPE_PUBLIC_API_URL")?
+        .trim_end_matches('/')
+        .to_string();
+    if !api_url.starts_with("https://") && !api_url.starts_with("http://127.0.0.1") {
+        anyhow::bail!("SCOPE_PUBLIC_API_URL must use HTTPS outside local development");
+    }
+    let max_concurrency = parse_usize_env("SCOPE_CLOUD_RUNS_MAX_CONCURRENCY", 20)?;
+    if !(1..=MAX_CLOUD_RUN_CONCURRENCY).contains(&max_concurrency) {
+        anyhow::bail!(
+            "SCOPE_CLOUD_RUNS_MAX_CONCURRENCY must be between 1 and {MAX_CLOUD_RUN_CONCURRENCY}"
+        );
+    }
+    Ok(Some(CloudExecutionSettings {
+        api_url,
+        northflank_api_url: non_empty_env("NORTHFLANK_API_URL")
+            .unwrap_or_else(|| "https://api.northflank.com".to_string())
+            .trim_end_matches('/')
+            .to_string(),
+        northflank_api_token: required_env("NORTHFLANK_API_TOKEN")?,
+        northflank_project_id: required_env("NORTHFLANK_PROJECT_ID")?,
+        northflank_job_id: required_env("NORTHFLANK_JOB_ID")?,
+        northflank_deployment_plan: required_env("NORTHFLANK_DEPLOYMENT_PLAN")?,
+        northflank_registry_credentials_id: non_empty_env("NORTHFLANK_REGISTRY_CREDENTIALS_ID"),
+        runtime_version: non_empty_env("SCOPE_RUNTIME_VERSION")
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+        max_concurrency,
+    }))
 }
 
 fn required_env(name: &str) -> anyhow::Result<String> {

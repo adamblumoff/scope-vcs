@@ -20,8 +20,7 @@ pub(crate) mod routes;
 mod run_detail_response;
 pub(crate) mod run_resources;
 mod run_response;
-pub(crate) mod runner_protocol;
-pub(crate) mod runners;
 pub(crate) mod runs;
+pub(crate) mod runtime_protocol;
 #[cfg(feature = "type-export")]
 pub(crate) mod type_exports;

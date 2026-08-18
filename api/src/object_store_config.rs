@@ -24,6 +24,10 @@ pub(crate) fn encryption_key_from_env() -> anyhow::Result<[u8; 32]> {
 }
 
 pub(crate) fn s3_from_env() -> anyhow::Result<S3ObjectStore> {
+    S3ObjectStore::new(s3_settings_from_env()?).map_err(anyhow::Error::from)
+}
+
+pub(crate) fn s3_settings_from_env() -> anyhow::Result<S3ObjectStoreSettings> {
     let mut settings = S3ObjectStoreSettings::new(
         required_env(SCOPE_BUCKET_ENDPOINT_ENV)?,
         required_env(SCOPE_BUCKET_NAME_ENV)?,
@@ -34,7 +38,7 @@ pub(crate) fn s3_from_env() -> anyhow::Result<S3ObjectStore> {
     settings.force_path_style = non_empty_env(SCOPE_BUCKET_FORCE_PATH_STYLE_ENV)
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false);
-    S3ObjectStore::new(settings).map_err(anyhow::Error::from)
+    Ok(settings)
 }
 
 #[cfg(feature = "local-dev")]

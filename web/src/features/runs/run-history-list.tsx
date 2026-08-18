@@ -3,10 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
 import { EmptyState } from '@/components/empty-state'
 import { LoaderCircle, TerminalSquare } from 'lucide-react'
-import {
-  formatRunRunnerSelection,
-  runDisplayState,
-} from './run-formatting'
+import { runDisplayState } from './run-formatting'
 import { RunStatusDot } from './run-status-dot'
 import { RunTimestamp } from './run-timestamp'
 
@@ -58,7 +55,7 @@ export function RunHistoryList({
                   {run.workflow_name}
                 </span>
                 <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">
-                  {run.git_oid.slice(0, 12)} · {formatRunRunnerSelection(run.runner_selection)}
+                  {run.git_oid.slice(0, 12)} · Scope Cloud
                 </span>
               </span>
               <span className="shrink-0 text-right text-xs text-muted-foreground">

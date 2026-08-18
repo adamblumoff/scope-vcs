@@ -4,10 +4,9 @@ const WORKFLOW: &str = r#"
 name: Test
 on:
   manual: true
-runs-on: linux-box
 caches: []
 container:
-  image: alpine:3.20
+  image: alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 timeout: 5m
 jobs:
   checks:

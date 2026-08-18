@@ -186,11 +186,9 @@ function LatestJobSummary({ jobDetail }: { jobDetail: RepoRunJobDetail }) {
 function jobStatusLabel({ job, attempts }: RepoRunJobDetail) {
   if (job.state === 'blocked') return `Waiting for ${job.needs.join(', ')}`
   if (job.state === 'queued') {
-    return job.desired_runner
-      ? `Queued for ${job.desired_runner}`
-      : 'Queued for any runner'
+    return 'Queued for Scope Cloud'
   }
-  if (job.state === 'leased') return 'Runner claimed; preparing job'
+  if (job.state === 'dispatching') return 'Starting cloud job'
   if (job.state === 'running') {
     const activeStep = attempts
       .flatMap((attempt) => attempt.steps)

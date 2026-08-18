@@ -47,6 +47,7 @@ mod admin;
 mod auth;
 mod cli_auth;
 mod clone_access;
+mod cloud_runs;
 mod commit_history;
 mod device_login;
 mod git_binary;
@@ -65,7 +66,6 @@ mod repo_visibility;
 mod request_discussions;
 mod requests;
 mod run_resources;
-mod runs;
 mod runtime_budgets;
 
 const TEST_CLERK_ISSUER: &str = "https://clerk.test";

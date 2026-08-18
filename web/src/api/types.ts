@@ -60,9 +60,6 @@ import type {
   RepositoryRunStepResponse,
   RepositoryRunState,
   RepositoryRunSummaryResponse,
-  RepositoryRunnerResponse,
-  RepositoryRunnerState,
-  RepositoryRunnersResponse,
   SessionIdentity as GeneratedSessionIdentity,
   FileChangeKind as GeneratedFileChangeKind,
   UserResponse,
@@ -110,9 +107,6 @@ export type RepoRunJobState = RepositoryRunJobState
 export type RepoRunLog = RepositoryRunLogResponse
 export type RepoRunStep = RepositoryRunStepResponse
 export type RepoRunStepLogPage = RepositoryRunStepLogPageResponse
-export type RepoRunner = RepositoryRunnerResponse
-export type RepoRunnerState = RepositoryRunnerState
-export type RepoRunners = RepositoryRunnersResponse
 export type FirstPushToken = FirstPushTokenResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
 export type CommitHistory = CommitHistoryResponse

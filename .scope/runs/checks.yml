@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-runs-on: remote-linux
 container:
   image: ghcr.io/adamblumoff/scope-vcs/checks@sha256:026dd8b675ea52cfcf999765eafb3be81e9c723f551c469d5d0d11d1142fba0a
 timeout: 60m

@@ -34,7 +34,6 @@ import { RunStatusDot } from './run-status-dot'
 import { RunJobGraph } from './run-job-graph'
 import { runJobPanelId } from './run-job-ids'
 import {
-  formatRunRunnerSelection,
   runDisplayState,
 } from './run-formatting'
 import { RunTimestamp } from './run-timestamp'
@@ -178,7 +177,7 @@ function JobDetailsPanel({
           </span>
         </span>
         <span className="truncate text-xs text-muted-foreground sm:text-right">
-          {job.desired_runner ?? 'any runner'} · {attemptCount} · updated{' '}
+          Scope Cloud · {attemptCount} · updated{' '}
           <RunTimestamp value={job.updated_at_unix} />
         </span>
       </div>
@@ -208,7 +207,7 @@ function JobDetailsPanel({
             {job.state === 'blocked'
               ? 'Waiting for required jobs to finish.'
               : job.state === 'queued'
-                ? 'Waiting for a runner to claim this job.'
+                ? 'Waiting for cloud capacity.'
                 : 'No attempts were created for this job.'}
           </p>
         ) : null}
@@ -256,7 +255,7 @@ function RunHeader({
             <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
               <code>{run.git_oid.slice(0, 12)}</code>
               <span aria-hidden="true">·</span>
-              <span>{formatRunRunnerSelection(run.runner_selection)}</span>
+              <span>Scope Cloud</span>
               <span aria-hidden="true">·</span>
               <span>
                 Updated <RunTimestamp value={run.updated_at_unix} />
@@ -316,13 +315,13 @@ function AttemptRow({
   onLogRetry: () => void
   onSelectStep: (stepIndex: number) => void
   onToggle: () => void
-  pinnedContainerImage: string | null
+  pinnedContainerImage: string
   selectedStepIndex: number | null
 }) {
   const panelId = `run-attempt-${attempt.id}`
   const stateLabel = attemptStateLabel(attempt)
   const metadata = [
-    attempt.runner_name,
+    attempt.execution_provider === 'northflank' ? 'Northflank' : attempt.execution_provider,
     durationLabel('queued', attempt.created_at_unix, attempt.started_at_unix),
     durationLabel('ran', attempt.started_at_unix, attempt.completed_at_unix),
   ].filter(Boolean).join(' · ')
@@ -351,7 +350,7 @@ function AttemptRow({
       </button>
       {expanded ? (
         <div className="border-t border-border/70 pl-5 sm:pl-9" id={panelId}>
-          {attempt.terminal_reason?.kind === 'runner-setup-failed' ? (
+          {attempt.terminal_reason?.kind === 'runtime-setup-failed' ? (
             <p className="border-b border-border px-3 py-4 text-sm text-muted-foreground">
               {attempt.terminal_reason.message}
             </p>
@@ -502,10 +501,10 @@ function attemptStateLabel(attempt: RepoRunAttempt) {
   switch (attempt.terminal_reason.kind) {
     case 'timed-out':
       return 'timed out'
-    case 'runner-setup-failed':
+    case 'runtime-setup-failed':
       return 'setup failed'
-    case 'runner-lost':
-      return 'runner lost'
+    case 'execution-lost':
+      return 'execution lost'
     default:
       return attempt.state
   }

@@ -9,7 +9,7 @@ pub use encrypted::EncryptedObjectStore;
 pub use error::{ObjectStoreError, ObjectStoreErrorKind};
 pub use filesystem::{FileObjectStore, FileObjectStoreSettings};
 pub use memory::MemoryObjectStore;
-pub use s3::{S3ObjectStore, S3ObjectStoreSettings};
+pub use s3::{S3ObjectStore, S3ObjectStoreSettings, S3Presigner};
 pub use source_blobs::{
     ContentObjectKind, content_object_for_bytes, delete_source_blobs, object_key,
     object_key_for_content_ref, put_content_object, put_source_blob, source_blob_bytes,

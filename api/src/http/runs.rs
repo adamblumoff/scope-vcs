@@ -29,7 +29,7 @@ use scope_api_contract::{
 use scope_domain::{
     runs::{
         run::{Run, RunSource, RunTrigger},
-        workflow::{RunnerSelector, WorkflowPath},
+        workflow::WorkflowPath,
     },
     store::RepositoryActor,
 };
@@ -89,11 +89,6 @@ pub(crate) async fn create_manual_run(
             "workflow does not enable the manual trigger",
         ));
     }
-    let runner_override = query
-        .runner
-        .map(RunnerSelector::named)
-        .transpose()
-        .map_err(ApiError::bad_request)?;
     let mut stored = put_content_object(
         state.object_store.as_ref(),
         ContentObjectKind::GitBundle,
@@ -110,7 +105,6 @@ pub(crate) async fn create_manual_run(
         RunTrigger::Manual,
         Some(user.id),
         RunSource::ephemeral_git_bundle(stored)?,
-        runner_override,
         now,
     )?;
     let run = match state.metadata.runs().enqueue_run(run, revision).await {
@@ -758,7 +752,6 @@ impl Drop for RunTempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_api_contract::RunRunnerSelection;
     use scope_domain::{
         content_ref::ContentRef,
         runs::{
@@ -803,31 +796,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn run_responses_report_effective_named_and_mixed_runner_selection() {
-        let run = terminal_run();
-        let mut linux_one = terminal_job(1);
-        linux_one.desired_runner = RunnerSelector::named("linux-one").unwrap();
-        assert_eq!(
-            run_response(&run, &[linux_one.clone()], false)
-                .unwrap()
-                .runner_selection,
-            RunRunnerSelection::Named {
-                name: "linux-one".to_string()
-            }
-        );
-
-        let mut linux_two = terminal_job(1);
-        linux_two.key = WorkflowJobId::parse("lint").unwrap();
-        linux_two.desired_runner = RunnerSelector::named("linux-two").unwrap();
-        assert_eq!(
-            repository_run_summary(&run, &[linux_one, linux_two])
-                .unwrap()
-                .runner_selection,
-            RunRunnerSelection::Mixed
-        );
-    }
-
     fn terminal_run() -> Run {
         Run::restore(
             "run-summary",
@@ -848,7 +816,6 @@ mod tests {
                 size_bytes: 1,
             })
             .unwrap(),
-            None,
             RunState::Failed,
             false,
             1,
@@ -862,8 +829,11 @@ mod tests {
         RunJob::restore(
             "run-summary",
             WorkflowJobId::parse("checks").unwrap(),
-            RunnerSelector::Any,
-            None,
+            scope_domain::runs::run::PinnedContainerImage::parse(format!(
+                "rust@sha256:{}",
+                "d".repeat(64)
+            ))
+            .unwrap(),
             RunJobState::Failed,
             last_attempt_number,
             None,

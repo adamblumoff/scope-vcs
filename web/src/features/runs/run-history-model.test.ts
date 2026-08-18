@@ -57,7 +57,6 @@ function page(
       created_at_unix: index,
       git_oid: 'a'.repeat(40),
       id,
-      runner_selection: { kind: 'any' },
       state: 'queued',
       updated_at_unix: index,
       workflow_name: 'Checks',

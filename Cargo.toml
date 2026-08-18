@@ -8,6 +8,7 @@ members = [
     "crates/scope-object-store",
     "crates/scope-git-process",
     "crates/scope-run-config",
+    "runner-runtime",
     "worker",
 ]
 exclude = ["cli"]

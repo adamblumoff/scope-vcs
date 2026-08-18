@@ -9,7 +9,7 @@ async fn permissioned_scope_sessions_share_raw_live_head() {
     fs::create_dir_all(source.join(".scope/runs")).unwrap();
     fs::write(
         source.join(".scope/runs/test.yml"),
-        "name: Test\non: { manual: true }\nruns-on: any\ncontainer: { image: rust:1.90 }\ntimeout: 20m\nsteps: [{ name: Test, run: cargo test }]\n",
+        "name: Test\non: { manual: true }\ncontainer: { image: rust@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa }\ntimeout: 20m\nsteps: [{ name: Test, run: cargo test }]\n",
     )
     .unwrap();
     fs::create_dir_all(source.join(".scope/images/checks")).unwrap();

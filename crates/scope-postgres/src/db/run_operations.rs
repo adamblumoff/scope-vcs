@@ -1,18 +1,8 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
-use scope_domain::runs::{
-    job::RunJob,
-    run::Run,
-    runner::{Runner, RunnerGrant},
-};
+use scope_domain::runs::{job::RunJob, run::Run};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::{BTreeMap, BTreeSet};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RepositoryRunner {
-    pub runner: Runner,
-    pub grant: RunnerGrant,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunSnapshot {
@@ -60,53 +50,6 @@ impl RunStore {
         run_ids: &[String],
     ) -> Result<BTreeMap<String, Vec<RunJob>>, PostgresError> {
         run_jobs_by_ids(self.db.as_ref(), run_ids).await
-    }
-
-    pub async fn repository_runners(
-        &self,
-        repository_id: &str,
-    ) -> Result<Vec<RepositoryRunner>, PostgresError> {
-        let grant_models = entities::runner_grant::Entity::find()
-            .filter(entities::runner_grant::Column::RepoId.eq(repository_id))
-            .filter(entities::runner_grant::Column::RevokedAtUnix.is_null())
-            .order_by_asc(entities::runner_grant::Column::Name)
-            .all(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?;
-        if grant_models.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let runner_ids = grant_models
-            .iter()
-            .map(|grant| grant.runner_id.clone())
-            .collect::<Vec<_>>();
-        let mut runners = entities::runner::Entity::find()
-            .filter(entities::runner::Column::Id.is_in(runner_ids))
-            .all(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(|model| {
-                let id = model.id.clone();
-                Ok((id, model.try_into_domain()?))
-            })
-            .collect::<Result<BTreeMap<_, _>, PostgresError>>()?;
-
-        grant_models
-            .into_iter()
-            .map(|model| {
-                let runner = runners.remove(&model.runner_id).ok_or_else(|| {
-                    PostgresError::internal_message(
-                        "active repository runner grant references a missing runner",
-                    )
-                })?;
-                Ok(RepositoryRunner {
-                    runner,
-                    grant: model.try_into_domain()?,
-                })
-            })
-            .collect()
     }
 
     pub async fn run_has_truncated_logs(&self, run_id: &str) -> Result<bool, PostgresError> {
