@@ -8,7 +8,8 @@ environment="${SCOPE_RAILWAY_ENVIRONMENT_ID:?SCOPE_RAILWAY_ENVIRONMENT_ID is req
 api_service="${SCOPE_RAILWAY_API_SERVICE_ID:?SCOPE_RAILWAY_API_SERVICE_ID is required}"
 worker_service="${SCOPE_RAILWAY_WORKER_SERVICE_ID:?SCOPE_RAILWAY_WORKER_SERVICE_ID is required}"
 database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SERVICE_ID is required}"
-railway_region="${SCOPE_RAILWAY_REGION_ID:?SCOPE_RAILWAY_REGION_ID is required}"
+api_region="${SCOPE_RAILWAY_API_REGION_ID:?SCOPE_RAILWAY_API_REGION_ID is required}"
+worker_region="${SCOPE_RAILWAY_WORKER_REGION_ID:?SCOPE_RAILWAY_WORKER_REGION_ID is required}"
 recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
 
 if [[ -z "${RAILWAY_TOKEN:-}" || -z "${RAILWAY_API_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
@@ -239,11 +240,19 @@ process.exit(Array.isArray(deployments) && deployments.length > 0 ? 0 : 1);
 scale_service() {
   local service_name="$1"
   local replicas="$2"
-  local request response
+  local region request response
+  case "$service_name" in
+    "$api_service") region="$api_region" ;;
+    "$worker_service") region="$worker_region" ;;
+    *)
+      echo "No reviewed Railway region is configured for service $service_name." >&2
+      return 1
+      ;;
+  esac
   request="$(
     SERVICE_ID="$service_name" \
       ENVIRONMENT_ID="$environment" \
-      RAILWAY_REGION="$railway_region" \
+      RAILWAY_REGION="$region" \
       REPLICA_COUNT="$replicas" \
       node -e '
 const replicas = Number(process.env.REPLICA_COUNT);
@@ -281,7 +290,7 @@ console.log(JSON.stringify({
   )"
   RAILWAY_GRAPHQL_RESPONSE="$response" node -e '
 const response = JSON.parse(process.env.RAILWAY_GRAPHQL_RESPONSE || "{}");
-if (response.data?.environmentPatchCommit !== true) {
+if (typeof response.data?.environmentPatchCommit !== "string" || response.data.environmentPatchCommit.length === 0) {
   const messages = Array.isArray(response.errors)
     ? response.errors.map(({message}) => message).filter(Boolean).join("; ")
     : "";
