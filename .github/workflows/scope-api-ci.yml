@@ -111,6 +111,7 @@ jobs:
             cp -a api "$root/api"
             cp -a worker "$root/worker"
             cp -a crates "$root/crates"
+            cp -a runner-runtime "$root/runner-runtime"
           done
 
       - name: Install Railway CLI
