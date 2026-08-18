@@ -14,12 +14,20 @@ import {
 } from '@/features/repo-detail/repo-code-route-data'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import {
+  peekRepoFileCache,
+  readRepoFileCache,
+  repoFileCacheKey,
+  writeRepoFileCache,
+} from '@/features/repo-detail/repo-file-cache'
+import {
   displayRouteFilePath,
   parseRouteFileSearch,
 } from '@/lib/route-file'
+import { useCachedResource } from '@/lib/use-cached-resource'
 import { RepoContentError } from '@/components/repo-content-error'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
+import { useCallback } from 'react'
 
 const PROJECTION_REBUILDING_MESSAGE = 'repository projection is rebuilding; retry shortly'
 
@@ -49,11 +57,11 @@ const loadRepoFile = createServerFn({ method: 'GET' })
 
 export const Route = createFileRoute('/$owner/$repo/')({
   validateSearch: parseRepoCodeSearch,
-  loaderDeps: ({ search }) => ({
-    file: search.file ?? DEFAULT_REPO_FILE_PATH,
+  beforeLoad: ({ search }) => ({
+    initialFilePath: search.file ?? DEFAULT_REPO_FILE_PATH,
   }),
   staleTime: Infinity,
-  loader: ({ abortController, deps, params }) =>
+  loader: ({ abortController, context, params }) =>
     loadRepoCodeRouteData({
       loadContent: () => loadRepoContent({
         data: params,
@@ -66,7 +74,7 @@ export const Route = createFileRoute('/$owner/$repo/')({
         }),
         signal: abortController.signal,
       }),
-      requestedPath: deps.file,
+      requestedPath: context.initialFilePath,
     }),
   errorComponent: RepoContentError,
   component: RepoIndexRoute,
@@ -74,19 +82,73 @@ export const Route = createFileRoute('/$owner/$repo/')({
 
 function RepoIndexRoute() {
   const routeData = Route.useLoaderData()
-  const { content, selectedFile, selectedPath } = routeData
+  const {
+    content,
+    requestedPath: initialRequestedPath,
+    selectedFile: initialFile,
+    selectedPath: initialPath,
+  } = routeData
   const params = Route.useParams()
+  const search = Route.useSearch()
   const { repo } = useRepoLayout()
   const navigate = useNavigate({ from: Route.fullPath })
-  const identity = selectedFile
-    ? [
-        repo.id,
-        repo.change_version,
-        repo.access.can_read_private_files ? 'private' : 'public',
-        selectedFile.path,
-        selectedFile.oid,
-      ].join('\0')
-    : null
+  const requestedPath = search.file ?? DEFAULT_REPO_FILE_PATH
+  const identity = repoFileCacheKey({
+    audience: repo.access.can_read_private_files ? 'private' : 'public',
+    changeVersion: repo.change_version,
+    path: requestedPath,
+    repoId: repo.id,
+  })
+  const initialIdentity = repoFileCacheKey({
+    audience: repo.access.can_read_private_files ? 'private' : 'public',
+    changeVersion: repo.change_version,
+    path: initialRequestedPath,
+    repoId: repo.id,
+  })
+  const readFile = useCallback(
+    (key: string) => readRepoFileCache(key)
+      ?? (key === initialIdentity ? initialFile : null),
+    [initialFile, initialIdentity],
+  )
+  const peekFile = useCallback(
+    (key: string) => peekRepoFileCache(key)
+      ?? (key === initialIdentity ? initialFile : null),
+    [initialFile, initialIdentity],
+  )
+  const loadSelectedFile = useCallback(
+    async (signal: AbortSignal) => {
+      const file = await loadRepoFileWhenReady({
+        load: () => loadRepoFile({
+          data: {
+            owner: params.owner,
+            path: requestedPath,
+            repo: params.repo,
+          },
+          signal,
+        }),
+        signal,
+      })
+      if (!file) {
+        throw new Error('This file is no longer available in the current scoped view.')
+      }
+      return file
+    },
+    [params.owner, params.repo, requestedPath],
+  )
+  const resourceIdentity = identity === initialIdentity && !initialFile
+    ? null
+    : identity
+  const selectedResource = useCachedResource({
+    fallbackError: 'File content is unavailable.',
+    identity: resourceIdentity,
+    load: loadSelectedFile,
+    peek: peekFile,
+    read: readFile,
+    write: writeRepoFileCache,
+  })
+  const selectedPath = identity === initialIdentity
+    ? initialPath
+    : selectedResource.value?.path ?? `/${displayRouteFilePath(requestedPath)}`
 
   return (
     <RepoDetailPage
@@ -98,8 +160,11 @@ function RepoIndexRoute() {
         })
       }}
       params={params}
-      selectedFile={selectedFile}
-      selectedFileIdentity={identity}
+      selectedFile={selectedResource.value}
+      selectedFileError={selectedResource.error}
+      selectedFileIdentity={resourceIdentity}
+      selectedFileLoading={selectedResource.status === 'loading'}
+      selectedFileRetry={selectedResource.retry}
       selectedPath={selectedPath}
     />
   )

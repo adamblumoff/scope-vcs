@@ -21,11 +21,13 @@ export async function loadRepoCodeRouteData({
   loadFile: (path: string) => Promise<RepoFileContent | null>
   requestedPath?: string
 }) {
+  const primaryPath = requestedPath ?? DEFAULT_REPO_FILE_PATH
   const content = loadContent()
-  const selectedFile = await loadFile(requestedPath ?? DEFAULT_REPO_FILE_PATH)
+  const selectedFile = await loadFile(primaryPath)
 
   return {
     content,
+    requestedPath: primaryPath,
     selectedFile,
     selectedPath: selectedFile?.path ?? null,
   }

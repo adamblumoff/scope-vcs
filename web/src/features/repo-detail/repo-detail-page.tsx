@@ -15,14 +15,20 @@ export function RepoDetailPage({
   onSelectFilePath,
   params,
   selectedFile,
+  selectedFileError,
   selectedFileIdentity,
+  selectedFileLoading,
+  selectedFileRetry,
   selectedPath,
 }: {
   content: Promise<RepoContent>
   onSelectFilePath: (path: string) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
+  selectedFileError: string | null
   selectedFileIdentity: string | null
+  selectedFileLoading: boolean
+  selectedFileRetry: () => void
   selectedPath: string | null
 }) {
   const { repo } = useRepoLayout()
@@ -59,7 +65,10 @@ export function RepoDetailPage({
         onSelectFilePath={onSelectFilePath}
         params={params}
         selectedFile={selectedFile}
+        selectedFileError={selectedFileError}
         selectedFileIdentity={selectedFileIdentity}
+        selectedFileLoading={selectedFileLoading}
+        selectedFileRetry={selectedFileRetry}
         selectedPath={selectedPath}
       />
     </WorkbenchPane>
