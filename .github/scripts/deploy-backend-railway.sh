@@ -238,8 +238,7 @@ process.exit(Array.isArray(deployments) && deployments.length > 0 ? 0 : 1);
 scale_service() {
   local service_name="$1"
   local replicas="$2"
-  railway scale "${railway_scope[@]}" \
-    --service "$service_name" \
+  railway scale --service "$service_name" \
     "${railway_region}=${replicas}" \
     --json
 }
@@ -312,6 +311,10 @@ leave_failure_state() {
 trap 'leave_failure_state $?' EXIT
 
 validate_production_target
+railway link \
+  --project "$RAILWAY_PROJECT_ID" \
+  --environment "$environment" \
+  --json >/dev/null
 
 api_rollback_replicas="$(
   configured_or_declared_replicas "$api_service" SCOPE_RAILWAY_API_REPLICAS

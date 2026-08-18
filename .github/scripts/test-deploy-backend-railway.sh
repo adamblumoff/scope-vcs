@@ -73,6 +73,13 @@ if [[ "$1" == "run" ]]; then
   exit $?
 fi
 
+if [[ "$1" == "link" ]]; then
+  [[ "$*" == *"--project project-test"* ]]
+  [[ "$*" == *"--environment production"* ]]
+  echo '{"projectId":"project-test","environmentId":"production"}'
+  exit 0
+fi
+
 if [[ "$1" == "scale" ]]; then
   service=""
   assignment=""
@@ -281,15 +288,16 @@ assert_in_order() {
 run_cutover success 0
 [[ "$(cat "$test_dir/success-result")" == "0" ]]
 assert_in_order "$test_dir/success-trace" \
+  "link --project project-test --environment production --json" \
   "$test_dir/maintenance plan" \
-  "scale --project project-test --environment production --service scope-api us-east4-eqdc4a=0 --json" \
-  "scale --project project-test --environment production --service scope-worker us-east4-eqdc4a=0 --json" \
+  "scale --service scope-api us-east4-eqdc4a=0 --json" \
+  "scale --service scope-worker us-east4-eqdc4a=0 --json" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance verify" \
   "up $test_dir/worker" \
-  "scale --project project-test --environment production --service scope-worker us-east4-eqdc4a=1 --json" \
+  "scale --service scope-worker us-east4-eqdc4a=1 --json" \
   "up $test_dir/api" \
-  "scale --project project-test --environment production --service scope-api us-east4-eqdc4a=1 --json"
+  "scale --service scope-api us-east4-eqdc4a=1 --json"
 
 run_cutover degraded 0 0 "" 0 0 0 0 "" 0 "" "" 1 scope-worker
 [[ "$(cat "$test_dir/degraded-result")" != "0" ]]
@@ -302,8 +310,8 @@ fi
 run_cutover degraded-during-shutdown 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 1
 [[ "$(cat "$test_dir/degraded-during-shutdown-result")" != "0" ]]
 assert_in_order "$test_dir/degraded-during-shutdown-trace" \
-  "scale --project project-test --environment production --service scope-api us-east4-eqdc4a=0 --json" \
-  "scale --project project-test --environment production --service scope-api us-east4-eqdc4a=1 --json"
+  "scale --service scope-api us-east4-eqdc4a=0 --json" \
+  "scale --service scope-api us-east4-eqdc4a=1 --json"
 if grep -F -- "--service scope-worker us-east4-eqdc4a=0" "$test_dir/degraded-during-shutdown-trace"; then
   echo "a service that degrades before shutdown must remain recoverable" >&2
   exit 1
@@ -320,8 +328,8 @@ run_cutover rollback rollback
 assert_in_order "$test_dir/rollback-trace" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance plan" \
-  "scale --project project-test --environment production --service scope-worker us-east4-eqdc4a=1 --json" \
-  "scale --project project-test --environment production --service scope-api us-east4-eqdc4a=1 --json"
+  "scale --service scope-worker us-east4-eqdc4a=1 --json" \
+  "scale --service scope-api us-east4-eqdc4a=1 --json"
 if grep -F "up $test_dir/api" "$test_dir/rollback-trace"; then
   echo "failed migration must not deploy the new API" >&2
   exit 1
@@ -386,12 +394,12 @@ assert_in_order "$test_dir/bootstrap-trace" \
 run_cutover partial-reopen 0 0 scope-api
 [[ "$(cat "$test_dir/partial-reopen-result")" != "0" ]]
 assert_in_order "$test_dir/partial-reopen-trace" \
-  "scale --project project-test --environment production --service scope-api us-east4-eqdc4a=0 --json" \
-  "scale --project project-test --environment production --service scope-worker us-east4-eqdc4a=0 --json" \
+  "scale --service scope-api us-east4-eqdc4a=0 --json" \
+  "scale --service scope-worker us-east4-eqdc4a=0 --json" \
   "up $test_dir/worker" \
-  "scale --project project-test --environment production --service scope-worker us-east4-eqdc4a=1 --json" \
+  "scale --service scope-worker us-east4-eqdc4a=1 --json" \
   "up $test_dir/api" \
-  "scale --project project-test --environment production --service scope-worker us-east4-eqdc4a=0 --json"
+  "scale --service scope-worker us-east4-eqdc4a=0 --json"
 [[ "$(grep -F -c -- "--service scope-api us-east4-eqdc4a=0" "$test_dir/partial-reopen-trace")" == "1" ]]
 
 run_cutover denied-api 0 0 "" 0 0 0 0 "" 0 scope-api
@@ -405,9 +413,9 @@ fi
 run_cutover denied-worker 0 0 "" 0 0 0 0 "" 0 scope-worker
 [[ "$(cat "$test_dir/denied-worker-result")" != "0" ]]
 assert_in_order "$test_dir/denied-worker-trace" \
-  "scale --project project-test --environment production --service scope-api us-east4-eqdc4a=0 --json" \
-  "scale --project project-test --environment production --service scope-worker us-east4-eqdc4a=0 --json" \
-  "scale --project project-test --environment production --service scope-api us-east4-eqdc4a=1 --json"
+  "scale --service scope-api us-east4-eqdc4a=0 --json" \
+  "scale --service scope-worker us-east4-eqdc4a=0 --json" \
+  "scale --service scope-api us-east4-eqdc4a=1 --json"
 if grep -F -- "--service scope-worker us-east4-eqdc4a=1" "$test_dir/denied-worker-trace"; then
   echo "a worker shutdown denial must not restore a worker that was never closed" >&2
   exit 1
