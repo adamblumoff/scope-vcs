@@ -194,16 +194,17 @@ while [[ "$#" -gt 0 ]]; do
     *) shift ;;
   esac
 done
-read -r service replicas < <(
+read -r service region replicas < <(
   REQUEST_JSON="$request" node -e '
 const request = JSON.parse(process.env.REQUEST_JSON || "{}");
 const services = request.variables?.patch?.services || {};
 const [service, config] = Object.entries(services)[0] || [];
-const region = config?.deploy?.multiRegionConfig?.["us-east4-eqdc4a"];
-console.log(`${service || ""} ${region === null ? 0 : region?.numReplicas ?? ""}`);
+const regions = config?.deploy?.multiRegionConfig || {};
+const [region, regionConfig] = Object.entries(regions)[0] || [];
+console.log(`${service || ""} ${region || ""} ${regionConfig === null ? 0 : regionConfig?.numReplicas ?? ""}`);
 '
 )
-printf 'graphql scale %s %s\n' "$service" "$replicas" >> "$FAKE_RAILWAY_TRACE"
+printf 'graphql scale %s %s %s\n' "$service" "$region" "$replicas" >> "$FAKE_RAILWAY_TRACE"
 if [[ "${FAKE_DENY_SCALE_SERVICE:-}" == "$service" ]]; then
   echo '{"errors":[{"message":"permission denied"}]}'
   exit 0
@@ -213,7 +214,7 @@ if [[ "$replicas" == "0" ]]; then
 else
   rm -f "$FAKE_RAILWAY_STATE/stopped-${service}" "$FAKE_RAILWAY_STATE/crashed-${service}"
 fi
-echo '{"data":{"environmentPatchCommit":true}}'
+echo '{"data":{"environmentPatchCommit":"environment-snapshot-test"}}'
 FAKE
 chmod +x "$test_dir/bin/curl"
 
@@ -264,7 +265,8 @@ run_cutover() {
     SCOPE_RAILWAY_API_SERVICE_ID="scope-api" \
     SCOPE_RAILWAY_WORKER_SERVICE_ID="scope-worker" \
     SCOPE_RAILWAY_DATABASE_SERVICE_ID="scope-postgres" \
-    SCOPE_RAILWAY_REGION_ID="us-east4-eqdc4a" \
+    SCOPE_RAILWAY_API_REGION_ID="us-west2" \
+    SCOPE_RAILWAY_WORKER_REGION_ID="us-east4-eqdc4a" \
     SCOPE_RAILWAY_API_REPLICAS="1" \
     SCOPE_RAILWAY_WORKER_REPLICAS="1" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
@@ -297,14 +299,14 @@ run_cutover success 0
 [[ "$(cat "$test_dir/success-result")" == "0" ]]
 assert_in_order "$test_dir/success-trace" \
   "$test_dir/maintenance plan" \
-  "graphql scale scope-api 0" \
-  "graphql scale scope-worker 0" \
+  "graphql scale scope-api us-west2 0" \
+  "graphql scale scope-worker us-east4-eqdc4a 0" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance verify" \
   "up $test_dir/worker" \
-  "graphql scale scope-worker 1" \
+  "graphql scale scope-worker us-east4-eqdc4a 1" \
   "up $test_dir/api" \
-  "graphql scale scope-api 1"
+  "graphql scale scope-api us-west2 1"
 
 run_cutover degraded 0 0 "" 0 0 0 0 "" 0 "" "" 1 scope-worker
 [[ "$(cat "$test_dir/degraded-result")" != "0" ]]
@@ -317,9 +319,9 @@ fi
 run_cutover degraded-during-shutdown 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 1
 [[ "$(cat "$test_dir/degraded-during-shutdown-result")" != "0" ]]
 assert_in_order "$test_dir/degraded-during-shutdown-trace" \
-  "graphql scale scope-api 0" \
-  "graphql scale scope-api 1"
-if grep -F "graphql scale scope-worker 0" "$test_dir/degraded-during-shutdown-trace"; then
+  "graphql scale scope-api us-west2 0" \
+  "graphql scale scope-api us-west2 1"
+if grep -F "graphql scale scope-worker us-east4-eqdc4a 0" "$test_dir/degraded-during-shutdown-trace"; then
   echo "a service that degrades before shutdown must remain recoverable" >&2
   exit 1
 fi
@@ -335,8 +337,8 @@ run_cutover rollback rollback
 assert_in_order "$test_dir/rollback-trace" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance plan" \
-  "graphql scale scope-worker 1" \
-  "graphql scale scope-api 1"
+  "graphql scale scope-worker us-east4-eqdc4a 1" \
+  "graphql scale scope-api us-west2 1"
 if grep -F "up $test_dir/api" "$test_dir/rollback-trace"; then
   echo "failed migration must not deploy the new API" >&2
   exit 1
@@ -344,7 +346,7 @@ fi
 
 run_cutover unknown committed-error 0 "" 1
 [[ "$(cat "$test_dir/unknown-result")" != "0" ]]
-if grep -E "graphql scale (scope-api|scope-worker) 1" "$test_dir/unknown-trace"; then
+if grep -E "graphql scale (scope-api us-west2|scope-worker us-east4-eqdc4a) 1" "$test_dir/unknown-trace"; then
   echo "unknown migration state must not restore old deployments" >&2
   exit 1
 fi
@@ -401,13 +403,13 @@ assert_in_order "$test_dir/bootstrap-trace" \
 run_cutover partial-reopen 0 0 scope-api
 [[ "$(cat "$test_dir/partial-reopen-result")" != "0" ]]
 assert_in_order "$test_dir/partial-reopen-trace" \
-  "graphql scale scope-api 0" \
-  "graphql scale scope-worker 0" \
+  "graphql scale scope-api us-west2 0" \
+  "graphql scale scope-worker us-east4-eqdc4a 0" \
   "up $test_dir/worker" \
-  "graphql scale scope-worker 1" \
+  "graphql scale scope-worker us-east4-eqdc4a 1" \
   "up $test_dir/api" \
-  "graphql scale scope-worker 0"
-[[ "$(grep -F -c "graphql scale scope-api 0" "$test_dir/partial-reopen-trace")" == "1" ]]
+  "graphql scale scope-worker us-east4-eqdc4a 0"
+[[ "$(grep -F -c "graphql scale scope-api us-west2 0" "$test_dir/partial-reopen-trace")" == "1" ]]
 
 run_cutover denied-api 0 0 "" 0 0 0 0 "" 0 scope-api
 [[ "$(cat "$test_dir/denied-api-result")" != "0" ]]
@@ -420,10 +422,10 @@ fi
 run_cutover denied-worker 0 0 "" 0 0 0 0 "" 0 scope-worker
 [[ "$(cat "$test_dir/denied-worker-result")" != "0" ]]
 assert_in_order "$test_dir/denied-worker-trace" \
-  "graphql scale scope-api 0" \
-  "graphql scale scope-worker 0" \
-  "graphql scale scope-api 1"
-if grep -F "graphql scale scope-worker 1" "$test_dir/denied-worker-trace"; then
+  "graphql scale scope-api us-west2 0" \
+  "graphql scale scope-worker us-east4-eqdc4a 0" \
+  "graphql scale scope-api us-west2 1"
+if grep -F "graphql scale scope-worker us-east4-eqdc4a 1" "$test_dir/denied-worker-trace"; then
   echo "a worker shutdown denial must not restore a worker that was never closed" >&2
   exit 1
 fi
