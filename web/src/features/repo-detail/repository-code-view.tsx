@@ -10,6 +10,7 @@ import { isRepositoryHtmlPath } from '@/components/repository-html'
 import { RepositoryHtmlRenderer } from '@/components/repository-html-renderer'
 import { isRepositoryMarkdownPath } from '@/components/repository-markdown'
 import { RepositoryMarkdownRenderer } from '@/components/repository-markdown-renderer'
+import { Button } from '@/components/ui/button'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
@@ -19,9 +20,17 @@ import {
   pruneWorkspaceTabs,
   type WorkspaceTabItem,
 } from '@/components/workspace-tab-model'
-import { Await } from '@tanstack/react-router'
-import { FileQuestion, LoaderCircle } from 'lucide-react'
-import { useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
+import {
+  displayRouteFilePath,
+  selectedRouteFilePath,
+} from '@/lib/route-file'
+import { FileQuestion, LoaderCircle, TriangleAlert } from 'lucide-react'
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from 'react'
 import {
   readRepositorySourceScroll,
   writeRepositorySourceScroll,
@@ -31,17 +40,31 @@ const CODE_TAB_SET_ID = 'repository-code-files'
 
 export function RepositoryCodeView({
   content,
+  contentError,
+  contentLoading,
+  contentRetry,
+  initialFile,
   onSelectFilePath,
   params,
   selectedFile,
+  selectedFileError,
   selectedFileIdentity,
+  selectedFileLoading,
+  selectedFileRetry,
   selectedPath,
 }: {
-  content: Promise<RepoContent>
-  onSelectFilePath: (path: string) => Promise<boolean>
+  content: RepoContent | null
+  contentError: string | null
+  contentLoading: boolean
+  contentRetry: () => void
+  initialFile: RepoFileContent | null
+  onSelectFilePath: (path: string) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
+  selectedFileError: string | null
   selectedFileIdentity: string | null
+  selectedFileLoading: boolean
+  selectedFileRetry: () => void
   selectedPath: string | null
 }) {
   const workspaceTabs = useWorkspaceTabs({
@@ -54,9 +77,22 @@ export function RepositoryCodeView({
 
   // Closing the last tab keeps the route pointing at the file it was showing:
   // an empty workspace is this session's state, not something worth sharing.
-  async function selectFile(path: string, pinned: boolean) {
-    if (await onSelectFilePath(path) && pinned) workspaceTabs.open(path, true)
+  function selectFile(path: string, pinned: boolean) {
+    workspaceTabs.open(displayRouteFilePath(path), pinned)
+    onSelectFilePath(path)
   }
+
+  const pendingFile = initialFile && selectedPath &&
+    displayRouteFilePath(initialFile.path) === displayRouteFilePath(selectedPath)
+    ? initialFile
+    : null
+  const sourceFile = content ? selectedFile : pendingFile
+  const sourceError = content
+    ? selectedFileError
+    : pendingFile ? null : contentError
+  const sourceLoading = content
+    ? selectedFileLoading
+    : Boolean(openPath && !pendingFile && contentLoading)
 
   return (
     <section>
@@ -67,23 +103,33 @@ export function RepositoryCodeView({
           ref={fileNavigatorRef}
           tabIndex={-1}
         >
-          <Await promise={content} fallback={<FileNavigatorPending />}>
-            {(resolved) => (
-              <RepositoryFileNavigator
-                files={resolved.files}
-                onSelectFile={selectFile}
-                selectedPath={openPath}
-              />
-            )}
-          </Await>
+          {content ? (
+            <RepositoryFileNavigator
+              files={content.files}
+              onSelectFile={selectFile}
+              selectedPath={selectedRouteFilePath(
+                content.files,
+                openPath ?? undefined,
+              )}
+            />
+          ) : contentError ? (
+            <FileNavigatorError error={contentError} retry={contentRetry} />
+          ) : (
+            <FileNavigatorPending />
+          )}
         </div>
         <SourcePane
-          content={content}
-          file={selectedFile}
+          availablePaths={content
+            ? content.files.map((file) => displayRouteFilePath(file.path))
+            : workspaceTabs.state.openIds}
+          error={sourceError}
+          file={sourceFile}
+          loading={sourceLoading}
           onActivateTab={onSelectFilePath}
           onEmptyTabFocus={() => fileNavigatorRef.current?.focus()}
           onPinTab={(path) => workspaceTabs.open(path, true)}
           params={params}
+          retry={content ? selectedFileRetry : contentRetry}
           scrollKey={selectedFileIdentity}
           selectedPath={openPath}
           workspaceTabs={workspaceTabs}
@@ -134,23 +180,47 @@ function FileNavigatorPending() {
   )
 }
 
+function FileNavigatorError({
+  error,
+  retry,
+}: {
+  error: string
+  retry: () => void
+}) {
+  return (
+    <PanelState role="alert" tone="error">
+      <TriangleAlert className="size-5" />
+      <span>{error}</span>
+      <Button onClick={retry} size="sm" type="button" variant="secondary">
+        Retry
+      </Button>
+    </PanelState>
+  )
+}
+
 function SourcePane({
-  content,
+  availablePaths,
+  error,
   file,
+  loading,
   onActivateTab,
   onEmptyTabFocus,
   onPinTab,
   params,
+  retry,
   scrollKey,
   selectedPath,
   workspaceTabs,
 }: {
-  content: Promise<RepoContent>
+  availablePaths: string[]
+  error: string | null
   file: RepoFileContent | null
-  onActivateTab: (path: string) => Promise<boolean>
+  loading: boolean
+  onActivateTab: (path: string) => void
   onEmptyTabFocus: () => void
   onPinTab: (path: string) => void
   params: RepoParams
+  retry: () => void
   scrollKey: string | null
   selectedPath: string | null
   workspaceTabs: ReturnType<typeof useWorkspaceTabs>
@@ -160,8 +230,10 @@ function SourcePane({
     : null
   const contentRef = useRef<HTMLDivElement>(null)
   const meta = useMemo(
-    () => file && selectedPath ? <FileMeta file={file} /> : undefined,
-    [file, selectedPath],
+    () => file && selectedPath && !loading && !error
+      ? <FileMeta file={file} />
+      : undefined,
+    [error, file, loading, selectedPath],
   )
 
   useLayoutEffect(() => {
@@ -172,32 +244,15 @@ function SourcePane({
 
   return (
     <div className="min-w-0">
-      <Await
-        promise={content}
-        fallback={(
-          <RepositoryTabStrip
-            availablePaths={workspaceTabs.state.openIds}
-            meta={meta}
-            onActivateTab={onActivateTab}
-            onEmptyTabFocus={onEmptyTabFocus}
-            onPinTab={onPinTab}
-            selectedPath={selectedPath}
-            workspaceTabs={workspaceTabs}
-          />
-        )}
-      >
-        {(resolved) => (
-          <RepositoryTabStrip
-            availablePaths={resolved.files.map((item) => item.path)}
-            meta={meta}
-            onActivateTab={onActivateTab}
-            onEmptyTabFocus={onEmptyTabFocus}
-            onPinTab={onPinTab}
-            selectedPath={selectedPath}
-            workspaceTabs={workspaceTabs}
-          />
-        )}
-      </Await>
+      <RepositoryTabStrip
+        availablePaths={availablePaths}
+        meta={meta}
+        onActivateTab={onActivateTab}
+        onEmptyTabFocus={onEmptyTabFocus}
+        onPinTab={onPinTab}
+        selectedPath={selectedPath}
+        workspaceTabs={workspaceTabs}
+      />
       <div
         aria-label={activeTabDomIds ? undefined : 'Repository file viewer'}
         aria-labelledby={activeTabDomIds?.tabId}
@@ -211,8 +266,11 @@ function SourcePane({
         tabIndex={selectedPath ? 0 : undefined}
       >
         <SourceContent
+          error={error}
           file={file}
+          loading={loading}
           params={params}
+          retry={retry}
           selectedPath={selectedPath}
         />
       </div>
@@ -231,7 +289,7 @@ function RepositoryTabStrip({
 }: {
   availablePaths: string[]
   meta: ReactNode
-  onActivateTab: (path: string) => Promise<boolean>
+  onActivateTab: (path: string) => void
   onEmptyTabFocus: () => void
   onPinTab: (path: string) => void
   selectedPath: string | null
@@ -269,12 +327,18 @@ function RepositoryTabStrip({
 }
 
 function SourceContent({
+  error,
   file,
+  loading,
   params,
+  retry,
   selectedPath,
 }: {
+  error: string | null
   file: RepoFileContent | null
+  loading: boolean
   params: RepoParams
+  retry: () => void
   selectedPath: string | null
 }) {
   if (!selectedPath) {
@@ -282,6 +346,27 @@ function SourceContent({
       <PanelState>
         <FileQuestion className="size-5" />
         <span>Select a file to inspect its projected contents.</span>
+      </PanelState>
+    )
+  }
+
+  if (loading) {
+    return (
+      <PanelState busy>
+        <LoaderCircle className="size-5 animate-spin" />
+        <span>Loading {displayPath(selectedPath)}</span>
+      </PanelState>
+    )
+  }
+
+  if (error) {
+    return (
+      <PanelState role="alert" tone="error">
+        <TriangleAlert className="size-5" />
+        <span>{error}</span>
+        <Button onClick={retry} size="sm" type="button" variant="secondary">
+          Retry
+        </Button>
       </PanelState>
     )
   }
