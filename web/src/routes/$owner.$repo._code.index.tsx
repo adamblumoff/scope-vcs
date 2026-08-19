@@ -19,6 +19,7 @@ import {
   writeRepoFileCache,
 } from '@/features/repo-detail/repo-file-cache'
 import { RepoDetailPage } from '@/features/repo-detail/repo-detail-page'
+import { RepositoryCodePending } from '@/features/repo-detail/repository-code-pending'
 import {
   DEFAULT_REPO_FILE_PATH,
   loadRepoFileWhenReady,
@@ -83,6 +84,7 @@ export const Route = createFileRoute('/$owner/$repo/_code/')({
     return { initialFile }
   },
   errorComponent: RepoContentError,
+  pendingComponent: RepositoryCodePending,
   component: RepoIndexRoute,
 })
 

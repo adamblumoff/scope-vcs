@@ -22,6 +22,7 @@ import {
   RequestDetailPage,
   RequestUnavailablePage,
 } from '@/features/requests/request-detail-page'
+import { RequestDetailPagePending } from '@/features/requests/request-page-pending'
 import {
   loadOptionalSelectedRequestResource,
   requestParamsForRoute,
@@ -72,6 +73,7 @@ const rateRequest = createServerFn({ method: 'POST' })
 export const Route = createFileRoute('/$owner/$repo/requests/$requestId')({
   validateSearch: parseRequestDetailSearch,
   loader: ({ params }) => loadRequestPage({ data: requestParamsForRoute(params) }),
+  pendingComponent: RequestDetailPagePending,
   component: RequestRoute,
 })
 

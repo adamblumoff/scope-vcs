@@ -9,6 +9,7 @@ import type {
 } from '@/api/types'
 import type { LoadRequestRevisionCommitInput } from '@/api/requests'
 import { PendingSurface } from '@/components/pending-surface'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   historyCommitCacheKey,
   historyDiffCacheKey,
@@ -452,7 +453,10 @@ function RequestCommitContext({
         </p>
       ) : null}
       {discussions.length > 0 ? (
-        <div className="mt-3 space-y-2" aria-label="Related discussions">
+        <div
+          aria-label="Related discussions"
+          className="scope-content-enter mt-3 space-y-2"
+        >
           {discussions.map((discussion) => (
             <a
               className="flex min-w-0 items-center gap-2 text-foreground hover:text-brand"
@@ -471,8 +475,22 @@ function RequestCommitContext({
       {discussionReferences.status === 'loading' ? (
         <PendingSurface
           className="mt-3 min-h-6"
+          delay
           label="Loading discussion references"
-        />
+        >
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Skeleton className="size-3.5" />
+              <Skeleton className="h-3 w-3/5" />
+              <Skeleton className="ml-auto h-3 w-12" />
+            </div>
+            <div className="flex items-center gap-2">
+              <Skeleton className="size-3.5" />
+              <Skeleton className="h-3 w-2/5" />
+              <Skeleton className="ml-auto h-3 w-12" />
+            </div>
+          </div>
+        </PendingSurface>
       ) : null}
       {discussionReferences.status === 'failed' ? (
         <div className="mt-3 flex items-center gap-2">

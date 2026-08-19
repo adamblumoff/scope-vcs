@@ -4,6 +4,7 @@ import type {
   RepoParams,
 } from '@/api/types'
 import { HistoryError } from '@/features/history/history-error'
+import { HistoryPagePending } from '@/features/history/history-page-pending'
 import {
   HistoryPage,
   type CommitHistories,
@@ -34,6 +35,7 @@ export const Route = createFileRoute('/$owner/$repo/history')({
     } satisfies CommitHistories
   },
   errorComponent: HistoryError,
+  pendingComponent: HistoryPagePending,
   component: HistoryRoute,
 })
 

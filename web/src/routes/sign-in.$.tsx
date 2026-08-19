@@ -18,7 +18,11 @@ function Page() {
         description="Continue to repositories, requests, and your CLI sessions."
         title="Sign in to Scope"
       >
-        {isLoaded ? <SignIn /> : <AuthLoadingState label="Loading sign in…" />}
+        {isLoaded ? (
+          <div className="scope-content-enter">
+            <SignIn />
+          </div>
+        ) : <AuthLoadingState label="Loading sign in…" />}
       </AuthSurface>
     </AuthLayout>
   )

@@ -18,7 +18,11 @@ function Page() {
         description="Create an account for permissioned repository collaboration."
         title="Create your Scope account"
       >
-        {isLoaded ? <SignUp /> : <AuthLoadingState label="Loading sign up…" />}
+        {isLoaded ? (
+          <div className="scope-content-enter">
+            <SignUp />
+          </div>
+        ) : <AuthLoadingState label="Loading sign up…" />}
       </AuthSurface>
     </AuthLayout>
   )

@@ -21,6 +21,53 @@ body {
   background: var(--background);
 }
 
+@keyframes scope-skeleton-breathe {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+
+  50% {
+    opacity: 0.82;
+  }
+}
+
+@keyframes scope-content-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scope-pending-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.scope-skeleton {
+  animation: scope-skeleton-breathe 1.6s ease-in-out infinite;
+}
+
+.scope-content-enter {
+  animation: scope-content-enter 180ms ease-out both;
+}
+
+.scope-pending-enter {
+  animation: scope-pending-enter 180ms ease-out both;
+}
+
+.scope-pending-delayed {
+  animation-delay: 150ms;
+}
+
 button,
 a {
   font: inherit;
@@ -55,6 +102,10 @@ a {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .scope-pending-delayed {
+    animation-delay: 0ms !important;
   }
 }
 

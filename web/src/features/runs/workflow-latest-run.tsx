@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { reconcileExpandedJobs, runNeedsPolling } from './repository-run-detail-model'
 import { RunStatusDot } from './run-status-dot'
 import { RunJobGraph } from './run-job-graph'
+import { RunGraphSkeleton } from './run-graph-skeleton'
 import { runJobPanelId } from './run-job-ids'
 import { runDisplayState } from './run-formatting'
 import { RunTimestamp } from './run-timestamp'
@@ -128,7 +129,7 @@ export function WorkflowLatestRun({
         </div>
       ) : null}
       {detail ? (
-        <>
+        <div className="scope-content-enter">
           <div className="mt-3">
             <RunJobGraph
               compact
@@ -146,12 +147,15 @@ export function WorkflowLatestRun({
               ) : null)}
             </div>
           ) : null}
-        </>
+        </div>
       ) : (
         <PendingSurface
-          className="mt-3 min-h-[140px] border-y border-border"
+          className="min-h-[140px]"
+          delay
           label="Loading latest job graph"
-        />
+        >
+          <RunGraphSkeleton />
+        </PendingSurface>
       )}
     </section>
   )

@@ -10,6 +10,7 @@ import {
   RepositoryRunDetailPage,
   RunDetailPageError,
 } from '@/features/runs/repository-run-detail-page'
+import { RunDetailPagePending } from '@/features/runs/runs-page-pending'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useCallback, useMemo } from 'react'
@@ -32,6 +33,7 @@ export const Route = createFileRoute('/$owner/$repo/runs/$runId')({
     data: runInput(params),
   }),
   errorComponent: RunDetailPageError,
+  pendingComponent: RunDetailPagePending,
   component: RepositoryRunDetailRoute,
 })
 

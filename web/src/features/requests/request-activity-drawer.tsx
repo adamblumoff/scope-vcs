@@ -2,6 +2,7 @@ import type { RequestEvent } from '@/api/types'
 import { PendingSurface } from '@/components/pending-surface'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import * as Dialog from '@radix-ui/react-dialog'
 import { History, TriangleAlert, X } from 'lucide-react'
 import {
@@ -72,8 +73,11 @@ export function RequestActivityDrawer({
             {loading ? (
               <PendingSurface
                 className="min-h-full"
+                delay
                 label="Loading request history"
-              />
+              >
+                <RequestActivitySkeleton />
+              </PendingSurface>
             ) : error ? (
               <div
                 className="flex items-start gap-3 px-5 py-8 text-sm"
@@ -99,7 +103,7 @@ export function RequestActivityDrawer({
                 const body = requestEventBody(event)
                 return (
                   <article
-                    className="grid gap-2 border-b border-border px-5 py-4"
+                    className="scope-content-enter grid gap-2 border-b border-border px-5 py-4"
                     key={event.id}
                   >
                     <div className="flex flex-wrap items-center gap-2">
@@ -133,5 +137,22 @@ export function RequestActivityDrawer({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  )
+}
+
+function RequestActivitySkeleton() {
+  return (
+    <div className="divide-y divide-border">
+      {[68, 46, 78, 58, 72].map((width) => (
+        <div className="grid gap-3 px-5 py-4" key={width}>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-5 w-20 rounded-full" />
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+          <Skeleton className="h-3" style={{ width: `${width}%` }} />
+        </div>
+      ))}
+    </div>
   )
 }

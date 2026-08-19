@@ -2,6 +2,7 @@ import type { RepoRunHistoryInput, RunActionInput } from '@/api/types'
 import {
   RepositoryRunsPage,
 } from '@/features/runs/repository-runs-page'
+import { RunsPagePending } from '@/features/runs/runs-page-pending'
 import { RunsPageError } from '@/features/runs/runs-page-error'
 import {
   loadRepoRunHistory,
@@ -14,6 +15,7 @@ import { useCallback } from 'react'
 export const Route = createFileRoute('/$owner/$repo/runs/workflows/$workflow')({
   loader: ({ params }) => loadRepoRunPage({ data: params }),
   errorComponent: RunsPageError,
+  pendingComponent: RunsPagePending,
   component: RepoWorkflowRunsRoute,
 })
 
