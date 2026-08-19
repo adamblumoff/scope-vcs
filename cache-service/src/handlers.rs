@@ -6,7 +6,7 @@ use axum::{
 };
 use scope_cache_contract::{
     CommitCacheUploadRequest, CommitCacheUploadResponse, PrepareCacheUploadRequest,
-    PrepareCacheUploadResponse, RestoreCacheRequest, RestoreCacheResponse,
+    PrepareCacheUploadResponse, RestoreCacheRequest, RestoreCacheResponse, SignedCacheGrantClaims,
 };
 use scope_cache_domain::{CacheDigest, UploadLeaseId};
 use scope_object_store::ObjectStore;
@@ -37,6 +37,7 @@ pub(crate) async fn restore(
     let now = unix_now()?;
     let claims = state.verifier.verify(&headers, now)?;
     require_identity(&claims, &request.identity_digest, now)?;
+    let signed_url_ttl = signed_url_ttl(&claims, now)?;
     let object = state
         .metadata
         .caches()
@@ -56,13 +57,13 @@ pub(crate) async fn restore(
     }
     let url = state
         .presigner
-        .presign("GET", &object.object_key, SIGNED_URL_TTL_SECONDS)
+        .presign("GET", &object.object_key, signed_url_ttl)
         .map_err(|error| ServiceError::internal(error.to_string()))?;
     Ok(Json(RestoreCacheResponse::Hit {
         object_digest: CacheDigest::parse(object.checksum_sha256)?,
         size_bytes: object.size_bytes,
         download_url: url,
-        expires_at_unix: checked_add(now, u64::from(SIGNED_URL_TTL_SECONDS))?,
+        expires_at_unix: checked_add(now, u64::from(signed_url_ttl))?,
     }))
 }
 
@@ -74,6 +75,7 @@ pub(crate) async fn prepare_upload(
     let now = unix_now()?;
     let claims = state.verifier.verify(&headers, now)?;
     require_identity(&claims, &request.identity_digest, now)?;
+    let signed_url_ttl = signed_url_ttl(&claims, now)?;
     let upload_id = UploadLeaseId::parse(random_upload_id()?)?;
     let result = state
         .metadata
@@ -102,8 +104,9 @@ pub(crate) async fn prepare_upload(
                 .presigner
                 .presign_checksum_bound_put(
                     &upload.object_key,
-                    SIGNED_URL_TTL_SECONDS,
+                    signed_url_ttl,
                     &upload.checksum_sha256,
+                    upload.size_bytes,
                 )
                 .map_err(|error| ServiceError::internal(error.to_string()))?;
             Ok(Json(PrepareCacheUploadResponse::Upload {
@@ -257,6 +260,18 @@ fn checked_add(now: u64, seconds: u64) -> Result<u64, ServiceError> {
         .ok_or_else(|| ServiceError::internal("cache timestamp overflow"))
 }
 
+fn signed_url_ttl(claims: &SignedCacheGrantClaims, now_unix: u64) -> Result<u32, ServiceError> {
+    let remaining = claims
+        .expires_at_unix
+        .checked_sub(now_unix)
+        .filter(|remaining| *remaining > 0)
+        .ok_or_else(|| ServiceError::unauthorized("cache grant is expired"))?;
+    Ok(
+        u32::try_from(remaining.min(u64::from(SIGNED_URL_TTL_SECONDS)))
+            .expect("signed URL TTL is capped to a u32 constant"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +298,27 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt as _;
+
+    #[test]
+    fn signed_urls_never_outlive_the_attempt_grant() {
+        let claims = SignedCacheGrantClaims {
+            repository_id: RepositoryId::parse("repo-1").unwrap(),
+            allowed_identity_digests: vec![],
+            backend: "test-local".to_string(),
+            expires_at_unix: 100,
+        };
+        assert_eq!(signed_url_ttl(&claims, 50).unwrap(), 50);
+        assert!(signed_url_ttl(&claims, 100).is_err());
+
+        let long_grant = SignedCacheGrantClaims {
+            expires_at_unix: 2_000,
+            ..claims
+        };
+        assert_eq!(
+            signed_url_ttl(&long_grant, 0).unwrap(),
+            SIGNED_URL_TTL_SECONDS
+        );
+    }
 
     #[tokio::test]
     async fn real_service_round_trip_is_cold_then_warm_then_unchanged() {

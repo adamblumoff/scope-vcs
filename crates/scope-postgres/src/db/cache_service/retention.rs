@@ -141,43 +141,64 @@ impl CacheStore {
         retry_at_unix: u64,
         limit: u64,
     ) -> Result<Vec<PendingCacheDeletion>, PostgresError> {
-        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let rows = tx
+        let candidates = self
+            .db
             .query_all(statement(
-                "WITH due AS (
-                    SELECT q.repository_id, q.checksum_sha256, q.not_before_unix
-                    FROM scope_cache_deletion_queue q
-                    WHERE q.not_before_unix <= $1
-                      AND NOT EXISTS (
-                        SELECT 1 FROM scope_cache_references r
-                        WHERE r.repository_id = q.repository_id
-                          AND r.checksum_sha256 = q.checksum_sha256
-                      )
-                    ORDER BY q.not_before_unix
-                    FOR UPDATE SKIP LOCKED LIMIT $2
-                 )
-                 UPDATE scope_cache_deletion_queue q
-                 SET attempts = q.attempts + 1, not_before_unix = $3
-                 FROM due, scope_cache_objects o
-                 WHERE q.repository_id = due.repository_id
-                   AND q.checksum_sha256 = due.checksum_sha256
-                   AND o.repository_id = q.repository_id
-                   AND o.checksum_sha256 = q.checksum_sha256
-                 RETURNING q.repository_id, q.checksum_sha256, o.object_key,
-                    q.attempts, due.not_before_unix AS eligible_after_unix",
-                vec![
-                    to_i64(now_unix)?.into(),
-                    to_i64(limit)?.into(),
-                    to_i64(retry_at_unix)?.into(),
-                ],
+                "SELECT repository_id, checksum_sha256
+                 FROM scope_cache_deletion_queue
+                 WHERE not_before_unix <= $1
+                 ORDER BY not_before_unix, repository_id, checksum_sha256
+                 LIMIT $2",
+                vec![to_i64(now_unix)?.into(), to_i64(limit)?.into()],
             ))
             .await
             .map_err(PostgresError::internal)?;
-        let deletions = rows
-            .into_iter()
-            .map(decode_deletion)
-            .collect::<Result<Vec<_>, _>>()?;
-        for deletion in &deletions {
+        let mut deletions = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let repository_id: String = candidate
+                .try_get("", "repository_id")
+                .map_err(PostgresError::internal)?;
+            let checksum_sha256: String = candidate
+                .try_get("", "checksum_sha256")
+                .map_err(PostgresError::internal)?;
+            let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+            lock_repository(&tx, &repository_id).await?;
+            let row = tx
+                .query_one(statement(
+                    "WITH due AS (
+                        SELECT not_before_unix
+                        FROM scope_cache_deletion_queue
+                        WHERE repository_id = $1 AND checksum_sha256 = $2
+                          AND not_before_unix <= $3
+                        FOR UPDATE
+                     )
+                     UPDATE scope_cache_deletion_queue q
+                     SET attempts = q.attempts + 1, not_before_unix = $4
+                     FROM due, scope_cache_objects o
+                     WHERE q.repository_id = $1 AND q.checksum_sha256 = $2
+                       AND o.repository_id = q.repository_id
+                       AND o.checksum_sha256 = q.checksum_sha256
+                       AND NOT EXISTS (
+                        SELECT 1 FROM scope_cache_references r
+                        WHERE r.repository_id = q.repository_id
+                          AND r.checksum_sha256 = q.checksum_sha256
+                       )
+                     RETURNING q.repository_id, q.checksum_sha256, o.object_key,
+                        q.attempts, due.not_before_unix AS eligible_after_unix",
+                    vec![
+                        repository_id.into(),
+                        checksum_sha256.into(),
+                        to_i64(now_unix)?.into(),
+                        to_i64(retry_at_unix)?.into(),
+                    ],
+                ))
+                .await
+                .map_err(PostgresError::internal)?;
+            let Some(row) = row else {
+                tx.commit().await.map_err(PostgresError::internal)?;
+                continue;
+            };
+            let deletion = decode_deletion(row)?;
             let candidate = DeletionCandidate::restore(
                 RepositoryId::parse(deletion.repository_id.clone())?,
                 CacheDigest::parse(deletion.checksum_sha256.clone())?,
@@ -191,8 +212,9 @@ impl CacheStore {
                     "due unreferenced cache object was unexpectedly retained",
                 ));
             }
+            tx.commit().await.map_err(PostgresError::internal)?;
+            deletions.push(deletion);
         }
-        tx.commit().await.map_err(PostgresError::internal)?;
         Ok(deletions)
     }
 
@@ -201,11 +223,18 @@ impl CacheStore {
         repository_id: &str,
         checksum_sha256: &str,
     ) -> Result<bool, PostgresError> {
-        let result = self
-            .db
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        lock_repository(&tx, repository_id).await?;
+        let result = tx
             .execute(statement(
                 "DELETE FROM scope_cache_objects o
                  WHERE o.repository_id = $1 AND o.checksum_sha256 = $2
+                   AND EXISTS (
+                    SELECT 1 FROM scope_cache_deletion_queue q
+                    WHERE q.repository_id = o.repository_id
+                      AND q.checksum_sha256 = o.checksum_sha256
+                      AND q.attempts > 0
+                   )
                    AND NOT EXISTS (
                     SELECT 1 FROM scope_cache_references r
                     WHERE r.repository_id = o.repository_id
@@ -215,6 +244,7 @@ impl CacheStore {
             ))
             .await
             .map_err(PostgresError::internal)?;
+        tx.commit().await.map_err(PostgresError::internal)?;
         Ok(result.rows_affected() == 1)
     }
 

@@ -9,79 +9,16 @@ use sea_orm::{
 };
 
 mod retention;
+mod types;
 
 use retention::{
     active_repository_bytes, expire_repository_references, make_repository_room,
     queue_if_unreferenced,
 };
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CacheObjectRecord {
-    pub repository_id: String,
-    pub checksum_sha256: String,
-    pub storage_backend: String,
-    pub object_key: String,
-    pub size_bytes: u64,
-    pub created_at_unix: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CacheUploadRecord {
-    pub upload_id: String,
-    pub repository_id: String,
-    pub identity_digest: String,
-    pub checksum_sha256: String,
-    pub storage_backend: String,
-    pub object_key: String,
-    pub size_bytes: u64,
-    pub expected_reference_version: Option<u64>,
-    pub state: CacheUploadState,
-    pub created_at_unix: u64,
-    pub expires_at_unix: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CacheUploadState {
-    Active,
-    Deleting,
-    Committed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CachePrepareResult {
-    UseObject {
-        object: CacheObjectRecord,
-        reference_version: u64,
-        expires_at_unix: u64,
-    },
-    Upload(CacheUploadRecord),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CacheCommitResult {
-    Committed {
-        object: CacheObjectRecord,
-        reference_version: u64,
-        expires_at_unix: u64,
-    },
-    AlreadyCommitted {
-        object: CacheObjectRecord,
-        reference_version: u64,
-        expires_at_unix: u64,
-    },
-    Stale {
-        orphaned_object_key: String,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PendingCacheDeletion {
-    pub repository_id: String,
-    pub checksum_sha256: String,
-    pub object_key: String,
-    pub attempts: u32,
-    pub eligible_after_unix: u64,
-}
+pub use types::{
+    CacheCommitResult, CacheObjectRecord, CachePrepareResult, CacheUploadRecord, CacheUploadState,
+    PendingCacheDeletion,
+};
 
 #[allow(clippy::too_many_arguments)]
 impl CacheStore {
@@ -196,6 +133,11 @@ impl CacheStore {
             .map(|reference| domain_reference(repository_id, identity_digest, reference))
             .transpose()?;
         if let Some(object) = stored_object(&tx, repository_id, checksum_sha256).await? {
+            if deletion_is_claimed(&tx, repository_id, checksum_sha256).await? {
+                return Err(PostgresError::conflict(
+                    "cache object deletion is already in progress",
+                ));
+            }
             if object.storage_backend != storage_backend || object.size_bytes != size_bytes {
                 return Err(PostgresError::conflict(
                     "cache object digest is already committed with different metadata",
@@ -599,6 +541,28 @@ async fn stored_object<C: ConnectionTrait>(
     .transpose()
 }
 
+async fn deletion_is_claimed(
+    tx: &DatabaseTransaction,
+    repository_id: &str,
+    checksum_sha256: &str,
+) -> Result<bool, PostgresError> {
+    let row = tx
+        .query_one(statement(
+            "SELECT attempts FROM scope_cache_deletion_queue
+             WHERE repository_id = $1 AND checksum_sha256 = $2 FOR UPDATE",
+            vec![repository_id.into(), checksum_sha256.into()],
+        ))
+        .await
+        .map_err(PostgresError::internal)?;
+    row.map(|row| {
+        row.try_get::<i32>("", "attempts")
+            .map(|attempts| attempts > 0)
+            .map_err(PostgresError::internal)
+    })
+    .transpose()
+    .map(|claimed| claimed.unwrap_or(false))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn replace_reference(
     tx: &DatabaseTransaction,
@@ -916,6 +880,22 @@ mod tests {
             .unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].checksum_sha256, first_digest);
+        let deletion_race = caches
+            .prepare_upload(
+                &repository_id,
+                &"3".repeat(64),
+                &first_digest,
+                100,
+                "test-local",
+                "blocked-by-deletion",
+                now + 3_606,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            deletion_race.kind,
+            crate::error::PostgresErrorKind::Conflict
+        );
         assert!(
             caches
                 .complete_deletion(&repository_id, &due[0].checksum_sha256)

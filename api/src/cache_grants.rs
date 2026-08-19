@@ -3,8 +3,6 @@ use scope_cache_contract::SignedCacheGrantClaims;
 use scope_cache_domain::{CacheDigest, RepositoryId};
 use std::sync::Arc;
 
-pub(crate) const CACHE_GRANT_TTL_SECONDS: u64 = 24 * 60 * 60;
-
 #[derive(Clone)]
 pub(crate) struct CacheGrantIssuer {
     endpoint: Arc<str>,
@@ -90,6 +88,9 @@ fn required_env(name: &str) -> anyhow::Result<String> {
 const TEST_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIGrD/e7uKYqSY4twDEsRfMMuLSrODf14dpTiTK6K1YI0\n-----END PRIVATE KEY-----\n";
 
 #[cfg(test)]
+pub(crate) const TEST_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA2+Jj2UvNCvQiUPNYRgSi0cJSPiJI6Rs6D0UTeEpQVj8=\n-----END PUBLIC KEY-----\n";
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use jsonwebtoken::{DecodingKey, Validation, decode};
@@ -116,7 +117,6 @@ mod tests {
         .claims;
         assert_eq!(claims.repository_id.as_str(), "repo-1");
         assert_eq!(claims.backend, "test-local");
+        assert_eq!(claims.expires_at_unix, 100);
     }
-
-    const TEST_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA2+Jj2UvNCvQiUPNYRgSi0cJSPiJI6Rs6D0UTeEpQVj8=\n-----END PUBLIC KEY-----\n";
 }

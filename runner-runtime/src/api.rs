@@ -3,7 +3,7 @@ use anyhow::{Context as _, bail};
 use reqwest::blocking::{Client, Response};
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
+    AttemptHeartbeatResponse, AttemptStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
     CompleteAttemptStepRequest, ReportAttemptCacheFinalizationsRequest,
     ReportAttemptCachePreparationsRequest, StepConclusionRequest,
 };
@@ -152,11 +152,20 @@ impl RuntimeClient {
     }
 
     pub fn heartbeat(&self) -> anyhow::Result<AttemptStatusResponse> {
-        self.post_json(
+        let response: AttemptHeartbeatResponse = self.post_json(
             "heartbeat",
             &AttemptHeartbeatRequest {},
             "heartbeat attempt",
-        )
+        )?;
+        let mut access = self
+            .cache_access
+            .lock()
+            .expect("cache access mutex poisoned");
+        let access = access
+            .as_mut()
+            .context("cache access is unavailable before attempt claim")?;
+        access.grant = response.cache_grant;
+        Ok(response.status)
     }
 
     pub fn restore_cache(
@@ -238,10 +247,15 @@ impl RuntimeClient {
     ) -> anyhow::Result<()> {
         let file = fs::File::open(source).context("open cache archive")?;
         let size = file.metadata()?.len();
-        let mut request = self
-            .client
-            .put(url)
-            .header(reqwest::header::CONTENT_LENGTH, size);
+        let declared_size = headers
+            .get("content-length")
+            .context("cache upload instructions are missing content-length")?
+            .parse::<u64>()
+            .context("cache upload content-length is invalid")?;
+        if declared_size != size {
+            bail!("cache archive size does not match signed upload size");
+        }
+        let mut request = self.client.put(url);
         for (name, value) in headers {
             request = request.header(name, value);
         }

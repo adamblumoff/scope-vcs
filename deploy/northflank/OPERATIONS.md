@@ -38,9 +38,11 @@ strict.
 
 Run cache metadata and storage are owned by the separate `scope-cache-service`. The API gives each
 claimed attempt a dedicated Ed25519-signed grant scoped to its repository, workflow cache
-identities, backend, and maximum 24-hour run lifetime. The runner exchanges that grant for
-15-minute signed URLs and transfers bytes directly to the cache bucket; neither the API nor cache
-service proxies archives.
+identities, backend, and current attempt lease. Each successful heartbeat rotates the grant to the
+renewed 90-second lease boundary, so a stale runner cannot retain cache authority after its attempt
+lease ends. The runner exchanges that grant for signed URLs lasting up to 15 minutes and transfers
+bytes directly to the cache bucket; each URL is shortened to the remaining grant lifetime when
+necessary. Neither the API nor cache service proxies archives.
 
 Provision a cache bucket that is separate from the durable repository/source bucket. Confirm the
 Northflank job region before choosing the first cache backend region. Configure the cache service:

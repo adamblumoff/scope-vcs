@@ -395,6 +395,12 @@ pub struct AttemptStatusResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AttemptHeartbeatResponse {
+    pub status: AttemptStatusResponse,
+    pub cache_grant: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AttemptRecoveryStatusResponse {
     pub next_log_sequence: u64,
     pub steps: Vec<AttemptStepStatusResponse>,

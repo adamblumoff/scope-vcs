@@ -97,6 +97,7 @@ impl S3Presigner {
         key: &str,
         expires_seconds: u32,
         checksum_sha256: &str,
+        content_length: u64,
     ) -> Result<PresignedRequest, ObjectStoreError> {
         if checksum_sha256.len() != 64
             || !checksum_sha256
@@ -111,11 +112,13 @@ impl S3Presigner {
             ObjectStoreError::internal_message("checksum must be valid hexadecimal")
         })?;
         let checksum_base64 = BASE64.encode(checksum_bytes);
+        let content_length = content_length.to_string();
         self.presign_request(
             "PUT",
             key,
             expires_seconds,
             &[
+                ("content-length", content_length.as_str()),
                 ("x-amz-checksum-sha256", checksum_base64.as_str()),
                 ("x-amz-meta-scope-sha256", checksum_sha256),
             ],
@@ -646,15 +649,16 @@ mod tests {
         settings.force_path_style = true;
         let checksum = "a".repeat(64);
         let request = S3Presigner::new(&settings)
-            .presign_checksum_bound_put("repos/repo-1/objects/sha256/abc", 900, &checksum)
+            .presign_checksum_bound_put("repos/repo-1/objects/sha256/abc", 900, &checksum, 42)
             .unwrap();
 
         assert!(request.url.contains(
-            "X-Amz-SignedHeaders=host%3Bx-amz-checksum-sha256%3Bx-amz-meta-scope-sha256"
+            "X-Amz-SignedHeaders=content-length%3Bhost%3Bx-amz-checksum-sha256%3Bx-amz-meta-scope-sha256"
         ));
         assert_eq!(
             request.headers,
             vec![
+                ("content-length".to_string(), "42".to_string()),
                 (
                     "x-amz-checksum-sha256".to_string(),
                     "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=".to_string(),
@@ -679,7 +683,7 @@ mod tests {
         assert!(signer.presign("HEAD", "object", 60).is_ok());
         assert!(
             signer
-                .presign_checksum_bound_put("object", 60, "not-a-checksum")
+                .presign_checksum_bound_put("object", 60, "not-a-checksum", 42)
                 .is_err()
         );
     }

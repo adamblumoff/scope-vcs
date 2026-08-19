@@ -89,10 +89,10 @@ mod tests {
         let response = PrepareCacheUploadResponse::Upload {
             lease_id: UploadLeaseId::parse("lease-1").unwrap(),
             upload_url: "https://objects.example/upload".to_string(),
-            upload_headers: BTreeMap::from([(
-                "x-amz-meta-scope-sha256".to_string(),
-                "a".repeat(64),
-            )]),
+            upload_headers: BTreeMap::from([
+                ("content-length".to_string(), "42".to_string()),
+                ("x-amz-meta-scope-sha256".to_string(), "a".repeat(64)),
+            ]),
             expires_at_unix: 100,
         };
         let value = serde_json::to_value(response).unwrap();
@@ -100,5 +100,6 @@ mod tests {
             value["upload_headers"]["x-amz-meta-scope-sha256"],
             "a".repeat(64)
         );
+        assert_eq!(value["upload_headers"]["content-length"], "42");
     }
 }

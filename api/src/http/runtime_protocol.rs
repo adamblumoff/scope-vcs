@@ -3,7 +3,6 @@ use crate::{
         runtime::{attempt_token_hash, bootstrap_token_hash, require_attempt},
         tokens::generate_attempt_token,
     },
-    cache_grants::CACHE_GRANT_TTL_SECONDS,
     error::ApiError,
     persistence::unix_now,
     state::AppState,
@@ -19,10 +18,10 @@ use axum::{
 };
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptRecoveryStatusResponse, AttemptStatusResponse, AttemptStepStatusResponse,
-    ClaimRuntimeResponse, CompleteAttemptRequest, CompleteAttemptStepRequest,
-    ReportAttemptCacheFinalizationsRequest, ReportAttemptCachePreparationsRequest, RunJobResponse,
-    StepConclusionRequest,
+    AttemptHeartbeatResponse, AttemptRecoveryStatusResponse, AttemptStatusResponse,
+    AttemptStepStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
+    CompleteAttemptStepRequest, ReportAttemptCacheFinalizationsRequest,
+    ReportAttemptCachePreparationsRequest, RunJobResponse, StepConclusionRequest,
 };
 use scope_domain::runs::cache::{CacheIdentity, CacheNamespace, CachePlatform};
 use scope_domain::runs::run::{AttemptConclusion, RunAttemptStep, RunLogChunk, StepConclusion};
@@ -50,40 +49,8 @@ pub(crate) async fn claim(
             lease_expires_at_unix,
         )
         .await?;
-    let job_definition = claim
-        .workflow_revision
-        .definition()
-        .job(&claim.job.key)
-        .expect("claimed run job definition must exist")
-        .clone();
-    let namespace = CacheNamespace::workflow(claim.run.workflow.path(), &claim.job.key);
-    let allowed_identity_digests = job_definition
-        .caches()
-        .iter()
-        .map(|cache| {
-            let digest = CacheIdentity::new(
-                claim.run.workflow.repository_id(),
-                namespace.clone(),
-                cache.clone(),
-                &claim.job.pinned_container_image,
-                CachePlatform::LinuxAmd64,
-            )?
-            .digest();
-            scope_cache_domain::CacheDigest::parse(digest).map_err(ApiError::bad_request)
-        })
-        .collect::<Result<Vec<_>, ApiError>>()?;
-    let cache_grant_expires_at = now
-        .checked_add(CACHE_GRANT_TTL_SECONDS)
-        .ok_or_else(|| ApiError::internal_message("cache grant timestamp overflow"))?;
-    let cache_grant = state
-        .cache_grants
-        .issue(
-            scope_cache_domain::RepositoryId::parse(claim.run.workflow.repository_id().to_string())
-                .map_err(ApiError::bad_request)?,
-            allowed_identity_digests,
-            cache_grant_expires_at,
-        )
-        .map_err(|error| ApiError::internal_message(error.to_string()))?;
+    let job_definition = claimed_job_definition(&claim);
+    let cache_grant = issue_cache_grant(&state, &claim)?;
     Ok(Json(ClaimRuntimeResponse {
         attempt_token,
         lease_expires_at_unix,
@@ -121,7 +88,7 @@ pub(crate) async fn heartbeat(
     headers: HeaderMap,
     Path(attempt_id): Path<String>,
     Json(_input): Json<AttemptHeartbeatRequest>,
-) -> Result<Json<AttemptStatusResponse>, ApiError> {
+) -> Result<Json<AttemptHeartbeatResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
     let now = unix_now()?;
     state
@@ -134,7 +101,11 @@ pub(crate) async fn heartbeat(
         .runs()
         .authenticate_attempt(&attempt_id, &token_hash, now)
         .await?;
-    Ok(Json(attempt_status(&claim)))
+    let cache_grant = issue_cache_grant(&state, &claim)?;
+    Ok(Json(AttemptHeartbeatResponse {
+        status: attempt_status(&claim),
+        cache_grant,
+    }))
 }
 
 pub(crate) async fn report_cache_preparations(
@@ -342,6 +313,49 @@ fn attempt_status(claim: &scope_postgres::db::DispatchClaim) -> AttemptStatusRes
         cancellation_requested: claim.run.cancellation_requested,
         lease_expires_at_unix: claim.attempt.lease_expires_at_unix,
     }
+}
+
+fn claimed_job_definition(
+    claim: &scope_postgres::db::DispatchClaim,
+) -> scope_domain::runs::workflow::WorkflowJob {
+    claim
+        .workflow_revision
+        .definition()
+        .job(&claim.job.key)
+        .expect("claimed run job definition must exist")
+        .clone()
+}
+
+fn issue_cache_grant(
+    state: &AppState,
+    claim: &scope_postgres::db::DispatchClaim,
+) -> Result<String, ApiError> {
+    let job_definition = claimed_job_definition(claim);
+    let namespace = CacheNamespace::workflow(claim.run.workflow.path(), &claim.job.key);
+    let allowed_identity_digests = job_definition
+        .caches()
+        .iter()
+        .map(|cache| {
+            let digest = CacheIdentity::new(
+                claim.run.workflow.repository_id(),
+                namespace.clone(),
+                cache.clone(),
+                &claim.job.pinned_container_image,
+                CachePlatform::LinuxAmd64,
+            )?
+            .digest();
+            scope_cache_domain::CacheDigest::parse(digest).map_err(ApiError::bad_request)
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    state
+        .cache_grants
+        .issue(
+            scope_cache_domain::RepositoryId::parse(claim.run.workflow.repository_id().to_string())
+                .map_err(ApiError::bad_request)?,
+            allowed_identity_digests,
+            claim.attempt.lease_expires_at_unix,
+        )
+        .map_err(|error| ApiError::internal_message(error.to_string()))
 }
 
 fn attempt_step_status(step: &RunAttemptStep) -> AttemptStepStatusResponse {

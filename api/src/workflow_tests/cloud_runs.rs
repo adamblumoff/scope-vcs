@@ -1,5 +1,10 @@
 use super::*;
-use scope_api_contract::{ClaimRuntimeResponse, CompleteAttemptStepRequest, StepConclusionRequest};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+use scope_api_contract::{
+    AttemptHeartbeatRequest, AttemptHeartbeatResponse, ClaimRuntimeResponse,
+    CompleteAttemptStepRequest, StepConclusionRequest,
+};
+use scope_cache_contract::SignedCacheGrantClaims;
 
 const WORKFLOW: &str = r#"
 name: Cloud protocol
@@ -89,6 +94,10 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
     let claim: ClaimRuntimeResponse = serde_json::from_value(response_json(claimed).await).unwrap();
     assert!(claim.attempt_token.starts_with("scope_attempt_"));
     assert_eq!(
+        cache_grant_claims(&claim.cache_grant).expires_at_unix,
+        claim.lease_expires_at_unix
+    );
+    assert_eq!(
         claim.job.pinned_container_image,
         "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
@@ -97,6 +106,29 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
     assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
 
     let attempt_auth = format!("Bearer {}", claim.attempt_token);
+    let heartbeat = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(scope_api_contract::routes::attempt_heartbeat(attempt_id))
+                .header(AUTHORIZATION, &attempt_auth)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&AttemptHeartbeatRequest {}).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(heartbeat.status(), StatusCode::OK);
+    let heartbeat: AttemptHeartbeatResponse =
+        serde_json::from_value(response_json(heartbeat).await).unwrap();
+    assert_eq!(
+        cache_grant_claims(&heartbeat.cache_grant).expires_at_unix,
+        heartbeat.status.lease_expires_at_unix
+    );
+
     let started = app
         .clone()
         .oneshot(
@@ -158,4 +190,17 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
         .unwrap();
     assert_eq!(completed_attempt.status(), StatusCode::OK);
     assert_eq!(response_json(completed_attempt).await["state"], "succeeded");
+}
+
+fn cache_grant_claims(token: &str) -> SignedCacheGrantClaims {
+    let mut validation = Validation::new(Algorithm::EdDSA);
+    validation.required_spec_claims.clear();
+    validation.validate_exp = false;
+    decode::<SignedCacheGrantClaims>(
+        token,
+        &DecodingKey::from_ed_pem(crate::cache_grants::TEST_PUBLIC_KEY.as_bytes()).unwrap(),
+        &validation,
+    )
+    .unwrap()
+    .claims
 }
