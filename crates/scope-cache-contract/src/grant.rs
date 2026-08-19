@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// becoming an authorization implementation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SignedCacheGrantClaims {
+    pub attempt_id: String,
     pub repository_id: RepositoryId,
     pub allowed_identity_digests: Vec<CacheDigest>,
     pub backend: String,
@@ -35,6 +36,7 @@ mod tests {
     #[test]
     fn grant_is_repository_backend_and_identity_scoped() {
         let claims = SignedCacheGrantClaims {
+            attempt_id: "attempt-1".to_string(),
             repository_id: RepositoryId::parse("repo-1").unwrap(),
             allowed_identity_digests: vec![digest('a')],
             backend: "railway-iad".to_string(),
@@ -46,12 +48,14 @@ mod tests {
 
         let encoded = serde_json::to_value(claims).unwrap();
         assert_eq!(encoded["repository_id"], "repo-1");
+        assert_eq!(encoded["attempt_id"], "attempt-1");
         assert_eq!(encoded["backend"], "railway-iad");
     }
 
     #[test]
     fn malformed_identity_claims_are_rejected_during_deserialization() {
         let value = serde_json::json!({
+            "attempt_id": "attempt-1",
             "repository_id": "repo-1",
             "allowed_identity_digests": ["not-a-digest"],
             "backend": "railway-iad",

@@ -93,9 +93,20 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
     assert_eq!(claimed.status(), StatusCode::OK);
     let claim: ClaimRuntimeResponse = serde_json::from_value(response_json(claimed).await).unwrap();
     assert!(claim.attempt_token.starts_with("scope_attempt_"));
-    assert_eq!(
-        cache_grant_claims(&claim.cache_grant).expires_at_unix,
-        claim.lease_expires_at_unix
+    let cache_claims = cache_grant_claims(&claim.cache_grant);
+    assert_eq!(cache_claims.attempt_id, attempt_id);
+    assert_eq!(cache_claims.expires_at_unix, claim.lease_expires_at_unix);
+    assert!(
+        state
+            .metadata
+            .runs()
+            .authorize_cache_grant(
+                &cache_claims.attempt_id,
+                cache_claims.repository_id.as_str(),
+                unix_now(),
+            )
+            .await
+            .unwrap()
     );
     assert_eq!(
         claim.job.pinned_container_image,
@@ -190,6 +201,18 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
         .unwrap();
     assert_eq!(completed_attempt.status(), StatusCode::OK);
     assert_eq!(response_json(completed_attempt).await["state"], "succeeded");
+    assert!(
+        !state
+            .metadata
+            .runs()
+            .authorize_cache_grant(
+                &cache_claims.attempt_id,
+                cache_claims.repository_id.as_str(),
+                unix_now(),
+            )
+            .await
+            .unwrap()
+    );
 }
 
 fn cache_grant_claims(token: &str) -> SignedCacheGrantClaims {

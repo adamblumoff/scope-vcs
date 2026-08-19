@@ -35,7 +35,7 @@ pub(crate) async fn restore(
     Json(request): Json<RestoreCacheRequest>,
 ) -> Result<Json<RestoreCacheResponse>, ServiceError> {
     let now = unix_now()?;
-    let claims = state.verifier.verify(&headers, now)?;
+    let claims = authorize_grant(&state, &headers, now).await?;
     require_identity(&claims, &request.identity_digest, now)?;
     let signed_url_ttl = signed_url_ttl(&claims, now)?;
     let object = state
@@ -73,7 +73,7 @@ pub(crate) async fn prepare_upload(
     Json(request): Json<PrepareCacheUploadRequest>,
 ) -> Result<Json<PrepareCacheUploadResponse>, ServiceError> {
     let now = unix_now()?;
-    let claims = state.verifier.verify(&headers, now)?;
+    let claims = authorize_grant(&state, &headers, now).await?;
     require_identity(&claims, &request.identity_digest, now)?;
     let signed_url_ttl = signed_url_ttl(&claims, now)?;
     let upload_id = UploadLeaseId::parse(random_upload_id()?)?;
@@ -125,7 +125,7 @@ pub(crate) async fn commit_upload(
     Json(request): Json<CommitCacheUploadRequest>,
 ) -> Result<Json<CommitCacheUploadResponse>, ServiceError> {
     let now = unix_now()?;
-    let claims = state.verifier.verify(&headers, now)?;
+    let claims = authorize_grant(&state, &headers, now).await?;
     let upload = state
         .metadata
         .caches()
@@ -260,6 +260,25 @@ fn checked_add(now: u64, seconds: u64) -> Result<u64, ServiceError> {
         .ok_or_else(|| ServiceError::internal("cache timestamp overflow"))
 }
 
+async fn authorize_grant(
+    state: &AppState,
+    headers: &HeaderMap,
+    now_unix: u64,
+) -> Result<SignedCacheGrantClaims, ServiceError> {
+    let claims = state.verifier.verify(headers, now_unix)?;
+    if !state
+        .metadata
+        .runs()
+        .authorize_cache_grant(&claims.attempt_id, claims.repository_id.as_str(), now_unix)
+        .await?
+    {
+        return Err(ServiceError::unauthorized(
+            "cache grant is no longer attached to an active attempt",
+        ));
+    }
+    Ok(claims)
+}
+
 fn signed_url_ttl(claims: &SignedCacheGrantClaims, now_unix: u64) -> Result<u32, ServiceError> {
     let remaining = claims
         .expires_at_unix
@@ -290,7 +309,15 @@ mod tests {
     };
     use scope_cache_domain::RepositoryId;
     use scope_domain::{
+        content_ref::ContentRef,
         policy::Visibility,
+        runs::{
+            run::{Run, RunSource, RunTrigger},
+            workflow::{
+                CompiledWorkflow, ContainerSpec, WorkflowIdentity, WorkflowJob, WorkflowJobId,
+                WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
+            },
+        },
         store::{RepoLifecycleState, StoredRepository, UserAccount},
     };
     use scope_object_store::{S3ObjectStore, S3ObjectStoreSettings, S3Presigner};
@@ -302,6 +329,7 @@ mod tests {
     #[test]
     fn signed_urls_never_outlive_the_attempt_grant() {
         let claims = SignedCacheGrantClaims {
+            attempt_id: "attempt-1".to_string(),
             repository_id: RepositoryId::parse("repo-1").unwrap(),
             allowed_identity_digests: vec![],
             backend: "test-local".to_string(),
@@ -328,6 +356,8 @@ mod tests {
         )
         .expect("connect test metadata");
         let repository_id = seed_repository(&metadata);
+        let (attempt_id, attempt_token_hash) = seed_active_attempt(&metadata, &repository_id).await;
+        let terminal_metadata = metadata.clone();
         let identity = CacheDigest::parse("1".repeat(64)).unwrap();
         let object_bytes = b"real cache-service round trip".to_vec();
         let object_digest = CacheDigest::parse(hex::encode(Sha256::digest(&object_bytes))).unwrap();
@@ -356,7 +386,7 @@ mod tests {
             http: reqwest::Client::new(),
             backend: Arc::from("test-local"),
         };
-        let token = grant(&repository_id, identity.clone());
+        let token = grant(&attempt_id, &repository_id, identity.clone());
         let app = router(state);
 
         let first = post_json(
@@ -435,6 +465,28 @@ mod tests {
             serde_json::from_slice(&unchanged).unwrap(),
             PrepareCacheUploadResponse::UseObject { .. }
         ));
+
+        terminal_metadata
+            .runs()
+            .abandon_attempt(&attempt_id, &attempt_token_hash, unix_now().unwrap())
+            .await
+            .unwrap();
+        let rejected = app
+            .oneshot(
+                Request::post(RESTORE_CACHE_PATH)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RestoreCacheRequest {
+                            identity_digest: CacheDigest::parse("1".repeat(64)).unwrap(),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[derive(Clone, Default)]
@@ -556,10 +608,11 @@ mod tests {
         bytes.to_vec()
     }
 
-    fn grant(repository_id: &str, identity: CacheDigest) -> String {
+    fn grant(attempt_id: &str, repository_id: &str, identity: CacheDigest) -> String {
         encode(
             &Header::new(Algorithm::EdDSA),
             &SignedCacheGrantClaims {
+                attempt_id: attempt_id.to_string(),
                 repository_id: RepositoryId::parse(repository_id).unwrap(),
                 allowed_identity_digests: vec![identity],
                 backend: "test-local".to_string(),
@@ -587,6 +640,76 @@ mod tests {
             .insert(repository_id.clone(), repository);
         store.admin().seed_catalog_for_tests(catalog).unwrap();
         repository_id
+    }
+
+    async fn seed_active_attempt(store: &MetadataStore, repository_id: &str) -> (String, String) {
+        let workflow = WorkflowIdentity::new(
+            repository_id,
+            WorkflowPath::parse("/.scope/runs/cache-service.yml").unwrap(),
+        )
+        .unwrap();
+        let definition = CompiledWorkflow::new(
+            "Cache service",
+            WorkflowTriggers::new(true, false).unwrap(),
+            vec![
+                WorkflowJob::new(
+                    WorkflowJobId::parse("checks").unwrap(),
+                    vec![],
+                    ContainerSpec::new(format!("alpine@sha256:{}", "a".repeat(64))).unwrap(),
+                    600,
+                    vec![],
+                    vec![WorkflowStep::new("Test", "true").unwrap()],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let revision = WorkflowRevision::new(workflow.clone(), definition).unwrap();
+        let source_digest = "c".repeat(64);
+        let source = RunSource::ephemeral_git_bundle(scope_domain::store::SourceBlob {
+            content_ref: ContentRef::git_bundle_sha256(source_digest.clone()),
+            sha256: source_digest,
+            git_oid: "d".repeat(40),
+            git_file_mode: "100644".to_string(),
+            size_bytes: 1,
+        })
+        .unwrap();
+        let now = unix_now().unwrap();
+        store
+            .runs()
+            .enqueue_run(
+                Run::new(
+                    "cache-service-run",
+                    "cache-service-test",
+                    workflow,
+                    revision.digest(),
+                    RunTrigger::Manual,
+                    Some("user_cache_service".to_string()),
+                    source,
+                    now,
+                )
+                .unwrap(),
+                revision,
+            )
+            .await
+            .unwrap();
+        let offer = store.runs().next_dispatchable_job().await.unwrap().unwrap();
+        let attempt_id = "attempt-cache-service".to_string();
+        let attempt_token_hash = "e".repeat(64);
+        store
+            .runs()
+            .dispatch_job(
+                &offer.run.id,
+                offer.job.key.as_str(),
+                &attempt_id,
+                &attempt_token_hash,
+                "test-runtime",
+                now,
+                now + 3_600,
+            )
+            .await
+            .unwrap();
+        (attempt_id, attempt_token_hash)
     }
 
     const TEST_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIGrD/e7uKYqSY4twDEsRfMMuLSrODf14dpTiTK6K1YI0\n-----END PRIVATE KEY-----\n";

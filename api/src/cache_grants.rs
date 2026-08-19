@@ -46,6 +46,7 @@ impl CacheGrantIssuer {
 
     pub(crate) fn issue(
         &self,
+        attempt_id: String,
         repository_id: RepositoryId,
         allowed_identity_digests: Vec<CacheDigest>,
         expires_at_unix: u64,
@@ -53,6 +54,7 @@ impl CacheGrantIssuer {
         Ok(encode(
             &Header::new(Algorithm::EdDSA),
             &SignedCacheGrantClaims {
+                attempt_id,
                 repository_id,
                 allowed_identity_digests,
                 backend: self.backend.to_string(),
@@ -100,6 +102,7 @@ mod tests {
         let issuer = CacheGrantIssuer::test();
         let token = issuer
             .issue(
+                "attempt-1".to_string(),
                 RepositoryId::parse("repo-1").unwrap(),
                 vec![CacheDigest::parse("a".repeat(64)).unwrap()],
                 100,
@@ -116,6 +119,7 @@ mod tests {
         .unwrap()
         .claims;
         assert_eq!(claims.repository_id.as_str(), "repo-1");
+        assert_eq!(claims.attempt_id, "attempt-1");
         assert_eq!(claims.backend, "test-local");
         assert_eq!(claims.expires_at_unix, 100);
     }

@@ -78,6 +78,7 @@ mod request_submission_transactions;
 mod requests;
 mod run_attempt_mutations;
 mod run_attempt_persistence;
+mod run_cache_authorization;
 mod run_cache_observations;
 mod run_details;
 mod run_dispatch;

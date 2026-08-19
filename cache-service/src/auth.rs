@@ -73,6 +73,7 @@ mod tests {
         let verifier = GrantVerifier::new(TEST_PUBLIC_KEY, "test-local".to_string()).unwrap();
         let identity = CacheDigest::parse("a".repeat(64)).unwrap();
         let claims = SignedCacheGrantClaims {
+            attempt_id: "attempt-1".to_string(),
             repository_id: RepositoryId::parse("repo-1").unwrap(),
             allowed_identity_digests: vec![identity.clone()],
             backend: "test-local".to_string(),

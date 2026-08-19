@@ -350,6 +350,7 @@ fn issue_cache_grant(
     state
         .cache_grants
         .issue(
+            claim.attempt.id.clone(),
             scope_cache_domain::RepositoryId::parse(claim.run.workflow.repository_id().to_string())
                 .map_err(ApiError::bad_request)?,
             allowed_identity_digests,
