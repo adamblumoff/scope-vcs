@@ -5,7 +5,7 @@ on:
     branches:
       - main
 container:
-  image: ghcr.io/adamblumoff/scope-vcs/checks@sha256:e4aea75fe36f3eedfb5d99eab64b2ef05a8280aebd00fff870329ee034ff4802
+  image: ghcr.io/adamblumoff/scope-vcs/checks@sha256:3bcd2d99cb8b70fc8fc2827d1859386a9ce4d21faa937166faeec3382b15ada0
 timeout: 60m
 caches: []
 env:
