@@ -61,7 +61,10 @@ export function PageContent({
   className?: string
 }) {
   return (
-    <PageRail as="section" className={cn('py-8 lg:py-10', className)}>
+    <PageRail
+      as="section"
+      className={cn('scope-content-enter py-8 lg:py-10', className)}
+    >
       {children}
     </PageRail>
   )
@@ -79,7 +82,7 @@ export function WorkbenchPane({
   className?: string
 }) {
   return (
-    <AppRail className={className}>
+    <AppRail className={cn('scope-content-enter', className)}>
       {children}
     </AppRail>
   )

@@ -1,8 +1,8 @@
 import { HttpError } from '@/api/client'
 import { loadOwnerProfileForRequest } from '@/api/profile'
-import { ApplicationPendingShell } from '@/components/pending-surface'
 import { OwnerProfileError } from '@/features/home/owner-profile-error'
 import { OwnerProfileNotFound } from '@/features/home/owner-profile-not-found'
+import { OwnerProfilePending } from '@/features/home/owner-profile-pending'
 import { OwnerProfileRoute } from '@/features/home/owner-profile-route'
 import { createFileRoute, notFound } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -24,11 +24,11 @@ export const Route = createFileRoute('/$owner/')({
   loader: ({ params }) => loadOwnerProfile({ data: params }),
   errorComponent: OwnerProfileError,
   notFoundComponent: OwnerProfileNotFound,
-  pendingComponent: OwnerProfilePending,
+  pendingComponent: OwnerProfileRoutePending,
   component: OwnerProfileRoute,
 })
 
-function OwnerProfilePending() {
+function OwnerProfileRoutePending() {
   const { owner } = Route.useParams()
-  return <ApplicationPendingShell label={`Loading @${owner}`} />
+  return <OwnerProfilePending owner={owner} />
 }

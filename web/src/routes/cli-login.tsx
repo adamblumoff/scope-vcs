@@ -11,6 +11,7 @@ import { AppShell } from '@/components/app-shell'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { PendingSurface } from '@/components/pending-surface'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -281,8 +282,11 @@ function CliLoginAction({
     return (
       <PendingSurface
         className="min-h-8 min-w-24"
+        delay
         label="Loading account authorization"
-      />
+      >
+        <Skeleton className="h-8 w-24" />
+      </PendingSurface>
     )
   }
 

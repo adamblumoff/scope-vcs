@@ -246,7 +246,7 @@ test('public repository exposes only its projected source', async () => {
       '#repository-code-files-panel [aria-busy="true"]',
     )
     await pendingFileViewer.waitFor()
-    await assertNoVisibleLoadingIndicators(page, '#repository-code-files-panel')
+    await assertPassiveSkeleton(page, '#repository-code-files-panel')
     assert.equal(await preview.isVisible(), false)
     assert.equal(
       await navigator.getAttribute('data-persistence-probe'),
@@ -255,6 +255,10 @@ test('public repository exposes only its projected source', async () => {
     releaseFileRequest()
     await openFile
     await page.locator('pre code').filter({ hasText: 'export function greet' }).waitFor()
+    assert.equal(
+      await page.locator('#repository-code-files-panel [data-slot="skeleton"]').count(),
+      0,
+    )
     assert.equal(appFileRequests, 1)
     const transitionFrames = await page.evaluate(() => {
       globalThis.__scopeTrackTransitionFrames = false
@@ -481,8 +485,9 @@ test('repository chrome persists across navigation and request revalidation', as
   })
 })
 
-test('requests navigation replaces Code with a quiet repository shell', async () => {
+test('requests navigation shows a destination skeleton inside the repository shell', async () => {
   await withPage(repoPath, async (page) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' })
     await assertCurrentRepoSection(page, 'Code')
     await assertPageHeading(page, 'Code')
     await page.getByLabel('Repository file navigator').waitFor()
@@ -540,13 +545,32 @@ test('requests navigation replaces Code with a quiet repository shell', async ()
         await page.getByRole('heading', { level: 1, name: 'Code' }).count(),
         0,
       )
-      await assertNoVisibleLoadingIndicators(page, '#main-content')
+      await assertPassiveSkeleton(page, '#main-content')
+      const reducedMotion = await page
+        .locator('#main-content [data-slot="skeleton"]')
+        .first()
+        .evaluate((element) => {
+          const style = getComputedStyle(element)
+          return {
+            durationSeconds: Number.parseFloat(style.animationDuration),
+            iterations: style.animationIterationCount,
+          }
+        })
+      assert.equal(reducedMotion.durationSeconds <= 0.001, true)
+      assert.equal(reducedMotion.iterations, '1')
     } finally {
       releaseQueueRequests()
       await requestsNavigation
     }
 
     await assertPageHeading(page, 'Requests')
+    await page.locator('#main-content [data-slot="skeleton"]').first().waitFor({
+      state: 'detached',
+    })
+    assert.equal(
+      await page.locator('#main-content [data-slot="skeleton"]').count(),
+      0,
+    )
   })
 })
 
@@ -801,13 +825,18 @@ async function assertRepositoryChromePreserved(page, chrome) {
   )
 }
 
-async function assertNoVisibleLoadingIndicators(page, selector) {
-  assert.equal(
-    await page.locator(`${selector} .animate-spin:visible`).count(),
-    0,
+async function assertPassiveSkeleton(page, selector) {
+  const skeletons = page.locator(`${selector} [data-slot="skeleton"]:visible`)
+  await skeletons.first().waitFor()
+  assert.equal((await skeletons.count()) > 0, true)
+  assert.deepEqual(
+    await skeletons.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('aria-hidden')),
+    ),
+    Array.from({ length: await skeletons.count() }, () => 'true'),
   )
   assert.equal(
-    await page.locator(`${selector} .animate-pulse:visible`).count(),
+    await page.locator(`${selector} .animate-spin:visible`).count(),
     0,
   )
   assert.deepEqual(

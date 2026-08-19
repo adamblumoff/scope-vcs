@@ -3,6 +3,7 @@ import { PanelState } from '@/components/empty-state'
 import { displayPath } from '@/components/file-system-tree-model'
 import { PendingSurface } from '@/components/pending-surface'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { parseDiffFromFile, type FileDiffMetadata } from '@pierre/diffs'
 import {
@@ -127,8 +128,11 @@ export function ReviewFileDiffDrawer({
           {loading ? (
             <PendingSurface
               className="min-h-full"
+              delay
               label={`Loading ${displayName || 'file'} diff`}
-            />
+            >
+              <DiffSkeleton />
+            </PendingSurface>
           ) : error ? (
             <PanelState role="alert" tone="error">
               <TriangleAlert className="size-5" />
@@ -147,7 +151,7 @@ export function ReviewFileDiffDrawer({
           ) : contentSides.binary.length > 0 ? (
             <BinaryDiffState sides={contentSides.binary} />
           ) : fileDiff && fileDiff.hunks.length > 0 ? (
-            <div className="review-diff-viewer">
+            <div className="review-diff-viewer scope-content-enter">
               <PierreFileDiff
                 fileDiff={fileDiff}
                 options={diffOptions}
@@ -163,6 +167,27 @@ export function ReviewFileDiffDrawer({
         </div>
       </div>
     </aside>
+  )
+}
+
+const DIFF_SKELETON_WIDTHS = [78, 46, 86, 62, 72, 38, 82, 56, 68]
+
+function DiffSkeleton() {
+  return (
+    <div className="py-3 font-mono">
+      {DIFF_SKELETON_WIDTHS.map((width, index) => (
+        <div
+          className={cn(
+            'grid min-h-7 grid-cols-[36px_minmax(0,1fr)] items-center gap-3 px-4',
+            index === 3 || index === 4 ? 'bg-success-soft/50' : undefined,
+          )}
+          key={`${width}-${index}`}
+        >
+          <Skeleton className="h-3 w-5" />
+          <Skeleton className="h-3" style={{ width: `${width}%` }} />
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -333,4 +358,3 @@ function modeChangeLabel(diff: ReviewFileDiff | null) {
   }
   return `Mode ${diff.old_mode} → ${diff.new_mode}`
 }
-

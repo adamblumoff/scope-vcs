@@ -4,6 +4,7 @@ import {
   type RequestQueueSection,
 } from '@/api/request-queue-input'
 import { RequestsPage } from '@/features/requests/requests-page'
+import { RequestsPagePending } from '@/features/requests/requests-page-pending'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -22,6 +23,7 @@ export const Route = createFileRoute('/$owner/$repo/requests/')({
     ])
     return { closed, open, your_work: yourWork }
   },
+  pendingComponent: RequestsPagePending,
   component: RequestsRoute,
 })
 

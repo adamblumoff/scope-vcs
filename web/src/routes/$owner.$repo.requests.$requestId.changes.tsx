@@ -9,6 +9,7 @@ import {
   loadRequestDiscussionsForRequest,
 } from '@/features/requests/request-discussion-api'
 import { RequestChangesView } from '@/features/requests/request-changes-view'
+import { RequestChangesPending } from '@/features/requests/request-page-pending'
 import {
   requestChangeSelection,
   requestRevisionPin,
@@ -95,6 +96,7 @@ export const Route = createFileRoute(
     }
     return revisions
   },
+  pendingComponent: RequestChangesPending,
   component: RequestChangesRoute,
 })
 

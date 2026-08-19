@@ -16,6 +16,7 @@ import {
 } from '@/features/requests/request-discussion-api'
 import { includeFocusedDiscussion } from '@/features/requests/request-discussion-model'
 import { RequestDiscussionView } from '@/features/requests/request-discussion-view'
+import { RequestDiscussionPending } from '@/features/requests/request-page-pending'
 import {
   loadOptionalSelectedRequestResource,
   requestParamsForRoute,
@@ -84,6 +85,7 @@ export const Route = createFileRoute('/$owner/$repo/requests/$requestId/')({
       discussion_id: deps.discussion,
     },
   }),
+  pendingComponent: RequestDiscussionPending,
   component: RequestDiscussionRoute,
 })
 
