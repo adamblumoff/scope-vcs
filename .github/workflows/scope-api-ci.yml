@@ -91,6 +91,7 @@ jobs:
             cp -a worker "$root/worker"
             cp -a crates "$root/crates"
             cp -a runner-runtime "$root/runner-runtime"
+            printf '%s\n' "$GITHUB_SHA" > "$root/$service/.scope-deployment-sha"
           done
 
       - name: Install Railway CLI
