@@ -36,13 +36,15 @@ api_rollback_replicas=0
 worker_rollback_replicas=0
 
 validate_production_target() {
-  local status_json services_json
+  local status_json services_json environment_config_json
   status_json="$(railway status "${railway_scope[@]}" --json)"
   services_json="$(railway service list "${railway_scope[@]}" --json)"
+  environment_config_json="$(railway environment config --environment "$environment" --json)"
   # The JavaScript template literals are evaluated by Node.
   # shellcheck disable=SC2016
   RAILWAY_STATUS_JSON="$status_json" \
     RAILWAY_SERVICES_JSON="$services_json" \
+    RAILWAY_ENVIRONMENT_CONFIG_JSON="$environment_config_json" \
     EXPECTED_PROJECT_ID="$RAILWAY_PROJECT_ID" \
     EXPECTED_ENVIRONMENT_ID="$environment" \
     EXPECTED_API_SERVICE_ID="$api_service" \
@@ -54,6 +56,7 @@ validate_production_target() {
     node -e '
 const status = JSON.parse(process.env.RAILWAY_STATUS_JSON || "{}");
 const serviceStates = JSON.parse(process.env.RAILWAY_SERVICES_JSON || "[]");
+const environmentConfig = JSON.parse(process.env.RAILWAY_ENVIRONMENT_CONFIG_JSON || "{}");
 const fail = (message) => {
   console.error(`Refusing backend deployment: ${message}.`);
   process.exit(1);
@@ -86,6 +89,17 @@ for (const [id, name, expectedRegion] of [
     (region) => region.name === expectedRegion && region.configured === configured,
   )) {
     fail(`Railway service ${name} is not running in reviewed region ${expectedRegion}`);
+  }
+  const storedRegions = environmentConfig.services?.[id]?.deploy?.multiRegionConfig || {};
+  const activeStoredRegions = Object.entries(storedRegions).filter(
+    ([, config]) => config && Number(config.numReplicas) > 0,
+  );
+  if (configured > 0 && !(
+    activeStoredRegions.length === 1 &&
+    activeStoredRegions[0][0] === expectedRegion &&
+    Number(activeStoredRegions[0][1].numReplicas) === configured
+  )) {
+    fail(`Railway service ${name} stored region config does not match reviewed region ${expectedRegion}`);
   }
 }
 '

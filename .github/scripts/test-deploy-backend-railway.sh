@@ -57,6 +57,12 @@ JSON
   exit 0
 fi
 
+if [[ "$1 $2" == "environment config" ]]; then
+  stored_api_region="${FAKE_STORED_API_REGION:-us-east4-eqdc4a}"
+  printf '{"services":{"scope-api":{"deploy":{"multiRegionConfig":{"%s":{"numReplicas":1}}}},"scope-worker":{"deploy":{"multiRegionConfig":{"us-east4-eqdc4a":{"numReplicas":1}}}}}}\n' "$stored_api_region"
+  exit 0
+fi
+
 if [[ "$1" == "run" ]]; then
   service=""
   while [[ "$1" != "--" ]]; do
@@ -250,6 +256,7 @@ run_cutover() {
   local degraded_service="${14:-}"
   local degrade_worker_after_api_stop="${15:-0}"
   local reported_api_region="${16:-us-east4-eqdc4a}"
+  local stored_api_region="${17:-us-east4-eqdc4a}"
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
   mkdir -p "$state"
@@ -272,6 +279,7 @@ run_cutover() {
     FAKE_DEGRADED_SERVICE="$degraded_service" \
     FAKE_DEGRADE_WORKER_AFTER_API_STOP="$degrade_worker_after_api_stop" \
     FAKE_API_REGION="$reported_api_region" \
+    FAKE_STORED_API_REGION="$stored_api_region" \
     FAKE_FAIL_RECOVERY_PLAN="$fail_recovery_plan" \
     FAKE_FAIL_FIRST_PLAN="$fail_first_plan" \
     FAKE_DENY_SCALE_SERVICE="$deny_scale_service" \
@@ -341,6 +349,14 @@ run_cutover wrong-api-region 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 us-west2
 if grep -F "graphql scale " "$test_dir/wrong-api-region-trace" \
   || grep -F "$test_dir/maintenance apply" "$test_dir/wrong-api-region-trace"; then
   echo "region drift must fail before maintenance starts" >&2
+  exit 1
+fi
+
+run_cutover wrong-stored-api-region 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 us-east4-eqdc4a us-west2
+[[ "$(cat "$test_dir/wrong-stored-api-region-result")" != "0" ]]
+if grep -F "graphql scale " "$test_dir/wrong-stored-api-region-trace" \
+  || grep -F "$test_dir/maintenance apply" "$test_dir/wrong-stored-api-region-trace"; then
+  echo "stored region drift must fail before maintenance starts" >&2
   exit 1
 fi
 
