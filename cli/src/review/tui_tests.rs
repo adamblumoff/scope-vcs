@@ -1,4 +1,4 @@
-use super::{fit_cell, footer_hint, review_body_heights, row_line};
+use super::{footer_hints, review_body_heights, row_line};
 use crate::review::state::{ChangeListKind, ReviewMode, ReviewRow};
 use scope_domain::repo_visibility::ReviewVisibility;
 use unicode_width::UnicodeWidthStr;
@@ -53,10 +53,24 @@ fn change_section_rows_are_compact_and_descriptive() {
 
 #[test]
 fn narrow_footer_keeps_required_push_actions_visible() {
-    let hint = fit_cell(&footer_hint(ReviewMode::Push, 80), 80);
+    let hints = footer_hints(ReviewMode::Push, 40);
+    let text = hints.join(" ");
 
-    assert!(hint.contains("P push"), "{hint}");
-    assert!(hint.contains("Q cancel"), "{hint}");
-    assert!(hint.contains("? help"), "{hint}");
-    assert_eq!(UnicodeWidthStr::width(hint.as_str()), 80);
+    assert!(hints.len() > 1, "{hints:?}");
+    assert!(
+        hints
+            .iter()
+            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 40)
+    );
+    for control in [
+        "↑↓←→ move",
+        "Space toggle",
+        "S save",
+        "P push",
+        "Q cancel",
+        "/ filter",
+        "? help",
+    ] {
+        assert!(text.contains(control), "missing {control}: {hints:?}");
+    }
 }

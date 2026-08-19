@@ -66,10 +66,13 @@ pub fn run_review_tui(
 
 fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
     let area = frame.area();
+    let width = area.width as usize;
+    let footer_hints = footer_hints(state.mode(), width);
+    let footer_height = footer_hints.len().saturating_add(1) as u16;
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
-        Constraint::Length(2),
+        Constraint::Length(footer_height),
     ])
     .split(area);
 
@@ -100,7 +103,6 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
             state.history_rewrite_count()
         )
     };
-    let width = area.width as usize;
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(fit_cell(
@@ -136,13 +138,12 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
     );
     frame.render_widget(Paragraph::new(lines), chunks[1]);
 
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(fit_cell(&footer_hint(state.mode(), width), width)),
-            Line::from(fit_cell(&terminal_safe(state.message()), width)),
-        ]),
-        chunks[2],
-    );
+    let mut footer_lines = footer_hints
+        .into_iter()
+        .map(|hint| Line::from(fit_cell(&hint, width)))
+        .collect::<Vec<_>>();
+    footer_lines.push(Line::from(fit_cell(&terminal_safe(state.message()), width)));
+    frame.render_widget(Paragraph::new(footer_lines), chunks[2]);
 }
 
 fn review_body_heights(
@@ -281,7 +282,7 @@ fn row_column_widths(width: usize) -> (usize, usize, usize) {
     (path_width, visibility_width, detail_width)
 }
 
-fn footer_hint(mode: ReviewMode, width: usize) -> String {
+fn footer_hints(mode: ReviewMode, width: usize) -> Vec<String> {
     let full = match mode {
         ReviewMode::Push => {
             "Arrows navigate  Space toggle  S save  P push  Q cancel  / filter  ? help"
@@ -289,15 +290,47 @@ fn footer_hint(mode: ReviewMode, width: usize) -> String {
         ReviewMode::Standalone => "Arrows navigate  Space toggle  S save  Q quit  / filter  ? help",
     };
     if UnicodeWidthStr::width(full) <= width {
-        return full.to_string();
+        return vec![full.to_string()];
     }
 
-    match mode {
-        ReviewMode::Push => {
-            "Arrows move  Space toggle  S save  P push  Q cancel  ? help".to_string()
+    let controls: &[&str] = match mode {
+        ReviewMode::Push => &[
+            "↑↓←→ move",
+            "Space toggle",
+            "S save",
+            "P push",
+            "Q cancel",
+            "/ filter",
+            "? help",
+        ],
+        ReviewMode::Standalone => &[
+            "↑↓←→ move",
+            "Space toggle",
+            "S save",
+            "Q quit",
+            "/ filter",
+            "? help",
+        ],
+    };
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for control in controls {
+        let candidate = if line.is_empty() {
+            (*control).to_string()
+        } else {
+            format!("{line} {control}")
+        };
+        if !line.is_empty() && UnicodeWidthStr::width(candidate.as_str()) > width {
+            lines.push(line);
+            line = (*control).to_string();
+        } else {
+            line = candidate;
         }
-        ReviewMode::Standalone => "Arrows move  Space toggle  S save  Q quit  ? help".to_string(),
     }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn fit_cell(text: &str, width: usize) -> String {
