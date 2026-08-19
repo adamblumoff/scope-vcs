@@ -257,6 +257,9 @@ run_cutover() {
   local degrade_worker_after_api_stop="${15:-0}"
   local reported_api_region="${16:-us-east4-eqdc4a}"
   local stored_api_region="${17:-us-east4-eqdc4a}"
+  local deploy_cache="${18:-1}"
+  local deploy_worker="${19:-1}"
+  local deploy_api="${20:-1}"
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
   mkdir -p "$state"
@@ -295,6 +298,9 @@ run_cutover() {
     SCOPE_RAILWAY_WORKER_REGION_ID="us-east4-eqdc4a" \
     SCOPE_RAILWAY_API_REPLICAS="1" \
     SCOPE_RAILWAY_WORKER_REPLICAS="1" \
+    SCOPE_DEPLOY_CACHE="$deploy_cache" \
+    SCOPE_DEPLOY_WORKER="$deploy_worker" \
+    SCOPE_DEPLOY_API="$deploy_api" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
     SCOPE_RECOVER_CLOSED_CUTOVER="$recover_closed_cutover" \
     bash "$root/.github/scripts/deploy-backend-railway.sh" \
@@ -423,6 +429,48 @@ if grep -F "graphql scale " "$test_dir/rolling-trace"; then
   echo "exact-schema deployment must stay on the rolling path" >&2
   exit 1
 fi
+
+run_cutover rolling-cache 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 1 0 0
+[[ "$(cat "$test_dir/rolling-cache-result")" == "0" ]]
+assert_in_order "$test_dir/rolling-cache-trace" \
+  "$test_dir/maintenance verify" \
+  "up $test_dir/cache"
+if grep -E "up $test_dir/(worker|api)" "$test_dir/rolling-cache-trace"; then
+  echo "cache-only deployment must not deploy worker or API" >&2
+  exit 1
+fi
+
+run_cutover rolling-worker 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 1 0
+[[ "$(cat "$test_dir/rolling-worker-result")" == "0" ]]
+assert_in_order "$test_dir/rolling-worker-trace" \
+  "$test_dir/maintenance verify" \
+  "up $test_dir/worker"
+if grep -E "up $test_dir/(cache|api)" "$test_dir/rolling-worker-trace"; then
+  echo "worker-only deployment must not deploy cache or API" >&2
+  exit 1
+fi
+
+run_cutover rolling-api 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 0 1
+[[ "$(cat "$test_dir/rolling-api-result")" == "0" ]]
+assert_in_order "$test_dir/rolling-api-trace" \
+  "$test_dir/maintenance verify" \
+  "up $test_dir/api"
+if grep -E "up $test_dir/(cache|worker)" "$test_dir/rolling-api-trace"; then
+  echo "API-only deployment must not deploy cache or worker" >&2
+  exit 1
+fi
+
+run_cutover maintenance-forces-all 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 0 1
+[[ "$(cat "$test_dir/maintenance-forces-all-result")" == "0" ]]
+assert_in_order "$test_dir/maintenance-forces-all-trace" \
+  "$test_dir/maintenance apply" \
+  "up $test_dir/cache" \
+  "up $test_dir/worker" \
+  "up $test_dir/api"
 
 run_cutover transient-plan 0 1 "" 0 0 0 0 "" 1
 [[ "$(cat "$test_dir/transient-plan-result")" == "0" ]]

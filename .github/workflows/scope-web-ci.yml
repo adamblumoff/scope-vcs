@@ -1,35 +1,11 @@
 name: Scope Web CI
 
 on:
-  pull_request:
-    paths:
-      - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-web-ci.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "api/**"
-      - "crates/**"
-      - "dev/**"
-      - "web/**"
-      - "worker/**"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-web-ci.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "api/**"
-      - "crates/**"
-      - "dev/**"
-      - "web/**"
-      - "worker/**"
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  workflow_call:
+    inputs:
+      deploy:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -200,7 +176,7 @@ jobs:
     name: Deploy scope-web
     needs: [checks, smoke]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -220,12 +196,19 @@ jobs:
           test ! -e .railway-upload/package.json
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli@5.23.1
+        run: |
+          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
+          npm install -g "@railway/cli@$railway_cli_version"
 
       - name: Deploy to Railway
         shell: bash
         env:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
-          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: bash .github/scripts/deploy-railway.sh scope-web .railway-upload
+        run: |
+          manifest=.github/deployment-services.json
+          RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
+          SCOPE_RAILWAY_ENVIRONMENT_ID="$(jq -r '.railway.environmentId' "$manifest")"
+          export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
+          service_id="$(jq -r '.services.web.id' "$manifest")"
+          bash .github/scripts/deploy-railway.sh "$service_id" .railway-upload

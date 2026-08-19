@@ -1,43 +1,17 @@
 name: Scope Backend CI
 
 on:
-  pull_request:
-    paths:
-      - ".github/scripts/deploy-railway.sh"
-      - ".github/scripts/deploy-backend-railway.sh"
-      - ".github/scripts/test-deploy-backend-railway.sh"
-      - ".github/workflows/scope-api-ci.yml"
-      - ".github/workflows/rust-workspace-checks.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "api/**"
-      - "cache-service/**"
-      - "crates/**"
-      - "worker/**"
-      - "web/scripts/check-api-contract.mjs"
-      - "web/src/api/types.generated.ts"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/scripts/deploy-railway.sh"
-      - ".github/scripts/deploy-backend-railway.sh"
-      - ".github/scripts/test-deploy-backend-railway.sh"
-      - ".github/workflows/scope-api-ci.yml"
-      - ".github/workflows/rust-workspace-checks.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "api/**"
-      - "cache-service/**"
-      - "crates/**"
-      - "worker/**"
-      - "web/scripts/check-api-contract.mjs"
-      - "web/src/api/types.generated.ts"
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  workflow_call:
+    inputs:
+      deploy_cache:
+        type: boolean
+        default: false
+      deploy_worker:
+        type: boolean
+        default: false
+      deploy_api:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -67,7 +41,9 @@ jobs:
     name: Deploy backend
     needs: [checks, deployment-tests]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      (inputs.deploy_cache || inputs.deploy_worker || inputs.deploy_api)
     environment: production
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -118,7 +94,9 @@ jobs:
           done
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli@5.41.2
+        run: |
+          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
+          npm install -g "@railway/cli@$railway_cli_version"
 
       - name: Deploy to Railway
         shell: bash
@@ -126,18 +104,26 @@ jobs:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          RAILWAY_PROJECT_ID: 45dd67fa-6d69-48ad-9680-1313d41b4490
-          SCOPE_RAILWAY_ENVIRONMENT_ID: 2f21f6b6-6817-4338-9e08-cf18e78b8f46
-          SCOPE_RAILWAY_API_SERVICE_ID: 9456cd8d-40bd-489a-a181-72b7f777c4a8
-          SCOPE_RAILWAY_WORKER_SERVICE_ID: a474a0d1-3000-4a95-9ca3-cd3a7f3ef669
-          SCOPE_RAILWAY_CACHE_SERVICE_ID: 668d47df-8f68-4f96-b52f-7c02324829e3
-          SCOPE_RAILWAY_DATABASE_SERVICE_ID: 44c41a90-2d1a-4a1b-85c9-6af85d179be3
-          SCOPE_RAILWAY_API_REGION_ID: us-east4-eqdc4a
-          SCOPE_RAILWAY_WORKER_REGION_ID: us-east4-eqdc4a
+          SCOPE_DEPLOY_CACHE: ${{ inputs.deploy_cache && '1' || '0' }}
+          SCOPE_DEPLOY_WORKER: ${{ inputs.deploy_worker && '1' || '0' }}
+          SCOPE_DEPLOY_API: ${{ inputs.deploy_api && '1' || '0' }}
           SCOPE_RAILWAY_API_REPLICAS: 1
           SCOPE_RAILWAY_WORKER_REPLICAS: 1
-        run: >-
-          bash .github/scripts/deploy-backend-railway.sh
-          .railway-upload/api
-          .railway-upload/worker
-          .railway-upload/cache-service
+        run: |
+          manifest=.github/deployment-services.json
+          RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
+          SCOPE_RAILWAY_ENVIRONMENT_ID="$(jq -r '.railway.environmentId' "$manifest")"
+          SCOPE_RAILWAY_API_SERVICE_ID="$(jq -r '.services.api.id' "$manifest")"
+          SCOPE_RAILWAY_WORKER_SERVICE_ID="$(jq -r '.services.worker.id' "$manifest")"
+          SCOPE_RAILWAY_CACHE_SERVICE_ID="$(jq -r '.services.cache.id' "$manifest")"
+          SCOPE_RAILWAY_DATABASE_SERVICE_ID="$(jq -r '.railway.databaseServiceId' "$manifest")"
+          SCOPE_RAILWAY_API_REGION_ID="$(jq -r '.railway.regionId' "$manifest")"
+          SCOPE_RAILWAY_WORKER_REGION_ID="$SCOPE_RAILWAY_API_REGION_ID"
+          export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
+          export SCOPE_RAILWAY_API_SERVICE_ID SCOPE_RAILWAY_WORKER_SERVICE_ID
+          export SCOPE_RAILWAY_CACHE_SERVICE_ID SCOPE_RAILWAY_DATABASE_SERVICE_ID
+          export SCOPE_RAILWAY_API_REGION_ID SCOPE_RAILWAY_WORKER_REGION_ID
+          bash .github/scripts/deploy-backend-railway.sh \
+            .railway-upload/api \
+            .railway-upload/worker \
+            .railway-upload/cache-service

@@ -13,6 +13,21 @@ database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SE
 api_region="${SCOPE_RAILWAY_API_REGION_ID:?SCOPE_RAILWAY_API_REGION_ID is required}"
 worker_region="${SCOPE_RAILWAY_WORKER_REGION_ID:?SCOPE_RAILWAY_WORKER_REGION_ID is required}"
 recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
+deploy_cache_requested="${SCOPE_DEPLOY_CACHE:-1}"
+deploy_worker_requested="${SCOPE_DEPLOY_WORKER:-1}"
+deploy_api_requested="${SCOPE_DEPLOY_API:-1}"
+
+for deployment_flag in deploy_cache_requested deploy_worker_requested deploy_api_requested; do
+  if [[ "${!deployment_flag}" != "0" && "${!deployment_flag}" != "1" ]]; then
+    echo "${deployment_flag} must be 0 or 1." >&2
+    exit 2
+  fi
+done
+if [[ "$deploy_cache_requested" == "0" && "$deploy_worker_requested" == "0" \
+  && "$deploy_api_requested" == "0" ]]; then
+  echo "At least one backend service must be selected for deployment." >&2
+  exit 2
+fi
 
 if [[ -z "${RAILWAY_TOKEN:-}" || -z "${RAILWAY_API_TOKEN:-}" || -z "${RAILWAY_PROJECT_ID:-}" ]]; then
   echo "RAILWAY_TOKEN, RAILWAY_API_TOKEN, and RAILWAY_PROJECT_ID are required for backend deployment." >&2
@@ -376,14 +391,26 @@ restore_old_release() {
   fi
 }
 
-deploy_cache() {
+deploy_cache_release() {
   bash .github/scripts/deploy-railway.sh "$cache_service" "$cache_upload_root"
   wait_for_service_health "$cache_service"
 }
 
+deploy_selected_releases() {
+  if [[ "$deploy_cache_requested" == "1" ]]; then
+    deploy_cache_release
+  fi
+  if [[ "$deploy_worker_requested" == "1" ]]; then
+    bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
+  fi
+  if [[ "$deploy_api_requested" == "1" ]]; then
+    bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
+  fi
+}
+
 deploy_and_reopen() {
   maintenance_read verify
-  deploy_cache
+  deploy_cache_release
   bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root" stopped
   scale_service "$worker_service" "$worker_rollback_replicas"
   wait_for_service_health "$worker_service"
@@ -453,9 +480,7 @@ case "$plan_status" in
       exit 1
     fi
     maintenance_read verify
-    deploy_cache
-    bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
-    bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
+    deploy_selected_releases
     trap - EXIT
     exit 0
     ;;

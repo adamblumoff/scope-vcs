@@ -1,0 +1,166 @@
+{
+  "railway": {
+    "cliVersion": "5.41.2",
+    "projectId": "45dd67fa-6d69-48ad-9680-1313d41b4490",
+    "environmentId": "2f21f6b6-6817-4338-9e08-cf18e78b8f46",
+    "databaseServiceId": "44c41a90-2d1a-4a1b-85c9-6af85d179be3",
+    "regionId": "us-east4-eqdc4a"
+  },
+  "deploymentAuthority": "github-actions",
+  "source": {
+    "repository": "adamblumoff/scope-vcs",
+    "branch": "main",
+    "nativeAutodeploy": false
+  },
+  "services": {
+    "cache": {
+      "name": "scope-cache-service",
+      "id": "668d47df-8f68-4f96-b52f-7c02324829e3",
+      "dependsOn": [],
+      "rootDirectory": "",
+      "healthPath": "/healthz",
+      "uploadRoot": ".railway-upload/cache-service"
+    },
+    "worker": {
+      "name": "scope-worker",
+      "id": "a474a0d1-3000-4a95-9ca3-cd3a7f3ef669",
+      "dependsOn": ["cache"],
+      "rootDirectory": "",
+      "healthPath": "/healthz",
+      "uploadRoot": ".railway-upload/worker"
+    },
+    "api": {
+      "name": "scope-api",
+      "id": "9456cd8d-40bd-489a-a181-72b7f777c4a8",
+      "dependsOn": ["worker"],
+      "rootDirectory": "",
+      "healthPath": "/readyz",
+      "uploadRoot": ".railway-upload/api"
+    },
+    "web": {
+      "name": "scope-web",
+      "id": "df831355-3056-4d1a-a4be-37735fb83d00",
+      "dependsOn": ["api"],
+      "rootDirectory": "/web",
+      "healthPath": null,
+      "uploadRoot": ".railway-upload"
+    },
+    "cli": {
+      "name": "scope-cli",
+      "id": "a212bccb-ed1a-4574-a031-2b0183e08a2d",
+      "dependsOn": ["api"],
+      "rootDirectory": "/cli",
+      "healthPath": null,
+      "uploadRoot": ".railway-upload"
+    }
+  },
+  "changeScopes": {
+    "all": {
+      "files": [
+        ".github/deployment-services.json",
+        ".github/scripts/plan-production-deployment.mjs",
+        ".github/scripts/plan-production-deployment.test.mjs",
+        ".github/workflows/scope-production-deploy.yml"
+      ],
+      "prefixes": []
+    },
+    "checksImage": {
+      "files": [
+        ".github/workflows/scope-checks-image.yml",
+        "Cargo.lock",
+        "Cargo.toml"
+      ],
+      "prefixes": [
+        ".scope/images/checks/",
+        "runner-runtime/",
+        "crates/scope-api-contract/",
+        "crates/scope-cache-contract/",
+        "crates/scope-cache-domain/",
+        "crates/scope-domain/"
+      ]
+    },
+    "cache": {
+      "files": [
+        ".github/scripts/deploy-backend-railway.sh",
+        ".github/scripts/deploy-railway.sh",
+        ".github/scripts/test-deploy-backend-railway.sh",
+        ".github/workflows/rust-workspace-checks.yml",
+        ".github/workflows/scope-api-ci.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "rust-toolchain.toml"
+      ],
+      "prefixes": [
+        "cache-service/",
+        "crates/"
+      ]
+    },
+    "worker": {
+      "files": [
+        ".github/scripts/deploy-backend-railway.sh",
+        ".github/scripts/deploy-railway.sh",
+        ".github/scripts/test-deploy-backend-railway.sh",
+        ".github/workflows/rust-workspace-checks.yml",
+        ".github/workflows/scope-api-ci.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "rust-toolchain.toml"
+      ],
+      "prefixes": [
+        "crates/",
+        "runner-runtime/",
+        "worker/"
+      ]
+    },
+    "api": {
+      "files": [
+        ".github/scripts/deploy-backend-railway.sh",
+        ".github/scripts/deploy-railway.sh",
+        ".github/scripts/test-deploy-backend-railway.sh",
+        ".github/workflows/rust-workspace-checks.yml",
+        ".github/workflows/scope-api-ci.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "rust-toolchain.toml",
+        "web/scripts/check-api-contract.mjs",
+        "web/src/api/types.generated.ts"
+      ],
+      "prefixes": [
+        "api/",
+        "crates/"
+      ]
+    },
+    "web": {
+      "files": [
+        ".github/scripts/deploy-railway.sh",
+        ".github/workflows/scope-web-ci.yml",
+        "Cargo.lock",
+        "Cargo.toml"
+      ],
+      "prefixes": [
+        "api/",
+        "crates/",
+        "dev/",
+        "web/",
+        "worker/"
+      ]
+    },
+    "cli": {
+      "files": [
+        ".github/scripts/deploy-railway.sh",
+        ".github/workflows/scope-cli-build.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "rust-toolchain.toml",
+        "web/src/api/types.generated.ts"
+      ],
+      "prefixes": [
+        "api/",
+        "cli/",
+        "crates/",
+        "dev/",
+        "worker/"
+      ]
+    }
+  }
+}

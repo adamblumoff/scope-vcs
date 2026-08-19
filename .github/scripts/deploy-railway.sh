@@ -20,7 +20,7 @@ if [[ -n "${RAILWAY_API_TOKEN:-}" && -n "${RAILWAY_TOKEN:-}" ]]; then
 fi
 
 if [ -z "${RAILWAY_PROJECT_ID:-}" ]; then
-  echo "Set the RAILWAY_PROJECT_ID repository secret before deploying ${service_name}."
+  echo "Set RAILWAY_PROJECT_ID before deploying ${service_name}."
   exit 1
 fi
 

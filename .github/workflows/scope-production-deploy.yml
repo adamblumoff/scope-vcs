@@ -1,0 +1,142 @@
+name: Scope CI and Production Deploy
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Component to validate and deploy
+        type: choice
+        default: all
+        options:
+          - all
+          - checksImage
+          - cache
+          - worker
+          - api
+          - web
+          - cli
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('scope-ci-pr-{0}', github.event.pull_request.number) || 'scope-production-deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  plan:
+    name: Plan selected components
+    runs-on: ubuntu-latest
+    outputs:
+      checks_image: ${{ steps.plan.outputs.checks_image }}
+      cache: ${{ steps.plan.outputs.cache }}
+      worker: ${{ steps.plan.outputs.worker }}
+      api: ${{ steps.plan.outputs.api }}
+      web: ${{ steps.plan.outputs.web }}
+      cli: ${{ steps.plan.outputs.cli }}
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Select affected components
+        id: plan
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REQUESTED_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'changed' }}
+        run: >-
+          node .github/scripts/plan-production-deployment.mjs
+          --manifest .github/deployment-services.json
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --scope "$REQUESTED_SCOPE"
+
+      - name: Test deployment planner
+        run: node --test .github/scripts/plan-production-deployment.test.mjs
+
+  checks-image:
+    name: Checks image
+    needs: plan
+    if: needs.plan.outputs.checks_image == 'true'
+    uses: ./.github/workflows/scope-checks-image.yml
+    with:
+      publish: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit
+
+  backend:
+    name: Backend
+    needs: [plan, checks-image]
+    if: >-
+      always() &&
+      (needs.plan.outputs.cache == 'true' ||
+      needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.api == 'true') &&
+      (needs.checks-image.result == 'success' || needs.checks-image.result == 'skipped')
+    uses: ./.github/workflows/scope-api-ci.yml
+    with:
+      deploy_cache: ${{ github.event_name != 'pull_request' && needs.plan.outputs.cache == 'true' }}
+      deploy_worker: ${{ github.event_name != 'pull_request' && needs.plan.outputs.worker == 'true' }}
+      deploy_api: ${{ github.event_name != 'pull_request' && needs.plan.outputs.api == 'true' }}
+    secrets: inherit
+
+  web-independent:
+    name: Web
+    needs: plan
+    if: >-
+      needs.plan.outputs.web == 'true' &&
+      needs.plan.outputs.cache != 'true' &&
+      needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.api != 'true'
+    uses: ./.github/workflows/scope-web-ci.yml
+    with:
+      deploy: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit
+
+  web-after-backend:
+    name: Web after backend
+    needs: [plan, backend]
+    if: >-
+      always() && needs.plan.outputs.web == 'true' &&
+      (needs.plan.outputs.cache == 'true' ||
+      needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.api == 'true') &&
+      needs.backend.result == 'success'
+    uses: ./.github/workflows/scope-web-ci.yml
+    with:
+      deploy: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit
+
+  cli-independent:
+    name: CLI
+    needs: plan
+    if: >-
+      needs.plan.outputs.cli == 'true' &&
+      needs.plan.outputs.cache != 'true' &&
+      needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.api != 'true'
+    uses: ./.github/workflows/scope-cli-build.yml
+    with:
+      deploy: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit
+
+  cli-after-backend:
+    name: CLI after backend
+    needs: [plan, backend]
+    if: >-
+      always() && needs.plan.outputs.cli == 'true' &&
+      (needs.plan.outputs.cache == 'true' ||
+      needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.api == 'true') &&
+      needs.backend.result == 'success'
+    uses: ./.github/workflows/scope-cli-build.yml
+    with:
+      deploy: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit

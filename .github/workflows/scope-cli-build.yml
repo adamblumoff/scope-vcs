@@ -1,39 +1,11 @@
 name: Scope CLI Build
 
 on:
-  pull_request:
-    paths:
-      - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-cli-build.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "api/**"
-      - "cli/**"
-      - "crates/**"
-      - "dev/**"
-      - "rust-toolchain.toml"
-      - "web/src/api/types.generated.ts"
-      - "worker/**"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/scripts/deploy-railway.sh"
-      - ".github/workflows/scope-cli-build.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "api/**"
-      - "cli/**"
-      - "crates/**"
-      - "dev/**"
-      - "rust-toolchain.toml"
-      - "web/src/api/types.generated.ts"
-      - "worker/**"
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  workflow_call:
+    inputs:
+      deploy:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,7 +17,7 @@ env:
 jobs:
   prepare:
     name: Prepare distribution matrix
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
@@ -95,7 +67,7 @@ jobs:
         run: cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Build release binaries
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: >
           cargo build
           --manifest-path cli/Cargo.toml
@@ -107,7 +79,7 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     needs: [checks, prepare]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -283,7 +255,7 @@ jobs:
     name: Deploy scope-cli
     needs: [build, e2e]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -334,12 +306,19 @@ jobs:
           test ! -e .railway-upload/Cargo.toml
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli@5.23.1
+        run: |
+          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
+          npm install -g "@railway/cli@$railway_cli_version"
 
       - name: Deploy artifacts to Railway
         shell: bash
         env:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
-          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: bash .github/scripts/deploy-railway.sh scope-cli .railway-upload
+        run: |
+          manifest=.github/deployment-services.json
+          RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
+          SCOPE_RAILWAY_ENVIRONMENT_ID="$(jq -r '.railway.environmentId' "$manifest")"
+          export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
+          service_id="$(jq -r '.services.cli.id' "$manifest")"
+          bash .github/scripts/deploy-railway.sh "$service_id" .railway-upload
