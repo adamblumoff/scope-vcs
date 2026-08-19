@@ -18,11 +18,10 @@ use axum::{
 };
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptRecoveryStatusResponse, AttemptStatusResponse, AttemptStepStatusResponse,
-    CacheDownloadSessionResponse, CacheUploadSessionResponse, ClaimRuntimeResponse,
-    CommitCacheUploadRequest, CompleteAttemptRequest, CompleteAttemptStepRequest,
-    ReportAttemptCacheFinalizationsRequest, ReportAttemptCachePreparationsRequest, RunJobResponse,
-    StepConclusionRequest,
+    AttemptHeartbeatResponse, AttemptRecoveryStatusResponse, AttemptStatusResponse,
+    AttemptStepStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
+    CompleteAttemptStepRequest, ReportAttemptCacheFinalizationsRequest,
+    ReportAttemptCachePreparationsRequest, RunJobResponse, StepConclusionRequest,
 };
 use scope_domain::runs::cache::{CacheIdentity, CacheNamespace, CachePlatform};
 use scope_domain::runs::run::{AttemptConclusion, RunAttemptStep, RunLogChunk, StepConclusion};
@@ -30,7 +29,6 @@ use scope_object_store::source_blob_bytes_bounded;
 
 const ATTEMPT_LEASE_SECONDS: u64 = 90;
 const MAX_SOURCE_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
-const CACHE_URL_TTL_SECONDS: u32 = 15 * 60;
 pub(crate) async fn claim(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -51,9 +49,13 @@ pub(crate) async fn claim(
             lease_expires_at_unix,
         )
         .await?;
+    let job_definition = claimed_job_definition(&claim);
+    let cache_grant = issue_cache_grant(&state, &claim)?;
     Ok(Json(ClaimRuntimeResponse {
         attempt_token,
         lease_expires_at_unix,
+        cache_endpoint: state.cache_grants.endpoint().to_string(),
+        cache_grant,
         job: RunJobResponse {
             run_id: claim.run.id,
             job_key: claim.job.key.as_str().to_string(),
@@ -62,12 +64,7 @@ pub(crate) async fn claim(
             git_oid: claim.run.source.git_oid().to_string(),
             source_digest: claim.run.source.digest().to_string(),
             pinned_container_image: claim.job.pinned_container_image.as_str().to_string(),
-            definition: claim
-                .workflow_revision
-                .definition()
-                .job(&claim.job.key)
-                .expect("claimed run job definition must exist")
-                .clone(),
+            definition: job_definition,
         },
     }))
 }
@@ -91,7 +88,7 @@ pub(crate) async fn heartbeat(
     headers: HeaderMap,
     Path(attempt_id): Path<String>,
     Json(_input): Json<AttemptHeartbeatRequest>,
-) -> Result<Json<AttemptStatusResponse>, ApiError> {
+) -> Result<Json<AttemptHeartbeatResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
     let now = unix_now()?;
     state
@@ -104,7 +101,11 @@ pub(crate) async fn heartbeat(
         .runs()
         .authenticate_attempt(&attempt_id, &token_hash, now)
         .await?;
-    Ok(Json(attempt_status(&claim)))
+    let cache_grant = issue_cache_grant(&state, &claim)?;
+    Ok(Json(AttemptHeartbeatResponse {
+        status: attempt_status(&claim),
+        cache_grant,
+    }))
 }
 
 pub(crate) async fn report_cache_preparations(
@@ -164,125 +165,6 @@ pub(crate) async fn report_cache_finalizations(
         )
         .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
-}
-
-pub(crate) async fn cache_download(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((attempt_id, identity_digest)): Path<(String, String)>,
-) -> Result<Json<CacheDownloadSessionResponse>, ApiError> {
-    let claim = require_cache_attempt(&state, &headers, &attempt_id).await?;
-    require_cache_identity(&claim, &identity_digest)?;
-    let Some(object) = state
-        .metadata
-        .runs()
-        .ready_cache_object(&identity_digest)
-        .await?
-    else {
-        return Ok(Json(CacheDownloadSessionResponse {
-            download_url: None,
-            checksum_sha256: None,
-            size_bytes: None,
-        }));
-    };
-    let signer = state.cache_presigner.as_ref().ok_or_else(|| {
-        ApiError::infrastructure_unavailable("remote run cache is not configured")
-    })?;
-    let download_url = signer
-        .presign("GET", &object.object_key, CACHE_URL_TTL_SECONDS)
-        .map_err(|error| ApiError::internal_message(error.to_string()))?;
-    Ok(Json(CacheDownloadSessionResponse {
-        download_url: Some(download_url),
-        checksum_sha256: Some(object.checksum_sha256),
-        size_bytes: Some(object.size_bytes),
-    }))
-}
-
-pub(crate) async fn cache_upload(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((attempt_id, identity_digest)): Path<(String, String)>,
-) -> Result<Json<CacheUploadSessionResponse>, ApiError> {
-    let claim = require_cache_attempt(&state, &headers, &attempt_id).await?;
-    require_cache_identity(&claim, &identity_digest)?;
-    let object = state
-        .metadata
-        .runs()
-        .begin_cache_upload(&identity_digest, unix_now()?)
-        .await?;
-    let signer = state.cache_presigner.as_ref().ok_or_else(|| {
-        ApiError::infrastructure_unavailable("remote run cache is not configured")
-    })?;
-    let upload_url = signer
-        .presign("PUT", &object.object_key, CACHE_URL_TTL_SECONDS)
-        .map_err(|error| ApiError::internal_message(error.to_string()))?;
-    Ok(Json(CacheUploadSessionResponse {
-        upload_url,
-        generation: object.generation,
-    }))
-}
-
-pub(crate) async fn cache_commit(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((attempt_id, identity_digest)): Path<(String, String)>,
-    Json(input): Json<CommitCacheUploadRequest>,
-) -> Result<axum::http::StatusCode, ApiError> {
-    let claim = require_cache_attempt(&state, &headers, &attempt_id).await?;
-    require_cache_identity(&claim, &identity_digest)?;
-    state
-        .metadata
-        .runs()
-        .commit_cache_upload(
-            &identity_digest,
-            input.generation,
-            &input.checksum_sha256,
-            input.size_bytes,
-            unix_now()?,
-        )
-        .await?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
-}
-
-fn require_cache_identity(
-    claim: &scope_postgres::db::DispatchClaim,
-    digest: &str,
-) -> Result<(), ApiError> {
-    let definition = claim
-        .workflow_revision
-        .definition()
-        .job(&claim.job.key)
-        .ok_or_else(|| ApiError::internal_message("attempt job definition is missing"))?;
-    let namespace = CacheNamespace::workflow(claim.run.workflow.path(), &claim.job.key);
-    let valid = definition.caches().iter().any(|cache| {
-        CacheIdentity::new(
-            claim.run.workflow.repository_id(),
-            namespace.clone(),
-            cache.clone(),
-            &claim.job.pinned_container_image,
-            CachePlatform::LinuxAmd64,
-        )
-        .is_ok_and(|identity| identity.digest() == digest)
-    });
-    if !valid {
-        return Err(ApiError::bad_request(
-            "cache identity does not belong to this attempt",
-        ));
-    }
-    Ok(())
-}
-
-async fn require_cache_attempt(
-    state: &AppState,
-    headers: &HeaderMap,
-    attempt_id: &str,
-) -> Result<scope_postgres::db::DispatchClaim, ApiError> {
-    state
-        .metadata
-        .runs()
-        .authenticate_attempt_cache(attempt_id, &attempt_token_hash(headers)?, unix_now()?)
-        .await
-        .map_err(ApiError::from)
 }
 
 pub(crate) async fn recovery_status(
@@ -431,6 +313,50 @@ fn attempt_status(claim: &scope_postgres::db::DispatchClaim) -> AttemptStatusRes
         cancellation_requested: claim.run.cancellation_requested,
         lease_expires_at_unix: claim.attempt.lease_expires_at_unix,
     }
+}
+
+fn claimed_job_definition(
+    claim: &scope_postgres::db::DispatchClaim,
+) -> scope_domain::runs::workflow::WorkflowJob {
+    claim
+        .workflow_revision
+        .definition()
+        .job(&claim.job.key)
+        .expect("claimed run job definition must exist")
+        .clone()
+}
+
+fn issue_cache_grant(
+    state: &AppState,
+    claim: &scope_postgres::db::DispatchClaim,
+) -> Result<String, ApiError> {
+    let job_definition = claimed_job_definition(claim);
+    let namespace = CacheNamespace::workflow(claim.run.workflow.path(), &claim.job.key);
+    let allowed_identity_digests = job_definition
+        .caches()
+        .iter()
+        .map(|cache| {
+            let digest = CacheIdentity::new(
+                claim.run.workflow.repository_id(),
+                namespace.clone(),
+                cache.clone(),
+                &claim.job.pinned_container_image,
+                CachePlatform::LinuxAmd64,
+            )?
+            .digest();
+            scope_cache_domain::CacheDigest::parse(digest).map_err(ApiError::bad_request)
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    state
+        .cache_grants
+        .issue(
+            claim.attempt.id.clone(),
+            scope_cache_domain::RepositoryId::parse(claim.run.workflow.repository_id().to_string())
+                .map_err(ApiError::bad_request)?,
+            allowed_identity_digests,
+            claim.attempt.lease_expires_at_unix,
+        )
+        .map_err(|error| ApiError::internal_message(error.to_string()))
 }
 
 fn attempt_step_status(step: &RunAttemptStep) -> AttemptStepStatusResponse {

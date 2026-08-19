@@ -87,6 +87,7 @@ fn cloud_dispatch_pins_the_workflow_image_and_rotates_the_bootstrap_credential()
     attempt
         .claim_runtime(&job, &"b".repeat(64), "a".repeat(64), 12, 102)
         .unwrap();
+    attempt.authorize_cache_access(&job, 12).unwrap();
     assert!(
         attempt
             .claim_runtime(&job, &"b".repeat(64), "e".repeat(64), 13, 103)
@@ -185,6 +186,7 @@ fn successful_attempt_finishes_only_after_runtime_finalization() {
     assert_eq!(attempt.state, AttemptState::Succeeded);
     assert_eq!(job.state, RunJobState::Succeeded);
     assert_eq!(run.state, RunState::Succeeded);
+    assert!(attempt.authorize_cache_access(&job, 15).is_err());
 }
 
 #[test]

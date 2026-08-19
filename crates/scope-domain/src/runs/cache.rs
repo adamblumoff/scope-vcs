@@ -14,7 +14,12 @@ pub const CACHE_IDENTITY_FORMAT: &str = "scope-cache-v3";
 pub const MAX_CACHE_OBSERVATION_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
 
 const RESERVED_CACHE_NAME_PREFIX: &str = "scope-";
-const RESERVED_CACHE_PATHS: &[&str] = &["/scope-steps", "/scope-step.log", "/scope-active-step"];
+const RESERVED_CACHE_PATHS: &[&str] = &[
+    "/scope-steps",
+    "/scope-step.log",
+    "/scope-active-step",
+    "/workspace/target",
+];
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum CacheError {
@@ -422,9 +427,9 @@ mod tests {
 
     #[test]
     fn workflow_cache_names_and_mount_paths_are_validated() {
-        let cache = WorkflowCache::new("cargo-target", "/workspace/target").unwrap();
-        assert_eq!(cache.as_str(), "cargo-target");
-        assert_eq!(cache.mount_path(), "/workspace/target");
+        let cache = WorkflowCache::new("cargo", "/scope/cache/cargo").unwrap();
+        assert_eq!(cache.as_str(), "cargo");
+        assert_eq!(cache.mount_path(), "/scope/cache/cargo");
 
         for invalid in [
             "",
@@ -451,6 +456,8 @@ mod tests {
             "/cache/nul\0byte",
             "/cache/new\nline",
             "/cache/carriage\rreturn",
+            "/workspace/target",
+            "/workspace/target/debug",
         ] {
             assert!(WorkflowCache::new("cargo", invalid).is_err(), "{invalid}");
         }

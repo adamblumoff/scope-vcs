@@ -1,5 +1,6 @@
 use super::{ObjectStore, ensure_object_size, object_too_large};
 use crate::ObjectStoreError;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, Mac};
 use reqwest::blocking::Client;
 use sha2::{Digest as _, Sha256};
@@ -64,6 +65,12 @@ pub struct S3Presigner {
     force_path_style: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresignedRequest {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+}
+
 impl S3Presigner {
     pub fn new(settings: &S3ObjectStoreSettings) -> Self {
         Self {
@@ -82,7 +89,53 @@ impl S3Presigner {
         key: &str,
         expires_seconds: u32,
     ) -> Result<String, ObjectStoreError> {
-        if !matches!(method, "GET" | "PUT") || expires_seconds == 0 || expires_seconds > 3600 {
+        Ok(self.presign_request(method, key, expires_seconds, &[])?.url)
+    }
+
+    pub fn presign_checksum_bound_put(
+        &self,
+        key: &str,
+        expires_seconds: u32,
+        checksum_sha256: &str,
+        content_length: u64,
+    ) -> Result<PresignedRequest, ObjectStoreError> {
+        if checksum_sha256.len() != 64
+            || !checksum_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ObjectStoreError::internal_message(
+                "checksum must be 64 lowercase hexadecimal characters",
+            ));
+        }
+        let checksum_bytes = hex::decode(checksum_sha256).map_err(|_| {
+            ObjectStoreError::internal_message("checksum must be valid hexadecimal")
+        })?;
+        let checksum_base64 = BASE64.encode(checksum_bytes);
+        let content_length = content_length.to_string();
+        self.presign_request(
+            "PUT",
+            key,
+            expires_seconds,
+            &[
+                ("content-length", content_length.as_str()),
+                ("x-amz-checksum-sha256", checksum_base64.as_str()),
+                ("x-amz-meta-scope-sha256", checksum_sha256),
+            ],
+        )
+    }
+
+    fn presign_request(
+        &self,
+        method: &str,
+        key: &str,
+        expires_seconds: u32,
+        request_headers: &[(&str, &str)],
+    ) -> Result<PresignedRequest, ObjectStoreError> {
+        if !matches!(method, "GET" | "HEAD" | "PUT")
+            || expires_seconds == 0
+            || expires_seconds > 3600
+        {
             return Err(ObjectStoreError::internal_message(
                 "invalid presigned object request",
             ));
@@ -120,6 +173,38 @@ impl S3Presigner {
         } else {
             format!("/{key}")
         };
+        let mut signed_headers = vec![("host", host.as_str())];
+        for (name, value) in request_headers {
+            let normalized_name = name.trim();
+            if normalized_name.is_empty()
+                || normalized_name
+                    .bytes()
+                    .any(|byte| byte.is_ascii_uppercase())
+                || normalized_name == "host"
+                || value.trim() != *value
+                || value.contains(['\r', '\n'])
+            {
+                return Err(ObjectStoreError::internal_message(
+                    "invalid presigned object request header",
+                ));
+            }
+            signed_headers.push((normalized_name, *value));
+        }
+        signed_headers.sort_by_key(|(name, _)| *name);
+        if signed_headers.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(ObjectStoreError::internal_message(
+                "duplicate presigned object request header",
+            ));
+        }
+        let signed_header_names = signed_headers
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(";");
+        let canonical_headers = signed_headers
+            .iter()
+            .map(|(name, value)| format!("{name}:{value}\n"))
+            .collect::<String>();
         let credential_scope = format!("{date_stamp}/{}/s3/aws4_request", self.region);
         let mut query = [
             ("X-Amz-Algorithm", "AWS4-HMAC-SHA256".to_string()),
@@ -129,7 +214,7 @@ impl S3Presigner {
             ),
             ("X-Amz-Date", amz_date.clone()),
             ("X-Amz-Expires", expires_seconds.to_string()),
-            ("X-Amz-SignedHeaders", "host".to_string()),
+            ("X-Amz-SignedHeaders", signed_header_names.clone()),
         ];
         query.sort_by_key(|(name, _)| *name);
         let canonical_query = query
@@ -138,7 +223,7 @@ impl S3Presigner {
             .collect::<Vec<_>>()
             .join("&");
         let canonical_request = format!(
-            "{method}\n{canonical_uri}\n{canonical_query}\nhost:{host}\n\nhost\nUNSIGNED-PAYLOAD"
+            "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_header_names}\nUNSIGNED-PAYLOAD"
         );
         let string_to_sign = format!(
             "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
@@ -146,9 +231,13 @@ impl S3Presigner {
         );
         let signing_key = signing_key(&self.secret_access_key, date_stamp, &self.region)?;
         let signature = hex::encode(hmac_sha256(&signing_key, string_to_sign.as_bytes())?);
-        Ok(format!(
-            "{base}?{canonical_query}&X-Amz-Signature={signature}"
-        ))
+        Ok(PresignedRequest {
+            url: format!("{base}?{canonical_query}&X-Amz-Signature={signature}"),
+            headers: request_headers
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                .collect(),
+        })
     }
 }
 
@@ -514,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_presigner_produces_bounded_path_style_urls_without_exposing_the_secret() {
+    fn presigner_produces_bounded_path_style_urls_without_exposing_the_secret() {
         let mut settings = S3ObjectStoreSettings::new(
             "https://storage.example".into(),
             "scope-bucket".into(),
@@ -524,11 +613,13 @@ mod tests {
         );
         settings.force_path_style = true;
         let url = S3Presigner::new(&settings)
-            .presign("PUT", "run-caches/v1/abc/1.tar.zst", 900)
+            .presign("PUT", "repos/repo-1/objects/sha256/abc", 900)
             .unwrap();
 
         assert!(
-            url.starts_with("https://storage.example/scope-bucket/run-caches/v1/abc/1.tar.zst?")
+            url.starts_with(
+                "https://storage.example/scope-bucket/repos/repo-1/objects/sha256/abc?"
+            )
         );
         assert!(url.contains("X-Amz-Expires=900"));
         assert!(url.contains("X-Amz-Credential=test-access%2F"));
@@ -542,6 +633,57 @@ mod tests {
         assert!(
             S3Presigner::new(&settings)
                 .presign("GET", "key", 3_601)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn checksum_bound_put_signs_and_returns_the_required_metadata_header() {
+        let mut settings = S3ObjectStoreSettings::new(
+            "https://storage.example".into(),
+            "scope-cache".into(),
+            "us-east-1".into(),
+            "access".into(),
+            "secret".into(),
+        );
+        settings.force_path_style = true;
+        let checksum = "a".repeat(64);
+        let request = S3Presigner::new(&settings)
+            .presign_checksum_bound_put("repos/repo-1/objects/sha256/abc", 900, &checksum, 42)
+            .unwrap();
+
+        assert!(request.url.contains(
+            "X-Amz-SignedHeaders=content-length%3Bhost%3Bx-amz-checksum-sha256%3Bx-amz-meta-scope-sha256"
+        ));
+        assert_eq!(
+            request.headers,
+            vec![
+                ("content-length".to_string(), "42".to_string()),
+                (
+                    "x-amz-checksum-sha256".to_string(),
+                    "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=".to_string(),
+                ),
+                ("x-amz-meta-scope-sha256".to_string(), checksum),
+            ]
+        );
+        assert!(!request.url.contains("secret"));
+    }
+
+    #[test]
+    fn presigner_supports_head_and_rejects_invalid_checksums() {
+        let settings = S3ObjectStoreSettings::new(
+            "https://storage.example".into(),
+            "scope-cache".into(),
+            "us-east-1".into(),
+            "access".into(),
+            "secret".into(),
+        );
+        let signer = S3Presigner::new(&settings);
+
+        assert!(signer.presign("HEAD", "object", 60).is_ok());
+        assert!(
+            signer
+                .presign_checksum_bound_put("object", 60, "not-a-checksum", 42)
                 .is_err()
         );
     }

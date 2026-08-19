@@ -471,6 +471,17 @@ impl RunAttempt {
         self.authenticate(job, token_hash, now_unix)
     }
 
+    pub fn authorize_cache_access(&self, job: &RunJob, now_unix: u64) -> Result<(), DomainError> {
+        if self.state.is_terminal() {
+            return Err(DomainError::authentication_failed(
+                "terminal attempts cannot use cache grants",
+            ));
+        }
+        self.ensure_job_alignment(job)?;
+        job.ensure_current_attempt(self)?;
+        self.ensure_lease_active(now_unix)
+    }
+
     pub fn authenticate_cache_observation_report(
         &self,
         job: &RunJob,
@@ -726,12 +737,7 @@ impl RunAttempt {
     ) -> Result<(), DomainError> {
         self.authenticate_identity(job, token_hash)?;
         job.ensure_current_attempt(self)?;
-        if now_unix >= self.token_expires_at_unix {
-            return Err(DomainError::authentication_failed(
-                "attempt credentials are invalid or expired",
-            ));
-        }
-        Ok(())
+        self.ensure_lease_active(now_unix)
     }
 
     pub(crate) fn authenticate_identity(
@@ -739,6 +745,16 @@ impl RunAttempt {
         job: &RunJob,
         token_hash: &str,
     ) -> Result<(), DomainError> {
+        self.ensure_job_alignment(job)?;
+        if self.token_hash != token_hash {
+            return Err(DomainError::authentication_failed(
+                "attempt credentials are invalid",
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_job_alignment(&self, job: &RunJob) -> Result<(), DomainError> {
         job.ensure_latest_attempt(self)?;
         let states_align = matches!(
             (job.state, self.state),
@@ -754,9 +770,13 @@ impl RunAttempt {
                 "run and attempt states disagree",
             ));
         }
-        if self.token_hash != token_hash {
+        Ok(())
+    }
+
+    fn ensure_lease_active(&self, now_unix: u64) -> Result<(), DomainError> {
+        if now_unix >= self.token_expires_at_unix {
             return Err(DomainError::authentication_failed(
-                "attempt credentials are invalid",
+                "attempt credentials are invalid or expired",
             ));
         }
         Ok(())

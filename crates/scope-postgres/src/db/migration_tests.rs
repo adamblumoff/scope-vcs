@@ -7,6 +7,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use sea_orm_migration::MigratorTrait;
 use std::sync::Arc;
 
+mod cache_service_cutover;
 mod maintenance_cutover;
 mod request_revisions;
 
@@ -38,6 +39,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0018_truthful_run_log_truncation",
     "m0019_run_attempt_cache_observations",
     "m0020_cloud_execution",
+    "m0021_cache_service_cutover",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -238,7 +240,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 41);
+    assert_eq!(scope_table_count, 44);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
     assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
     let review_columns = db
@@ -596,7 +598,9 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
     }
     assert!(relation_exists(db.as_ref(), "idx_scope_run_attempts_provider_state").await);
     assert!(relation_exists(db.as_ref(), "idx_scope_run_attempts_external_run").await);
-    assert!(relation_exists(db.as_ref(), "scope_run_cache_objects").await);
+    assert!(!relation_exists(db.as_ref(), "scope_run_cache_objects").await);
+    assert!(relation_exists(db.as_ref(), "scope_cache_objects").await);
+    assert!(relation_exists(db.as_ref(), "scope_run_attempt_caches").await);
     assert!(!relation_exists(db.as_ref(), "scope_runners").await);
 }
 

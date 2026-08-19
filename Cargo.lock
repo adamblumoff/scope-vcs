@@ -71,6 +71,8 @@ dependencies = [
  "jsonwebtoken",
  "reqwest",
  "scope-api-contract",
+ "scope-cache-contract",
+ "scope-cache-domain",
  "scope-domain",
  "scope-git",
  "scope-git-process",
@@ -2167,6 +2169,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "scope-cache-contract"
+version = "0.1.0"
+dependencies = [
+ "scope-cache-domain",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "scope-cache-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "scope-cache-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64",
+ "getrandom 0.3.4",
+ "hex",
+ "jsonwebtoken",
+ "reqwest",
+ "scope-cache-contract",
+ "scope-cache-domain",
+ "scope-domain",
+ "scope-object-store",
+ "scope-postgres",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "scope-domain"
 version = "0.1.0"
 dependencies = [
@@ -2202,6 +2248,7 @@ dependencies = [
 name = "scope-object-store"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chacha20poly1305",
  "getrandom 0.3.4",
  "hex",
@@ -2220,6 +2267,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
+ "scope-cache-domain",
  "scope-domain",
  "scope-git",
  "scope-run-config",
@@ -2254,6 +2302,8 @@ dependencies = [
  "libc",
  "reqwest",
  "scope-api-contract",
+ "scope-cache-contract",
+ "scope-cache-domain",
  "scope-domain",
  "serde",
  "serde_json",
