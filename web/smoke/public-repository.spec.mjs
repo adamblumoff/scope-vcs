@@ -242,7 +242,11 @@ test('public repository exposes only its projected source', async () => {
     const openFile = page.getByRole('button', { name: 'app.ts', exact: true }).click()
     await within(fileRequestStarted, 10_000, 'file request did not start')
     await page.waitForURL((url) => url.searchParams.get('file') === 'src/app.ts')
-    await page.getByText('Loading src/app.ts', { exact: true }).waitFor()
+    const pendingFileViewer = page.locator(
+      '#repository-code-files-panel [aria-busy="true"]',
+    )
+    await pendingFileViewer.waitFor()
+    await assertNoVisibleLoadingIndicators(page, '#repository-code-files-panel')
     assert.equal(await preview.isVisible(), false)
     assert.equal(
       await navigator.getAttribute('data-persistence-probe'),
@@ -474,6 +478,75 @@ test('repository chrome persists across navigation and request revalidation', as
     await assertCurrentRepoSection(page, 'History')
     await assertRepositoryChromePreserved(page, { header, navigation })
     await assertCurrentRepoSection(page, 'History')
+  })
+})
+
+test('requests navigation replaces Code with a quiet repository shell', async () => {
+  await withPage(repoPath, async (page) => {
+    await assertCurrentRepoSection(page, 'Code')
+    await assertPageHeading(page, 'Code')
+    await page.getByLabel('Repository file navigator').waitFor()
+    await page.waitForFunction(() => {
+      const link = document.querySelector('a[href$="/requests"]')
+      return link && Object.keys(link).some((key) => key.startsWith('__reactProps$'))
+    })
+
+    const header = await page.locator('header.sticky').elementHandle()
+    const navigation = await page
+      .getByRole('navigation', { name: 'Primary' })
+      .elementHandle()
+    assert(header)
+    assert(navigation)
+
+    let releaseQueueRequests = () => undefined
+    let markQueueRequestStarted = () => undefined
+    const queueRequestStarted = new Promise((resolve) => {
+      markQueueRequestStarted = resolve
+    })
+    const queueRequestsReleased = new Promise((resolve) => {
+      releaseQueueRequests = resolve
+    })
+    await page.route('**/_serverFn/**', async (route) => {
+      const requestUrl = decodeURIComponent(route.request().url())
+      if (!requestUrl.includes('section')) {
+        await route.continue()
+        return
+      }
+      markQueueRequestStarted()
+      await queueRequestsReleased
+      await route.continue()
+    })
+
+    const requestsNavigation = page
+      .getByRole('navigation', { name: 'Primary' })
+      .getByRole('link', { name: 'Requests', exact: true })
+      .click()
+
+    try {
+      await within(
+        queueRequestStarted,
+        10_000,
+        'request queue navigation did not start',
+      )
+      const pendingPage = page.locator('#main-content [aria-busy="true"]').first()
+      await pendingPage.waitFor()
+      await assertCurrentRepoSection(page, 'Requests')
+      await assertRepositoryChromePreserved(page, { header, navigation })
+      assert.equal(
+        await page.getByLabel('Repository file navigator').count(),
+        0,
+      )
+      assert.equal(
+        await page.getByRole('heading', { level: 1, name: 'Code' }).count(),
+        0,
+      )
+      await assertNoVisibleLoadingIndicators(page, '#main-content')
+    } finally {
+      releaseQueueRequests()
+      await requestsNavigation
+    }
+
+    await assertPageHeading(page, 'Requests')
   })
 })
 
@@ -725,6 +798,39 @@ async function assertRepositoryChromePreserved(page, chrome) {
       chrome,
     ),
     true,
+  )
+}
+
+async function assertNoVisibleLoadingIndicators(page, selector) {
+  assert.equal(
+    await page.locator(`${selector} .animate-spin:visible`).count(),
+    0,
+  )
+  assert.equal(
+    await page.locator(`${selector} .animate-pulse:visible`).count(),
+    0,
+  )
+  assert.deepEqual(
+    await page.locator(selector).evaluate((root) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      const visibleLoadingText = []
+      let node = walker.nextNode()
+      while (node) {
+        const text = node.textContent?.trim() ?? ''
+        const parent = node.parentElement
+        if (
+          /^(Loading|Connecting)\b/i.test(text) &&
+          parent &&
+          !parent.closest('.sr-only') &&
+          parent.getClientRects().length > 0
+        ) {
+          visibleLoadingText.push(text)
+        }
+        node = walker.nextNode()
+      }
+      return visibleLoadingText
+    }),
+    [],
   )
 }
 

@@ -8,6 +8,7 @@ import type {
   ReviewFileDiff,
 } from '@/api/types'
 import type { LoadRequestRevisionCommitInput } from '@/api/requests'
+import { PendingSurface } from '@/components/pending-surface'
 import {
   historyCommitCacheKey,
   historyDiffCacheKey,
@@ -468,7 +469,10 @@ function RequestCommitContext({
         </div>
       ) : null}
       {discussionReferences.status === 'loading' ? (
-        <p className="mt-3">Loading discussion references…</p>
+        <PendingSurface
+          className="mt-3 min-h-6"
+          label="Loading discussion references"
+        />
       ) : null}
       {discussionReferences.status === 'failed' ? (
         <div className="mt-3 flex items-center gap-2">

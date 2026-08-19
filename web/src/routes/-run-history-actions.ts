@@ -22,15 +22,8 @@ export const loadRepoRunPage = createServerFn({ method: 'GET' })
             workflows: { workflows: [] },
           })),
       ])
-      const latest = history.runs[0]
-        ? await loadRepoRunDetailForRequest({
-            ...data,
-            run_id: history.runs[0].id,
-          }, api).catch(() => null)
-        : null
       return {
         history,
-        latest,
         workflows: workflowResource.workflows,
         workflowsError: workflowResource.error,
       }

@@ -1,4 +1,4 @@
-import { Skeleton } from '@/components/ui/skeleton'
+import { PendingSurface } from '@/components/pending-surface'
 import type { ReactNode } from 'react'
 
 export function AuthSurface({
@@ -23,19 +23,9 @@ export function AuthSurface({
 
 export function AuthLoadingState({ label }: { label: string }) {
   return (
-    <output
-      aria-label={label}
-      className="block w-full max-w-sm border-y border-border py-6"
-    >
-      <div className="text-sm font-medium">{label}</div>
-      <div className="mt-1 text-sm text-muted-foreground">
-        Connecting to secure account services…
-      </div>
-      <div aria-hidden className="mt-6 space-y-3">
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-9 w-28" />
-      </div>
-    </output>
+    <PendingSurface
+      className="min-h-[220px] w-full max-w-sm"
+      label={label}
+    />
   )
 }

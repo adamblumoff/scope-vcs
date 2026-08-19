@@ -10,7 +10,7 @@ import {
 } from '@/components/repo-section-model'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import { UserButton } from '@clerk/tanstack-react-start'
-import { Link, useMatchRoute } from '@tanstack/react-router'
+import { Link, useLocation, useRouter } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 
 export function RepoShell({
@@ -21,12 +21,14 @@ export function RepoShell({
   params: RepoParams
 }) {
   const { repo } = useRepoLayout()
-  const matchRoute = useMatchRoute()
-  const active = activeRepoSection((to) => Boolean(matchRoute({
-    fuzzy: true,
-    to,
-  })))
-  const items = repoSectionsForActor(repo.access.actor).map<TopbarItem>(
+  const router = useRouter()
+  const pathname = useLocation({ select: (location) => location.pathname })
+  const sections = repoSectionsForActor(repo.access.actor)
+  const active = activeRepoSection((to) => {
+    const target = router.buildLocation({ params, to }).pathname
+    return pathname === target || pathname.startsWith(`${target}/`)
+  })
+  const items = sections.map<TopbarItem>(
     (section) => ({
       active: active === section.key,
       label: section.label,

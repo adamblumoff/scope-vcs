@@ -1,5 +1,6 @@
 import { buildCliInstallCommands } from '@/api/cli-install'
 import { loadAuthenticatedAccountForRequest } from '@/api/profile'
+import { ApplicationPendingShell } from '@/components/pending-surface'
 import { MarketingLandingPage } from '@/features/marketing/marketing-landing-page'
 import { detectCliPlatform } from '@/lib/cli-platform'
 import { createFileRoute, redirect } from '@tanstack/react-router'
@@ -33,8 +34,13 @@ const loadIndex = createServerFn({ method: 'GET' }).handler(async () => {
 
 export const Route = createFileRoute('/')({
   loader: () => loadIndex(),
+  pendingComponent: IndexPending,
   component: IndexRoute,
 })
+
+function IndexPending() {
+  return <ApplicationPendingShell label="Loading Scope" />
+}
 
 function IndexRoute() {
   const state = Route.useLoaderData()

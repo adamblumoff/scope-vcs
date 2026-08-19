@@ -3,6 +3,7 @@ import {
   loadRepoInviteForRequest,
   parseRepoInviteTokenInput,
 } from '@/api/repos'
+import { ApplicationPendingShell } from '@/components/pending-surface'
 import { InvitePage } from '@/features/invites/invite-page'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -17,8 +18,18 @@ const acceptInvite = createServerFn({ method: 'POST' })
 
 export const Route = createFileRoute('/invites/$token')({
   loader: ({ params }) => loadInvite({ data: params }),
+  pendingComponent: InvitePending,
   component: InviteRoute,
 })
+
+function InvitePending() {
+  return (
+    <ApplicationPendingShell
+      contextLabel="Repository invite"
+      label="Loading repository invite"
+    />
+  )
+}
 
 function InviteRoute() {
   const invite = Route.useLoaderData()

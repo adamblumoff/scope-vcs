@@ -61,7 +61,7 @@ export function RepoDetailPage({
         )}
         summary={content
           ? `${content.files.length} ${content.files.length === 1 ? 'file' : 'files'}`
-          : contentLoading ? 'Loading files…' : 'Files unavailable'}
+          : contentLoading ? undefined : 'Files unavailable'}
         title="Code"
       />
       <RepositoryCodeView

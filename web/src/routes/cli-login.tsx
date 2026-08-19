@@ -10,6 +10,7 @@ import { ApplicationTopbar } from '@/components/application-topbar'
 import { AppShell } from '@/components/app-shell'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
+import { PendingSurface } from '@/components/pending-surface'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -278,10 +279,10 @@ function CliLoginAction({
 }) {
   if (!isLoaded) {
     return (
-      <Button disabled size="sm" type="button">
-        <LoaderCircle className="size-3.5 animate-spin" />
-        <span>Loading…</span>
-      </Button>
+      <PendingSurface
+        className="min-h-8 min-w-24"
+        label="Loading account authorization"
+      />
     )
   }
 

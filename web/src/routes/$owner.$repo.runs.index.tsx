@@ -3,7 +3,6 @@ import {
   RepositoryRunsPage,
 } from '@/features/runs/repository-runs-page'
 import { RunsPageError } from '@/features/runs/runs-page-error'
-import { RunsPagePending } from '@/features/runs/runs-page-pending'
 import {
   loadRepoRunHistory,
   loadRepoRunDetail,
@@ -15,7 +14,6 @@ import { useCallback } from 'react'
 export const Route = createFileRoute('/$owner/$repo/runs/')({
   loader: ({ params }) => loadRepoRunPage({ data: params }),
   errorComponent: RunsPageError,
-  pendingComponent: RunsPagePending,
   component: RepoRunsRoute,
 })
 

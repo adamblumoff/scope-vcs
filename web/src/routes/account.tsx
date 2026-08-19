@@ -11,6 +11,7 @@ import { CopyableCodeBlock } from '@/components/copyable-code-block'
 import { DestructiveActionDialog } from '@/components/destructive-action-dialog'
 import { PageContent, PageHeader } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
+import { ApplicationPendingShell } from '@/components/pending-surface'
 import { SectionRow, SectionRows } from '@/components/section-rows'
 import { Button } from '@/components/ui/button'
 import { UserButton } from '@clerk/tanstack-react-start'
@@ -48,6 +49,12 @@ const UNIX_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
 export const Route = createFileRoute('/account')({
   beforeLoad: () => requireAccountAuth(),
   loader: () => loadCliSessions(),
+  pendingComponent: () => (
+    <ApplicationPendingShell
+      contextLabel="Account"
+      label="Loading account"
+    />
+  ),
   component: AccountRoute,
 })
 

@@ -5,9 +5,10 @@ import type {
   RunActionInput,
 } from '@/api/types'
 import { PageErrorAlert } from '@/components/page-error-alert'
+import { PendingSurface } from '@/components/pending-surface'
 import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, LoaderCircle } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { reconcileExpandedJobs, runNeedsPolling } from './repository-run-detail-model'
 import { RunStatusDot } from './run-status-dot'
@@ -19,18 +20,15 @@ import { RunTimestamp } from './run-timestamp'
 const LATEST_RUN_REFRESH_INTERVAL_MS = 2_000
 
 export function WorkflowLatestRun({
-  initialDetail,
   loadDetail,
   params,
   run,
 }: {
-  initialDetail: RepoRunDetail | null
   loadDetail: (input: RunActionInput) => Promise<RepoRunDetail>
   params: { owner: string; repo: string }
   run: RepoRunHistoryPage['runs'][number] | undefined
 }) {
-  const initial = initialDetail?.run.id === run?.id ? initialDetail : null
-  const [detail, setDetail] = useState(initial)
+  const [detail, setDetail] = useState<RepoRunDetail | null>(null)
   const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(false)
@@ -150,13 +148,10 @@ export function WorkflowLatestRun({
           ) : null}
         </>
       ) : (
-        <output
-          aria-busy="true"
-          className="mt-3 flex items-center gap-2 border-y border-border px-3 py-7 text-sm text-muted-foreground"
-        >
-          <LoaderCircle className="size-4 animate-spin" />
-          Loading latest job graph
-        </output>
+        <PendingSurface
+          className="mt-3 min-h-[140px] border-y border-border"
+          label="Loading latest job graph"
+        />
       )}
     </section>
   )
