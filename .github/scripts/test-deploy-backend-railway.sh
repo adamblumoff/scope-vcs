@@ -4,7 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
-mkdir -p "$test_dir/bin" "$test_dir/api" "$test_dir/worker"
+mkdir -p "$test_dir/bin" "$test_dir/api" "$test_dir/worker" "$test_dir/cache"
 
 cat > "$test_dir/maintenance" <<'FAKE'
 #!/usr/bin/env bash
@@ -52,7 +52,7 @@ printf '%s\n' "$*" >> "$FAKE_RAILWAY_TRACE"
 
 if [[ "$1" == "status" ]]; then
   cat <<'JSON'
-{"id":"project-test","environments":{"edges":[{"node":{"id":"production","name":"production"}}]},"services":{"edges":[{"node":{"id":"scope-api","name":"scope-api"}},{"node":{"id":"scope-worker","name":"scope-worker"}},{"node":{"id":"scope-postgres","name":"scope-postgres"}}]}}
+{"id":"project-test","environments":{"edges":[{"node":{"id":"production","name":"production"}}]},"services":{"edges":[{"node":{"id":"scope-api","name":"scope-api"}},{"node":{"id":"scope-worker","name":"scope-worker"}},{"node":{"id":"scope-cache-service","name":"scope-cache-service"}},{"node":{"id":"scope-postgres","name":"scope-postgres"}}]}}
 JSON
   exit 0
 fi
@@ -99,10 +99,13 @@ fi
 if [[ "$1 $2" == "service list" ]]; then
   api_deployment='"old-scope-api"'
   worker_deployment='"old-scope-worker"'
+  cache_deployment='"old-scope-cache-service"'
   api_status=SUCCESS
   worker_status=SUCCESS
+  cache_status=SUCCESS
   api_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
   worker_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
+  cache_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
   api_stopped=false
   worker_stopped=false
   if [[ -f "$FAKE_RAILWAY_STATE/stopped-scope-api" ]]; then
@@ -125,6 +128,7 @@ if [[ "$1 $2" == "service list" ]]; then
   fi
   [[ -f "$FAKE_RAILWAY_STATE/up-scope-api" && "$api_stopped" == "false" ]] && api_deployment='"new-scope-api"'
   [[ -f "$FAKE_RAILWAY_STATE/up-scope-worker" && "$worker_stopped" == "false" ]] && worker_deployment='"new-scope-worker"'
+  [[ -f "$FAKE_RAILWAY_STATE/up-scope-cache-service" ]] && cache_deployment='"new-scope-cache-service"'
   if [[ -f "$FAKE_RAILWAY_STATE/up-scope-api" && "$api_stopped" == "false" && ! -f "$FAKE_RAILWAY_STATE/crashed-scope-api" ]]; then
     api_replicas="{\"configured\":${FAKE_NEW_REPLICAS:-1},\"running\":${FAKE_NEW_REPLICAS:-1},\"crashed\":0,\"exited\":0,\"total\":${FAKE_NEW_REPLICAS:-1}}"
   fi
@@ -139,6 +143,10 @@ if [[ "$1 $2" == "service list" ]]; then
     worker_status=CRASHED
     worker_replicas='{"configured":1,"running":0,"crashed":1,"exited":0,"total":1}'
   fi
+  if [[ -f "$FAKE_RAILWAY_STATE/crashed-scope-cache-service" ]]; then
+    cache_status=CRASHED
+    cache_replicas='{"configured":1,"running":0,"crashed":1,"exited":0,"total":1}'
+  fi
   if [[ "${FAKE_DEGRADED_SERVICE:-}" == "scope-api" && "$api_stopped" == "false" ]]; then
     api_replicas='{"configured":2,"running":1,"crashed":1,"exited":0,"total":2}'
   fi
@@ -150,7 +158,7 @@ if [[ "$1 $2" == "service list" ]]; then
     worker_status=CRASHED
     worker_replicas='{"configured":1,"running":0,"crashed":1,"exited":0,"total":1}'
   fi
-  printf '[{"id":"scope-api","name":"scope-api","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s},{"id":"scope-worker","name":"scope-worker","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s}]\n' "$api_status" "$api_deployment" "$api_stopped" "$api_replicas" "$worker_status" "$worker_deployment" "$worker_stopped" "$worker_replicas"
+  printf '[{"id":"scope-api","name":"scope-api","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s},{"id":"scope-worker","name":"scope-worker","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s},{"id":"scope-cache-service","name":"scope-cache-service","status":"%s","deploymentId":%s,"deploymentStopped":false,"replicas":%s}]\n' "$api_status" "$api_deployment" "$api_stopped" "$api_replicas" "$worker_status" "$worker_deployment" "$worker_stopped" "$worker_replicas" "$cache_status" "$cache_deployment" "$cache_replicas"
   exit 0
 fi
 
@@ -264,6 +272,7 @@ run_cutover() {
     SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
     SCOPE_RAILWAY_API_SERVICE_ID="scope-api" \
     SCOPE_RAILWAY_WORKER_SERVICE_ID="scope-worker" \
+    SCOPE_RAILWAY_CACHE_SERVICE_ID="scope-cache-service" \
     SCOPE_RAILWAY_DATABASE_SERVICE_ID="scope-postgres" \
     SCOPE_RAILWAY_API_REGION_ID="us-west2" \
     SCOPE_RAILWAY_WORKER_REGION_ID="us-east4-eqdc4a" \
@@ -271,7 +280,8 @@ run_cutover() {
     SCOPE_RAILWAY_WORKER_REPLICAS="1" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
     SCOPE_RECOVER_CLOSED_CUTOVER="$recover_closed_cutover" \
-    bash "$root/.github/scripts/deploy-backend-railway.sh" "$test_dir/api" "$test_dir/worker"
+    bash "$root/.github/scripts/deploy-backend-railway.sh" \
+      "$test_dir/api" "$test_dir/worker" "$test_dir/cache"
   result=$?
   set -e
   printf '%s\n' "$result" > "$test_dir/$name-result"
@@ -303,6 +313,7 @@ assert_in_order "$test_dir/success-trace" \
   "graphql scale scope-worker us-east4-eqdc4a 0" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance verify" \
+  "up $test_dir/cache" \
   "up $test_dir/worker" \
   "graphql scale scope-worker us-east4-eqdc4a 1" \
   "up $test_dir/api" \
@@ -332,6 +343,18 @@ assert_in_order "$test_dir/crashed-worker-trace" \
   "$test_dir/maintenance apply" \
   "up $test_dir/worker"
 
+run_cutover crashed-cache 0 0 "" 0 0 0 0 "" 0 "" scope-cache-service
+[[ "$(cat "$test_dir/crashed-cache-result")" != "0" ]]
+assert_in_order "$test_dir/crashed-cache-trace" \
+  "$test_dir/maintenance apply" \
+  "up $test_dir/cache"
+if grep -F "up $test_dir/worker" "$test_dir/crashed-cache-trace" \
+  || grep -F "up $test_dir/api" "$test_dir/crashed-cache-trace" \
+  || grep -E "graphql scale (scope-api us-west2|scope-worker us-east4-eqdc4a) 1" "$test_dir/crashed-cache-trace"; then
+  echo "failed cache deployment must leave both writers closed" >&2
+  exit 1
+fi
+
 run_cutover rollback rollback
 [[ "$(cat "$test_dir/rollback-result")" != "0" ]]
 assert_in_order "$test_dir/rollback-trace" \
@@ -359,9 +382,10 @@ run_cutover rolling 0 1
 [[ "$(cat "$test_dir/rolling-result")" == "0" ]]
 assert_in_order "$test_dir/rolling-trace" \
   "$test_dir/maintenance plan" \
-  "up $test_dir/api" \
   "$test_dir/maintenance verify" \
-  "up $test_dir/worker"
+  "up $test_dir/cache" \
+  "up $test_dir/worker" \
+  "up $test_dir/api"
 if grep -F "graphql scale " "$test_dir/rolling-trace"; then
   echo "exact-schema deployment must stay on the rolling path" >&2
   exit 1
@@ -378,6 +402,7 @@ run_cutover interrupted 0 0 "" 0 1
 assert_in_order "$test_dir/interrupted-trace" \
   "$test_dir/maintenance plan" \
   "$test_dir/maintenance verify" \
+  "up $test_dir/cache" \
   "up $test_dir/worker" \
   "up $test_dir/api"
 if grep -F "$test_dir/maintenance apply" "$test_dir/interrupted-trace"; then
@@ -397,6 +422,7 @@ run_cutover bootstrap 0 1 "" 0 0 1 1
 assert_in_order "$test_dir/bootstrap-trace" \
   "$test_dir/maintenance plan" \
   "$test_dir/maintenance verify" \
+  "up $test_dir/cache" \
   "up $test_dir/worker" \
   "up $test_dir/api"
 
@@ -405,6 +431,7 @@ run_cutover partial-reopen 0 0 scope-api
 assert_in_order "$test_dir/partial-reopen-trace" \
   "graphql scale scope-api us-west2 0" \
   "graphql scale scope-worker us-east4-eqdc4a 0" \
+  "up $test_dir/cache" \
   "up $test_dir/worker" \
   "graphql scale scope-worker us-east4-eqdc4a 1" \
   "up $test_dir/api" \

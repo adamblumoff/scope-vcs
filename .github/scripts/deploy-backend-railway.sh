@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-api_upload_root="${1:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root>}"
-worker_upload_root="${2:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root>}"
+api_upload_root="${1:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root> <cache-upload-root>}"
+worker_upload_root="${2:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root> <cache-upload-root>}"
+cache_upload_root="${3:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root> <cache-upload-root>}"
 maintenance_binary="${SCOPE_MAINTENANCE_BINARY:-./target/release/scope-maintenance}"
 environment="${SCOPE_RAILWAY_ENVIRONMENT_ID:?SCOPE_RAILWAY_ENVIRONMENT_ID is required}"
 api_service="${SCOPE_RAILWAY_API_SERVICE_ID:?SCOPE_RAILWAY_API_SERVICE_ID is required}"
 worker_service="${SCOPE_RAILWAY_WORKER_SERVICE_ID:?SCOPE_RAILWAY_WORKER_SERVICE_ID is required}"
+cache_service="${SCOPE_RAILWAY_CACHE_SERVICE_ID:?SCOPE_RAILWAY_CACHE_SERVICE_ID is required}"
 database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SERVICE_ID is required}"
 api_region="${SCOPE_RAILWAY_API_REGION_ID:?SCOPE_RAILWAY_API_REGION_ID is required}"
 worker_region="${SCOPE_RAILWAY_WORKER_REGION_ID:?SCOPE_RAILWAY_WORKER_REGION_ID is required}"
@@ -43,6 +45,7 @@ validate_production_target() {
     EXPECTED_ENVIRONMENT_ID="$environment" \
     EXPECTED_API_SERVICE_ID="$api_service" \
     EXPECTED_WORKER_SERVICE_ID="$worker_service" \
+    EXPECTED_CACHE_SERVICE_ID="$cache_service" \
     EXPECTED_DATABASE_SERVICE_ID="$database_service" \
     node -e '
 const status = JSON.parse(process.env.RAILWAY_STATUS_JSON || "{}");
@@ -53,6 +56,7 @@ const fail = (message) => {
 const expectedServices = new Map([
   [process.env.EXPECTED_API_SERVICE_ID, "scope-api"],
   [process.env.EXPECTED_WORKER_SERVICE_ID, "scope-worker"],
+  [process.env.EXPECTED_CACHE_SERVICE_ID, "scope-cache-service"],
   [process.env.EXPECTED_DATABASE_SERVICE_ID, "scope-postgres"],
 ]);
 const environments = status.environments?.edges?.map(({node}) => node) || [];
@@ -340,8 +344,14 @@ restore_old_release() {
   fi
 }
 
+deploy_cache() {
+  bash .github/scripts/deploy-railway.sh "$cache_service" "$cache_upload_root"
+  wait_for_service_health "$cache_service"
+}
+
 deploy_and_reopen() {
   maintenance_read verify
+  deploy_cache
   bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root" stopped
   scale_service "$worker_service" "$worker_rollback_replicas"
   wait_for_service_health "$worker_service"
@@ -410,9 +420,10 @@ case "$plan_status" in
       echo "API and worker replica state is inconsistent; refusing deployment." >&2
       exit 1
     fi
-    bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
     maintenance_read verify
+    deploy_cache
     bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
+    bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
     trap - EXIT
     exit 0
     ;;

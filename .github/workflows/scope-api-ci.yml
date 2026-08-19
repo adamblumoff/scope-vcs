@@ -11,6 +11,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "api/**"
+      - "cache-service/**"
       - "crates/**"
       - "worker/**"
       - "web/scripts/check-api-contract.mjs"
@@ -27,6 +28,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "api/**"
+      - "cache-service/**"
       - "crates/**"
       - "worker/**"
       - "web/scripts/check-api-contract.mjs"
@@ -102,13 +104,14 @@ jobs:
         shell: bash
         run: |
           rm -rf .railway-upload
-          for service in api worker; do
+          for service in api worker cache-service; do
             root=".railway-upload/$service"
             mkdir -p "$root"
             cp Cargo.toml Cargo.lock rust-toolchain.toml "$root/"
             cp "$service/railpack.json" "$root/railpack.json"
             cp "$service/railway.json" "$root/railway.json"
             cp -a api "$root/api"
+            cp -a cache-service "$root/cache-service"
             cp -a worker "$root/worker"
             cp -a crates "$root/crates"
             cp -a runner-runtime "$root/runner-runtime"
@@ -127,9 +130,14 @@ jobs:
           SCOPE_RAILWAY_ENVIRONMENT_ID: 2f21f6b6-6817-4338-9e08-cf18e78b8f46
           SCOPE_RAILWAY_API_SERVICE_ID: 9456cd8d-40bd-489a-a181-72b7f777c4a8
           SCOPE_RAILWAY_WORKER_SERVICE_ID: a474a0d1-3000-4a95-9ca3-cd3a7f3ef669
+          SCOPE_RAILWAY_CACHE_SERVICE_ID: 668d47df-8f68-4f96-b52f-7c02324829e3
           SCOPE_RAILWAY_DATABASE_SERVICE_ID: 44c41a90-2d1a-4a1b-85c9-6af85d179be3
           SCOPE_RAILWAY_API_REGION_ID: us-west2
           SCOPE_RAILWAY_WORKER_REGION_ID: us-east4-eqdc4a
           SCOPE_RAILWAY_API_REPLICAS: 1
           SCOPE_RAILWAY_WORKER_REPLICAS: 1
-        run: bash .github/scripts/deploy-backend-railway.sh .railway-upload/api .railway-upload/worker
+        run: >-
+          bash .github/scripts/deploy-backend-railway.sh
+          .railway-upload/api
+          .railway-upload/worker
+          .railway-upload/cache-service
