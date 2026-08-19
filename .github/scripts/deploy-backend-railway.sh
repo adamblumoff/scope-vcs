@@ -36,19 +36,24 @@ api_rollback_replicas=0
 worker_rollback_replicas=0
 
 validate_production_target() {
-  local status_json
+  local status_json services_json
   status_json="$(railway status "${railway_scope[@]}" --json)"
+  services_json="$(railway service list "${railway_scope[@]}" --json)"
   # The JavaScript template literals are evaluated by Node.
   # shellcheck disable=SC2016
   RAILWAY_STATUS_JSON="$status_json" \
+    RAILWAY_SERVICES_JSON="$services_json" \
     EXPECTED_PROJECT_ID="$RAILWAY_PROJECT_ID" \
     EXPECTED_ENVIRONMENT_ID="$environment" \
     EXPECTED_API_SERVICE_ID="$api_service" \
     EXPECTED_WORKER_SERVICE_ID="$worker_service" \
     EXPECTED_CACHE_SERVICE_ID="$cache_service" \
     EXPECTED_DATABASE_SERVICE_ID="$database_service" \
+    EXPECTED_API_REGION="$api_region" \
+    EXPECTED_WORKER_REGION="$worker_region" \
     node -e '
 const status = JSON.parse(process.env.RAILWAY_STATUS_JSON || "{}");
+const serviceStates = JSON.parse(process.env.RAILWAY_SERVICES_JSON || "[]");
 const fail = (message) => {
   console.error(`Refusing backend deployment: ${message}.`);
   process.exit(1);
@@ -68,6 +73,19 @@ if (!environments.some(({id, name}) => id === process.env.EXPECTED_ENVIRONMENT_I
 for (const [id, name] of expectedServices) {
   if (!services.some((service) => service.id === id && service.name === name)) {
     fail(`Railway service ${name} does not match the reviewed target`);
+  }
+}
+for (const [id, name, expectedRegion] of [
+  [process.env.EXPECTED_API_SERVICE_ID, "scope-api", process.env.EXPECTED_API_REGION],
+  [process.env.EXPECTED_WORKER_SERVICE_ID, "scope-worker", process.env.EXPECTED_WORKER_REGION],
+]) {
+  const service = serviceStates.find((candidate) => candidate.id === id);
+  if (!service) fail(`Railway service ${name} has no production state`);
+  const configured = service.replicas?.configured || 0;
+  if (configured > 0 && !service.regions?.some(
+    (region) => region.name === expectedRegion && region.configured === configured,
+  )) {
+    fail(`Railway service ${name} is not running in reviewed region ${expectedRegion}`);
   }
 }
 '
