@@ -1,6 +1,7 @@
 import type { ReviewFileDiff } from '@/api/types'
 import { PanelState } from '@/components/empty-state'
 import { displayPath } from '@/components/file-system-tree-model'
+import { PendingSurface } from '@/components/pending-surface'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { parseDiffFromFile, type FileDiffMetadata } from '@pierre/diffs'
@@ -10,7 +11,6 @@ import {
   type WorkerInitializationRenderOptions,
   type WorkerPoolOptions,
 } from '@pierre/diffs/react'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useThemeType } from '@/lib/use-theme-type'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useLayoutEffect, useMemo, useRef } from 'react'
@@ -100,7 +100,7 @@ export function ReviewFileDiffDrawer({
             </div>
             <div className="text-xs leading-4 text-muted-foreground">
               {loading
-                ? 'Loading diff…'
+                ? null
                 : error
                   ? 'Diff unavailable'
                   : modeChangeLabel(diff) ?? 'Diff'}
@@ -125,7 +125,10 @@ export function ReviewFileDiffDrawer({
           ref={scrollRef}
         >
           {loading ? (
-            <DiffSkeleton />
+            <PendingSurface
+              className="min-h-full"
+              label={`Loading ${displayName || 'file'} diff`}
+            />
           ) : error ? (
             <PanelState role="alert" tone="error">
               <TriangleAlert className="size-5" />
@@ -329,28 +332,5 @@ function modeChangeLabel(diff: ReviewFileDiff | null) {
     return null
   }
   return `Mode ${diff.old_mode} → ${diff.new_mode}`
-}
-
-const DIFF_SKELETON_WIDTHS = [
-  'w-[82%]',
-  'w-[64%]',
-  'w-[91%]',
-  'w-[48%]',
-  'w-[73%]',
-  'w-[86%]',
-  'w-[57%]',
-  'w-[78%]',
-  'w-[40%]',
-  'w-[69%]',
-]
-
-function DiffSkeleton() {
-  return (
-    <div className="space-y-2.5 px-4 py-4 font-mono">
-      {DIFF_SKELETON_WIDTHS.map((width) => (
-        <Skeleton className={cn('h-3.5', width)} key={width} />
-      ))}
-    </div>
-  )
 }
 

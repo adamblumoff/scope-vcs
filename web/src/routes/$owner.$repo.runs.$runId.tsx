@@ -9,7 +9,6 @@ import type { RunActionInput, RunStepLogsInput } from '@/api/types'
 import {
   RepositoryRunDetailPage,
   RunDetailPageError,
-  RunDetailPagePending,
 } from '@/features/runs/repository-run-detail-page'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -33,7 +32,6 @@ export const Route = createFileRoute('/$owner/$repo/runs/$runId')({
     data: runInput(params),
   }),
   errorComponent: RunDetailPageError,
-  pendingComponent: RunDetailPagePending,
   component: RepositoryRunDetailRoute,
 })
 

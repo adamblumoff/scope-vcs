@@ -1,9 +1,9 @@
 import type { CommitFile } from '@/api/types'
 import { PanelState, EmptyState } from '@/components/empty-state'
 import { FileSystemTree } from '@/components/file-system-tree'
+import { PendingSurface } from '@/components/pending-surface'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import { historyCommitTitle } from '@/features/history/history-row-labels'
 import type {
   CommitDetailState,
@@ -41,7 +41,12 @@ export function CommitDetailPanel({
   const fileNavigatorRef = useRef<HTMLDivElement>(null)
 
   if (commitState.status === 'loading') {
-    return <CommitDetailSkeleton />
+    return (
+      <PendingSurface
+        className="min-h-[340px]"
+        label="Loading commit details"
+      />
+    )
   }
 
   if (commitState.status === 'failed') {
@@ -131,26 +136,6 @@ export function CommitDetailPanel({
             </PanelState>
           )}
         </div>
-      </div>
-    </div>
-  )
-}
-
-/** Mirrors the loaded layout: commit heading, mono meta line, then file rows. */
-function CommitDetailSkeleton() {
-  return (
-    <div className="min-w-0">
-      <div className="border-b border-border px-5 py-4 sm:px-6">
-        <Skeleton className="h-4 w-2/5" />
-        <Skeleton className="mt-2 h-3 w-28" />
-      </div>
-      <div className="space-y-3 px-5 py-4 sm:px-6">
-        {Array.from({ length: 5 }).map((_, index) => (
-          <div className="flex items-center gap-2" key={index}>
-            <Skeleton className="size-4 rounded-sm" />
-            <Skeleton className="h-3.5 w-1/2" />
-          </div>
-        ))}
       </div>
     </div>
   )

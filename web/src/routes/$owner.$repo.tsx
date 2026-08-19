@@ -3,6 +3,7 @@ import {
   parseRepoParams,
 } from '@/api/repos'
 import { RepoShell } from '@/components/repo-shell'
+import { RepositoryRoutePending } from '@/components/repository-route-pending'
 import { RepositoryHtmlPreviewProvider } from '@/components/repository-html-preview-store'
 import { RouteErrorPage } from '@/components/route-error-page'
 import { RepoLayoutProvider } from '@/features/repo-detail/repo-layout-context'
@@ -18,6 +19,7 @@ const loadRepoLiveState = createServerFn({ method: 'GET' })
 export const Route = createFileRoute('/$owner/$repo')({
   loader: ({ params }) => loadRepoLiveState({ data: params }),
   errorComponent: RepoLayoutError,
+  pendingComponent: RepositoryRoutePending,
   component: RepoLayoutRoute,
 })
 

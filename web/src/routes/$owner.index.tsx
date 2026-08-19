@@ -1,5 +1,6 @@
 import { HttpError } from '@/api/client'
 import { loadOwnerProfileForRequest } from '@/api/profile'
+import { ApplicationPendingShell } from '@/components/pending-surface'
 import { OwnerProfileError } from '@/features/home/owner-profile-error'
 import { OwnerProfileNotFound } from '@/features/home/owner-profile-not-found'
 import { OwnerProfileRoute } from '@/features/home/owner-profile-route'
@@ -23,5 +24,11 @@ export const Route = createFileRoute('/$owner/')({
   loader: ({ params }) => loadOwnerProfile({ data: params }),
   errorComponent: OwnerProfileError,
   notFoundComponent: OwnerProfileNotFound,
+  pendingComponent: OwnerProfilePending,
   component: OwnerProfileRoute,
 })
+
+function OwnerProfilePending() {
+  const { owner } = Route.useParams()
+  return <ApplicationPendingShell label={`Loading @${owner}`} />
+}

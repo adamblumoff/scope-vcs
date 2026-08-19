@@ -20,7 +20,6 @@ const RUNS_REFRESH_INTERVAL_MS = 2_000
 
 type RunPageResources = {
   history: RepoRunHistoryPage
-  latest: RepoRunDetail | null
   workflows: RepoRunWorkflowList
   workflowsError: string | null
 }
@@ -184,7 +183,6 @@ export function RepositoryRunsPage({
             </div>
           ) : null}
           <WorkflowLatestRun
-            initialDetail={initialResources.latest}
             key={history.runs[0]?.id ?? 'empty'}
             loadDetail={loadDetail}
             params={params}

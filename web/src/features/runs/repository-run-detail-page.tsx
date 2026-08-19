@@ -549,20 +549,6 @@ function jobSummary(jobs: readonly RepoRunJobDetail[]) {
     .join(' · ') || 'No jobs'
 }
 
-export function RunDetailPagePending() {
-  return (
-    <WorkbenchPane>
-      <output
-        aria-busy="true"
-        className="flex items-center justify-center gap-2 px-5 py-16 text-sm text-muted-foreground"
-      >
-        <LoaderCircle className="size-4 animate-spin" />
-        Loading run
-      </output>
-    </WorkbenchPane>
-  )
-}
-
 export function RunDetailPageError({ error }: { error: unknown }) {
   return (
     <WorkbenchPane>

@@ -1,4 +1,5 @@
 import type { RequestEvent } from '@/api/types'
+import { PendingSurface } from '@/components/pending-surface'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -69,9 +70,10 @@ export function RequestActivityDrawer({
 
           <div className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
-              <p className="px-5 py-8 text-sm text-muted-foreground">
-                Loading request history…
-              </p>
+              <PendingSurface
+                className="min-h-full"
+                label="Loading request history"
+              />
             ) : error ? (
               <div
                 className="flex items-start gap-3 px-5 py-8 text-sm"

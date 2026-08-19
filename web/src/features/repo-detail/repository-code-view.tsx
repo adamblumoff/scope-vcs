@@ -6,6 +6,7 @@ import type {
 } from '@/api/types'
 import { EmptyState, PanelState } from '@/components/empty-state'
 import { FileSystemTree } from '@/components/file-system-tree'
+import { PendingSurface } from '@/components/pending-surface'
 import { isRepositoryHtmlPath } from '@/components/repository-html'
 import { RepositoryHtmlRenderer } from '@/components/repository-html-renderer'
 import { isRepositoryMarkdownPath } from '@/components/repository-markdown'
@@ -24,7 +25,7 @@ import {
   displayRouteFilePath,
   selectedRouteFilePath,
 } from '@/lib/route-file'
-import { FileQuestion, LoaderCircle, TriangleAlert } from 'lucide-react'
+import { FileQuestion, TriangleAlert } from 'lucide-react'
 import {
   useLayoutEffect,
   useMemo,
@@ -115,7 +116,10 @@ export function RepositoryCodeView({
           ) : contentError ? (
             <FileNavigatorError error={contentError} retry={contentRetry} />
           ) : (
-            <FileNavigatorPending />
+            <PendingSurface
+              className="min-h-[220px]"
+              label="Loading repository files"
+            />
           )}
         </div>
         <SourcePane
@@ -168,15 +172,6 @@ function RepositoryFileNavigator({
       onSelectFile={(file) => onSelectFile(file.path, false)}
       selectedFilePath={selectedPath}
     />
-  )
-}
-
-function FileNavigatorPending() {
-  return (
-    <PanelState busy>
-      <LoaderCircle className="size-5 animate-spin" />
-      <span>Loading repository files</span>
-    </PanelState>
   )
 }
 
@@ -352,10 +347,10 @@ function SourceContent({
 
   if (loading) {
     return (
-      <PanelState busy>
-        <LoaderCircle className="size-5 animate-spin" />
-        <span>Loading {displayPath(selectedPath)}</span>
-      </PanelState>
+      <PendingSurface
+        className="min-h-[220px]"
+        label={`Loading ${displayPath(selectedPath)}`}
+      />
     )
   }
 
