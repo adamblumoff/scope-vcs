@@ -1,4 +1,6 @@
-use super::state::{ReviewInput, ReviewMode, ReviewRow, ReviewState, ReviewStateAction};
+use super::state::{
+    ChangeListKind, ReviewInput, ReviewMode, ReviewRow, ReviewState, ReviewStateAction,
+};
 use anyhow::Context;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -8,6 +10,7 @@ use crossterm::{
 use ratatui::{prelude::*, widgets::Paragraph};
 use scope_domain::repo_config::RepoConfig;
 use std::io;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TuiOutcome {
@@ -63,10 +66,13 @@ pub fn run_review_tui(
 
 fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
     let area = frame.area();
+    let width = area.width as usize;
+    let footer_hints = footer_hints(state.mode(), width);
+    let footer_height = footer_hints.len().saturating_add(1) as u16;
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(1),
-        Constraint::Length(2),
+        Constraint::Length(footer_height),
     ])
     .split(area);
 
@@ -99,13 +105,12 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
     };
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(format!("{mode}  Scope repo config  {dirty}{rewrite_note}")),
-            Line::from(format!(
-                "Path                                      Visibility  Rule  {filter}{filter_mode}"
+            Line::from(fit_cell(
+                &format!("{mode}  Scope repo config  {dirty}{rewrite_note}"),
+                width,
             )),
-            Line::from(
-                "--------------------------------------------------------------------------",
-            ),
+            review_header_line(&format!("{filter}{filter_mode}"), width),
+            Line::from("─".repeat(width)),
         ]),
         chunks[0],
     );
@@ -114,7 +119,6 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
     let read_only_lines = state
         .history_rewrite_summaries()
         .into_iter()
-        .chain(state.deleted_path_summaries().iter().cloned())
         .map(|line| Line::from(terminal_safe(&line)))
         .collect::<Vec<_>>();
     let rows = state.visible_rows();
@@ -130,29 +134,16 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
             .enumerate()
             .skip(state.scroll())
             .take(row_height)
-            .map(|(index, row)| row_line(row, index == state.cursor())),
+            .map(|(index, row)| row_line(row, index == state.cursor(), width)),
     );
     frame.render_widget(Paragraph::new(lines), chunks[1]);
 
-    let push_hint = if state.mode() == ReviewMode::Push {
-        "  P continue push"
-    } else {
-        ""
-    };
-    let quit_label = if state.mode() == ReviewMode::Push {
-        "Q cancel"
-    } else {
-        "Q quit"
-    };
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(format!(
-                "Space toggle  Right expand  Left collapse  S save{push_hint}  {quit_label}  / filter  ? help"
-            )),
-            Line::from(terminal_safe(state.message())),
-        ]),
-        chunks[2],
-    );
+    let mut footer_lines = footer_hints
+        .into_iter()
+        .map(|hint| Line::from(fit_cell(&hint, width)))
+        .collect::<Vec<_>>();
+    footer_lines.push(Line::from(fit_cell(&terminal_safe(state.message()), width)));
+    frame.render_widget(Paragraph::new(footer_lines), chunks[2]);
 }
 
 fn review_body_heights(
@@ -169,33 +160,202 @@ fn review_body_heights(
     )
 }
 
-fn row_line(row: &ReviewRow, selected: bool) -> Line<'static> {
-    let symbol = match row.kind {
-        super::tree::ReviewNodeKind::Root => " . ",
-        super::tree::ReviewNodeKind::File => "   ",
-        super::tree::ReviewNodeKind::Directory if row.expanded => "[v]",
-        super::tree::ReviewNodeKind::Directory => "[>]",
+fn row_line(row: &ReviewRow, selected: bool, width: usize) -> Line<'static> {
+    let line = match row {
+        ReviewRow::ChangeSection {
+            kind,
+            count,
+            expanded,
+        } => change_section_line(*kind, *count, *expanded, width),
+        ReviewRow::ChangePath { kind, path } => Line::from(Span::styled(
+            fit_cell(&format!("    {}", terminal_safe(path)), width),
+            change_list_style(*kind),
+        )),
+        ReviewRow::TreeNode {
+            depth,
+            name,
+            kind,
+            expanded,
+            visibility,
+            rule,
+            reserved,
+            change_status,
+            ..
+        } => {
+            let symbol = match kind {
+                super::tree::ReviewNodeKind::Root => " . ",
+                super::tree::ReviewNodeKind::File => "   ",
+                super::tree::ReviewNodeKind::Directory if *expanded => "[v]",
+                super::tree::ReviewNodeKind::Directory => "[>]",
+            };
+            let path = format!("{}{symbol} {}", "  ".repeat(*depth), terminal_safe(name));
+            let change = change_status
+                .as_deref()
+                .filter(|status| !status.starts_with(['A', 'D']))
+                .map(|status| format!("  {}", terminal_safe(status)))
+                .unwrap_or_default();
+            let reserved = if *reserved { " reserved" } else { "" };
+            let detail = format!("{}{}{}", terminal_safe(rule), reserved, change);
+            tree_line(&path, *visibility, &detail, width)
+        }
     };
-    let indent = "  ".repeat(row.depth);
-    let change = row
-        .change_status
-        .as_ref()
-        .map(|status| format!("  {status}"))
-        .unwrap_or_default();
-    let reserved = if row.reserved { " reserved" } else { "" };
-    let text = format!(
-        "{indent}{symbol} {:<34} {:<10} {}{}{}",
-        terminal_safe(&row.name),
-        scope_domain::repo_visibility::visibility_label(row.visibility),
-        terminal_safe(&row.rule),
-        reserved,
-        terminal_safe(&change)
-    );
     if selected {
-        Line::from(text).style(Style::new().add_modifier(Modifier::REVERSED))
+        line.style(Style::new().add_modifier(Modifier::REVERSED))
     } else {
-        Line::from(text)
+        line
     }
+}
+
+fn review_header_line(filter: &str, width: usize) -> Line<'static> {
+    let (path_width, visibility_width, detail_width) = row_column_widths(width);
+    Line::from(vec![
+        Span::raw(fit_cell("Path", path_width)),
+        Span::raw(fit_cell("Visibility", visibility_width)),
+        Span::raw(fit_cell(&format!("Rule  {filter}"), detail_width)),
+    ])
+}
+
+fn tree_line(
+    path: &str,
+    visibility: scope_domain::repo_visibility::ReviewVisibility,
+    detail: &str,
+    width: usize,
+) -> Line<'static> {
+    let (path_width, visibility_width, detail_width) = row_column_widths(width);
+    let (visibility_text, visibility_style) = visibility_cell(visibility);
+    Line::from(vec![
+        Span::raw(fit_cell(path, path_width)),
+        Span::styled(
+            fit_cell(visibility_text, visibility_width),
+            visibility_style,
+        ),
+        Span::raw(fit_cell(detail, detail_width)),
+    ])
+}
+
+fn change_section_line(
+    kind: ChangeListKind,
+    count: usize,
+    expanded: bool,
+    width: usize,
+) -> Line<'static> {
+    let symbol = if expanded { "[v]" } else { "[>]" };
+    Line::from(Span::styled(
+        fit_cell(
+            &format!("{symbol} {} files ({count})", change_list_label(kind)),
+            width,
+        ),
+        change_list_style(kind).add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn change_list_label(kind: ChangeListKind) -> &'static str {
+    match kind {
+        ChangeListKind::Added => "Added",
+        ChangeListKind::Deleted => "Deleted",
+    }
+}
+
+fn change_list_style(kind: ChangeListKind) -> Style {
+    match kind {
+        ChangeListKind::Added => Style::new().fg(Color::Green),
+        ChangeListKind::Deleted => Style::new().fg(Color::Red),
+    }
+}
+
+fn visibility_cell(
+    visibility: scope_domain::repo_visibility::ReviewVisibility,
+) -> (&'static str, Style) {
+    use scope_domain::repo_visibility::ReviewVisibility;
+
+    match visibility {
+        ReviewVisibility::Public => ("🌐 public", Style::new().fg(Color::Green)),
+        ReviewVisibility::Private => ("🔒 private", Style::new().fg(Color::Red)),
+        ReviewVisibility::Mixed => ("− mixed", Style::new().fg(Color::Yellow)),
+    }
+}
+
+fn row_column_widths(width: usize) -> (usize, usize, usize) {
+    let path_width = (width / 2).clamp(12, 52).min(width);
+    let visibility_width = 14.min(width.saturating_sub(path_width));
+    let detail_width = width.saturating_sub(path_width + visibility_width);
+    (path_width, visibility_width, detail_width)
+}
+
+fn footer_hints(mode: ReviewMode, width: usize) -> Vec<String> {
+    let full = match mode {
+        ReviewMode::Push => {
+            "Arrows navigate  Space toggle  S save  P push  Q cancel  / filter  ? help"
+        }
+        ReviewMode::Standalone => "Arrows navigate  Space toggle  S save  Q quit  / filter  ? help",
+    };
+    if UnicodeWidthStr::width(full) <= width {
+        return vec![full.to_string()];
+    }
+
+    let controls: &[&str] = match mode {
+        ReviewMode::Push => &[
+            "↑↓←→ move",
+            "Space toggle",
+            "S save",
+            "P push",
+            "Q cancel",
+            "/ filter",
+            "? help",
+        ],
+        ReviewMode::Standalone => &[
+            "↑↓←→ move",
+            "Space toggle",
+            "S save",
+            "Q quit",
+            "/ filter",
+            "? help",
+        ],
+    };
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for control in controls {
+        let candidate = if line.is_empty() {
+            (*control).to_string()
+        } else {
+            format!("{line} {control}")
+        };
+        if !line.is_empty() && UnicodeWidthStr::width(candidate.as_str()) > width {
+            lines.push(line);
+            line = (*control).to_string();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn fit_cell(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let text_width = UnicodeWidthStr::width(text);
+    if text_width <= width {
+        return format!("{text}{}", " ".repeat(width - text_width));
+    }
+
+    let target_width = width.saturating_sub(1);
+    let mut clipped = String::new();
+    let mut clipped_width = 0;
+    for value in text.chars() {
+        let value_width = UnicodeWidthChar::width(value).unwrap_or(0);
+        if clipped_width + value_width > target_width {
+            break;
+        }
+        clipped.push(value);
+        clipped_width += value_width;
+    }
+    clipped.push('…');
+    clipped.push_str(&" ".repeat(width.saturating_sub(clipped_width + 1)));
+    clipped
 }
 
 fn terminal_safe(text: &str) -> String {

@@ -45,12 +45,7 @@ pub fn run_push_review(
     ensure_review_terminal_available("scope push review")?;
     let config = load_worktree_scope_repo_config(&repo.root)?;
     let tree = committed_review_tree(repo, reviewed_head_oid, changed_paths)?;
-    let state = ReviewState::new_with_deleted_paths(
-        tree,
-        config,
-        ReviewMode::Push,
-        deleted_path_summaries(changed_paths),
-    );
+    let state = ReviewState::new_with_changed_paths(tree, config, ReviewMode::Push, changed_paths);
 
     match run_review_tui(state, |config| {
         write_worktree_scope_repo_config(&repo.root, config)
@@ -68,12 +63,4 @@ pub fn ensure_review_terminal_available(command_name: &str) -> anyhow::Result<()
     bail!(
         "{command_name} requires an interactive terminal; use --no-review with scope push to skip review"
     )
-}
-
-fn deleted_path_summaries(changed_paths: &[GitChangedPath]) -> Vec<String> {
-    changed_paths
-        .iter()
-        .filter(|path| path.status.starts_with('D'))
-        .map(|path| format!("Deleted path: {} {}", path.status, path.path))
-        .collect()
 }
