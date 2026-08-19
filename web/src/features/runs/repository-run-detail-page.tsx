@@ -445,10 +445,10 @@ function StepLogs({
   return (
     <section
       aria-label={`${step.name} output`}
-      className="border-t border-border bg-[var(--terminal-surface)] text-[var(--terminal-foreground)]"
+      className="border-t border-border bg-background text-foreground"
       id={id}
     >
-      <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-2 text-xs text-white/60">
+      <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-2">
           <TerminalSquare className="size-3.5" />
           {step.name}
@@ -461,7 +461,7 @@ function StepLogs({
       </div>
       {logState.error ? (
         <div
-          className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-3 text-sm text-[var(--terminal-danger)]"
+          className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 text-sm text-danger-strong"
           role="alert"
         >
           <span>{logState.error}</span>
@@ -472,7 +472,7 @@ function StepLogs({
       ) : null}
       <pre className="max-h-[34rem] overflow-auto whitespace-pre-wrap break-words px-4 py-4 font-mono text-xs leading-5">
         {logState.logs.length === 0
-          ? <span className="text-white/50">No output yet.</span>
+          ? <span className="text-muted-foreground">No output yet.</span>
           : logState.logs.map((log) => log.text).join('')}
       </pre>
     </section>

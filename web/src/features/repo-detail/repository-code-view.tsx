@@ -435,7 +435,7 @@ function SourceFileContent({
   }
 
   return (
-    <pre className="min-h-full bg-[var(--terminal-surface)] p-5 font-mono text-xs leading-5 whitespace-pre text-[var(--terminal-foreground)] sm:p-7">
+    <pre className="min-h-full bg-background p-5 font-mono text-xs leading-5 whitespace-pre text-foreground sm:p-7">
       <code>{file.content.text}</code>
     </pre>
   )
