@@ -62,29 +62,6 @@ impl RunStore {
         })
     }
 
-    pub async fn authenticate_attempt_cache(
-        &self,
-        attempt_id: &str,
-        token_hash: &str,
-        now_unix: u64,
-    ) -> Result<DispatchClaim, PostgresError> {
-        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (run, job, attempt, steps) =
-            super::run_attempt_persistence::locked_attempt_context(&tx, attempt_id).await?;
-        attempt
-            .authenticate_cache_observation_report(&job, token_hash, now_unix)
-            .map_err(PostgresError::from)?;
-        let workflow_revision = super::runs::workflow_revision_for_run(&tx, &run).await?;
-        tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(DispatchClaim {
-            run,
-            job,
-            attempt,
-            steps,
-            workflow_revision,
-        })
-    }
-
     pub(super) async fn mutate_attempt(
         &self,
         attempt_id: &str,

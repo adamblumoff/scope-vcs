@@ -82,18 +82,6 @@ pub fn router(state: AppState) -> Router {
             post(http::runtime_protocol::report_cache_finalizations),
         )
         .route(
-            routes::ATTEMPT_CACHE_OBJECT,
-            get(http::runtime_protocol::cache_download),
-        )
-        .route(
-            routes::ATTEMPT_CACHE_UPLOAD,
-            post(http::runtime_protocol::cache_upload),
-        )
-        .route(
-            routes::ATTEMPT_CACHE_COMMIT,
-            post(http::runtime_protocol::cache_commit),
-        )
-        .route(
             routes::ATTEMPT_RECOVERY_STATUS,
             get(http::runtime_protocol::recovery_status),
         )

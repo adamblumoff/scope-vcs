@@ -291,7 +291,7 @@ container:
 timeout: 20m
 caches:
   - name: cargo-target
-    path: /workspace/target
+    path: /scope/cache/cargo-target
   - name: cargo
     path: /scope/cache/cargo
 env:
@@ -344,7 +344,7 @@ container: { image: "rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 timeout: 1200s
 caches:
   - { name: cargo, path: /scope/cache/cargo }
-  - { name: cargo-target, path: /workspace/target }
+  - { name: cargo-target, path: /scope/cache/cargo-target }
 env: { TEST_MODE: strict, RUSTUP_TOOLCHAIN: stable }
 jobs:
   checks:
@@ -368,8 +368,8 @@ jobs:
     fn cache_yaml_order_does_not_change_the_revision_digest() {
         let reversed =
             WORKFLOW.replace(
-                "  - name: cargo-target\n    path: /workspace/target\n  - name: cargo\n    path: /scope/cache/cargo",
-                "  - name: cargo\n    path: /scope/cache/cargo\n  - name: cargo-target\n    path: /workspace/target",
+                "  - name: cargo-target\n    path: /scope/cache/cargo-target\n  - name: cargo\n    path: /scope/cache/cargo",
+                "  - name: cargo\n    path: /scope/cache/cargo\n  - name: cargo-target\n    path: /scope/cache/cargo-target",
             );
         let first = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes())
             .unwrap()
@@ -434,7 +434,7 @@ jobs:
     #[test]
     fn caches_default_to_empty_and_reject_invalid_or_ambiguous_mounts() {
         let missing = WORKFLOW.replace(
-            "caches:\n  - name: cargo-target\n    path: /workspace/target\n  - name: cargo\n    path: /scope/cache/cargo\n",
+            "caches:\n  - name: cargo-target\n    path: /scope/cache/cargo-target\n  - name: cargo\n    path: /scope/cache/cargo\n",
             "",
         );
         assert!(
@@ -464,7 +464,7 @@ jobs:
         ));
 
         let old_list = WORKFLOW.replace(
-            "  - name: cargo-target\n    path: /workspace/target\n  - name: cargo\n    path: /scope/cache/cargo",
+            "  - name: cargo-target\n    path: /scope/cache/cargo-target\n  - name: cargo\n    path: /scope/cache/cargo",
             "  - cargo-target\n  - cargo",
         );
         assert!(matches!(
@@ -473,8 +473,8 @@ jobs:
         ));
 
         let overlapping = WORKFLOW.replace(
-            "path: /scope/cache/cargo",
-            "path: /workspace/target/registry",
+            "    path: /scope/cache/cargo\n",
+            "    path: /scope/cache/cargo-target/registry\n",
         );
         assert!(matches!(
             parse_workflow("/.scope/runs/test.yml", overlapping.as_bytes()),

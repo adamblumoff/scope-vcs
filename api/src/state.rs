@@ -1,17 +1,18 @@
 use crate::{
     auth::clerk::ClerkVerifier,
+    cache_grants::CacheGrantIssuer,
     config::{
         SCOPE_OPERATOR_TOKEN_ENV, data_dir, database_url_from_env, git_repo_root, non_empty_env,
     },
     git::cache::{GitDerivedCacheCoordinator, RawGitCacheRegistry},
-    object_store_config::{encryption_key_from_env, s3_from_env, s3_settings_from_env},
+    object_store_config::{encryption_key_from_env, s3_from_env},
     persistence::ensure_private_dir,
     push_intents::push_intent_signing_key,
     repo_cleanup::best_effort_drain_pending_repo_storage_deletions,
     repo_events::RepoChangeBus,
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgets},
 };
-use scope_object_store::{EncryptedObjectStore, ObjectStore, S3Presigner};
+use scope_object_store::{EncryptedObjectStore, ObjectStore};
 use scope_postgres::db::MetadataStore;
 use std::{path::PathBuf, sync::Arc};
 
@@ -21,7 +22,7 @@ pub struct AppState {
     pub(crate) data_dir: Arc<PathBuf>,
     pub(crate) clerk: ClerkVerifier,
     pub(crate) object_store: Arc<dyn ObjectStore>,
-    pub(crate) cache_presigner: Option<Arc<S3Presigner>>,
+    pub(crate) cache_grants: CacheGrantIssuer,
     pub(crate) runtime_budgets: Arc<RuntimeBudgets>,
     pub(crate) operator_token: Option<Arc<str>>,
     pub(crate) repo_events: RepoChangeBus,
@@ -43,14 +44,15 @@ impl AppState {
         let metadata = MetadataStore::connect(database_url_from_env()?).await?;
         let repo_events = RepoChangeBus::default();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
+        let s3 = tokio::task::spawn_blocking(s3_from_env).await??;
         let object_store = Arc::new(BudgetedObjectStore::new(
             Arc::new(EncryptedObjectStore::new(
-                Arc::new(s3_from_env()?),
+                Arc::new(s3),
                 encryption_key_from_env()?,
             )),
             runtime_budgets.clone(),
         ));
-        let cache_presigner = Some(Arc::new(S3Presigner::new(&s3_settings_from_env()?)));
+        let cache_grants = CacheGrantIssuer::from_env()?;
         let listener_bus = repo_events.clone();
         metadata
             .repositories()
@@ -65,7 +67,7 @@ impl AppState {
             data_dir: Arc::new(data_dir),
             clerk: ClerkVerifier::from_env(),
             object_store,
-            cache_presigner,
+            cache_grants,
             runtime_budgets,
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
             repo_events,
@@ -106,7 +108,7 @@ impl AppState {
                 test_object_store.clone(),
                 runtime_budgets.clone(),
             )),
-            cache_presigner: None,
+            cache_grants: CacheGrantIssuer::test(),
             runtime_budgets,
             operator_token: None,
             repo_events: RepoChangeBus::default(),

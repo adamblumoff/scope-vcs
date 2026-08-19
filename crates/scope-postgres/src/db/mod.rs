@@ -14,6 +14,7 @@ pub use cli_auth_results::{
     BrowserLoginCompletion, CliSessionSummary, CreateCliExchangeGrantCommand, DeviceLoginPoll,
     NewCliSession, StartBrowserLoginCommand, StartDeviceLoginCommand,
 };
+mod cache_service;
 mod cleanup_queue;
 #[cfg(test)]
 mod cleanup_queue_tests;
@@ -35,6 +36,10 @@ mod migration_tests;
 mod request_activity_migration_tests;
 #[cfg(test)]
 mod request_submission_migration_tests;
+pub use cache_service::{
+    CacheCommitResult, CacheObjectRecord, CachePrepareResult, CacheUploadRecord,
+    PendingCacheDeletion,
+};
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
 mod history_rows;
@@ -73,7 +78,6 @@ mod request_submission_transactions;
 mod requests;
 mod run_attempt_mutations;
 mod run_attempt_persistence;
-mod run_cache_objects;
 mod run_cache_observations;
 mod run_details;
 mod run_dispatch;
@@ -84,7 +88,6 @@ mod run_operations;
 mod run_retention;
 mod run_step_operations;
 mod runs;
-pub use run_cache_objects::RunCacheObject;
 pub use run_cache_observations::{AttemptCacheFinalizationCommand, AttemptCachePreparationCommand};
 pub use run_details::{RunAttemptDetail, RunDetail};
 pub use run_dispatch::CloudAttemptAbort;
@@ -154,6 +157,11 @@ pub struct CleanupStore {
 }
 
 #[derive(Clone)]
+pub struct CacheStore {
+    db: Arc<DatabaseConnection>,
+}
+
+#[derive(Clone)]
 pub struct RepositoryStore {
     db: Arc<DatabaseConnection>,
     postgres_database_url: Option<Arc<str>>,
@@ -184,6 +192,12 @@ impl MetadataStore {
 
     pub fn cleanup(&self) -> CleanupStore {
         CleanupStore {
+            db: Arc::clone(&self.db),
+        }
+    }
+
+    pub fn caches(&self) -> CacheStore {
+        CacheStore {
             db: Arc::clone(&self.db),
         }
     }

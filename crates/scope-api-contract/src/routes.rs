@@ -22,12 +22,6 @@ pub const ATTEMPT_CACHE_PREPARATIONS: &str =
     "/v1/runtime-protocol/attempts/{attempt_id}/cache-observations/preparations";
 pub const ATTEMPT_CACHE_FINALIZATIONS: &str =
     "/v1/runtime-protocol/attempts/{attempt_id}/cache-observations/finalizations";
-pub const ATTEMPT_CACHE_OBJECT: &str =
-    "/v1/runtime-protocol/attempts/{attempt_id}/caches/{identity_digest}";
-pub const ATTEMPT_CACHE_UPLOAD: &str =
-    "/v1/runtime-protocol/attempts/{attempt_id}/caches/{identity_digest}/upload";
-pub const ATTEMPT_CACHE_COMMIT: &str =
-    "/v1/runtime-protocol/attempts/{attempt_id}/caches/{identity_digest}/commit";
 pub const ATTEMPT_RECOVERY_STATUS: &str =
     "/v1/runtime-protocol/attempts/{attempt_id}/recovery-status";
 pub const ATTEMPT_SOURCE: &str = "/v1/runtime-protocol/attempts/{attempt_id}/source";
@@ -139,28 +133,6 @@ pub fn attempt_cache_finalizations(attempt_id: &str) -> String {
     format!(
         "{}/cache-observations/finalizations",
         attempt_root(attempt_id)
-    )
-}
-
-pub fn attempt_cache_object(attempt_id: &str, identity_digest: &str) -> String {
-    format!(
-        "{}/caches/{}",
-        attempt_root(attempt_id),
-        path_segment(identity_digest)
-    )
-}
-
-pub fn attempt_cache_upload(attempt_id: &str, identity_digest: &str) -> String {
-    format!(
-        "{}/upload",
-        attempt_cache_object(attempt_id, identity_digest)
-    )
-}
-
-pub fn attempt_cache_commit(attempt_id: &str, identity_digest: &str) -> String {
-    format!(
-        "{}/commit",
-        attempt_cache_object(attempt_id, identity_digest)
     )
 }
 

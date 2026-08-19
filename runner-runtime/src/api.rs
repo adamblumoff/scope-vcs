@@ -3,12 +3,18 @@ use anyhow::{Context as _, bail};
 use reqwest::blocking::{Client, Response};
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptStatusResponse, CacheDownloadSessionResponse, CacheUploadSessionResponse,
-    ClaimRuntimeResponse, CommitCacheUploadRequest, CompleteAttemptRequest,
+    AttemptStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
     CompleteAttemptStepRequest, ReportAttemptCacheFinalizationsRequest,
     ReportAttemptCachePreparationsRequest, StepConclusionRequest,
 };
+use scope_cache_contract::{
+    COMMIT_CACHE_UPLOAD_PATH, CommitCacheUploadRequest, CommitCacheUploadResponse,
+    PREPARE_CACHE_UPLOAD_PATH, PrepareCacheUploadRequest, PrepareCacheUploadResponse,
+    RESTORE_CACHE_PATH, RestoreCacheRequest, RestoreCacheResponse,
+};
+use scope_cache_domain::MAX_CACHE_OBJECT_BYTES;
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeMap;
 use std::{
     fs,
     io::{Read, Write},
@@ -24,12 +30,25 @@ use std::{
 
 const MAX_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
 
+#[derive(Debug)]
+pub(crate) enum CacheDownloadError {
+    Transport(anyhow::Error),
+    Invalid(anyhow::Error),
+}
+
 #[derive(Clone)]
 pub struct RuntimeClient {
     client: Client,
     api_url: String,
     attempt_id: String,
     attempt_token: Arc<Mutex<Option<String>>>,
+    cache_access: Arc<Mutex<Option<CacheAccess>>>,
+}
+
+#[derive(Clone)]
+struct CacheAccess {
+    endpoint: String,
+    grant: String,
 }
 
 impl RuntimeClient {
@@ -43,6 +62,7 @@ impl RuntimeClient {
             api_url: settings.api_url.clone(),
             attempt_id: settings.attempt_id.clone(),
             attempt_token: Arc::new(Mutex::new(None)),
+            cache_access: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -58,6 +78,13 @@ impl RuntimeClient {
             .attempt_token
             .lock()
             .expect("attempt token mutex poisoned") = Some(response.attempt_token.clone());
+        *self
+            .cache_access
+            .lock()
+            .expect("cache access mutex poisoned") = Some(CacheAccess {
+            endpoint: response.cache_endpoint.clone(),
+            grant: response.cache_grant.clone(),
+        });
         Ok(response)
     }
 
@@ -132,35 +159,25 @@ impl RuntimeClient {
         )
     }
 
-    pub fn cache_download_session(
+    pub fn restore_cache(
         &self,
-        digest: &str,
-    ) -> anyhow::Result<CacheDownloadSessionResponse> {
-        let response = self
-            .auth(self.client.get(self.url(&format!("caches/{digest}"))))
-            .send()
-            .context("request cache download")?;
-        json(response, "request cache download")
+        request: &RestoreCacheRequest,
+    ) -> anyhow::Result<RestoreCacheResponse> {
+        self.cache_post(RESTORE_CACHE_PATH, request, "restore cache")
     }
 
-    pub fn cache_upload_session(&self, digest: &str) -> anyhow::Result<CacheUploadSessionResponse> {
-        self.post_json(
-            &format!("caches/{digest}/upload"),
-            &serde_json::json!({}),
-            "request cache upload",
-        )
+    pub fn prepare_cache_upload(
+        &self,
+        request: &PrepareCacheUploadRequest,
+    ) -> anyhow::Result<PrepareCacheUploadResponse> {
+        self.cache_post(PREPARE_CACHE_UPLOAD_PATH, request, "prepare cache upload")
     }
 
-    pub fn commit_cache(
+    pub fn commit_cache_upload(
         &self,
-        digest: &str,
         request: &CommitCacheUploadRequest,
-    ) -> anyhow::Result<()> {
-        self.post_empty(
-            &format!("caches/{digest}/commit"),
-            request,
-            "commit cache upload",
-        )
+    ) -> anyhow::Result<CommitCacheUploadResponse> {
+        self.cache_post(COMMIT_CACHE_UPLOAD_PATH, request, "commit cache upload")
     }
 
     pub fn report_cache_preparations(
@@ -191,36 +208,67 @@ impl RuntimeClient {
         destination: &Path,
         expected_size: u64,
         expected_checksum: &str,
-    ) -> anyhow::Result<()> {
-        if expected_size > 10 * 1024 * 1024 * 1024 {
-            bail!("cache exceeds 10 GiB");
-        }
+    ) -> Result<(), CacheDownloadError> {
+        validate_cache_size(expected_size).map_err(CacheDownloadError::Invalid)?;
         let mut response = self
             .client
             .get(url)
             .send()
-            .context("download cache object")?;
-        ensure_success(&response, "download cache object")?;
+            .context("download cache object")
+            .map_err(CacheDownloadError::Transport)?;
+        ensure_success(&response, "download cache object")
+            .map_err(CacheDownloadError::Transport)?;
         let mut file = fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(destination)
-            .context("create cache archive")?;
+            .context("create cache archive")
+            .map_err(CacheDownloadError::Invalid)?;
         copy_hashed(&mut response, &mut file, expected_size, expected_checksum)?;
-        file.sync_all().context("sync cache archive")
+        file.sync_all()
+            .context("sync cache archive")
+            .map_err(CacheDownloadError::Invalid)
     }
 
-    pub fn upload_cache(&self, url: &str, source: &Path) -> anyhow::Result<()> {
+    pub fn upload_cache(
+        &self,
+        url: &str,
+        headers: &BTreeMap<String, String>,
+        source: &Path,
+    ) -> anyhow::Result<()> {
         let file = fs::File::open(source).context("open cache archive")?;
         let size = file.metadata()?.len();
-        let response = self
+        let mut request = self
             .client
             .put(url)
-            .header(reqwest::header::CONTENT_LENGTH, size)
-            .body(file)
-            .send()
-            .context("upload cache object")?;
+            .header(reqwest::header::CONTENT_LENGTH, size);
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        let response = request.body(file).send().context("upload cache object")?;
         ensure_success(&response, "upload cache object")
+    }
+
+    fn cache_post<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        request: &T,
+        context: &'static str,
+    ) -> anyhow::Result<R> {
+        let access = self
+            .cache_access
+            .lock()
+            .expect("cache access mutex poisoned")
+            .clone()
+            .context("cache access is unavailable before attempt claim")?;
+        let response = self
+            .client
+            .post(format!("{}{}", access.endpoint, path))
+            .bearer_auth(access.grant)
+            .json(request)
+            .send()
+            .with_context(|| context.to_string())?;
+        json(response, context)
     }
 
     pub fn complete_step(
@@ -401,26 +449,44 @@ fn copy_hashed(
     writer: &mut impl Write,
     expected_size: u64,
     expected_checksum: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), CacheDownloadError> {
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = reader.read(&mut buffer)?;
+        let read = reader
+            .read(&mut buffer)
+            .context("read cache object")
+            .map_err(CacheDownloadError::Transport)?;
         if read == 0 {
             break;
         }
         total = total
             .checked_add(read as u64)
-            .context("cache size overflow")?;
+            .context("cache size overflow")
+            .map_err(CacheDownloadError::Invalid)?;
         if total > expected_size {
-            bail!("cache object exceeds declared size");
+            return Err(CacheDownloadError::Invalid(anyhow::anyhow!(
+                "cache object exceeds declared size"
+            )));
         }
-        writer.write_all(&buffer[..read])?;
+        writer
+            .write_all(&buffer[..read])
+            .context("write cache object")
+            .map_err(CacheDownloadError::Invalid)?;
         hasher.update(&buffer[..read]);
     }
     if total != expected_size || hex::encode(hasher.finalize()) != expected_checksum {
-        bail!("cache object integrity check failed");
+        return Err(CacheDownloadError::Invalid(anyhow::anyhow!(
+            "cache object integrity check failed"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_cache_size(size: u64) -> anyhow::Result<()> {
+    if size > MAX_CACHE_OBJECT_BYTES {
+        bail!("cache exceeds {MAX_CACHE_OBJECT_BYTES} bytes");
     }
     Ok(())
 }
@@ -437,4 +503,27 @@ fn ensure_success(response: &Response, label: &str) -> anyhow::Result<()> {
         bail!("{label}: Scope API returned {}", response.status());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_download_limit_is_one_gibibyte() {
+        assert!(validate_cache_size(MAX_CACHE_OBJECT_BYTES).is_ok());
+        let error = validate_cache_size(MAX_CACHE_OBJECT_BYTES + 1).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("cache exceeds {MAX_CACHE_OBJECT_BYTES} bytes")
+        );
+    }
+
+    #[test]
+    fn cache_integrity_failures_are_invalid_not_transport_errors() {
+        let mut source = &b"different"[..];
+        let mut destination = Vec::new();
+        let error = copy_hashed(&mut source, &mut destination, 9, "wrong").unwrap_err();
+        assert!(matches!(error, CacheDownloadError::Invalid(_)));
+    }
 }

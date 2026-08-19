@@ -53,13 +53,29 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 3);
+    assert_eq!(plan.pending.len(), 4);
     assert_eq!(plan.pending[0].name, "m0018_truthful_run_log_truncation");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0019_run_attempt_cache_observations");
     assert_eq!(plan.pending[1].impact, MigrationImpact::Online);
     assert_eq!(plan.pending[2].name, "m0020_cloud_execution");
     assert_eq!(plan.pending[2].impact, MigrationImpact::MaintenanceRequired);
+    assert_eq!(plan.pending[3].name, "m0021_cache_service_cutover");
+    assert_eq!(plan.pending[3].impact, MigrationImpact::MaintenanceRequired);
+}
+
+#[tokio::test]
+async fn cache_service_cutover_requires_maintenance() {
+    let (_target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(20))
+        .await
+        .unwrap();
+
+    let plan = migrations::plan(db.as_ref()).await.unwrap();
+
+    assert_eq!(plan.pending.len(), 1);
+    assert_eq!(plan.pending[0].name, "m0021_cache_service_cutover");
+    assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
 }
 
 #[tokio::test]

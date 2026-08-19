@@ -18,6 +18,7 @@ mod m0017_run_history_indexes;
 mod m0018_truthful_run_log_truncation;
 mod m0019_run_attempt_cache_observations;
 mod m0020_cloud_execution;
+mod m0021_cache_service_cutover;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -106,6 +107,7 @@ fn inventory() -> Vec<MigrationSpec> {
         ),
         spec(m0019_run_attempt_cache_observations::Migration, Online),
         spec(m0020_cloud_execution::Migration, MaintenanceRequired),
+        spec(m0021_cache_service_cutover::Migration, MaintenanceRequired),
     ]
 }
 

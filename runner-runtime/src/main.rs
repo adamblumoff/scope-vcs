@@ -39,8 +39,13 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let finalization_heartbeat = api::RuntimeHeartbeat::start(client.clone());
-    if let Err(error) = cache::save_caches(&client, &caches) {
-        eprintln!("runtime cache finalization failed: {error:#}");
+    for finalization in cache::save_caches(&client, &caches) {
+        if let cache::CacheFinalizationOutcome::Skipped { reason, message } = finalization.outcome {
+            eprintln!(
+                "runtime cache finalization skipped for {} ({reason:?}): {message}",
+                finalization.identity_digest
+            );
+        }
     }
     let cancellation_requested =
         finalization_heartbeat.finish()? || client.heartbeat()?.cancellation_requested;

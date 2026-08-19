@@ -82,7 +82,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         data_dir: Arc::new(data_dir),
         clerk: ClerkVerifier::from_env(),
         object_store,
-        cache_presigner: None,
+        cache_grants: crate::cache_grants::CacheGrantIssuer::test(),
         runtime_budgets,
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
         repo_events,

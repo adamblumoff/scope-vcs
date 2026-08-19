@@ -370,6 +370,8 @@ pub struct PushTriggerEvaluationResponse {
 pub struct ClaimRuntimeResponse {
     pub attempt_token: String,
     pub lease_expires_at_unix: u64,
+    pub cache_endpoint: String,
+    pub cache_grant: String,
     pub job: RunJobResponse,
 }
 
@@ -438,26 +440,6 @@ pub struct AttemptCacheFinalizationReport {
     pub identity_digest: String,
     pub final_state: CacheFinalState,
     pub finalize_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CacheDownloadSessionResponse {
-    pub download_url: Option<String>,
-    pub checksum_sha256: Option<String>,
-    pub size_bytes: Option<u64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CacheUploadSessionResponse {
-    pub upload_url: String,
-    pub generation: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CommitCacheUploadRequest {
-    pub generation: u64,
-    pub checksum_sha256: String,
-    pub size_bytes: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

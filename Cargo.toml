@@ -1,7 +1,10 @@
 [workspace]
 members = [
     "api",
+    "cache-service",
     "crates/scope-api-contract",
+    "crates/scope-cache-contract",
+    "crates/scope-cache-domain",
     "crates/scope-domain",
     "crates/scope-postgres",
     "crates/scope-git",

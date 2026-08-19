@@ -10,7 +10,8 @@ pub enum PostgresErrorKind {
     Unauthenticated,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
 pub struct PostgresError {
     pub kind: PostgresErrorKind,
     pub message: String,
@@ -65,6 +66,25 @@ impl From<scope_domain::error::DomainError> for PostgresError {
             DomainErrorKind::InvariantViolation => PostgresErrorKind::Internal,
         };
         Self::new(kind, error.message)
+    }
+}
+
+impl From<scope_cache_domain::CacheDomainError> for PostgresError {
+    fn from(error: scope_cache_domain::CacheDomainError) -> Self {
+        use scope_cache_domain::CacheDomainError;
+
+        let kind = match error {
+            CacheDomainError::RepositoryBudgetExceeded { .. } => {
+                PostgresErrorKind::ResourceExhausted
+            }
+            CacheDomainError::UploadLeaseExpired
+            | CacheDomainError::StaleUploadLease
+            | CacheDomainError::ReferenceVersionOverflow => PostgresErrorKind::Conflict,
+            CacheDomainError::InvalidReferenceExpiry
+            | CacheDomainError::InvalidUploadLeaseExpiry => PostgresErrorKind::Internal,
+            _ => PostgresErrorKind::InvalidInput,
+        };
+        Self::new(kind, error.to_string())
     }
 }
 

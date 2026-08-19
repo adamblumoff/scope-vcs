@@ -2,6 +2,7 @@ pub mod app;
 pub mod state;
 
 pub(crate) mod auth;
+pub(crate) mod cache_grants;
 pub(crate) mod config;
 #[cfg(feature = "local-dev")]
 pub mod dev;
