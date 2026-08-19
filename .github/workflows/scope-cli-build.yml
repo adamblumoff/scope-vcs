@@ -263,6 +263,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
+          pattern: scope-*
           path: cli/dist
           merge-multiple: true
 
