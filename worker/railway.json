@@ -13,6 +13,11 @@
   "deploy": {
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 300,
+    "multiRegionConfig": {
+      "us-east4-eqdc4a": {
+        "numReplicas": 1
+      }
+    },
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
