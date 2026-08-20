@@ -434,10 +434,17 @@ bench() {
   fi
 
   SCOPE_BENCH_API_URL="$bench_api_origin" \
-    SCOPE_BENCH_AUTH_TOKEN="$bench_auth_token" \
+  SCOPE_BENCH_AUTH_TOKEN="$bench_auth_token" \
     SCOPE_DEV_USER_EMAIL="${SCOPE_DEV_USER_EMAIL:-$dev_email}" \
     SCOPE_DEV_USER_HANDLE="${SCOPE_DEV_USER_HANDLE:-$dev_handle}" \
-    node "$ROOT/bench/phase0.mjs"
+    SCOPE_LOAD_WORKLOADS="${SCOPE_LOAD_WORKLOADS:-warm-fetch,full-clone,tree-read,blob-read,history-read,mixed,consistency}" \
+    SCOPE_LOAD_STAGES="${SCOPE_LOAD_STAGES:-1,2}" \
+    SCOPE_LOAD_STAGE_SECONDS="${SCOPE_LOAD_STAGE_SECONDS:-5}" \
+    SCOPE_LOAD_CONFIRM_SECONDS="${SCOPE_LOAD_CONFIRM_SECONDS:-0}" \
+    SCOPE_LOAD_HISTORY_DEPTHS="${SCOPE_LOAD_HISTORY_DEPTHS:-1,8}" \
+    SCOPE_LOAD_CHURN_REPOS="${SCOPE_LOAD_CHURN_REPOS:-2}" \
+    SCOPE_LOAD_MIXED_REPOS="${SCOPE_LOAD_MIXED_REPOS:-2}" \
+    node "$ROOT/bench/railway-load.mjs"
 }
 
 up() {
