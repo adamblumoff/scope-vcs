@@ -25,6 +25,7 @@ import {
   loadRepoFileWhenReady,
   type RepoFileLoadResult,
 } from '@/features/repo-detail/repo-code-route-data'
+import { useRepoFileReadyTiming } from '@/features/repo-detail/repo-file-ready-telemetry'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import {
   displayRouteFilePath,
@@ -67,36 +68,17 @@ const loadRepoFile = createServerFn({ method: 'GET' })
 
 export const Route = createFileRoute('/$owner/$repo/_code/')({
   validateSearch: parseRepoCodeSearch,
-  staleTime: Infinity,
-  loader: async ({ abortController, location, params }) => {
-    const { file: requestedPath } = parseRepoCodeSearch(location.search)
-    const shouldBootstrapReadme =
-      !requestedPath || requestedPath === DEFAULT_REPO_FILE_PATH
-    const initialFile = shouldBootstrapReadme
-      ? await loadRepoFileWhenReady({
-          load: () => loadRepoFile({
-            data: { ...params, path: DEFAULT_REPO_FILE_PATH },
-            signal: abortController.signal,
-          }),
-          signal: abortController.signal,
-        })
-      : null
-    return { initialFile }
-  },
   errorComponent: RepoContentError,
   pendingComponent: RepositoryCodePending,
   component: RepoIndexRoute,
 })
 
 function RepoIndexRoute() {
-  const { initialFile } = Route.useLoaderData()
   const params = Route.useParams()
   const { repo } = useRepoLayout()
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
-  const selectedPath = search.file ?? displayRouteFilePath(
-    initialFile?.path ?? DEFAULT_REPO_FILE_PATH,
-  )
+  const selectedPath = search.file ?? DEFAULT_REPO_FILE_PATH
   const owner = params.owner
   const repoName = params.repo
   const contentIdentity = repoContentCacheKey({
@@ -136,15 +118,6 @@ function RepoIndexRoute() {
         repoId: repo.id,
       })
     : null
-  const initialFileIdentity = initialFile
-    ? repoFileCacheKey({
-        audience: repo.access.can_read_private_files ? 'private' : 'public',
-        changeVersion: repo.change_version,
-        oid: initialFile.oid,
-        path: initialFile.path,
-        repoId: repo.id,
-      })
-    : null
   const loadFile = useCallback(
     async (path: string, signal: AbortSignal): Promise<RepoFileContent> => {
       const file = await loadRepoFileWhenReady({
@@ -163,21 +136,6 @@ function RepoIndexRoute() {
     },
     [owner, repoName],
   )
-  const peekFile = useCallback(
-    (key: string) => key === initialFileIdentity && initialFile
-      ? initialFile
-      : peekRepoFileCache(key),
-    [initialFile, initialFileIdentity],
-  )
-  const readFile = useCallback(
-    (key: string) => {
-      const cached = readRepoFileCache(key)
-      if (cached || key !== initialFileIdentity || !initialFile) return cached
-      writeRepoFileCache(key, initialFile)
-      return initialFile
-    },
-    [initialFile, initialFileIdentity],
-  )
   const loadSelectedFile = useCallback(
     (signal: AbortSignal) => loadFile(selectedFilePath ?? '', signal),
     [loadFile, selectedFilePath],
@@ -186,9 +144,16 @@ function RepoIndexRoute() {
     fallbackError: 'File content is unavailable.',
     identity: selectedFileIdentity,
     load: loadSelectedFile,
-    peek: peekFile,
-    read: readFile,
+    peek: peekRepoFileCache,
+    read: readRepoFileCache,
     write: writeRepoFileCache,
+  })
+  useRepoFileReadyTiming({
+    identity: selectedFileIdentity,
+    owner,
+    path: selectedFilePath,
+    ready: selectedFileResource.status === 'loaded',
+    repo: repoName,
   })
 
   const selectFile = useCallback((path: string) => {
@@ -208,13 +173,12 @@ function RepoIndexRoute() {
       contentError={contentResource.error}
       contentLoading={contentResource.status === 'loading'}
       contentRetry={contentResource.retry}
-      initialFile={initialFile}
       onSelectFilePath={selectFile}
       params={params}
       repo={repo}
       selectedFile={selectedFileResource.value}
       selectedFileError={selectedFileResource.error}
-      selectedFileIdentity={selectedFileIdentity ?? initialFileIdentity}
+      selectedFileIdentity={selectedFileIdentity}
       selectedFileLoading={selectedFileResource.status === 'loading'}
       selectedFileRetry={selectedFileResource.retry}
       selectedPath={content

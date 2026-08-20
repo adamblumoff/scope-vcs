@@ -1,3 +1,4 @@
+import { HttpError } from '@/api/client'
 import {
   loadRepoLiveStateForRequest,
   parseRepoParams,
@@ -6,19 +7,35 @@ import { RepoShell } from '@/components/repo-shell'
 import { RepositoryRoutePending } from '@/components/repository-route-pending'
 import { RepositoryHtmlPreviewProvider } from '@/components/repository-html-preview-store'
 import { RouteErrorPage } from '@/components/route-error-page'
+import { RouteNotFoundPage } from '@/components/route-not-found-page'
 import { RepoLayoutProvider } from '@/features/repo-detail/repo-layout-context'
 import { useRepoLiveRefresh } from '@/features/repo-detail/repo-live-refresh'
-import { Outlet, createFileRoute, useRouter } from '@tanstack/react-router'
+import {
+  Outlet,
+  createFileRoute,
+  notFound,
+  useRouter,
+} from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useCallback } from 'react'
 
 const loadRepoLiveState = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
-  .handler(({ data }) => loadRepoLiveStateForRequest(data))
+  .handler(async ({ data }) => {
+    try {
+      return await loadRepoLiveStateForRequest(data)
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        throw notFound()
+      }
+      throw error
+    }
+  })
 
 export const Route = createFileRoute('/$owner/$repo')({
   loader: ({ params }) => loadRepoLiveState({ data: params }),
   errorComponent: RepoLayoutError,
+  notFoundComponent: RouteNotFoundPage,
   pendingComponent: RepositoryRoutePending,
   component: RepoLayoutRoute,
 })

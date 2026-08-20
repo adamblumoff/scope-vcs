@@ -14,7 +14,6 @@ export function RepoDetailPage({
   contentError,
   contentLoading,
   contentRetry,
-  initialFile,
   onSelectFilePath,
   params,
   repo,
@@ -29,7 +28,6 @@ export function RepoDetailPage({
   contentError: string | null
   contentLoading: boolean
   contentRetry: () => void
-  initialFile: RepoFileContent | null
   onSelectFilePath: (path: string) => void
   params: RepoParams
   repo: RepoSummary
@@ -69,7 +67,6 @@ export function RepoDetailPage({
         contentError={contentError}
         contentLoading={contentLoading}
         contentRetry={contentRetry}
-        initialFile={initialFile}
         onSelectFilePath={onSelectFilePath}
         params={params}
         selectedFile={selectedFile}

@@ -411,11 +411,19 @@ pub(crate) async fn get_file_content(
         .await?
         .ok_or_else(|| ApiError::not_found("file not found"))?;
     let repo = find_repo(&state, &owner, &repo_name).await?;
-    let content = crate::http::file_diffs::review_content_response_for_blob(
-        &state,
-        &projected.blob,
-        repo.git_head.as_ref().map(|head| &head.manifest),
-    )?;
+    let span = tracing::info_span!(
+        "repo_file_content",
+        owner = %owner,
+        repo_name = %repo_name,
+        file_path = %path.as_str(),
+    );
+    let content = span.in_scope(|| {
+        crate::http::file_diffs::review_content_response_for_blob(
+            &state,
+            &projected.blob,
+            repo.git_head.as_ref().map(|head| &head.manifest),
+        )
+    })?;
 
     Ok(Json(RepoFileContentResponse {
         path: projected.file.path.as_str().to_string(),

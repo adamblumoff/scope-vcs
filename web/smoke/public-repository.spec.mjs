@@ -16,6 +16,48 @@ if (!owner || !repo || extra) {
 
 const repoPath = `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
 
+test('repository shell renders before the initial file is ready', async () => {
+  for (const scenario of [
+    {
+      content: (page) => page.locator('iframe[title="README.html preview"]'),
+      path: repoPath,
+      requestPath: 'README.html',
+    },
+    {
+      content: (page) => page.locator('pre code').filter({
+        hasText: 'export function greet',
+      }),
+      path: `${repoPath}?file=src%2Fapp.ts`,
+      requestPath: 'src/app.ts',
+    },
+  ]) {
+    await assertShellBeforeFileReady(scenario)
+  }
+})
+
+test('unknown repository-shaped paths return not found', async () => {
+  const browser = await chromium.launch({ headless: true })
+  const page = await browser.newPage()
+  try {
+    for (const path of [
+      '/wp-admin/install.php',
+      '/definitely-no-such-owner/definitely-no-such-repo',
+    ]) {
+      const response = await page.goto(new URL(path, `${baseUrl}/`).toString(), {
+        timeout: 30_000,
+        waitUntil: 'domcontentloaded',
+      })
+      assert(response, `navigation to ${path} did not produce a response`)
+      assert.equal(response.status(), 404)
+      await page
+        .getByRole('heading', { level: 1, name: 'Nothing lives at this address.' })
+        .waitFor()
+    }
+  } finally {
+    await browser.close()
+  }
+})
+
 test('public repository exposes only its projected source', async () => {
   await withPage(repoPath, async (page) => {
     await assertCurrentRepoSection(page, 'Code')
@@ -201,7 +243,10 @@ test('public repository exposes only its projected source', async () => {
       releaseFileRequest = resolve
     })
     await page.route('**/_serverFn/**', async (route) => {
-      if (!decodeURIComponent(route.request().url()).includes('src/app.ts')) {
+      if (
+        route.request().method() !== 'GET' ||
+        !decodeURIComponent(route.request().url()).includes('src/app.ts')
+      ) {
         await route.continue()
         return
       }
@@ -302,7 +347,10 @@ test('public repository exposes only its projected source', async () => {
     })
     await page.unroute('**/_serverFn/**')
     await page.route('**/_serverFn/**', async (route) => {
-      if (!decodeURIComponent(route.request().url()).includes('src/app.ts')) {
+      if (
+        route.request().method() !== 'GET' ||
+        !decodeURIComponent(route.request().url()).includes('src/app.ts')
+      ) {
         await route.continue()
         return
       }
@@ -754,13 +802,14 @@ test('request queue search is keyboard accessible and mobile rows do not overflo
   )
 })
 
-async function withPage(path, assertion, pageOptions = {}) {
+async function withPage(path, assertion, pageOptions = {}, beforeGoto) {
   const browser = await chromium.launch({ headless: true })
   const page = await browser.newPage(pageOptions)
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
   try {
+    await beforeGoto?.(page)
     const response = await page.goto(new URL(path, `${baseUrl}/`).toString(), {
       timeout: 30_000,
       waitUntil: 'domcontentloaded',
@@ -771,6 +820,62 @@ async function withPage(path, assertion, pageOptions = {}) {
     assert.deepEqual(pageErrors, [])
   } finally {
     await browser.close()
+  }
+}
+
+async function assertShellBeforeFileReady({ content, path, requestPath }) {
+  let fileRequests = 0
+  let releaseFileRequest = () => undefined
+  let markFileRequestStarted = () => undefined
+  const fileRequestStarted = new Promise((resolve) => {
+    markFileRequestStarted = resolve
+  })
+  const fileRequestReleased = new Promise((resolve) => {
+    releaseFileRequest = resolve
+  })
+
+  try {
+    await withPage(
+      path,
+      async (page) => {
+        await within(
+          fileRequestStarted,
+          10_000,
+          `${requestPath} request did not start`,
+        )
+        await assertCurrentRepoSection(page, 'Code')
+        await assertPageHeading(page, 'Code')
+        await page.getByLabel('Repository file navigator').waitFor()
+        await page
+          .locator('#repository-code-files-panel [aria-busy="true"]')
+          .waitFor()
+        await assertPassiveSkeleton(page, '#repository-code-files-panel')
+        assert.equal(await content(page).count(), 0)
+
+        releaseFileRequest()
+        await content(page).waitFor()
+        assert.equal(fileRequests, 1)
+      },
+      {},
+      async (page) => {
+        await page.route('**/_serverFn/**', async (route) => {
+          const request = route.request()
+          if (
+            request.method() !== 'GET' ||
+            !decodeURIComponent(request.url()).includes(requestPath)
+          ) {
+            await route.continue()
+            return
+          }
+          fileRequests += 1
+          markFileRequestStarted()
+          await fileRequestReleased
+          await route.continue()
+        })
+      },
+    )
+  } finally {
+    releaseFileRequest()
   }
 }
 
