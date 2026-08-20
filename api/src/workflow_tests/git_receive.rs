@@ -212,6 +212,29 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         .unwrap();
     assert_eq!(jobs.succeeded, 5);
     assert_eq!(jobs.total, 5);
+
+    let now_unix = crate::persistence::unix_now().unwrap();
+    let compaction = state
+        .metadata
+        .jobs()
+        .claim_git_compaction(
+            "content-push-test",
+            32,
+            now_unix,
+            30,
+            &crate::persistence_ids::generate_persistence_id,
+        )
+        .await
+        .unwrap()
+        .expect("accepted pushes schedule durable compaction work");
+    assert_eq!(compaction.target_sequence, 3);
+    assert!(compaction.candidate.is_none());
+    state
+        .metadata
+        .jobs()
+        .complete_git_compaction_claim(&compaction, now_unix)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

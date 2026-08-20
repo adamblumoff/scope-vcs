@@ -2,6 +2,7 @@
 
 use super::{
     GeneratedIdSource, entities,
+    git_compaction::schedule_git_compaction,
     history_rows::{insert_commits, save_live_file},
     object_references::{insert_object_reference, replace_object_reference},
     outbox::enqueue_projection_read_model_rebuild,
@@ -179,6 +180,7 @@ async fn accept_and_persist_content_update(
         .map_err(PostgresError::internal)?;
     let segment_ref_id = format!("{repo_id}:{}", git_pack_span.first_sequence);
     insert_object_reference(tx, "git_segment", &segment_ref_id, &git_pack_span.object).await?;
+    schedule_git_compaction(tx, repo_id, git_head.push_sequence, now_unix).await?;
     let pinned_pack_spans = entities::git_pack_span::Entity::find()
         .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.to_string()))
         .order_by_asc(entities::git_pack_span::Column::FirstSequence)

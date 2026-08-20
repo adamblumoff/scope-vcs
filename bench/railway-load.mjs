@@ -205,9 +205,11 @@ function operationFor(name, context) {
   const pairs = pooled(context.fetchClients);
   const writes = pooled(context.mixedFixtures);
   if (name === 'warm-fetch') return (_worker, _iteration, scheduledAt) => withResource(pairs, (pair) => gitFetch(context.config, pair, scheduledAt));
-  if (name === 'incremental-fetch') return (_worker, iteration, scheduledAt) => withResource(pairs, async (pair) => {
-    const update = await updateAndPush(context.config, pair.fixture, iteration);
-    return update.ok ? gitFetch(context.config, pair) : update;
+  if (name === 'incremental-fetch') return (_worker, iteration, scheduledAt) => withResource(writes, async (fixture) => {
+    const pair = context.fetchClients.find((client) => client.fixture === fixture);
+    if (!pair) throw new Error(`missing fetch client for ${fixture.owner}/${fixture.repo}`);
+    const update = await updateAndPush(context.config, fixture, iteration, scheduledAt);
+    return update.ok ? gitFetch(context.config, pair, scheduledAt) : update;
   });
   if (name === 'full-clone') return (_worker, _iteration, scheduledAt) => clone(context.config, context.runRoot, read(), scheduledAt);
   if (name === 'code-read') return async (_worker, _iteration, scheduledAt) => {
