@@ -105,9 +105,11 @@ jobs:
           done
           mkdir -p .railway-staging-upload/web-root/web
           cp -a web/. .railway-staging-upload/web-root/web/
+          printf '%s\n' "$SOURCE_SHA" > .railway-staging-upload/web-root/web/.scope-deployment-sha
           test -s .railway-staging-upload/api/api/.scope-deployment-sha
           test -s .railway-staging-upload/worker/worker/.scope-deployment-sha
           test -s .railway-staging-upload/cache-service/cache-service/.scope-deployment-sha
+          test -s .railway-staging-upload/web-root/web/.scope-deployment-sha
           test -s .railway-staging-upload/web-root/web/package.json
 
       - name: Install Railway CLI
