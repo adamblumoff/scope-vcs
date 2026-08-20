@@ -1,5 +1,5 @@
-use crate::{GitSegmentManifest, GitStorageError, GitStorageLimits};
-use scope_domain::store::{GitHead, GitSegment, SourceBlob};
+use crate::{GitSnapshotManifest, GitStorageError, GitStorageLimits};
+use scope_domain::store::{GitHead, GitPackSpan, SourceBlob};
 use scope_object_store::{ContentObjectKind, ObjectStore, ensure_object_size, put_content_object};
 
 #[derive(Debug)]
@@ -45,104 +45,98 @@ impl std::error::Error for GitSnapshotMaterializationError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredGitSegment {
+pub struct StoredGitPush {
     pub head: GitHead,
-    pub segment: GitSegment,
+    pub pack_span: GitPackSpan,
 }
 
-pub fn materialize_incremental_git_segment(
+pub fn materialize_git_push(
     store: &dyn ObjectStore,
-    segment_bytes: &[u8],
+    pack_bytes: &[u8],
     head_oid: String,
     previous: Option<&GitHead>,
     storage_limits: GitStorageLimits,
-) -> Result<StoredGitSegment, GitSnapshotMaterializationError> {
+) -> Result<StoredGitPush, GitSnapshotMaterializationError> {
     let sequence = storage_limits
-        .next_segment_sequence(previous.map(|head| head.segment_sequence))
+        .next_push_sequence(previous.map(|head| head.push_sequence))
         .map_err(GitStorageError::from)
         .map_err(GitSnapshotMaterializationError::without_orphans)?;
-    materialize_git_segment(
+    materialize_git_push_objects(
         store,
-        segment_bytes,
+        pack_bytes,
         head_oid,
         sequence,
         previous.map(|head| head.head_oid.clone()),
-        previous.map(|head| head.manifest.clone()),
         previous.map_or(1, |head| head.change_version.saturating_add(1)),
         storage_limits.max_object_bytes(),
     )
 }
 
-pub fn materialize_compacted_git_segment(
+pub fn store_compacted_git_pack(
     store: &dyn ObjectStore,
-    segment_bytes: &[u8],
-    current_head: &GitHead,
+    pack_bytes: &[u8],
     storage_limits: GitStorageLimits,
-) -> Result<StoredGitSegment, GitSnapshotMaterializationError> {
-    materialize_git_segment(
-        store,
-        segment_bytes,
-        current_head.head_oid.clone(),
-        1,
-        None,
-        None,
-        current_head.change_version,
-        storage_limits.max_object_bytes(),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn materialize_git_segment(
-    store: &dyn ObjectStore,
-    segment_bytes: &[u8],
-    head_oid: String,
-    sequence: u64,
-    base_oid: Option<String>,
-    previous_manifest: Option<SourceBlob>,
-    change_version: u64,
-    max_object_bytes: usize,
-) -> Result<StoredGitSegment, GitSnapshotMaterializationError> {
+) -> Result<SourceBlob, GitSnapshotMaterializationError> {
     ensure_object_size(
         "write",
-        "Git segment",
-        segment_bytes.len(),
-        max_object_bytes,
+        "compacted Git pack",
+        pack_bytes.len(),
+        storage_limits.max_object_bytes(),
     )
     .map_err(GitStorageError::from)
     .map_err(GitSnapshotMaterializationError::without_orphans)?;
-    let segment = put_content_object(store, ContentObjectKind::GitSegment, segment_bytes)
+    put_content_object(store, ContentObjectKind::GitSegment, pack_bytes)
+        .map_err(GitStorageError::from)
+        .map_err(GitSnapshotMaterializationError::without_orphans)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_git_push_objects(
+    store: &dyn ObjectStore,
+    pack_bytes: &[u8],
+    head_oid: String,
+    sequence: u64,
+    base_oid: Option<String>,
+    change_version: u64,
+    max_object_bytes: usize,
+) -> Result<StoredGitPush, GitSnapshotMaterializationError> {
+    ensure_object_size("write", "Git pack", pack_bytes.len(), max_object_bytes)
         .map_err(GitStorageError::from)
         .map_err(GitSnapshotMaterializationError::without_orphans)?;
-    let manifest = GitSegmentManifest::new(head_oid.clone(), previous_manifest, segment.clone());
+    let pack = put_content_object(store, ContentObjectKind::GitSegment, pack_bytes)
+        .map_err(GitStorageError::from)
+        .map_err(GitSnapshotMaterializationError::without_orphans)?;
+    let manifest = GitSnapshotManifest::new(head_oid.clone(), sequence);
     let manifest_bytes = manifest
         .encode()
-        .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, segment.clone()))?;
+        .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, pack.clone()))?;
     ensure_object_size(
         "write",
-        "Git segment manifest",
+        "Git snapshot manifest",
         manifest_bytes.len(),
         max_object_bytes,
     )
     .map_err(GitStorageError::from)
-    .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, segment.clone()))?;
+    .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, pack.clone()))?;
     let mut manifest = put_content_object(store, ContentObjectKind::GitManifest, &manifest_bytes)
         .map_err(GitStorageError::from)
-        .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, segment.clone()))?;
+        .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, pack.clone()))?;
     manifest.git_oid = head_oid.clone();
 
-    Ok(StoredGitSegment {
+    Ok(StoredGitPush {
         head: GitHead {
             head_oid: head_oid.clone(),
-            segment_sequence: sequence,
+            push_sequence: sequence,
             change_version,
-            manifest: manifest.clone(),
+            manifest,
         },
-        segment: GitSegment {
-            sequence,
+        pack_span: GitPackSpan {
+            first_sequence: sequence,
+            last_sequence: sequence,
+            geometric_tier: 0,
             base_oid,
             head_oid,
-            object: segment,
-            manifest,
+            object: pack,
         },
     })
 }
@@ -164,16 +158,16 @@ mod tests {
     }
 
     #[test]
-    fn incremental_materialization_owns_chain_metadata_and_content_identity() {
+    fn push_materialization_separates_snapshot_identity_from_pack_layout() {
         let store = MemoryObjectStore::new();
         let previous = GitHead {
             head_oid: "head-1".to_string(),
-            segment_sequence: 4,
+            push_sequence: 4,
             change_version: 9,
             manifest: stored_blob("previous"),
         };
 
-        let stored = materialize_incremental_git_segment(
+        let stored = materialize_git_push(
             &store,
             b"pack",
             "head-2".to_string(),
@@ -182,51 +176,41 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(stored.head.segment_sequence, 5);
+        assert_eq!(stored.head.push_sequence, 5);
         assert_eq!(stored.head.change_version, 10);
-        assert_eq!(stored.segment.base_oid.as_deref(), Some("head-1"));
-        assert_eq!(stored.segment.head_oid, "head-2");
+        assert_eq!(stored.pack_span.first_sequence, 5);
+        assert_eq!(stored.pack_span.last_sequence, 5);
+        assert_eq!(stored.pack_span.base_oid.as_deref(), Some("head-1"));
+        assert_eq!(stored.pack_span.head_oid, "head-2");
         assert!(matches!(
-            stored.segment.object.content_ref,
+            stored.pack_span.object.content_ref,
             scope_domain::content_ref::ContentRef::GitSegmentSha256(_)
         ));
+        let manifest_bytes = store
+            .get(&scope_object_store::object_key(&stored.head.manifest))
+            .unwrap();
+        let manifest = GitSnapshotManifest::decode(&manifest_bytes).unwrap();
+        assert_eq!(manifest.push_sequence, 5);
+        assert_eq!(manifest.head_oid, "head-2");
+    }
+
+    #[test]
+    fn compacted_pack_storage_does_not_create_a_snapshot_manifest() {
+        let store = MemoryObjectStore::new();
+        let stored =
+            store_compacted_git_pack(&store, b"pack", GitStorageLimits::new(4096, 10).unwrap())
+                .unwrap();
+
         assert!(matches!(
-            stored.head.manifest.content_ref,
-            scope_domain::content_ref::ContentRef::GitManifestSha256(_)
+            stored.content_ref,
+            scope_domain::content_ref::ContentRef::GitSegmentSha256(_)
         ));
-        assert_eq!(stored.head.manifest, stored.segment.manifest);
     }
 
     #[test]
-    fn compacted_materialization_preserves_visible_version_and_resets_chain() {
+    fn manifest_failure_reports_the_stored_pack_for_cleanup() {
         let store = MemoryObjectStore::new();
-        let current = GitHead {
-            head_oid: "head".to_string(),
-            segment_sequence: 7,
-            change_version: 11,
-            manifest: stored_blob("current"),
-        };
-
-        let stored = materialize_compacted_git_segment(
-            &store,
-            b"pack",
-            &current,
-            GitStorageLimits::new(4096, 10).unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(stored.head.segment_sequence, 1);
-        assert_eq!(stored.head.change_version, 11);
-        assert_eq!(stored.segment.sequence, 1);
-        assert_eq!(stored.segment.base_oid, None);
-        assert_eq!(stored.segment.head_oid, "head");
-    }
-
-    #[test]
-    fn manifest_failure_reports_the_stored_segment_for_cleanup() {
-        let store = MemoryObjectStore::new();
-
-        let failure = materialize_incremental_git_segment(
+        let failure = materialize_git_push(
             &store,
             b"x",
             "head".to_string(),

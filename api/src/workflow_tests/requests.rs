@@ -70,7 +70,7 @@ async fn native_private_request_reads_use_the_persisted_git_head() {
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
-    let raw_cache = raw_git_cache_path(&state, &repo.git_head.as_ref().unwrap().manifest).unwrap();
+    let raw_cache = state.repository_engine.repository_path(&repo.record.id);
     if raw_cache.exists() {
         fs::remove_dir_all(raw_cache).unwrap();
     }

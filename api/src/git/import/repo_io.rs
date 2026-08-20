@@ -13,10 +13,10 @@ use scope_domain::{
     policy::ScopePath,
     repo_control::{RepoControlPath, classify_repo_control_path},
 };
-use scope_git::{GitTreePath, StoredGitSegment, materialize_incremental_git_segment};
+use scope_git::{GitTreePath, StoredGitPush, materialize_git_push};
 use scope_object_store::{ContentObjectKind, object_key, put_content_object};
 use sha2::{Digest, Sha256};
-use std::{path::Path as FsPath, process::Command};
+use std::{path::Path as FsPath, process::Command, time::Instant};
 
 pub(super) fn pushed_commit_message(
     staging_repo: &FsPath,
@@ -335,14 +335,15 @@ pub(crate) fn validate_pushed_commit_range(
     Ok(())
 }
 
-pub(crate) async fn git_segment_manifest_from_repo(
+pub(crate) async fn git_push_from_repo(
     state: &AppState,
     repo: &FsPath,
     previous: Option<&GitHead>,
-) -> Result<StoredGitSegment, ApiError> {
+    current_pack_span_count: usize,
+) -> Result<StoredGitPush, ApiError> {
     let storage_limits = state.runtime_budgets.git_storage_limits();
     storage_limits
-        .next_segment_sequence(previous.map(|head| head.segment_sequence))
+        .ensure_pack_span_capacity(current_pack_span_count)
         .map_err(scope_git::GitStorageError::from)
         .map_err(ApiError::from)?;
     let refname = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
@@ -355,6 +356,7 @@ pub(crate) async fn git_segment_manifest_from_repo(
         revisions.push_str(&previous.head_oid);
         revisions.push('\n');
     }
+    let pack_started = Instant::now();
     let output = git_process_output_with_limits(
         Command::new("git")
             .current_dir(repo)
@@ -363,40 +365,59 @@ pub(crate) async fn git_segment_manifest_from_repo(
         state.runtime_budgets.git_command_timeout(),
         storage_limits.max_object_bytes(),
     )?;
+    let pack_elapsed = pack_started.elapsed();
     if !output.status.success() {
+        tracing::info!(
+            incremental = previous.is_some(),
+            pack_us = pack_elapsed.as_micros(),
+            pack_bytes = output.stdout.len(),
+            success = false,
+            "Git push pack timing"
+        );
         return Err(ApiError::infrastructure_unavailable(format!(
-            "creating incremental Git segment: {}",
+            "creating incremental Git pack: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    match materialize_incremental_git_segment(
+    let pack_bytes = output.stdout.len();
+    let store_started = Instant::now();
+    let stored = materialize_git_push(
         state.object_store.as_ref(),
         &output.stdout,
         head_oid,
         previous,
         storage_limits,
-    ) {
+    );
+    tracing::info!(
+        incremental = previous.is_some(),
+        pack_us = pack_elapsed.as_micros(),
+        store_us = store_started.elapsed().as_micros(),
+        pack_bytes,
+        success = stored.is_ok(),
+        "Git push pack timing"
+    );
+    match stored {
         Ok(stored) => Ok(stored),
         Err(failure) => {
             let (error, orphan_objects) = failure.into_parts();
-            queue_failed_segments(state, orphan_objects).await?;
+            queue_failed_git_objects(state, orphan_objects).await?;
             Err(error.into())
         }
     }
 }
 
-pub(super) async fn queue_failed_segments(
+pub(super) async fn queue_failed_git_objects(
     state: &AppState,
-    segments: Vec<SourceBlob>,
+    objects: Vec<SourceBlob>,
 ) -> Result<(), ApiError> {
-    if segments.is_empty() {
+    if objects.is_empty() {
         return Ok(());
     }
     match state
         .metadata
         .cleanup()
         .queue_pending_source_blob_deletions(
-            segments.clone(),
+            objects.clone(),
             crate::persistence::unix_now()?,
             &crate::persistence_ids::generate_persistence_id,
         )
@@ -404,10 +425,10 @@ pub(super) async fn queue_failed_segments(
     {
         Ok(()) => Ok(()),
         Err(queue_error) => {
-            for segment in segments {
-                if let Err(delete_error) = state.object_store.delete(&object_key(&segment)) {
+            for object in objects {
+                if let Err(delete_error) = state.object_store.delete(&object_key(&object)) {
                     return Err(ApiError::infrastructure_unavailable(format!(
-                        "failed to queue or delete incomplete Git segment: {}; {}",
+                        "failed to queue or delete incomplete Git object: {}; {}",
                         queue_error.message, delete_error.message
                     )));
                 }

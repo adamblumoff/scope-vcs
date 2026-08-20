@@ -1,5 +1,5 @@
 use super::workflow::{WorkflowError, WorkflowPath};
-use crate::{error::DomainError, store::SourceBlob};
+use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,7 +21,6 @@ impl PushWorkflowFile {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushTriggerInput {
     pub head_oid: String,
-    pub snapshot: SourceBlob,
     pub workflows: Vec<PushWorkflowFile>,
     pub configuration_error: Option<String>,
 }
@@ -29,7 +28,6 @@ pub struct PushTriggerInput {
 impl PushTriggerInput {
     pub fn new(
         head_oid: impl Into<String>,
-        snapshot: SourceBlob,
         workflows: Vec<PushWorkflowFile>,
         configuration_error: Option<String>,
     ) -> Result<Self, DomainError> {
@@ -39,14 +37,8 @@ impl PushTriggerInput {
                 "push trigger head must be a SHA-1 hex digest",
             ));
         }
-        if snapshot.git_oid != head_oid {
-            return Err(DomainError::invalid_input(
-                "push trigger snapshot head does not match the accepted head",
-            ));
-        }
         Ok(Self {
             head_oid,
-            snapshot,
             workflows,
             configuration_error,
         })

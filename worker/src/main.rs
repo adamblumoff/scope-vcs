@@ -32,13 +32,19 @@ const SCOPE_BUCKET_FORCE_PATH_STYLE_ENV: &str = "SCOPE_BUCKET_FORCE_PATH_STYLE";
 const SCOPE_OBJECT_ENCRYPTION_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_KEY";
 const SCOPE_OBJECT_STORE_ENV: &str = "SCOPE_OBJECT_STORE";
 const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
+const RUNTIME_TELEMETRY_INTERVAL_SECS_ENV: &str = "SCOPE_RUNTIME_TELEMETRY_INTERVAL_SECS";
 
 const SCHEMA_WAIT_RETRY_SECS: u64 = 2;
 const COMPACTION_RETRY_SECS: u64 = 30;
 const CLEANUP_RETRY_SECS: u64 = 30;
 
+fn main() -> anyhow::Result<()> {
+    scope_git_process::install_pid1_reaper_if_needed()?;
+    run_service()
+}
+
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn run_service() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -47,7 +53,38 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    start_runtime_telemetry();
+
     run().await
+}
+
+fn start_runtime_telemetry() {
+    let Some(interval) = std::env::var(RUNTIME_TELEMETRY_INTERVAL_SECS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        loop {
+            let snapshot = scope_git_process::current_process_snapshot();
+            tracing::info!(
+                process_id = snapshot.process_id,
+                parent_process_id = snapshot.parent_process_id.unwrap_or(0),
+                threads = snapshot.threads.unwrap_or(0),
+                open_file_descriptors = snapshot.open_file_descriptors.unwrap_or(0),
+                child_processes = snapshot.child_processes.unwrap_or(0),
+                zombie_child_processes = snapshot.zombie_child_processes.unwrap_or(0),
+                cgroup_pids_current = snapshot.cgroup_pids_current.unwrap_or(0),
+                cgroup_pids_max = snapshot.cgroup_pids_max.unwrap_or(0),
+                cgroup_pids_unlimited = snapshot.cgroup_pids_unlimited,
+                "runtime process snapshot"
+            );
+            tokio::time::sleep(interval).await;
+        }
+    });
 }
 
 async fn run() -> anyhow::Result<()> {
@@ -57,9 +94,9 @@ async fn run() -> anyhow::Result<()> {
         health_port = settings.health_port,
         batch_size = settings.batch_size,
         poll_interval_ms = settings.poll_interval.as_millis(),
-        git_compaction_segments = settings.git_compaction_segments,
+        git_compaction_spans = settings.git_compaction_spans,
         git_compaction_timeout_secs = settings.git_compaction_timeout.as_secs(),
-        git_segment_max_depth = settings.git_storage_limits.max_chain_depth(),
+        git_pack_span_max_count = settings.git_storage_limits.max_pack_spans(),
         git_object_max_bytes = settings.git_storage_limits.max_object_bytes(),
         "starting worker"
     );
@@ -83,6 +120,7 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
     let mut next_compaction_attempt = Instant::now();
     let mut next_cleanup_attempt = Instant::now();
     loop {
+        let mut compaction_made_progress = false;
         if let Err(error) = metadata.admin().readiness_check().await {
             health.mark_schema_waiting();
             tracing::warn!(
@@ -146,17 +184,14 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
             match compact_one_git_repository(
                 &metadata,
                 object_store.as_ref(),
-                settings.git_compaction_segments,
+                settings.git_compaction_spans,
                 settings.git_storage_limits,
                 settings.git_compaction_timeout,
             )
             .await
             {
-                Ok(CompactionOutcome::Applied) => {
-                    tracing::info!("compacted Git segment chain")
-                }
-                Ok(CompactionOutcome::Stale) => {
-                    tracing::info!("discarded stale Git compaction result")
+                Ok(CompactionOutcome::Applied | CompactionOutcome::Stale) => {
+                    compaction_made_progress = true;
                 }
                 Ok(CompactionOutcome::NoCandidate) => {}
                 Ok(CompactionOutcome::Refused(reason)) => {
@@ -203,7 +238,11 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
         }
         health.mark_poll_succeeded(unix_now()?);
 
-        if summary.claimed >= settings.batch_size {
+        if should_poll_immediately(
+            summary.claimed,
+            settings.batch_size,
+            compaction_made_progress,
+        ) {
             continue;
         }
 
@@ -215,6 +254,14 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
             () = tokio::time::sleep(settings.poll_interval) => {}
         }
     }
+}
+
+fn should_poll_immediately(
+    claimed_outbox_jobs: usize,
+    batch_size: usize,
+    compaction_made_progress: bool,
+) -> bool {
+    claimed_outbox_jobs >= batch_size || compaction_made_progress
 }
 
 async fn wait_or_shutdown(duration: Duration) -> bool {
@@ -365,5 +412,17 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_poll_immediately;
+
+    #[test]
+    fn useful_compaction_drains_without_waiting_for_the_poll_interval() {
+        assert!(should_poll_immediately(0, 10, true));
+        assert!(should_poll_immediately(10, 10, false));
+        assert!(!should_poll_immediately(0, 10, false));
     }
 }

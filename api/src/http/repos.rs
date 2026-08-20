@@ -414,7 +414,13 @@ pub(crate) async fn get_file_content(
     let content = crate::http::file_diffs::review_content_response_for_blob(
         &state,
         &projected.blob,
-        repo.git_head.as_ref().map(|head| &head.manifest),
+        repo.git_head.as_ref().map(|head| {
+            (
+                repo.record.id.as_str(),
+                head,
+                repo.git_pack_spans.as_slice(),
+            )
+        }),
     )?;
 
     Ok(Json(RepoFileContentResponse {

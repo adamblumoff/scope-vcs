@@ -54,6 +54,11 @@ async fn published_receive_pack_push_applies_from_seeded_git_repo() {
 
     assert_eq!(update.branch, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
     assert_eq!(update.message, "update from git");
+    assert_eq!(update.durable_objects.len(), 2);
+    assert!(update.durable_objects.iter().all(|object| !matches!(
+        object.content_ref,
+        scope_domain::content_ref::ContentRef::GitBundleSha256(_)
+    )));
     persist_test_update(&state, update).await.unwrap();
     assert_eq!(
         live_file_content(&state, "/README.md").await.as_deref(),
@@ -75,8 +80,10 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         scope_domain::content_ref::ContentRef::git_manifest_sha256(base_manifest.sha256.clone());
     let base_head_oid = "0000000000000000000000000000000000000001".to_string();
     base_manifest.git_oid = base_head_oid.clone();
-    let base_segment = scope_domain::store::GitSegment {
-        sequence: 1,
+    let base_segment = scope_domain::store::GitPackSpan {
+        first_sequence: 1,
+        last_sequence: 1,
+        geometric_tier: 0,
         base_oid: None,
         head_oid: base_head_oid.clone(),
         object: {
@@ -85,15 +92,14 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
                 scope_domain::content_ref::ContentRef::git_segment_sha256(segment.sha256.clone());
             segment
         },
-        manifest: base_manifest.clone(),
     };
     repo.git_head = Some(scope_domain::store::GitHead {
         head_oid: base_head_oid.clone(),
-        segment_sequence: 1,
+        push_sequence: 1,
         change_version: repo.record.change_version,
         manifest: base_manifest.clone(),
     });
-    repo.git_segments.push(base_segment);
+    repo.git_pack_spans.push(base_segment);
     replace_test_repo(&state, repo).await;
 
     let initial_rebuild = state
@@ -129,12 +135,14 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         update.head_oid = head_oid.clone();
         update.git_head = scope_domain::store::GitHead {
             head_oid: head_oid.clone(),
-            segment_sequence: sequence,
+            push_sequence: sequence,
             change_version: sequence,
             manifest: manifest.clone(),
         };
-        update.git_segment = scope_domain::store::GitSegment {
-            sequence,
+        update.git_pack_span = scope_domain::store::GitPackSpan {
+            first_sequence: sequence,
+            last_sequence: sequence,
+            geometric_tier: 0,
             base_oid: Some(previous_head_oid),
             head_oid: head_oid.clone(),
             object: {
@@ -144,11 +152,9 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
                 );
                 segment
             },
-            manifest,
         };
         let trigger = update.push_trigger_input.as_mut().unwrap();
         trigger.head_oid = head_oid.clone();
-        trigger.snapshot.git_oid = head_oid.clone();
 
         let persisted = persist_test_update(&state, update).await.unwrap();
         assert_eq!(persisted.git_head.change_version, sequence);
@@ -190,11 +196,7 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
             .await
             .unwrap();
         assert_eq!(
-            blob_content(
-                &state,
-                &projected.blob,
-                repo.git_head.as_ref().map(|head| &head.manifest),
-            ),
+            blob_content(&state, &projected.blob, &repo,),
             expected_content
         );
 
@@ -342,18 +344,33 @@ async fn published_receive_pack_staging_restores_accepted_git_head_from_bucket_s
 }
 
 #[tokio::test]
-async fn applying_push_does_not_delete_segment_predecessors_inline() {
+async fn applying_push_does_not_delete_previous_snapshot_inline() {
     let state = test_state_with_repo();
     let old_snapshot = source_blob(&state, "old live git snapshot");
     let old_key = scope_object_store::object_key(&old_snapshot);
-    let update = receive_pack_update(&state, vec![("/README.md", Some("updated"))]);
+    let mut update = receive_pack_update(&state, vec![("/README.md", Some("updated"))]);
+    update.git_head.push_sequence = 2;
+    update.git_pack_span.first_sequence = 2;
+    update.git_pack_span.last_sequence = 2;
+    update.git_pack_span.base_oid = Some(old_snapshot.git_oid.clone());
     let new_key = scope_object_store::object_key(&update.git_head.manifest);
     let mut repo = repo_with_readme(&state);
     repo.git_head = Some(scope_domain::store::GitHead {
         head_oid: old_snapshot.git_oid.clone(),
-        segment_sequence: 1,
+        push_sequence: 1,
         change_version: 1,
         manifest: old_snapshot,
+    });
+    let mut old_pack = source_blob(&state, "old live Git pack");
+    old_pack.content_ref =
+        scope_domain::content_ref::ContentRef::git_segment_sha256(old_pack.sha256.clone());
+    repo.git_pack_spans.push(scope_domain::store::GitPackSpan {
+        first_sequence: 1,
+        last_sequence: 1,
+        geometric_tier: 0,
+        base_oid: None,
+        head_oid: repo.git_head.as_ref().unwrap().head_oid.clone(),
+        object: old_pack,
     });
     replace_test_repo(&state, repo).await;
 

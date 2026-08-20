@@ -150,7 +150,7 @@ async fn public_files_use_the_projected_blob() {
 }
 
 #[tokio::test]
-async fn file_content_reports_projection_rebuilds() {
+async fn file_content_falls_back_to_the_domain_while_projection_rebuilds() {
     let state = test_state_with_repo();
     mutate_repo(&state, |repo| {
         repo.graph.commits.push(commit(
@@ -173,11 +173,15 @@ async fn file_content_reports_projection_rebuilds() {
         None,
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["content"]["text"],
+        "public readme"
+    );
 }
 
 #[tokio::test]
-async fn public_file_content_reports_visible_projection_rebuilds() {
+async fn public_file_content_uses_visible_domain_state_while_projection_rebuilds() {
     let state = test_state_with_repo();
     mutate_repo(&state, |repo| {
         set_private(repo, Some("/README.md"));
@@ -191,7 +195,8 @@ async fn public_file_content_reports_visible_projection_rebuilds() {
         None,
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["content"]["text"], "hello");
 }
 
 #[tokio::test]

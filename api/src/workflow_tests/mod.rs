@@ -474,10 +474,9 @@ async fn live_file_content(state: &AppState, path: &str) -> Option<String> {
     let repo = find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
-    let manifest = repo.git_head.as_ref().map(|head| &head.manifest);
     repo.live_tree()
         .get(&ScopePath::parse(path).unwrap())
-        .map(|blob| blob_content(state, blob, manifest))
+        .map(|blob| blob_content(state, blob, &repo))
 }
 
 async fn persist_test_update(
@@ -530,7 +529,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
         visibility_events: Vec::new(),
         live_files: BTreeMap::new(),
         git_head: None,
-        git_segments: Vec::new(),
+        git_pack_spans: Vec::new(),
         members: Vec::new(),
         invitations: Vec::new(),
     }
@@ -591,9 +590,16 @@ fn source_blob_from_bytes(state: &AppState, bytes: &[u8]) -> scope_domain::store
 fn blob_content(
     state: &AppState,
     blob: &scope_domain::store::SourceBlob,
-    git_manifest: Option<&scope_domain::store::SourceBlob>,
+    repo: &StoredRepository,
 ) -> String {
-    String::from_utf8(crate::git::content::source_content_bytes(state, blob, git_manifest).unwrap())
+    let git_source = repo.git_head.as_ref().map(|head| {
+        (
+            repo.record.id.as_str(),
+            head,
+            repo.git_pack_spans.as_slice(),
+        )
+    });
+    String::from_utf8(crate::git::content::source_content_bytes(state, blob, git_source).unwrap())
         .unwrap()
 }
 
@@ -652,16 +658,14 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
         b"test staged Git manifest",
     )
     .unwrap();
-    let segment_object = source_blob(state, "test staged Git segment");
-    let head_oid = "1111111111111111111111111111111111111111";
-    manifest.git_oid = head_oid.to_string();
-    let mut trigger_snapshot = put_content_object(
+    let segment_object = put_content_object(
         state.object_store.as_ref(),
-        ContentObjectKind::GitBundle,
-        b"test push trigger snapshot",
+        ContentObjectKind::GitSegment,
+        b"test staged Git segment",
     )
     .unwrap();
-    trigger_snapshot.git_oid = head_oid.to_string();
+    let head_oid = "1111111111111111111111111111111111111111";
+    manifest.git_oid = head_oid.to_string();
     ReceivePackUpdate {
         branch: format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
         head_oid: head_oid.to_string(),
@@ -670,26 +674,21 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
         message: "owner push".to_string(),
         git_head: scope_domain::store::GitHead {
             head_oid: "1111111111111111111111111111111111111111".to_string(),
-            segment_sequence: 1,
+            push_sequence: 1,
             change_version: 1,
             manifest,
         },
-        git_segment: scope_domain::store::GitSegment {
-            sequence: 1,
+        git_pack_span: scope_domain::store::GitPackSpan {
+            first_sequence: 1,
+            last_sequence: 1,
+            geometric_tier: 0,
             base_oid: None,
             head_oid: "1111111111111111111111111111111111111111".to_string(),
             object: segment_object,
-            manifest: source_blob(state, "test staged Git segment manifest"),
         },
         durable_objects: Vec::new(),
         push_trigger_input: Some(
-            scope_domain::runs::trigger::PushTriggerInput::new(
-                head_oid,
-                trigger_snapshot,
-                Vec::new(),
-                None,
-            )
-            .unwrap(),
+            scope_domain::runs::trigger::PushTriggerInput::new(head_oid, Vec::new(), None).unwrap(),
         ),
         previous_config: None,
         base_config_hash: repo_config_fingerprint(&config).unwrap(),

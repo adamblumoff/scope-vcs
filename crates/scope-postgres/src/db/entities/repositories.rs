@@ -64,7 +64,7 @@ pub mod repository {
                 visibility_events: history.visibility_events,
                 live_files: history.live_files,
                 git_head: facts.git_head,
-                git_segments: facts.git_segments,
+                git_pack_spans: facts.git_pack_spans,
                 members,
                 invitations,
             })
@@ -173,7 +173,7 @@ pub mod git_head {
         #[sea_orm(primary_key, auto_increment = false)]
         pub repo_id: String,
         pub head_oid: String,
-        pub segment_sequence: i64,
+        pub push_sequence: i64,
         pub change_version: i64,
         pub manifest_object_key: String,
         pub manifest_sha256: String,
@@ -190,7 +190,7 @@ pub mod git_head {
             Ok(Self {
                 repo_id: repo_id.to_string(),
                 head_oid: head.head_oid.clone(),
-                segment_sequence: u64_to_i64(head.segment_sequence, "Git segment sequence")?,
+                push_sequence: u64_to_i64(head.push_sequence, "Git push sequence")?,
                 change_version: u64_to_i64(head.change_version, "Git head change version")?,
                 manifest_object_key: serde_json::to_string(&head.manifest.content_ref)
                     .map_err(PostgresError::internal)?,
@@ -202,7 +202,7 @@ pub mod git_head {
         pub fn try_into_domain(self) -> Result<GitHead, PostgresError> {
             Ok(GitHead {
                 head_oid: self.head_oid.clone(),
-                segment_sequence: i64_to_u64(self.segment_sequence, "Git segment sequence")?,
+                push_sequence: i64_to_u64(self.push_sequence, "Git push sequence")?,
                 change_version: i64_to_u64(self.change_version, "Git head change version")?,
                 manifest: SourceBlob {
                     content_ref: serde_json::from_str(&self.manifest_object_key)
@@ -217,7 +217,7 @@ pub mod git_head {
     }
 }
 
-pub mod git_segment {
+pub mod git_pack_span {
     use super::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -226,15 +226,14 @@ pub mod git_segment {
         #[sea_orm(primary_key, auto_increment = false)]
         pub repo_id: String,
         #[sea_orm(primary_key, auto_increment = false)]
-        pub sequence: i64,
+        pub first_sequence: i64,
+        pub last_sequence: i64,
+        pub geometric_tier: i32,
         pub base_oid: Option<String>,
         pub head_oid: String,
         pub object_key: String,
         pub sha256: String,
         pub size_bytes: i64,
-        pub manifest_object_key: String,
-        pub manifest_sha256: String,
-        pub manifest_size_bytes: i64,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -243,29 +242,26 @@ pub mod git_segment {
     impl ActiveModelBehavior for ActiveModel {}
 
     impl Model {
-        pub fn from_domain(repo_id: &str, segment: &GitSegment) -> Result<Self, PostgresError> {
+        pub fn from_domain(repo_id: &str, span: &GitPackSpan) -> Result<Self, PostgresError> {
             Ok(Self {
                 repo_id: repo_id.to_string(),
-                sequence: u64_to_i64(segment.sequence, "Git segment sequence")?,
-                base_oid: segment.base_oid.clone(),
-                head_oid: segment.head_oid.clone(),
-                object_key: serde_json::to_string(&segment.object.content_ref)
+                first_sequence: u64_to_i64(span.first_sequence, "Git pack span first sequence")?,
+                last_sequence: u64_to_i64(span.last_sequence, "Git pack span last sequence")?,
+                geometric_tier: u32_to_i32(span.geometric_tier, "Git pack span geometric tier")?,
+                base_oid: span.base_oid.clone(),
+                head_oid: span.head_oid.clone(),
+                object_key: serde_json::to_string(&span.object.content_ref)
                     .map_err(PostgresError::internal)?,
-                sha256: segment.object.sha256.clone(),
-                size_bytes: u64_to_i64(segment.object.size_bytes, "Git segment size")?,
-                manifest_object_key: serde_json::to_string(&segment.manifest.content_ref)
-                    .map_err(PostgresError::internal)?,
-                manifest_sha256: segment.manifest.sha256.clone(),
-                manifest_size_bytes: u64_to_i64(
-                    segment.manifest.size_bytes,
-                    "Git segment manifest size",
-                )?,
+                sha256: span.object.sha256.clone(),
+                size_bytes: u64_to_i64(span.object.size_bytes, "Git pack span size")?,
             })
         }
 
-        pub fn try_into_domain(self) -> Result<GitSegment, PostgresError> {
-            Ok(GitSegment {
-                sequence: i64_to_u64(self.sequence, "Git segment sequence")?,
+        pub fn try_into_domain(self) -> Result<GitPackSpan, PostgresError> {
+            let span = GitPackSpan {
+                first_sequence: i64_to_u64(self.first_sequence, "Git pack span first sequence")?,
+                last_sequence: i64_to_u64(self.last_sequence, "Git pack span last sequence")?,
+                geometric_tier: i32_to_u32(self.geometric_tier, "Git pack span geometric tier")?,
                 base_oid: self.base_oid,
                 head_oid: self.head_oid.clone(),
                 object: SourceBlob {
@@ -274,17 +270,19 @@ pub mod git_segment {
                     sha256: self.sha256,
                     git_oid: self.head_oid.clone(),
                     git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-                    size_bytes: i64_to_u64(self.size_bytes, "Git segment size")?,
+                    size_bytes: i64_to_u64(self.size_bytes, "Git pack span size")?,
                 },
-                manifest: SourceBlob {
-                    content_ref: serde_json::from_str(&self.manifest_object_key)
-                        .map_err(PostgresError::internal)?,
-                    sha256: self.manifest_sha256,
-                    git_oid: self.head_oid,
-                    git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-                    size_bytes: i64_to_u64(self.manifest_size_bytes, "Git segment manifest size")?,
-                },
-            })
+            };
+            let expected_tier = span
+                .expected_geometric_tier()
+                .map_err(|error| PostgresError::internal_message(error.to_string()))?;
+            if span.geometric_tier != expected_tier {
+                return Err(PostgresError::internal_message(format!(
+                    "Git pack span {}..{} has geometric tier {}, expected {expected_tier}",
+                    span.first_sequence, span.last_sequence, span.geometric_tier
+                )));
+            }
+            Ok(span)
         }
     }
 }

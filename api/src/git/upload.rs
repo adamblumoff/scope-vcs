@@ -9,7 +9,6 @@ use crate::{
         import::run_git,
         projection_repo::{hash_field, projection_bare_repo_for_state},
         request_refs::attach_visible_request_refs,
-        storage::cached_raw_git_repo,
     },
     repo_access::{ensure_repo_read, find_repo},
     runtime_budgets::{RuntimeBudgets, RuntimePermit},
@@ -96,7 +95,12 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     let private_view = ProjectionViewKey::from_access(access) == ProjectionViewKey::Private;
     let base_repo = if private_view {
         match repo.git_head.as_ref() {
-            Some(head) => cached_raw_git_repo(state, &head.manifest)?,
+            Some(head) => state.repository_engine.materialize_repository(
+                state,
+                &repo.record.id,
+                head,
+                &repo.git_pack_spans,
+            )?,
             None => {
                 let projection = project_graph(
                     &repo.graph,
@@ -105,8 +109,10 @@ pub(crate) async fn git_upload_pack_repo_for_request(
                 );
                 GitRepoHandle::from_path(projection_bare_repo_for_state(
                     state,
+                    &repo.record.id,
                     &projection,
-                    repo.git_head.as_ref().map(|head| &head.manifest),
+                    repo.git_head.as_ref(),
+                    &repo.git_pack_spans,
                 )?)
             }
         }
@@ -118,8 +124,10 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         );
         GitRepoHandle::from_path(projection_bare_repo_for_state(
             state,
+            &repo.record.id,
             &projection,
-            repo.git_head.as_ref().map(|head| &head.manifest),
+            repo.git_head.as_ref(),
+            &repo.git_pack_spans,
         )?)
     };
     let mut requests = Vec::new();
@@ -164,14 +172,17 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         );
         Some(projection_bare_repo_for_state(
             state,
+            &repo.record.id,
             &projection,
-            repo.git_head.as_ref().map(|head| &head.manifest),
+            repo.git_head.as_ref(),
+            &repo.git_pack_spans,
         )?)
     } else {
         None
     };
     git_read_view_repo(
         state,
+        &repo.record.id,
         base_repo,
         public_base_repo.as_deref(),
         viewer_user_id.as_deref(),
@@ -182,6 +193,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
 
 fn git_read_view_repo(
     state: &AppState,
+    repository_id: &str,
     base_repo: GitRepoHandle,
     public_base_repo: Option<&FsPath>,
     viewer_user_id: Option<&str>,
@@ -234,10 +246,11 @@ fn git_read_view_repo(
         hash_field(&mut hasher, b"hidden", request_name.as_bytes());
     }
     let cache_key = hex::encode(hasher.finalize());
-    let cache_root = state.git_cache_root()?;
+    let cache_root = state.repository_engine.cache_root().to_path_buf();
     let repo_path = cache_root.join(format!("read-view-{cache_key}.git"));
     let is_ready = || repo_path.join("objects").is_dir();
-    state.git_cache_builds.materialize(
+    state.repository_engine.materialize_derived(
+        repository_id,
         GitDerivedCacheNamespace::RequestReadView,
         cache_key.clone(),
         is_ready,

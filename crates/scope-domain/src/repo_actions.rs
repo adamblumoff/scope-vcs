@@ -236,7 +236,7 @@ mod tests {
         let snapshot = source_blob("live-snapshot");
         repo.git_head = Some(GitHead {
             head_oid: snapshot.git_oid.clone(),
-            segment_sequence: 1,
+            push_sequence: 1,
             change_version: 1,
             manifest: snapshot.clone(),
         });

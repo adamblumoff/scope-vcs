@@ -4,7 +4,7 @@ use super::{
     repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
     repo_control::{REPO_RULES_PATH, is_public_request_protected_path},
     store::{
-        GitHead, GitSegment, LogicalCommitOrigin, RepoLifecycleState, RequestMergeOrigin,
+        GitHead, GitPackSpan, LogicalCommitOrigin, RepoLifecycleState, RequestMergeOrigin,
         SourceBlob, StoredRepository,
     },
 };
@@ -31,7 +31,7 @@ pub struct ReviewedUpdateInput {
     pub author_id: String,
     pub message: String,
     pub git_head: GitHead,
-    pub git_segment: GitSegment,
+    pub git_pack_span: GitPackSpan,
     pub changes: Vec<ReviewedContentChange>,
     pub previous_config: Option<RepoConfig>,
     pub config: RepoConfig,
@@ -43,6 +43,7 @@ pub struct ContentPushState {
     pub policy: Policy,
     pub repo_config: RepoConfig,
     pub live_files: BTreeMap<ScopePath, SourceBlob>,
+    pub git_head: Option<GitHead>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,7 +51,7 @@ pub struct AcceptedContentPush {
     pub change_version: u64,
     pub policy: Policy,
     pub git_head: GitHead,
-    pub git_segment: GitSegment,
+    pub git_pack_span: GitPackSpan,
     pub logical_commit: LogicalCommit,
 }
 
@@ -77,6 +78,11 @@ pub fn apply_reviewed_update_to_repo(
     repo: &mut StoredRepository,
     update: ReviewedUpdateInput,
 ) -> ReviewedUpdateResult<()> {
+    validate_git_push_transition(
+        repo.git_head.as_ref(),
+        &update.git_head,
+        &update.git_pack_span,
+    )?;
     if update.changes.is_empty() {
         return Err(ReviewedUpdateError::BadRequest(
             "update must include file changes",
@@ -210,7 +216,7 @@ pub fn apply_reviewed_update_to_repo(
     repo.policy = next_policy;
     repo.repo_config = next_config;
     repo.visibility_events.extend(visibility_events);
-    repo.git_segments.push(update.git_segment);
+    repo.git_pack_spans.push(update.git_pack_span);
     repo.git_head = Some(update.git_head);
     repo.first_push_token = None;
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
@@ -228,6 +234,7 @@ fn apply_content_only_update(
             policy: repo.policy.clone(),
             repo_config: repo.repo_config.clone(),
             live_files: repo.live_tree(),
+            git_head: repo.git_head.clone(),
         },
         update,
     )?;
@@ -246,6 +253,7 @@ pub fn apply_request_merge_to_repo(
             policy: repo.policy.clone(),
             repo_config: repo.repo_config.clone(),
             live_files: repo.live_tree(),
+            git_head: repo.git_head.clone(),
         },
         update,
         origin,
@@ -268,7 +276,7 @@ fn apply_accepted_content_push(repo: &mut StoredRepository, accepted: AcceptedCo
     repo.record.change_version = accepted.change_version;
     repo.policy = accepted.policy;
     repo.graph.commits.push(accepted.logical_commit);
-    repo.git_segments.push(accepted.git_segment);
+    repo.git_pack_spans.push(accepted.git_pack_span);
     repo.git_head = Some(accepted.git_head);
     repo.first_push_token = None;
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
@@ -301,6 +309,11 @@ fn accept_content_update(
     allow_unchanged_tree: bool,
     origin: LogicalCommitOrigin,
 ) -> ReviewedUpdateResult<AcceptedContentPush> {
+    validate_git_push_transition(
+        state.git_head.as_ref(),
+        &update.git_head,
+        &update.git_pack_span,
+    )?;
     if update.changes.is_empty() && !allow_unchanged_tree {
         return Err(ReviewedUpdateError::BadRequest(
             "update must include file changes",
@@ -375,9 +388,40 @@ fn accept_content_update(
         change_version,
         policy,
         git_head: update.git_head,
-        git_segment: update.git_segment,
+        git_pack_span: update.git_pack_span,
         logical_commit,
     })
+}
+
+fn validate_git_push_transition(
+    previous: Option<&GitHead>,
+    next: &GitHead,
+    span: &GitPackSpan,
+) -> ReviewedUpdateResult<()> {
+    if span.first_sequence != next.push_sequence
+        || span.last_sequence != next.push_sequence
+        || span.geometric_tier != 0
+        || span.head_oid != next.head_oid
+    {
+        return Err(ReviewedUpdateError::Conflict(
+            "Git push pack span does not match the logical head",
+        ));
+    }
+    if !next.manifest.git_oid.is_empty() && next.manifest.git_oid != next.head_oid {
+        return Err(ReviewedUpdateError::Conflict(
+            "Git snapshot manifest does not match the logical head",
+        ));
+    }
+    let expected_sequence = previous
+        .map_or(Some(1), |head| head.push_sequence.checked_add(1))
+        .ok_or(ReviewedUpdateError::Conflict("Git push sequence overflow"))?;
+    let expected_base = previous.map(|head| head.head_oid.as_str());
+    if next.push_sequence != expected_sequence || span.base_oid.as_deref() != expected_base {
+        return Err(ReviewedUpdateError::Conflict(
+            "Git push does not advance the current pack frontier",
+        ));
+    }
+    Ok(())
 }
 
 fn repo_rules_path() -> ScopePath {

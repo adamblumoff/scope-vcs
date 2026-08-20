@@ -3,7 +3,7 @@ use super::*;
 pub mod outbox_job {
     use super::*;
 
-    pub const PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION: u8 = 4;
+    pub const PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION: u8 = 5;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "scope_outbox_jobs")]
@@ -70,11 +70,12 @@ pub mod outbox_job {
             id: String,
             job_kind: &str,
             repo_id: &str,
-            repo_version: u64,
-            manifest: &SourceBlob,
+            head: &scope_domain::store::GitHead,
+            pack_spans: &[scope_domain::store::GitPackSpan],
             input: &scope_domain::runs::trigger::PushTriggerInput,
             now: u64,
         ) -> Result<Self, PostgresError> {
+            let repo_version = head.change_version;
             let persisted_repo_version = u64_to_i64(repo_version, "repository change version")?;
             Ok(Self {
                 id,
@@ -84,7 +85,8 @@ pub mod outbox_job {
                 repo_version: persisted_repo_version,
                 payload: encode_json(&serde_json::json!({
                     "workflow_schema_version": PUSH_MAIN_TRIGGER_WORKFLOW_SCHEMA_VERSION,
-                    "manifest": manifest,
+                    "head": head,
+                    "pack_spans": pack_spans,
                     "input": input,
                 }))?,
                 state: "ready".to_string(),

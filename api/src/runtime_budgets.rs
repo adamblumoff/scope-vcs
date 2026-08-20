@@ -6,7 +6,7 @@ use scope_git::GitStorageLimits;
 use scope_object_store::{ObjectStore, ObjectStoreError, ensure_object_size};
 use std::{
     sync::{Arc, OnceLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -188,7 +188,16 @@ impl ObjectStore for BudgetedObjectStore {
             .map_err(|error| {
                 ObjectStoreError::capacity_exhausted(error.into_operator_diagnostic())
             })?;
-        self.inner.put(key, bytes)
+        let started = Instant::now();
+        let result = self.inner.put(key, bytes);
+        tracing::info!(
+            operation = "put",
+            bytes = bytes.len(),
+            elapsed_us = started.elapsed().as_micros(),
+            success = result.is_ok(),
+            "object store operation timing"
+        );
+        result
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>, ObjectStoreError> {
@@ -198,10 +207,32 @@ impl ObjectStore for BudgetedObjectStore {
             .map_err(|error| {
                 ObjectStoreError::capacity_exhausted(error.into_operator_diagnostic())
             })?;
-        let bytes = self
+        let started = Instant::now();
+        let result = self
             .inner
-            .get_bounded(key, self.budgets.git_storage_limits.max_object_bytes())?;
-        Ok(bytes)
+            .get_bounded(key, self.budgets.git_storage_limits.max_object_bytes());
+        match result {
+            Ok(bytes) => {
+                tracing::info!(
+                    operation = "get",
+                    bytes = bytes.len(),
+                    elapsed_us = started.elapsed().as_micros(),
+                    success = true,
+                    "object store operation timing"
+                );
+                Ok(bytes)
+            }
+            Err(error) => {
+                tracing::info!(
+                    operation = "get",
+                    bytes = 0,
+                    elapsed_us = started.elapsed().as_micros(),
+                    success = false,
+                    "object store operation timing"
+                );
+                Err(error)
+            }
+        }
     }
 
     fn delete(&self, key: &str) -> Result<(), ObjectStoreError> {
@@ -211,7 +242,15 @@ impl ObjectStore for BudgetedObjectStore {
             .map_err(|error| {
                 ObjectStoreError::capacity_exhausted(error.into_operator_diagnostic())
             })?;
-        self.inner.delete(key)
+        let started = Instant::now();
+        let result = self.inner.delete(key);
+        tracing::info!(
+            operation = "delete",
+            elapsed_us = started.elapsed().as_micros(),
+            success = result.is_ok(),
+            "object store operation timing"
+        );
+        result
     }
 
     fn readiness_check(&self) -> Result<(), ObjectStoreError> {

@@ -16,7 +16,7 @@ use scope_domain::{
             PushTriggerCheck, PushTriggerEvaluation, PushTriggerEvaluationState, PushTriggerInput,
         },
     },
-    store::{GitHead, SourceBlob},
+    store::{GitHead, GitPackSpan},
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait,
@@ -30,7 +30,8 @@ pub(super) const JOB_KIND: &str = "push_main_trigger_evaluation";
 #[derive(Deserialize)]
 struct PushMainTriggerJobPayload {
     workflow_schema_version: u8,
-    manifest: SourceBlob,
+    head: GitHead,
+    pack_spans: Vec<GitPackSpan>,
     input: PushTriggerInput,
 }
 
@@ -38,6 +39,7 @@ pub async fn enqueue_push_main_trigger_evaluation<C>(
     conn: &C,
     repo_id: &str,
     head: &GitHead,
+    pack_spans: &[GitPackSpan],
     input: &PushTriggerInput,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
@@ -50,6 +52,13 @@ where
             "push trigger input does not match the accepted Git head",
         ));
     }
+    let pinned_source = RunSource::accepted_git_head(
+        repo_id,
+        head.clone(),
+        pack_spans.to_vec(),
+        ProjectionViewKey::Private,
+    )
+    .map_err(PostgresError::from)?;
     let evaluation =
         PushTriggerEvaluation::pending(repo_id, head.change_version, &head.head_oid, now_unix)
             .map_err(PostgresError::from)?;
@@ -62,8 +71,8 @@ where
         generate_id(generated_ids, GeneratedIdKind::OutboxJob)?,
         JOB_KIND,
         repo_id,
-        head.change_version,
-        &head.manifest,
+        head,
+        pack_spans,
         input,
         now_unix,
     )?;
@@ -72,8 +81,10 @@ where
         .await
         .map_err(PostgresError::internal)?;
     let reference_id = format!("{repo_id}:{}", head.change_version);
-    insert_object_reference(conn, "push_trigger_source", &reference_id, &head.manifest).await?;
-    insert_object_reference(conn, "push_trigger_source", &reference_id, &input.snapshot).await
+    for object in pinned_source.retained_objects() {
+        insert_object_reference(conn, "push_trigger_source", &reference_id, object).await?;
+    }
+    Ok(())
 }
 
 pub(super) async fn evaluate<C>(
@@ -160,10 +171,10 @@ where
                 revision.workflow().path().as_str()
             );
             let run_id = stable_push_run_id(&job.repo_id, &idempotency_key);
-            let source = RunSource::accepted_revision(
-                change_version,
-                payload.manifest.clone(),
-                payload.input.snapshot.clone(),
+            let source = RunSource::accepted_git_head(
+                &job.repo_id,
+                payload.head.clone(),
+                payload.pack_spans.clone(),
                 ProjectionViewKey::Private,
             )
             .map_err(PostgresError::from)?;
@@ -292,9 +303,16 @@ where
         &format!("{repo_id}:{change_version}"),
     )
     .await?;
+    let source = RunSource::accepted_git_head(
+        repo_id,
+        payload.head.clone(),
+        payload.pack_spans.clone(),
+        ProjectionViewKey::Private,
+    )
+    .map_err(PostgresError::from)?;
     queue_pending_source_blob_deletion_rows(
         conn,
-        [payload.manifest.clone(), payload.input.snapshot.clone()],
+        source.retained_objects().into_iter().cloned(),
         now_unix,
         generated_ids,
     )
@@ -361,7 +379,7 @@ mod tests {
         content_ref::ContentRef,
         policy::Visibility,
         runs::trigger::PushWorkflowFile,
-        store::{DEFAULT_GIT_FILE_MODE, UserAccount},
+        store::{DEFAULT_GIT_FILE_MODE, SourceBlob, UserAccount},
     };
 
     #[tokio::test]
@@ -374,9 +392,9 @@ mod tests {
             store.db.as_ref(),
             &repo_id,
             &trigger_head(head_oid, 1),
+            &trigger_pack_spans(head_oid, 1),
             &PushTriggerInput::new(
                 head_oid,
-                trigger_snapshot(head_oid, 'a'),
                 vec![
                     PushWorkflowFile::new(
                         "/.scope/runs/test.yml",
@@ -425,13 +443,8 @@ jobs:
             store.db.as_ref(),
             &repo_id,
             &trigger_head(later_head_oid, 3),
-            &PushTriggerInput::new(
-                later_head_oid,
-                trigger_snapshot(later_head_oid, 'c'),
-                Vec::new(),
-                None,
-            )
-            .unwrap(),
+            &trigger_pack_spans(later_head_oid, 3),
+            &PushTriggerInput::new(later_head_oid, Vec::new(), None).unwrap(),
             now(),
             &crate::db::generated_ids::test_generated_id,
         )
@@ -515,9 +528,9 @@ jobs:
             store.db.as_ref(),
             &repo_id,
             &trigger_head(head_oid, 2),
+            &trigger_pack_spans(head_oid, 2),
             &PushTriggerInput::new(
                 head_oid,
-                trigger_snapshot(head_oid, 'b'),
                 vec![
                     PushWorkflowFile::new(
                         "/.scope/runs/broken.yml",
@@ -583,8 +596,8 @@ jobs:
             store.db.as_ref(),
             &repo_id,
             &trigger_head(head_oid, 5),
-            &PushTriggerInput::new(head_oid, trigger_snapshot(head_oid, 'e'), Vec::new(), None)
-                .unwrap(),
+            &trigger_pack_spans(head_oid, 5),
+            &PushTriggerInput::new(head_oid, Vec::new(), None).unwrap(),
             now(),
             &crate::db::generated_ids::test_generated_id,
         )
@@ -631,7 +644,7 @@ jobs:
             .source_blob_cleanup_batch(now() + 301, &crate::db::generated_ids::test_generated_id)
             .await
             .unwrap();
-        assert_eq!(cleanup.pending.len(), 2);
+        assert_eq!(cleanup.pending.len(), 3);
     }
 
     #[tokio::test]
@@ -663,16 +676,8 @@ jobs:
                 store.db.as_ref(),
                 &repo_id,
                 &trigger_head(head_oid, change_version),
-                &PushTriggerInput::new(
-                    head_oid,
-                    trigger_snapshot(
-                        head_oid,
-                        char::from_digit(change_version as u32, 10).unwrap(),
-                    ),
-                    vec![workflow()],
-                    None,
-                )
-                .unwrap(),
+                &trigger_pack_spans(head_oid, change_version),
+                &PushTriggerInput::new(head_oid, vec![workflow()], None).unwrap(),
                 now(),
                 &crate::db::generated_ids::test_generated_id,
             )
@@ -739,7 +744,7 @@ jobs:
         let digest = format!("{change_version:x}").repeat(64);
         GitHead {
             head_oid: head_oid.to_string(),
-            segment_sequence: change_version,
+            push_sequence: change_version,
             change_version,
             manifest: SourceBlob {
                 content_ref: ContentRef::git_manifest_sha256(digest.clone()),
@@ -751,15 +756,39 @@ jobs:
         }
     }
 
-    fn trigger_snapshot(head_oid: &str, digest_character: char) -> SourceBlob {
-        let digest = digest_character.to_string().repeat(64);
-        SourceBlob {
-            content_ref: ContentRef::git_bundle_sha256(digest.clone()),
-            sha256: digest,
-            git_oid: head_oid.to_string(),
-            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-            size_bytes: 1,
+    fn trigger_pack_spans(head_oid: &str, push_sequence: u64) -> Vec<GitPackSpan> {
+        let mut spans = Vec::new();
+        let mut first_sequence = 1;
+        let mut remaining = push_sequence;
+        let mut previous_head = None;
+        while remaining > 0 {
+            let width = 1_u64 << remaining.ilog2();
+            let last_sequence = first_sequence + width - 1;
+            let span_head = if last_sequence == push_sequence {
+                head_oid.to_string()
+            } else {
+                format!("{last_sequence:040x}")
+            };
+            let digest = format!("{first_sequence:064x}");
+            spans.push(GitPackSpan {
+                first_sequence,
+                last_sequence,
+                geometric_tier: width.ilog2(),
+                base_oid: previous_head.clone(),
+                head_oid: span_head.clone(),
+                object: SourceBlob {
+                    content_ref: ContentRef::git_segment_sha256(digest.clone()),
+                    sha256: digest,
+                    git_oid: span_head.clone(),
+                    git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+                    size_bytes: 1,
+                },
+            });
+            previous_head = Some(span_head);
+            first_sequence = last_sequence + 1;
+            remaining -= width;
         }
+        spans
     }
 
     fn now() -> u64 {

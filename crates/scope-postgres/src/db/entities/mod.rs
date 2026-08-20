@@ -15,7 +15,7 @@ use scope_domain::runs::{
     workflow::{CompiledWorkflow, WorkflowIdentity, WorkflowJobId, WorkflowPath, WorkflowRevision},
 };
 use scope_domain::store::{
-    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitHead, GitPushToken, GitSegment, RepoLifecycleState,
+    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitHead, GitPackSpan, GitPushToken, RepoLifecycleState,
     RepoRecord, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
     RepositoryMemberPermissions, SourceBlob, StoredRepository, UserAccount,
     is_supported_git_file_mode,
@@ -70,7 +70,7 @@ pub struct RepositoryFacts {
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
     pub git_head: Option<GitHead>,
-    pub git_segments: Vec<GitSegment>,
+    pub git_pack_spans: Vec<GitPackSpan>,
 }
 
 mod auth;
@@ -90,7 +90,7 @@ pub use history::{file_change, live_file, logical_commit, object_reference, visi
 pub use jobs::{metadata_lock, outbox_job, repo_storage_cleanup_job, source_blob_cleanup_job};
 pub use read_models::{projection_file, projection_read_model};
 pub use repositories::{
-    git_head, git_segment, repository, repository_first_push_token, repository_git_push_token,
+    git_head, git_pack_span, repository, repository_first_push_token, repository_git_push_token,
 };
 pub use requests::{
     request, request_discussion, request_discussion_read_state, request_discussion_reply,
@@ -253,9 +253,11 @@ mod tests {
 
     #[test]
     fn negative_persisted_values_are_rejected_instead_of_floored() {
-        let row = git_segment::Model {
+        let row = git_pack_span::Model {
             repo_id: "repo-1".to_string(),
-            sequence: 1,
+            first_sequence: 1,
+            last_sequence: 1,
+            geometric_tier: 0,
             base_oid: None,
             head_oid: "oid".to_string(),
             object_key: serde_json::to_string(
@@ -264,12 +266,6 @@ mod tests {
             .unwrap(),
             sha256: "sha".to_string(),
             size_bytes: -1,
-            manifest_object_key: serde_json::to_string(
-                &scope_domain::content_ref::ContentRef::git_manifest_sha256("manifest-sha"),
-            )
-            .unwrap(),
-            manifest_sha256: "manifest-sha".to_string(),
-            manifest_size_bytes: 1,
         };
 
         assert!(row.try_into_domain().is_err());

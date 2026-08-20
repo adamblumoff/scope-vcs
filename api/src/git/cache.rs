@@ -3,9 +3,8 @@ use crate::{
     error::ApiError,
     git::import::{run_git, run_git_output},
     persistence::ensure_private_dir,
-    state::AppState,
 };
-use scope_domain::store::SourceBlob;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -16,13 +15,15 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-const MAX_RAW_GIT_CACHES: usize = 8;
-const RAW_GIT_CACHE_MAX_IDLE: Duration = Duration::from_secs(30 * 60);
+const REPOSITORY_GIT_CACHE_MAX_IDLE: Duration = Duration::from_secs(30 * 60);
+const REPOSITORY_GIT_CACHE_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
+const APPLIED_SEQUENCE_FILE: &str = "scope-cache-applied-sequence";
+const LAST_USED_FILE: &str = "scope-cache-last-used";
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum GitDerivedCacheNamespace {
     Projection,
-    RawSnapshot,
+    Repository,
     RequestReadView,
 }
 
@@ -47,14 +48,15 @@ pub(crate) struct GitDerivedCacheCoordinator {
     builds: Mutex<BTreeMap<GitDerivedCacheKey, Arc<CacheBuildState>>>,
 }
 
-pub(crate) struct RawGitCacheRegistry {
+pub(crate) struct RepositoryGitCache {
     root: PathBuf,
+    max_bytes: usize,
     users: Mutex<BTreeMap<PathBuf, usize>>,
 }
 
 pub(crate) struct GitRepoHandle {
     path: PathBuf,
-    _lease: Option<RawGitCacheLease>,
+    _lease: Option<RepositoryGitCacheLease>,
 }
 
 impl GitDerivedCacheCoordinator {
@@ -65,64 +67,71 @@ impl GitDerivedCacheCoordinator {
         is_ready: impl Fn() -> bool,
         build: impl FnOnce() -> Result<(), ApiError>,
     ) -> Result<(), ApiError> {
-        if is_ready() {
-            return Ok(());
-        }
-
         let key = GitDerivedCacheKey { namespace, value };
-        let (state, is_leader) = {
-            let mut builds = self.builds.lock().map_err(|_| {
-                ApiError::internal_message("Git cache build coordinator is poisoned")
-            })?;
-            match builds.get(&key) {
-                Some(state) => (state.clone(), false),
-                None => {
-                    let state = Arc::new(CacheBuildState::default());
-                    builds.insert(key.clone(), state.clone());
-                    (state, true)
-                }
+        let mut build = Some(build);
+        loop {
+            if is_ready() {
+                return Ok(());
             }
-        };
 
-        if !is_leader {
-            #[cfg(test)]
-            state
-                .followers
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            return wait_for_cache_build(&state);
-        }
+            let (state, is_leader) = {
+                let mut builds = self.builds.lock().map_err(|_| {
+                    ApiError::internal_message("Git cache build coordinator is poisoned")
+                })?;
+                match builds.get(&key) {
+                    Some(state) => (state.clone(), false),
+                    None => {
+                        let state = Arc::new(CacheBuildState::default());
+                        builds.insert(key.clone(), state.clone());
+                        (state, true)
+                    }
+                }
+            };
 
-        // The first lookup and leader election are intentionally separate. Another
-        // process or a just-finished local builder may have promoted the cache in between.
-        let built = catch_unwind(AssertUnwindSafe(
-            || {
-                if is_ready() { Ok(()) } else { build() }
-            },
-        ));
-        let outcome = match &built {
-            Ok(result) => result.clone(),
-            Err(_) => Err(ApiError::internal_message("Git cache build panicked")),
-        };
+            if !is_leader {
+                #[cfg(test)]
+                state
+                    .followers
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                wait_for_cache_build(&state)?;
+                continue;
+            }
 
-        {
-            let mut completed = state
-                .outcome
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            *completed = Some(outcome.clone());
-            state.completed.notify_all();
-        }
-        if let Ok(mut builds) = self.builds.lock()
-            && builds
-                .get(&key)
-                .is_some_and(|current| Arc::ptr_eq(current, &state))
-        {
-            builds.remove(&key);
-        }
+            // Leader election and the build are separate. Another process may have
+            // finished the requested materialization between those operations.
+            let build = build
+                .take()
+                .expect("a cache request can become leader only once");
+            let built = catch_unwind(AssertUnwindSafe(
+                || {
+                    if is_ready() { Ok(()) } else { build() }
+                },
+            ));
+            let outcome = match &built {
+                Ok(result) => result.clone(),
+                Err(_) => Err(ApiError::internal_message("Git cache build panicked")),
+            };
 
-        match built {
-            Ok(result) => result,
-            Err(payload) => resume_unwind(payload),
+            {
+                let mut completed = state
+                    .outcome
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                *completed = Some(outcome.clone());
+                state.completed.notify_all();
+            }
+            if let Ok(mut builds) = self.builds.lock()
+                && builds
+                    .get(&key)
+                    .is_some_and(|current| Arc::ptr_eq(current, &state))
+            {
+                builds.remove(&key);
+            }
+
+            return match built {
+                Ok(result) => result,
+                Err(payload) => resume_unwind(payload),
+            };
         }
     }
 
@@ -158,16 +167,22 @@ fn wait_for_cache_build(state: &CacheBuildState) -> Result<(), ApiError> {
         .clone()
 }
 
-struct RawGitCacheLease {
-    registry: Arc<RawGitCacheRegistry>,
+struct RepositoryGitCacheLease {
+    registry: Arc<RepositoryGitCache>,
     path: PathBuf,
 }
 
-impl RawGitCacheRegistry {
-    pub(crate) fn new(root: PathBuf) -> Result<Arc<Self>, ApiError> {
+impl RepositoryGitCache {
+    pub(crate) fn new(root: PathBuf, max_bytes: usize) -> Result<Arc<Self>, ApiError> {
+        if max_bytes == 0 {
+            return Err(ApiError::internal_message(
+                "repository Git cache byte budget must be greater than zero",
+            ));
+        }
         ensure_private_dir(&root)?;
         let registry = Arc::new(Self {
             root,
+            max_bytes,
             users: Mutex::new(BTreeMap::new()),
         });
         registry.prune()?;
@@ -178,96 +193,87 @@ impl RawGitCacheRegistry {
         &self.root
     }
 
-    pub(crate) fn path_for(&self, manifest: &SourceBlob) -> PathBuf {
-        self.root
-            .join(format!("raw-{}.git", raw_git_cache_key(manifest)))
+    pub(crate) fn path_for(&self, repository_id: &str) -> PathBuf {
+        self.root.join(format!(
+            "repo-{}.git",
+            repository_git_cache_key(repository_id)
+        ))
     }
 
-    pub(crate) fn lease(
-        self: &Arc<Self>,
-        manifest: &SourceBlob,
-    ) -> Result<GitRepoHandle, ApiError> {
-        let path = self.path_for(manifest);
+    pub(crate) fn lease(self: &Arc<Self>, repository_id: &str) -> Result<GitRepoHandle, ApiError> {
+        let path = self.path_for(repository_id);
         {
-            let mut users = self
-                .users
-                .lock()
-                .map_err(|_| ApiError::internal_message("raw Git cache registry is poisoned"))?;
+            let mut users = self.users.lock().map_err(|_| {
+                ApiError::internal_message("repository Git cache registry is poisoned")
+            })?;
             touch_if_materialized(&path)?;
             *users.entry(path.clone()).or_default() += 1;
         }
         Ok(GitRepoHandle {
             path: path.clone(),
-            _lease: Some(RawGitCacheLease {
+            _lease: Some(RepositoryGitCacheLease {
                 registry: self.clone(),
                 path,
             }),
         })
     }
 
-    pub(crate) fn note_materialized(&self, path: &Path) -> Result<(), ApiError> {
+    pub(crate) fn note_applied(&self, path: &Path, push_sequence: u64) -> Result<(), ApiError> {
+        fs::write(path.join(APPLIED_SEQUENCE_FILE), push_sequence.to_string())
+            .map_err(ApiError::internal)?;
         touch_if_materialized(path)?;
         self.prune()
+    }
+
+    pub(crate) fn applied_sequence(&self, path: &Path) -> Option<u64> {
+        fs::read_to_string(path.join(APPLIED_SEQUENCE_FILE))
+            .ok()
+            .and_then(|value| value.parse().ok())
     }
 
     pub(crate) fn prune(&self) -> Result<(), ApiError> {
         let users = self
             .users
             .lock()
-            .map_err(|_| ApiError::internal_message("raw Git cache registry is poisoned"))?;
-        let mut caches = raw_cache_directories(&self.root)?;
+            .map_err(|_| ApiError::internal_message("repository Git cache registry is poisoned"))?;
+        let mut caches = repository_cache_directories(&self.root)?;
         let now = SystemTime::now();
         prune_stale_materializations(&self.root, now)?;
-        caches.sort_by_key(|(_, last_used)| *last_used);
+        caches.sort_by_key(|entry| entry.last_used);
 
-        let mut retained = caches.len();
-        for (path, last_used) in caches {
-            if users.get(&path).copied().unwrap_or_default() > 0 {
+        let mut retained_bytes = caches
+            .iter()
+            .try_fold(0_u64, |total, entry| total.checked_add(entry.size_bytes))
+            .ok_or_else(|| ApiError::internal_message("repository Git cache size overflow"))?;
+        let max_bytes = self.max_bytes as u64;
+        for entry in caches {
+            if users.get(&entry.path).copied().unwrap_or_default() > 0 {
                 continue;
             }
             let expired = now
-                .duration_since(last_used)
-                .is_ok_and(|idle| idle >= RAW_GIT_CACHE_MAX_IDLE);
-            if expired || retained > MAX_RAW_GIT_CACHES {
-                remove_dir_if_exists(&path)?;
-                retained = retained.saturating_sub(1);
+                .duration_since(entry.last_used)
+                .is_ok_and(|idle| idle >= REPOSITORY_GIT_CACHE_MAX_IDLE);
+            if expired || retained_bytes > max_bytes {
+                remove_dir_if_exists(&entry.path)?;
+                retained_bytes = retained_bytes.saturating_sub(entry.size_bytes);
             }
         }
         Ok(())
     }
 }
 
-impl AppState {
-    pub(crate) fn git_cache_root(&self) -> Result<PathBuf, ApiError> {
-        Ok(self.raw_git_cache.root().to_path_buf())
-    }
-
-    pub(crate) fn start_raw_git_cache_reaper(&self) {
-        let raw_git_cache = self.raw_git_cache.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
-            loop {
-                interval.tick().await;
-                if let Err(error) = raw_git_cache.prune() {
-                    tracing::warn!(error = %error.operator_diagnostic(), "failed to prune local raw Git caches");
-                }
-            }
-        });
-    }
-}
-
-pub(crate) fn sanitize_raw_git_cache_repo(
+pub(crate) fn sanitize_repository_git_cache_repo(
     repo: &Path,
     expected_head: &str,
 ) -> Result<(), ApiError> {
     let output = run_git_output(
         Some(repo),
         &["for-each-ref", "--format=%(refname)%00%(objectname)"],
-        "reading refs before raw Git cache promotion",
+        "reading refs before repository Git cache synchronization",
     )?;
     if !output.status.success() {
         return Err(ApiError::infrastructure_unavailable(format!(
-            "reading refs before raw Git cache promotion: {}",
+            "reading refs before repository Git cache synchronization: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
@@ -275,13 +281,13 @@ pub(crate) fn sanitize_raw_git_cache_repo(
     let main_ref = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
     let mut found_main = false;
     for line in refs.lines() {
-        let (refname, oid) = line
-            .split_once('\0')
-            .ok_or_else(|| ApiError::internal_message("invalid raw Git cache ref listing"))?;
+        let (refname, oid) = line.split_once('\0').ok_or_else(|| {
+            ApiError::internal_message("invalid repository Git cache ref listing")
+        })?;
         if refname == main_ref {
             if oid != expected_head {
                 return Err(ApiError::internal_message(
-                    "raw Git cache main ref does not match committed head",
+                    "repository Git cache main ref does not match committed head",
                 ));
             }
             found_main = true;
@@ -289,13 +295,13 @@ pub(crate) fn sanitize_raw_git_cache_repo(
             run_git(
                 Some(repo),
                 &["update-ref", "-d", refname],
-                "removing non-main ref before raw Git cache promotion",
+                "removing non-main ref before repository Git cache synchronization",
             )?;
         }
     }
     if !found_main {
         return Err(ApiError::internal_message(
-            "raw Git cache is missing the committed main ref",
+            "repository Git cache is missing the committed main ref",
         ));
     }
     Ok(())
@@ -307,7 +313,7 @@ fn prune_stale_materializations(root: &Path, now: SystemTime) -> Result<(), ApiE
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !name.starts_with("raw-") || !name.ends_with(".tmp") || !path.is_dir() {
+        if !name.starts_with("repo-") || !name.ends_with(".tmp") || !path.is_dir() {
             continue;
         }
         let modified = entry
@@ -316,7 +322,7 @@ fn prune_stale_materializations(root: &Path, now: SystemTime) -> Result<(), ApiE
             .unwrap_or(SystemTime::UNIX_EPOCH);
         if now
             .duration_since(modified)
-            .is_ok_and(|idle| idle >= RAW_GIT_CACHE_MAX_IDLE)
+            .is_ok_and(|idle| idle >= REPOSITORY_GIT_CACHE_MAX_IDLE)
         {
             remove_dir_if_exists(&path)?;
         }
@@ -353,7 +359,7 @@ impl AsRef<Path> for GitRepoHandle {
     }
 }
 
-impl Drop for RawGitCacheLease {
+impl Drop for RepositoryGitCacheLease {
     fn drop(&mut self) {
         if let Ok(mut users) = self.registry.users.lock() {
             match users.get_mut(&self.path) {
@@ -364,47 +370,82 @@ impl Drop for RawGitCacheLease {
                 None => {}
             }
         }
-        if let Err(error) = touch_if_materialized(&self.path).and_then(|()| self.registry.prune()) {
+        if let Err(error) = touch_if_materialized(&self.path) {
             tracing::warn!(
                 path = %self.path.display(),
                 error = %error.operator_diagnostic(),
-                "failed to prune local raw Git caches"
+                "failed to prune local repository Git caches"
             );
         }
     }
 }
 
-fn raw_git_cache_key(manifest: &SourceBlob) -> &str {
-    manifest
-        .sha256
-        .get(..16)
-        .unwrap_or(manifest.sha256.as_str())
+fn repository_git_cache_key(repository_id: &str) -> String {
+    let digest = Sha256::digest(repository_id.as_bytes());
+    hex::encode(&digest[..16])
 }
 
 fn touch_if_materialized(path: &Path) -> Result<(), ApiError> {
     if path.is_dir() {
-        fs::write(path.join("scope-cache-last-used"), []).map_err(ApiError::internal)?;
+        let marker = path.join(LAST_USED_FILE);
+        let touched_recently = fs::metadata(&marker)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|elapsed| elapsed < REPOSITORY_GIT_CACHE_TOUCH_INTERVAL);
+        if !touched_recently {
+            fs::write(marker, []).map_err(ApiError::internal)?;
+        }
     }
     Ok(())
 }
 
-fn raw_cache_directories(root: &Path) -> Result<Vec<(PathBuf, SystemTime)>, ApiError> {
+struct RepositoryCacheEntry {
+    path: PathBuf,
+    last_used: SystemTime,
+    size_bytes: u64,
+}
+
+fn repository_cache_directories(root: &Path) -> Result<Vec<RepositoryCacheEntry>, ApiError> {
     let mut caches = Vec::new();
     for entry in fs::read_dir(root).map_err(ApiError::internal)? {
         let entry = entry.map_err(ApiError::internal)?;
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !name.starts_with("raw-") || !name.ends_with(".git") || !path.is_dir() {
+        if !name.starts_with("repo-") || !name.ends_with(".git") || !path.is_dir() {
             continue;
         }
-        let last_used = fs::metadata(path.join("scope-cache-last-used"))
+        let last_used = fs::metadata(path.join(LAST_USED_FILE))
             .or_else(|_| fs::metadata(&path))
             .and_then(|metadata| metadata.modified())
             .unwrap_or(SystemTime::UNIX_EPOCH);
-        caches.push((path, last_used));
+        caches.push(RepositoryCacheEntry {
+            size_bytes: directory_size(&path)?,
+            path,
+            last_used,
+        });
     }
     Ok(caches)
+}
+
+fn directory_size(root: &Path) -> Result<u64, ApiError> {
+    let mut total = 0_u64;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).map_err(ApiError::internal)? {
+            let entry = entry.map_err(ApiError::internal)?;
+            let metadata = entry.metadata().map_err(ApiError::internal)?;
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                total = total.checked_add(metadata.len()).ok_or_else(|| {
+                    ApiError::internal_message("repository Git cache size overflow")
+                })?;
+            }
+        }
+    }
+    Ok(total)
 }
 
 fn remove_dir_if_exists(path: &Path) -> Result<(), ApiError> {
@@ -418,7 +459,6 @@ fn remove_dir_if_exists(path: &Path) -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_domain::store::DEFAULT_GIT_FILE_MODE;
     use std::{
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -428,39 +468,54 @@ mod tests {
         time::Instant,
     };
 
-    fn manifest(sha256: &str) -> SourceBlob {
-        SourceBlob {
-            content_ref: scope_domain::content_ref::ContentRef::git_manifest_sha256(sha256),
-            sha256: sha256.to_string(),
-            git_oid: String::new(),
-            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-            size_bytes: 0,
-        }
-    }
-
-    #[test]
-    fn active_cache_is_not_evicted_when_the_registry_is_over_capacity() {
-        let root = std::env::temp_dir().join(format!(
-            "scope-git-cache-test-{}-{}",
+    fn temp_cache_root(test: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "scope-{test}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        ));
-        let registry = RawGitCacheRegistry::new(root.clone()).unwrap();
-        let active_manifest = manifest("0000000000000000active");
-        let active_path = registry.path_for(&active_manifest);
+        ))
+    }
+
+    #[test]
+    fn active_repository_is_not_evicted_when_the_cache_exceeds_its_byte_budget() {
+        let root = temp_cache_root("git-cache-active");
+        let registry = RepositoryGitCache::new(root.clone(), 50).unwrap();
+        let active_path = registry.path_for("owner/active");
         fs::create_dir_all(&active_path).unwrap();
-        let lease = registry.lease(&active_manifest).unwrap();
-        for index in 1..=MAX_RAW_GIT_CACHES {
-            fs::create_dir_all(root.join(format!("raw-{index:016x}.git"))).unwrap();
-        }
+        fs::write(active_path.join("pack"), [0_u8; 40]).unwrap();
+        let lease = registry.lease("owner/active").unwrap();
+        let inactive_path = registry.path_for("owner/inactive");
+        fs::create_dir_all(&inactive_path).unwrap();
+        fs::write(inactive_path.join("pack"), [0_u8; 40]).unwrap();
 
         registry.prune().unwrap();
 
         assert!(active_path.exists());
+        assert!(!inactive_path.exists());
         drop(lease);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn least_recently_used_repository_is_evicted_by_byte_budget() {
+        let root = temp_cache_root("git-cache-lru");
+        let registry = RepositoryGitCache::new(root.clone(), 50).unwrap();
+        let old_path = registry.path_for("owner/old");
+        fs::create_dir_all(&old_path).unwrap();
+        fs::write(old_path.join("pack"), [0_u8; 40]).unwrap();
+        registry.note_applied(&old_path, 1).unwrap();
+        thread::sleep(Duration::from_millis(10));
+
+        let new_path = registry.path_for("owner/new");
+        fs::create_dir_all(&new_path).unwrap();
+        fs::write(new_path.join("pack"), [0_u8; 40]).unwrap();
+        registry.note_applied(&new_path, 1).unwrap();
+
+        assert!(!old_path.exists());
+        assert!(new_path.exists());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -521,7 +576,7 @@ mod tests {
         .unwrap();
         run_git(Some(&repo), &["tag", "private-tag"], "add tag").unwrap();
 
-        sanitize_raw_git_cache_repo(&repo, head).unwrap();
+        sanitize_repository_git_cache_repo(&repo, head).unwrap();
 
         let output = run_git_output(
             Some(&repo),
@@ -540,7 +595,7 @@ mod tests {
     fn concurrent_builds_coalesce_in_every_cache_namespace() {
         for namespace in [
             GitDerivedCacheNamespace::Projection,
-            GitDerivedCacheNamespace::RawSnapshot,
+            GitDerivedCacheNamespace::Repository,
             GitDerivedCacheNamespace::RequestReadView,
         ] {
             let coordinator = Arc::new(GitDerivedCacheCoordinator::default());
@@ -586,6 +641,63 @@ mod tests {
             follower.join().unwrap().unwrap();
             assert_eq!(builds.load(Ordering::SeqCst), 1, "{namespace:?}");
         }
+    }
+
+    #[test]
+    fn follower_with_a_newer_repository_frontier_runs_a_second_build() {
+        let coordinator = Arc::new(GitDerivedCacheCoordinator::default());
+        let first_ready = Arc::new(AtomicBool::new(false));
+        let newer_ready = Arc::new(AtomicBool::new(false));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let (leader_started_tx, leader_started_rx) = mpsc::channel();
+        let (release_leader_tx, release_leader_rx) = mpsc::channel();
+        let leader = {
+            let coordinator = coordinator.clone();
+            let first_ready = first_ready.clone();
+            let builds = builds.clone();
+            thread::spawn(move || {
+                coordinator.materialize(
+                    GitDerivedCacheNamespace::Repository,
+                    "same-repository".to_string(),
+                    || first_ready.load(Ordering::SeqCst),
+                    || {
+                        builds.fetch_add(1, Ordering::SeqCst);
+                        leader_started_tx.send(()).unwrap();
+                        release_leader_rx.recv().unwrap();
+                        first_ready.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+            })
+        };
+        leader_started_rx.recv().unwrap();
+        let follower = {
+            let coordinator = coordinator.clone();
+            let newer_ready = newer_ready.clone();
+            let builds = builds.clone();
+            thread::spawn(move || {
+                coordinator.materialize(
+                    GitDerivedCacheNamespace::Repository,
+                    "same-repository".to_string(),
+                    || newer_ready.load(Ordering::SeqCst),
+                    || {
+                        builds.fetch_add(1, Ordering::SeqCst);
+                        newer_ready.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+            })
+        };
+        wait_for_follower(
+            &coordinator,
+            GitDerivedCacheNamespace::Repository,
+            "same-repository",
+        );
+        release_leader_tx.send(()).unwrap();
+        leader.join().unwrap().unwrap();
+        follower.join().unwrap().unwrap();
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
+        assert!(newer_ready.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -687,7 +799,7 @@ mod tests {
 
         let error = coordinator
             .materialize(
-                GitDerivedCacheNamespace::RawSnapshot,
+                GitDerivedCacheNamespace::Repository,
                 "shared-value".to_string(),
                 || false,
                 || {

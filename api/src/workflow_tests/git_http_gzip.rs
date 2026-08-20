@@ -69,13 +69,7 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
     assert_eq!(
         repo.live_tree()
             .get(&ScopePath::parse("/README.md").unwrap())
-            .map(|blob| {
-                blob_content(
-                    &state,
-                    blob,
-                    repo.git_head.as_ref().map(|head| &head.manifest),
-                )
-            })
+            .map(|blob| { blob_content(&state, blob, &repo,) })
             .as_deref(),
         Some("hello over gzip receive-pack\n")
     );
