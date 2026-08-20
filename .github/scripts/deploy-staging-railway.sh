@@ -27,6 +27,7 @@ production_environment_id="$(jq -er '.railway.environmentId' "$manifest_path")"
 staging_environment_id="$(jq -er '.railway.staging.environmentId' "$manifest_path")"
 staging_environment_name="$(jq -er '.railway.staging.environmentName' "$manifest_path")"
 staging_cache_url="https://$(jq -er '.railway.staging.cacheDomain' "$manifest_path")"
+staging_region="$(jq -er '.railway.regionId' "$manifest_path")"
 database_service="$(jq -er '.railway.databaseServiceId' "$manifest_path")"
 cache_service="$(jq -er '.services.cache.id' "$manifest_path")"
 worker_service="$(jq -er '.services.worker.id' "$manifest_path")"
@@ -60,14 +61,78 @@ export RAILWAY_PROJECT_ID="$project_id"
 export SCOPE_RAILWAY_ENVIRONMENT_ID="$staging_environment_id"
 export RAILWAY_DEPLOY_MESSAGE="Staging ${GITHUB_SHA:-candidate}"
 
+evidence_lines="$(mktemp)"
+api_closed=0
+worker_closed=0
+cutover_committed=0
+
+scale_service() {
+  local service="$1"
+  local replicas="$2"
+  railway service scale "${railway_scope[@]}" --service "$service" \
+    "$staging_region=$replicas" --json >/dev/null
+}
+
+wait_for_replica_state() {
+  local service="$1"
+  local expected_running="$2"
+  local deadline=$((SECONDS + 300))
+  local state
+  local status configured running crashed
+
+  while [[ "$SECONDS" -lt "$deadline" ]]; do
+    state="$(
+      railway service list "${railway_scope[@]}" --json |
+        jq -er --arg service "$service" '
+          .[] | select(.id == $service) |
+          [.status, (.replicas.configured // 0), (.replicas.running // 0), (.replicas.crashed // 0)] |
+          @tsv
+        '
+    )"
+    IFS=$'\t' read -r status configured running crashed <<< "$state"
+    if [[ "$expected_running" == "0" && "$configured" == "0" && "$running" == "0" ]]; then
+      return 0
+    fi
+    if [[ "$expected_running" == "1" && "$status" == "SUCCESS" \
+      && "$configured" -ge 1 && "$running" -ge 1 && "$crashed" == "0" ]]; then
+      return 0
+    fi
+    sleep 5
+  done
+
+  echo "Timed out waiting for staging service $service to reach $expected_running running replicas." >&2
+  return 1
+}
+
+cleanup() {
+  local exit_status=$?
+  trap - EXIT
+  if [[ "$exit_status" -ne 0 && "$cutover_committed" == "0" ]]; then
+    [[ "$worker_closed" == "0" ]] || scale_service "$worker_service" 1 || true
+    [[ "$api_closed" == "0" ]] || scale_service "$api_service" 1 || true
+  elif [[ "$exit_status" -ne 0 && "$cutover_committed" == "1" ]]; then
+    scale_service "$api_service" 0 || true
+    scale_service "$worker_service" 0 || true
+    echo "Staging migration committed; writers remain closed until the proof is rerun." >&2
+  fi
+  rm -f "$evidence_lines"
+  exit "$exit_status"
+}
+trap cleanup EXIT
+
+scale_service "$api_service" 0
+api_closed=1
+scale_service "$worker_service" 0
+worker_closed=1
+wait_for_replica_state "$api_service" 0
+wait_for_replica_state "$worker_service" 0
+
 # The remote shell expands the Railway-provided database URL.
 # shellcheck disable=SC2016
 railway run "${railway_scope[@]}" --service "$database_service" --no-local -- \
   sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" exec "$@"' \
   scope-maintenance "$maintenance_binary" apply
-
-evidence_lines="$(mktemp)"
-trap 'rm -f "$evidence_lines"' EXIT
+cutover_committed=1
 
 deploy_service() {
   local service="$1"
@@ -85,9 +150,29 @@ deploy_service() {
   printf '%s\n' "$deployment_json" >> "$evidence_lines"
 }
 
+deploy_writer() {
+  local service="$1"
+  local upload_root="$2"
+  local deployment_json
+
+  bash .github/scripts/deploy-railway.sh "$service" "$upload_root" stopped
+  scale_service "$service" 1
+  wait_for_replica_state "$service" 1
+  deployment_json="$(
+    railway deployment list "${railway_scope[@]}" --service "$service" --limit 1 --json |
+      jq -ec --arg service "$service" '
+        first | select(.status == "SUCCESS") |
+        {service: $service, deploymentId: .id, status: .status}
+      '
+  )"
+  printf '%s\n' "$deployment_json" >> "$evidence_lines"
+}
+
 deploy_service "$cache_service" "$cache_upload_root"
-deploy_service "$worker_service" "$worker_upload_root"
-deploy_service "$api_service" "$api_upload_root"
+deploy_writer "$worker_service" "$worker_upload_root"
+worker_closed=0
+deploy_writer "$api_service" "$api_upload_root"
+api_closed=0
 
 database_variables="$(railway variable list "${railway_scope[@]}" --service "$database_service" --json)"
 SCOPE_STAGING_DATABASE_PUBLIC_URL="$(
