@@ -1,4 +1,5 @@
 import { forceSignedOut, signedOutPublishableKey } from '@/auth-mode'
+import { RouteNotFoundPage } from '@/components/route-not-found-page'
 import { signedOutClerk } from '@/lib/signed-out-clerk'
 import { ClerkProvider } from '@clerk/tanstack-react-start'
 import {
@@ -88,6 +89,7 @@ export const Route = createRootRoute({
       },
     ],
   }),
+  notFoundComponent: RouteNotFoundPage,
   component: RootComponent,
 })
 

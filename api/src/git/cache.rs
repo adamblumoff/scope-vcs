@@ -13,7 +13,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 const MAX_RAW_GIT_CACHES: usize = 8;
@@ -24,6 +24,33 @@ pub(crate) enum GitDerivedCacheNamespace {
     Projection,
     RawSnapshot,
     RequestReadView,
+}
+
+impl GitDerivedCacheNamespace {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Projection => "projection",
+            Self::RawSnapshot => "raw_snapshot",
+            Self::RequestReadView => "request_read_view",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GitDerivedCacheOutcome {
+    Hit,
+    Miss,
+    Waiter,
+}
+
+impl GitDerivedCacheOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+            Self::Waiter => "waiter",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -64,9 +91,12 @@ impl GitDerivedCacheCoordinator {
         value: String,
         is_ready: impl Fn() -> bool,
         build: impl FnOnce() -> Result<(), ApiError>,
-    ) -> Result<(), ApiError> {
+    ) -> Result<GitDerivedCacheOutcome, ApiError> {
+        let started_at = Instant::now();
         if is_ready() {
-            return Ok(());
+            let outcome = GitDerivedCacheOutcome::Hit;
+            log_cache_operation(namespace, outcome, started_at, true);
+            return Ok(outcome);
         }
 
         let key = GitDerivedCacheKey { namespace, value };
@@ -89,16 +119,23 @@ impl GitDerivedCacheCoordinator {
             state
                 .followers
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            return wait_for_cache_build(&state);
+            let result = wait_for_cache_build(&state);
+            let outcome = GitDerivedCacheOutcome::Waiter;
+            log_cache_operation(namespace, outcome, started_at, result.is_ok());
+            return result.map(|()| outcome);
         }
 
         // The first lookup and leader election are intentionally separate. Another
         // process or a just-finished local builder may have promoted the cache in between.
-        let built = catch_unwind(AssertUnwindSafe(
-            || {
-                if is_ready() { Ok(()) } else { build() }
-            },
-        ));
+        let mut cache_outcome = GitDerivedCacheOutcome::Hit;
+        let built = catch_unwind(AssertUnwindSafe(|| {
+            if is_ready() {
+                Ok(())
+            } else {
+                cache_outcome = GitDerivedCacheOutcome::Miss;
+                build()
+            }
+        }));
         let outcome = match &built {
             Ok(result) => result.clone(),
             Err(_) => Err(ApiError::internal_message("Git cache build panicked")),
@@ -120,8 +157,10 @@ impl GitDerivedCacheCoordinator {
             builds.remove(&key);
         }
 
+        log_cache_operation(namespace, cache_outcome, started_at, outcome.is_ok());
+
         match built {
-            Ok(result) => result,
+            Ok(result) => result.map(|()| cache_outcome),
             Err(payload) => resume_unwind(payload),
         }
     }
@@ -138,6 +177,40 @@ impl GitDerivedCacheCoordinator {
             .get(&key)
             .map(|state| state.followers.load(std::sync::atomic::Ordering::SeqCst))
             .unwrap_or_default()
+    }
+}
+
+fn log_cache_operation(
+    namespace: GitDerivedCacheNamespace,
+    outcome: GitDerivedCacheOutcome,
+    started_at: Instant,
+    success: bool,
+) {
+    let duration_ms = started_at.elapsed().as_millis();
+    match outcome {
+        GitDerivedCacheOutcome::Hit => tracing::info!(
+            cache_namespace = namespace.as_str(),
+            cache_outcome = outcome.as_str(),
+            duration_ms,
+            success,
+            "Git cache operation completed"
+        ),
+        GitDerivedCacheOutcome::Miss => tracing::info!(
+            cache_namespace = namespace.as_str(),
+            cache_outcome = outcome.as_str(),
+            duration_ms,
+            repo_git_materialize_ms = duration_ms,
+            success,
+            "Git cache operation completed"
+        ),
+        GitDerivedCacheOutcome::Waiter => tracing::info!(
+            cache_namespace = namespace.as_str(),
+            cache_outcome = outcome.as_str(),
+            duration_ms,
+            repo_git_cache_wait_ms = duration_ms,
+            success,
+            "Git cache operation completed"
+        ),
     }
 }
 
@@ -582,10 +655,46 @@ mod tests {
             };
             wait_for_follower(&coordinator, namespace, "same-key");
             release_leader_tx.send(()).unwrap();
-            leader.join().unwrap().unwrap();
-            follower.join().unwrap().unwrap();
+            assert_eq!(
+                leader.join().unwrap().unwrap(),
+                GitDerivedCacheOutcome::Miss
+            );
+            assert_eq!(
+                follower.join().unwrap().unwrap(),
+                GitDerivedCacheOutcome::Waiter
+            );
             assert_eq!(builds.load(Ordering::SeqCst), 1, "{namespace:?}");
         }
+    }
+
+    #[test]
+    fn ready_cache_is_a_hit_without_running_the_builder() {
+        let outcome = GitDerivedCacheCoordinator::default()
+            .materialize(
+                GitDerivedCacheNamespace::RawSnapshot,
+                "ready-key".to_string(),
+                || true,
+                || panic!("ready cache must not build"),
+            )
+            .unwrap();
+
+        assert_eq!(outcome, GitDerivedCacheOutcome::Hit);
+    }
+
+    #[test]
+    fn externally_completed_cache_is_a_hit_after_leader_election() {
+        let readiness_checks = AtomicUsize::new(0);
+        let outcome = GitDerivedCacheCoordinator::default()
+            .materialize(
+                GitDerivedCacheNamespace::RawSnapshot,
+                "externally-ready-key".to_string(),
+                || readiness_checks.fetch_add(1, Ordering::SeqCst) > 0,
+                || panic!("externally completed cache must not build"),
+            )
+            .unwrap();
+
+        assert_eq!(outcome, GitDerivedCacheOutcome::Hit);
+        assert_eq!(readiness_checks.load(Ordering::SeqCst), 2);
     }
 
     #[test]

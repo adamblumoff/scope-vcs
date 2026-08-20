@@ -45,7 +45,6 @@ export function RepositoryCodeView({
   contentError,
   contentLoading,
   contentRetry,
-  initialFile,
   onSelectFilePath,
   params,
   selectedFile,
@@ -59,7 +58,6 @@ export function RepositoryCodeView({
   contentError: string | null
   contentLoading: boolean
   contentRetry: () => void
-  initialFile: RepoFileContent | null
   onSelectFilePath: (path: string) => void
   params: RepoParams
   selectedFile: RepoFileContent | null
@@ -84,17 +82,11 @@ export function RepositoryCodeView({
     onSelectFilePath(path)
   }
 
-  const pendingFile = initialFile && selectedPath &&
-    displayRouteFilePath(initialFile.path) === displayRouteFilePath(selectedPath)
-    ? initialFile
-    : null
-  const sourceFile = content ? selectedFile : pendingFile
-  const sourceError = content
-    ? selectedFileError
-    : pendingFile ? null : contentError
+  const sourceFile = content ? selectedFile : null
+  const sourceError = content ? selectedFileError : contentError
   const sourceLoading = content
     ? selectedFileLoading
-    : Boolean(openPath && !pendingFile && contentLoading)
+    : Boolean(openPath && contentLoading)
 
   return (
     <section>

@@ -327,7 +327,7 @@ pub(crate) fn restore_git_segments(
             )));
         }
         if is_git_segment_manifest(&current) {
-            let bytes = source_blob_bytes(state.object_store.as_ref(), &current)?;
+            let bytes = restore_object_bytes(state, &current, "manifest")?;
             let manifest = GitSegmentManifest::decode(&bytes)?;
             if !current.git_oid.is_empty() && manifest.head_oid != current.git_oid {
                 return Err(ApiError::internal_message(
@@ -380,7 +380,9 @@ fn index_git_pack(
     repo_root: &FsPath,
     segment: &SourceBlob,
 ) -> Result<(), ApiError> {
-    let bytes = source_blob_bytes(state.object_store.as_ref(), segment)?;
+    let bytes = restore_object_bytes(state, segment, "segment")?;
+    let size_bytes = bytes.len();
+    let started_at = Instant::now();
     let output = crate::git::upload::git_process_output_with_timeout(
         Command::new("git")
             .arg("--git-dir")
@@ -388,7 +390,18 @@ fn index_git_pack(
             .args(["index-pack", "--stdin"]),
         Some(bytes),
         state.runtime_budgets.git_command_timeout(),
-    )?;
+    );
+    let success = output.as_ref().is_ok_and(|output| output.status.success());
+    let duration_ms = started_at.elapsed().as_millis();
+    tracing::info!(
+        operation = "index_pack",
+        duration_ms,
+        repo_git_index_pack_ms = duration_ms,
+        size_bytes,
+        success,
+        "Git restore operation completed"
+    );
+    let output = output?;
     if !output.status.success() {
         return Err(ApiError::infrastructure_unavailable(format!(
             "restoring Git segment: {}",
@@ -396,6 +409,29 @@ fn index_git_pack(
         )));
     }
     Ok(())
+}
+
+fn restore_object_bytes(
+    state: &AppState,
+    blob: &SourceBlob,
+    object_kind: &'static str,
+) -> Result<Vec<u8>, ApiError> {
+    let started_at = Instant::now();
+    let bytes = source_blob_bytes(state.object_store.as_ref(), blob).map_err(ApiError::from);
+    let size_bytes = bytes.as_ref().map_or(blob.size_bytes, |bytes| {
+        u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    });
+    let duration_ms = started_at.elapsed().as_millis();
+    tracing::info!(
+        operation = "object_retrieval",
+        object_kind,
+        duration_ms,
+        repo_git_object_retrieval_ms = duration_ms,
+        size_bytes,
+        success = bytes.is_ok(),
+        "Git restore operation completed"
+    );
+    bytes
 }
 
 pub(crate) fn install_first_push_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {
