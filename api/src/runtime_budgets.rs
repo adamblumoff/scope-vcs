@@ -143,6 +143,7 @@ impl RuntimeBudgets {
             .try_acquire_owned()
             .map(|permit| RuntimePermit { _permit: permit })
             .map_err(|_| {
+                tracing::warn!(operation, "runtime capacity permit rejected");
                 ApiError::too_many_requests(format!(
                     "{operation} capacity is exhausted; retry later"
                 ))

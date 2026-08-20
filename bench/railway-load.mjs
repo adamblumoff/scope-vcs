@@ -119,6 +119,12 @@ function configuration() {
     writeDeltaBytes,
     historyDepths: parseStages(process.env.SCOPE_LOAD_HISTORY_DEPTHS || '1,16,64'),
     mixedWritePercent: boundedNumber('SCOPE_LOAD_MIXED_WRITE_PERCENT', 20, 0, 100),
+    apiPermitLimits: {
+      receivePack: positiveInteger('SCOPE_BENCH_RECEIVE_PACK_CONCURRENCY', 4),
+      uploadPack: positiveInteger('SCOPE_BENCH_UPLOAD_PACK_CONCURRENCY', 8),
+      projectionBuild: positiveInteger('SCOPE_BENCH_PROJECTION_BUILD_CONCURRENCY', 2),
+      objectStore: positiveInteger('SCOPE_BENCH_OBJECT_STORE_CONCURRENCY', 16),
+    },
     nodeScaleLabel: nonEmpty('SCOPE_LOAD_NODE_SCALE_LABEL', 'unspecified'),
     protocolLabel: nonEmpty('SCOPE_LOAD_PROTOCOL_LABEL', 'current'),
     runLabel: nonEmpty('SCOPE_BENCH_RUN_LABEL', 'unlabeled'),
@@ -319,6 +325,7 @@ export function stageResult(name, concurrency, samples, elapsedSeconds, startedA
     writeSizeSlope: writeSizeSlope(samples),
     consistency: consistencyStats(samples),
     failureBreakdown: failureBreakdown(samples),
+    capacityRejections: capacityRejectionBreakdown(samples),
     failures: samples.filter((entry) => !entry.ok).slice(0, 5),
   };
 }
@@ -339,6 +346,16 @@ export function failureBreakdown(samples) {
     failures.set(kind, (failures.get(kind) || 0) + 1);
   }
   return Object.fromEntries([...failures.entries()].sort());
+}
+
+export function capacityRejectionBreakdown(samples) {
+  const rejections = new Map();
+  for (const entry of samples.filter(({ ok }) => !ok)) {
+    const match = (entry.error || '').match(/(Git receive-pack|Git upload-pack|Git projection build|object store (?:read|write|delete)) capacity is exhausted/i);
+    if (!match) continue;
+    rejections.set(match[1], (rejections.get(match[1]) || 0) + 1);
+  }
+  return Object.fromEntries([...rejections.entries()].sort());
 }
 
 function printStage(stage) {
@@ -712,7 +729,12 @@ function markdown(report) {
     const stage = workload.confirmations.at(-1) || workload.stages.at(-1);
     return `| ${workload.name} | ${workload.status} | ${workload.lastHealthyThroughputPerSecond ?? '—'} | ${stage?.normalized.logicalMiBPerSecond ?? '—'} | ${stage?.stats.p95Ms ?? '—'} | ${stage?.stats.ttfbP95Ms ?? '—'} | ${stage?.stats.p99Ms ?? '—'} | ${stage?.normalized.observedMiBPerSecond ?? '—'} |`;
   }).join('\n');
-  return `# Scope Railway Git storage load test\n\nGenerated: ${report.generatedAt}\n\nTarget: ${report.apiUrl}\n\nNode scale label: ${report.config.nodeScaleLabel}\n\nProtocol label: ${report.config.protocolLabel}\n\n| Workload | Status | Operations/s | Logical MiB/s | Completion p95 ms | TTFB p95 ms | Completion p99 ms | Observed MiB/s |\n|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\nLogical MiB/s uses fixture payload sizes for writes and clones, and response or received-object bytes for reads. Observed MiB/s uses response bytes or local Git object deltas. Neither is a wire-level counter. TTFB for JSON reads is time to response headers. Quiet Git commands commonly emit no output, so their completion time is reported as TTFB. Compare node-scale and protocol labels only when repository fixture sizes, stage controls, and Railway deployment shape are identical.\n`;
+  const permits = report.config.apiPermitLimits;
+  const rejectionRows = report.workloads.flatMap((workload) => workload.stages.flatMap((stage) =>
+    Object.entries(stage.capacityRejections || {}).map(([operation, count]) =>
+      `| ${workload.name} | ${stage.concurrency ?? stage.targetRate} | ${operation} | ${count} |`,
+    ))).join('\n') || '| none | n/a | none | 0 |';
+  return `# Scope Railway Git storage load test\n\nGenerated: ${report.generatedAt}\n\nTarget: ${report.apiUrl}\n\nNode scale label: ${report.config.nodeScaleLabel}\n\nProtocol label: ${report.config.protocolLabel}\n\nAPI permit labels per process: receive-pack ${permits.receivePack}, upload-pack ${permits.uploadPack}, projection build ${permits.projectionBuild}, object store ${permits.objectStore}.\n\n| Workload | Status | Operations/s | Logical MiB/s | Completion p95 ms | TTFB p95 ms | Completion p99 ms | Observed MiB/s |\n|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\n## Capacity rejections\n\n| Workload | Concurrency or rate | Operation | Count |\n|---|---:|---|---:|\n${rejectionRows}\n\nLogical MiB/s uses fixture payload sizes for writes and clones, and response or received-object bytes for reads. Observed MiB/s uses response bytes or local Git object deltas. Neither is a wire-level counter. TTFB for JSON reads is time to response headers. Quiet Git commands commonly emit no output, so their completion time is reported as TTFB. Compare node-scale and protocol labels only when repository fixture sizes, stage controls, and Railway deployment shape are identical.\n`;
 }
 
 function required(name) { const value = process.env[name]?.trim(); if (!value) throw new Error(`${name} is required`); return value; }

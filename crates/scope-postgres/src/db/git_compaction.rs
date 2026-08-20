@@ -256,6 +256,48 @@ impl JobStore {
         tx.commit().await.map_err(PostgresError::internal)
     }
 
+    pub async fn renew_git_compaction_claim(
+        &self,
+        claim: &GitCompactionClaim,
+        now_unix: u64,
+        lease_seconds: u64,
+    ) -> Result<bool, PostgresError> {
+        if lease_seconds == 0 {
+            return Err(PostgresError::internal_message(
+                "Git compaction lease must be greater than zero",
+            ));
+        }
+        let now = compaction_time(now_unix)?;
+        let lease_seconds = i64::try_from(lease_seconds).map_err(|_| {
+            PostgresError::internal_message("Git compaction lease exceeds database bigint")
+        })?;
+        let lease_expires = now.checked_add(lease_seconds).ok_or_else(|| {
+            PostgresError::internal_message("Git compaction lease expiry exceeds database bigint")
+        })?;
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"
+                    UPDATE scope_git_compaction_jobs
+                    SET lease_expires_at_unix = $3,
+                        updated_at_unix = GREATEST(updated_at_unix, $2)
+                    WHERE repo_id = $1
+                        AND lease_generation = $4
+                        AND lease_expires_at_unix > $2
+                "#,
+                [
+                    claim.repo_id.clone().into(),
+                    now.into(),
+                    lease_expires.into(),
+                    claim.lease_generation.clone().into(),
+                ],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn continue_git_compaction_claim(
         &self,
         claim: &GitCompactionClaim,
@@ -667,6 +709,54 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn lease_renewal_prevents_reclaim_until_the_extended_expiry() {
+        let store =
+            MetadataStore::connect_fresh_for_tests(&TestDatabaseTarget::required().unwrap())
+                .unwrap();
+        seed_scheduled_repo(&store).await;
+        schedule_git_compaction(store.db.as_ref(), "scheduler/repo", 1, 10)
+            .await
+            .unwrap();
+
+        let claim = store
+            .jobs()
+            .claim_git_compaction("worker-a", 2, 10, 10, &test_generated_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .jobs()
+                .renew_git_compaction_claim(&claim, 15, 10)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .jobs()
+                .claim_git_compaction("worker-b", 2, 21, 10, &test_generated_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .jobs()
+                .claim_git_compaction("worker-b", 2, 25, 10, &test_generated_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            !store
+                .jobs()
+                .renew_git_compaction_claim(&claim, 26, 10)
+                .await
+                .unwrap()
         );
     }
 

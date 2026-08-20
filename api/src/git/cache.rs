@@ -221,8 +221,7 @@ impl RepositoryGitCache {
     pub(crate) fn note_applied(&self, path: &Path, push_sequence: u64) -> Result<(), ApiError> {
         fs::write(path.join(APPLIED_SEQUENCE_FILE), push_sequence.to_string())
             .map_err(ApiError::internal)?;
-        touch_if_materialized(path)?;
-        self.prune()
+        touch_if_materialized(path)
     }
 
     pub(crate) fn applied_sequence(&self, path: &Path) -> Option<u64> {
@@ -433,9 +432,22 @@ fn directory_size(root: &Path) -> Result<u64, ApiError> {
     let mut total = 0_u64;
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(directory).map_err(ApiError::internal)? {
-            let entry = entry.map_err(ApiError::internal)?;
-            let metadata = entry.metadata().map_err(ApiError::internal)?;
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(ApiError::internal(error)),
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(ApiError::internal(error)),
+            };
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(ApiError::internal(error)),
+            };
             if metadata.is_dir() {
                 pending.push(entry.path());
             } else if metadata.is_file() {
@@ -500,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn least_recently_used_repository_is_evicted_by_byte_budget() {
+    fn cache_frontier_updates_do_not_run_global_eviction() {
         let root = temp_cache_root("git-cache-lru");
         let registry = RepositoryGitCache::new(root.clone(), 50).unwrap();
         let old_path = registry.path_for("owner/old");
@@ -513,6 +525,11 @@ mod tests {
         fs::create_dir_all(&new_path).unwrap();
         fs::write(new_path.join("pack"), [0_u8; 40]).unwrap();
         registry.note_applied(&new_path, 1).unwrap();
+
+        assert!(old_path.exists());
+        assert!(new_path.exists());
+
+        registry.prune().unwrap();
 
         assert!(!old_path.exists());
         assert!(new_path.exists());
