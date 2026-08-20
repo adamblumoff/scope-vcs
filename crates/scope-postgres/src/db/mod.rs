@@ -354,7 +354,7 @@ impl ExclusiveWriterFence {
             .await?;
         if !acquired {
             anyhow::bail!(
-                "maintenance migration refused: an API or worker writer still holds the database fence"
+                "maintenance migration refused: a metadata writer still holds the database fence"
             );
         }
         Ok(Self { connection })

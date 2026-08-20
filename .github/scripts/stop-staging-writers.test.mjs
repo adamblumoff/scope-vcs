@@ -24,6 +24,7 @@ async function fixture() {
     },
     services: {
       api: { id: 'api' },
+      cache: { id: 'cache' },
       worker: { id: 'worker' },
     },
   }))
@@ -32,11 +33,13 @@ set -euo pipefail
 if [[ "$*" == *"deployment list"* ]]; then
   if [[ "$*" == *"--service api"* ]]; then
     printf '%s\\n' '[{"id":"api-deployment","status":"SUCCESS"}]'
+  elif [[ "$*" == *"--service cache"* ]]; then
+    printf '%s\\n' '[{"id":"cache-deployment","status":"SUCCESS"}]'
   else
     printf '%s\\n' '[{"id":"worker-deployment","status":"SUCCESS"}]'
   fi
 elif [[ "$*" == *"service list"* ]]; then
-  printf '%s\\n' '[{"id":"api","replicas":{"running":0,"crashed":0}},{"id":"worker","replicas":{"running":0,"crashed":0}}]'
+  printf '%s\\n' '[{"id":"api","replicas":{"running":0,"crashed":0}},{"id":"cache","replicas":{"running":0,"crashed":0}},{"id":"worker","replicas":{"running":0,"crashed":0}}]'
 else
   exit 2
 fi
@@ -57,7 +60,7 @@ printf '%s\\n' '{"data":{"deploymentRemove":true}}'
   return { manifest, removals, root }
 }
 
-test('stops only the reviewed staging API and worker deployments', async () => {
+test('stops only the reviewed staging metadata-writer deployments', async () => {
   const { manifest, removals, root } = await fixture()
   const result = spawnSync('bash', ['.github/scripts/stop-staging-writers.sh'], {
     cwd: process.cwd(),
@@ -77,6 +80,7 @@ test('stops only the reviewed staging API and worker deployments', async () => {
   assert.deepEqual(requests.map(({ variables }) => variables.id), [
     'api-deployment',
     'worker-deployment',
+    'cache-deployment',
   ])
 })
 

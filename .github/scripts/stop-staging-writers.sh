@@ -14,6 +14,7 @@ production_environment_id="$(jq -er '.railway.environmentId' "$manifest_path")"
 staging_environment_id="$(jq -er '.railway.staging.environmentId' "$manifest_path")"
 worker_service="$(jq -er '.services.worker.id' "$manifest_path")"
 api_service="$(jq -er '.services.api.id' "$manifest_path")"
+cache_service="$(jq -er '.services.cache.id' "$manifest_path")"
 
 if [[ "$staging_environment_id" == "$production_environment_id" ]]; then
   echo "Staging environment matches production." >&2
@@ -95,5 +96,7 @@ wait_until_stopped() {
 
 stop_service "$api_service"
 stop_service "$worker_service"
+stop_service "$cache_service"
 wait_until_stopped "$api_service"
 wait_until_stopped "$worker_service"
+wait_until_stopped "$cache_service"

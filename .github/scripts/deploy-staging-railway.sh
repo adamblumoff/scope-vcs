@@ -58,12 +58,13 @@ assert_writer_state() {
   current_services="$(railway service list "${railway_scope[@]}" --json)"
   SERVICES_JSON="$current_services" \
     API_SERVICE="$api_service" \
+    CACHE_SERVICE="$cache_service" \
     WORKER_SERVICE="$worker_service" \
     EXPECTED_RUNNING="$expected_running" \
     node -e '
 const services = JSON.parse(process.env.SERVICES_JSON || "[]");
 const expected = Number(process.env.EXPECTED_RUNNING);
-for (const id of [process.env.API_SERVICE, process.env.WORKER_SERVICE]) {
+for (const id of [process.env.API_SERVICE, process.env.CACHE_SERVICE, process.env.WORKER_SERVICE]) {
   const service = services.find((candidate) => candidate.id === id);
   if (!service) process.exit(1);
   const replicas = service.replicas || {};
