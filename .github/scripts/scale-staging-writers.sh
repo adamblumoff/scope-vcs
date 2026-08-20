@@ -27,7 +27,9 @@ railway_scope=(
 )
 
 scale_service() {
-  railway service scale "${railway_scope[@]}" --service "$1" \
+  # Railway CLI 5.41.2's scale argument normalizer drops the long --project
+  # selector. Its short selectors reach the scale parser unchanged.
+  railway service scale -p "$project_id" -e "$staging_environment_id" -s "$1" \
     "$staging_region=$2" --json >/dev/null
 }
 
