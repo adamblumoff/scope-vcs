@@ -578,9 +578,22 @@ jobs:
             object_reference_count(&store, "push_trigger_source", &format!("{repo_id}:2")).await,
             0
         );
+        let protected = entities::source_blob_cleanup_job::Entity::find()
+            .all(store.db.as_ref())
+            .await
+            .unwrap();
+        assert!(!protected.is_empty());
+        assert!(protected.iter().all(|job| {
+            job.next_run_at_unix
+                >= i64::try_from(now() + crate::db::cleanup_queue::SOURCE_BLOB_DELETE_GRACE_SECONDS)
+                    .unwrap()
+        }));
         let cleanup = store
             .cleanup()
-            .source_blob_cleanup_batch(now() + 301, &crate::db::generated_ids::test_generated_id)
+            .source_blob_cleanup_batch(
+                now() + crate::db::cleanup_queue::SOURCE_BLOB_DELETE_GRACE_SECONDS + 1,
+                &crate::db::generated_ids::test_generated_id,
+            )
             .await
             .unwrap();
         assert_eq!(cleanup.pending.len(), 2);
@@ -641,7 +654,10 @@ jobs:
         );
         let cleanup = store
             .cleanup()
-            .source_blob_cleanup_batch(now() + 301, &crate::db::generated_ids::test_generated_id)
+            .source_blob_cleanup_batch(
+                now() + crate::db::cleanup_queue::SOURCE_BLOB_DELETE_GRACE_SECONDS + 1,
+                &crate::db::generated_ids::test_generated_id,
+            )
             .await
             .unwrap();
         assert_eq!(cleanup.pending.len(), 3);

@@ -119,7 +119,7 @@ pub use crate::migrations::{MigrationImpact, MigrationPlan, PendingMigration};
 #[cfg(any(test, feature = "test-support"))]
 pub use clerk_users::scope_user_id_for_auth_identity;
 pub use fast_push::ApplyContentOnlyPushCommand;
-pub use git_compaction::GitCompactionCandidate;
+pub use git_compaction::{GitCompactionCandidate, GitCompactionClaim};
 pub use git_push_reads::GitPushContext;
 use history_rows::load_repository_histories;
 use locks::acquire_aggregate_lock;

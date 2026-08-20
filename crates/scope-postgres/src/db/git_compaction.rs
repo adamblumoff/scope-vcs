@@ -1,12 +1,13 @@
 use super::{
-    GeneratedIdSource, JobStore, acquire_aggregate_lock,
+    GeneratedIdKind, GeneratedIdSource, JobStore, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows,
     entities,
+    generated_ids::generate_id,
     object_references::{delete_object_reference, insert_object_reference},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel,
-    QueryFilter, QueryOrder, Statement, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, FromQueryResult,
+    IntoActiveModel, QueryFilter, QueryOrder, Statement, TransactionTrait,
 };
 use {
     crate::error::PostgresError,
@@ -22,61 +23,142 @@ pub struct GitCompactionCandidate {
     pub spans: Vec<GitPackSpan>,
 }
 
+#[derive(Clone, Debug)]
+pub struct GitCompactionClaim {
+    pub target_sequence: u64,
+    pub attempts: u32,
+    pub queue_delay_ms: u64,
+    pub candidate: Option<GitCompactionCandidate>,
+    repo_id: String,
+    lease_generation: String,
+}
+
+const MAX_COMPACTION_RETRY_SECONDS: i64 = 3_600;
+
+pub(super) async fn schedule_git_compaction<C>(
+    conn: &C,
+    repo_id: &str,
+    target_sequence: u64,
+    now_unix: u64,
+) -> Result<(), PostgresError>
+where
+    C: ConnectionTrait,
+{
+    let target_sequence = i64::try_from(target_sequence).map_err(|_| {
+        PostgresError::internal_message("Git compaction target exceeds database bigint")
+    })?;
+    let now = i64::try_from(now_unix).map_err(|_| {
+        PostgresError::internal_message("Git compaction schedule time exceeds database bigint")
+    })?;
+    conn.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"
+            INSERT INTO scope_git_compaction_jobs (
+                repo_id, target_sequence, attempts, next_run_at_unix,
+                lease_generation, lease_owner, lease_expires_at_unix,
+                last_error, created_at_unix, updated_at_unix
+            ) VALUES ($1, $2, 0, $3, NULL, NULL, NULL, NULL, $3, $3)
+            ON CONFLICT (repo_id) DO UPDATE
+            SET target_sequence = GREATEST(
+                    scope_git_compaction_jobs.target_sequence,
+                    EXCLUDED.target_sequence
+                ),
+                updated_at_unix = GREATEST(
+                    scope_git_compaction_jobs.updated_at_unix,
+                    EXCLUDED.updated_at_unix
+                )
+        "#,
+        [repo_id.into(), target_sequence.into(), now.into()],
+    ))
+    .await
+    .map_err(PostgresError::internal)?;
+    Ok(())
+}
+
 impl JobStore {
-    pub async fn git_compaction_candidate(
+    pub async fn claim_git_compaction(
         &self,
+        worker_id: &str,
         minimum_spans: u64,
-    ) -> Result<Option<GitCompactionCandidate>, PostgresError> {
+        now_unix: u64,
+        lease_seconds: u64,
+        generated_ids: &dyn GeneratedIdSource,
+    ) -> Result<Option<GitCompactionClaim>, PostgresError> {
+        if worker_id.trim().is_empty() {
+            return Err(PostgresError::internal_message(
+                "Git compaction worker identity is empty",
+            ));
+        }
         if minimum_spans < 2 {
             return Err(PostgresError::internal_message(
                 "Git compaction span threshold must be at least 2",
             ));
         }
-        let minimum_spans = i64::try_from(minimum_spans).map_err(|_| {
-            PostgresError::internal_message("Git compaction span threshold exceeds bigint")
+        if lease_seconds == 0 {
+            return Err(PostgresError::internal_message(
+                "Git compaction lease must be greater than zero",
+            ));
+        }
+        let now = i64::try_from(now_unix).map_err(|_| {
+            PostgresError::internal_message("Git compaction claim time exceeds database bigint")
         })?;
-        let Some(candidate_row) = self
-            .db
-            .query_one(Statement::from_sql_and_values(
+        let lease_seconds = i64::try_from(lease_seconds).map_err(|_| {
+            PostgresError::internal_message("Git compaction lease exceeds database bigint")
+        })?;
+        let lease_expires = now.checked_add(lease_seconds).ok_or_else(|| {
+            PostgresError::internal_message("Git compaction lease expiry exceeds database bigint")
+        })?;
+        let lease_generation = generate_id(generated_ids, GeneratedIdKind::CleanupGeneration)?;
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let Some(job) =
+            entities::git_compaction_job::Model::find_by_statement(Statement::from_sql_and_values(
                 DatabaseBackend::Postgres,
                 r#"
-                    WITH layout AS (
-                        SELECT
-                            repo_id,
-                            geometric_tier,
-                            lead(geometric_tier) OVER (
-                                PARTITION BY repo_id ORDER BY first_sequence
-                            ) AS next_tier,
-                            count(*) OVER (PARTITION BY repo_id) AS span_count
-                        FROM scope_git_segments
-                    )
-                    SELECT repo_id
-                    FROM layout
-                    WHERE span_count >= $1
-                        AND geometric_tier = next_tier
-                    GROUP BY repo_id
-                    ORDER BY max(span_count) DESC, repo_id
-                    LIMIT 1
+                    UPDATE scope_git_compaction_jobs AS job
+                    SET lease_generation = $4,
+                        lease_owner = $3,
+                        lease_expires_at_unix = $2,
+                        updated_at_unix = $1
+                    FROM (
+                        SELECT repo_id
+                        FROM scope_git_compaction_jobs
+                        WHERE next_run_at_unix <= $1
+                            AND (
+                                lease_expires_at_unix IS NULL OR
+                                lease_expires_at_unix <= $1
+                            )
+                        ORDER BY next_run_at_unix, updated_at_unix, repo_id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                    ) AS claimed
+                    WHERE job.repo_id = claimed.repo_id
+                    RETURNING job.*
                 "#,
-                [minimum_spans.into()],
+                [
+                    now.into(),
+                    lease_expires.into(),
+                    worker_id.into(),
+                    lease_generation.clone().into(),
+                ],
             ))
+            .one(&tx)
             .await
             .map_err(PostgresError::internal)?
         else {
+            tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(None);
         };
-        let repo_id = candidate_row
-            .try_get::<String>("", "repo_id")
-            .map_err(PostgresError::internal)?;
-        let repo = entities::repository::Entity::find_by_id(repo_id.clone())
-            .one(self.db.as_ref())
+        let repo = entities::repository::Entity::find_by_id(job.repo_id.clone())
+            .one(&tx)
             .await
             .map_err(PostgresError::internal)?
-            .ok_or_else(|| PostgresError::internal_message("Git pack layout has no repository"))?;
+            .ok_or_else(|| {
+                PostgresError::internal_message("Git compaction job has no repository")
+            })?;
         let spans = entities::git_pack_span::Entity::find()
-            .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.clone()))
+            .filter(entities::git_pack_span::Column::RepoId.eq(job.repo_id.clone()))
             .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-            .all(self.db.as_ref())
+            .all(&tx)
             .await
             .map_err(PostgresError::internal)?
             .into_iter()
@@ -84,19 +166,163 @@ impl JobStore {
             .collect::<Result<Vec<_>, _>>()?;
         validate_git_pack_layout(&spans)
             .map_err(|error| PostgresError::internal_message(error.to_string()))?;
-        let Some(pair_start) = oldest_mergeable_pair_start(&spans, minimum_spans as usize) else {
-            return Ok(None);
-        };
-        Ok(Some(GitCompactionCandidate {
-            repo_id,
-            owner: repo.owner_handle,
-            name: repo.name,
-            predecessor: pair_start
-                .checked_sub(1)
-                .and_then(|index| spans.get(index))
-                .cloned(),
-            spans: spans[pair_start..pair_start + 2].to_vec(),
+        let candidate =
+            oldest_mergeable_pair_start(&spans, minimum_spans as usize).map(|pair_start| {
+                GitCompactionCandidate {
+                    repo_id: job.repo_id.clone(),
+                    owner: repo.owner_handle,
+                    name: repo.name,
+                    predecessor: pair_start
+                        .checked_sub(1)
+                        .and_then(|index| spans.get(index))
+                        .cloned(),
+                    spans: spans[pair_start..pair_start + 2].to_vec(),
+                }
+            });
+        let target_sequence = u64::try_from(job.target_sequence).map_err(|_| {
+            PostgresError::internal_message("Git compaction target sequence is negative")
+        })?;
+        let attempts = u32::try_from(job.attempts).map_err(|_| {
+            PostgresError::internal_message("Git compaction attempt count is invalid")
+        })?;
+        let due_at_unix = u64::try_from(job.next_run_at_unix)
+            .map_err(|_| PostgresError::internal_message("Git compaction due time is negative"))?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(Some(GitCompactionClaim {
+            target_sequence,
+            attempts,
+            queue_delay_ms: now_unix.saturating_sub(due_at_unix).saturating_mul(1_000),
+            candidate,
+            repo_id: job.repo_id,
+            lease_generation,
         }))
+    }
+
+    pub async fn complete_git_compaction_claim(
+        &self,
+        claim: &GitCompactionClaim,
+        now_unix: u64,
+    ) -> Result<(), PostgresError> {
+        let now = compaction_time(now_unix)?;
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            r#"
+                UPDATE scope_git_compaction_jobs
+                SET lease_generation = NULL,
+                    lease_owner = NULL,
+                    lease_expires_at_unix = NULL,
+                    next_run_at_unix = $3,
+                    attempts = 0,
+                    last_error = NULL,
+                    updated_at_unix = GREATEST(updated_at_unix, $3)
+                WHERE repo_id = $1
+                    AND lease_generation = $2
+                    AND target_sequence > $4
+            "#,
+            [
+                claim.repo_id.clone().into(),
+                claim.lease_generation.clone().into(),
+                now.into(),
+                i64::try_from(claim.target_sequence)
+                    .map_err(|_| {
+                        PostgresError::internal_message(
+                            "Git compaction target exceeds database bigint",
+                        )
+                    })?
+                    .into(),
+            ],
+        ))
+        .await
+        .map_err(PostgresError::internal)?;
+        tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "DELETE FROM scope_git_compaction_jobs
+             WHERE repo_id = $1 AND lease_generation = $2 AND target_sequence <= $3",
+            [
+                claim.repo_id.clone().into(),
+                claim.lease_generation.clone().into(),
+                i64::try_from(claim.target_sequence)
+                    .map_err(|_| {
+                        PostgresError::internal_message(
+                            "Git compaction target exceeds database bigint",
+                        )
+                    })?
+                    .into(),
+            ],
+        ))
+        .await
+        .map_err(PostgresError::internal)?;
+        tx.commit().await.map_err(PostgresError::internal)
+    }
+
+    pub async fn continue_git_compaction_claim(
+        &self,
+        claim: &GitCompactionClaim,
+        now_unix: u64,
+    ) -> Result<(), PostgresError> {
+        let now = compaction_time(now_unix)?;
+        self.db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"
+                    UPDATE scope_git_compaction_jobs
+                    SET lease_generation = NULL,
+                        lease_owner = NULL,
+                        lease_expires_at_unix = NULL,
+                        next_run_at_unix = $3,
+                        attempts = 0,
+                        last_error = NULL,
+                        updated_at_unix = GREATEST(updated_at_unix, $3)
+                    WHERE repo_id = $1 AND lease_generation = $2
+                "#,
+                [
+                    claim.repo_id.clone().into(),
+                    claim.lease_generation.clone().into(),
+                    now.into(),
+                ],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        Ok(())
+    }
+
+    pub async fn fail_git_compaction_claim(
+        &self,
+        claim: &GitCompactionClaim,
+        error: &str,
+        now_unix: u64,
+    ) -> Result<(), PostgresError> {
+        let now = compaction_time(now_unix)?;
+        let error = bounded_compaction_error(error);
+        self.db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"
+                    UPDATE scope_git_compaction_jobs
+                    SET lease_generation = NULL,
+                        lease_owner = NULL,
+                        lease_expires_at_unix = NULL,
+                        attempts = attempts + 1,
+                        next_run_at_unix = $3 + LEAST(
+                            $5,
+                            5 * (1::bigint << LEAST(attempts, 9))
+                        ),
+                        last_error = $4,
+                        updated_at_unix = GREATEST(updated_at_unix, $3)
+                    WHERE repo_id = $1 AND lease_generation = $2
+                "#,
+                [
+                    claim.repo_id.clone().into(),
+                    claim.lease_generation.clone().into(),
+                    now.into(),
+                    error.into(),
+                    MAX_COMPACTION_RETRY_SECONDS.into(),
+                ],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        Ok(())
     }
 
     pub async fn replace_git_pack_spans_with_compaction(
@@ -213,6 +439,19 @@ impl JobStore {
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(true)
     }
+}
+
+fn compaction_time(now_unix: u64) -> Result<i64, PostgresError> {
+    i64::try_from(now_unix)
+        .map_err(|_| PostgresError::internal_message("Git compaction time exceeds database bigint"))
+}
+
+fn bounded_compaction_error(error: &str) -> String {
+    let mut bounded = error.trim().chars().take(2_000).collect::<String>();
+    if bounded.is_empty() {
+        bounded = "Git compaction failed without a diagnostic".to_string();
+    }
+    bounded
 }
 
 fn validate_compaction_replacement(
@@ -346,6 +585,167 @@ mod tests {
         assert!(validate_compaction_replacement(&expected, &wrong_head).is_err());
     }
 
+    async fn seed_scheduled_repo(store: &MetadataStore) {
+        store
+            .db
+            .execute_unprepared(
+                r#"
+                    INSERT INTO scope_users (id, handle, email, email_verified)
+                    VALUES ('scheduler_user', 'scheduler-user', 'scheduler@scope.test', TRUE);
+                    INSERT INTO scope_repositories (
+                        id, owner_handle, name, owner_user_id, publication_state,
+                        change_version, repo_config, policy
+                    ) VALUES (
+                        'scheduler/repo', 'scheduler-user', 'repo', 'scheduler_user', 'Ready',
+                        1,
+                        '{"kind":"scope.repo-config","version":1,"visibility":{"default":"private","rules":[]}}'::jsonb,
+                        '{"default_visibility":"Private","rules":[]}'::jsonb
+                    );
+                "#,
+            )
+            .await
+            .unwrap();
+        entities::git_pack_span::Model::from_domain("scheduler/repo", &span(1, 1, 0))
+            .unwrap()
+            .into_active_model()
+            .insert(store.db.as_ref())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn lease_reclaim_rejects_the_old_workers_completion() {
+        let store =
+            MetadataStore::connect_fresh_for_tests(&TestDatabaseTarget::required().unwrap())
+                .unwrap();
+        seed_scheduled_repo(&store).await;
+        schedule_git_compaction(store.db.as_ref(), "scheduler/repo", 1, 10)
+            .await
+            .unwrap();
+
+        let first = store
+            .jobs()
+            .claim_git_compaction("worker-a", 2, 10, 10, &test_generated_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .jobs()
+                .claim_git_compaction("worker-b", 2, 10, 10, &test_generated_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let reclaimed = store
+            .jobs()
+            .claim_git_compaction("worker-b", 2, 21, 10, &test_generated_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        store
+            .jobs()
+            .complete_git_compaction_claim(&first, 22)
+            .await
+            .unwrap();
+        let job = entities::git_compaction_job::Entity::find_by_id("scheduler/repo")
+            .one(store.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.lease_owner.as_deref(), Some("worker-b"));
+
+        store
+            .jobs()
+            .complete_git_compaction_claim(&reclaimed, 22)
+            .await
+            .unwrap();
+        assert!(
+            entities::git_compaction_job::Entity::find_by_id("scheduler/repo")
+                .one(store.db.as_ref())
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn push_scheduled_during_a_claim_survives_completion() {
+        let store =
+            MetadataStore::connect_fresh_for_tests(&TestDatabaseTarget::required().unwrap())
+                .unwrap();
+        seed_scheduled_repo(&store).await;
+        schedule_git_compaction(store.db.as_ref(), "scheduler/repo", 1, 10)
+            .await
+            .unwrap();
+        let first = store
+            .jobs()
+            .claim_git_compaction("worker-a", 2, 10, 30, &test_generated_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        schedule_git_compaction(store.db.as_ref(), "scheduler/repo", 2, 11)
+            .await
+            .unwrap();
+        store
+            .jobs()
+            .complete_git_compaction_claim(&first, 12)
+            .await
+            .unwrap();
+
+        let next = store
+            .jobs()
+            .claim_git_compaction("worker-b", 2, 12, 30, &test_generated_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.target_sequence, 2);
+    }
+
+    #[tokio::test]
+    async fn new_push_does_not_bypass_a_failed_compactions_backoff() {
+        let store =
+            MetadataStore::connect_fresh_for_tests(&TestDatabaseTarget::required().unwrap())
+                .unwrap();
+        seed_scheduled_repo(&store).await;
+        schedule_git_compaction(store.db.as_ref(), "scheduler/repo", 1, 10)
+            .await
+            .unwrap();
+        let failed = store
+            .jobs()
+            .claim_git_compaction("worker-a", 2, 10, 30, &test_generated_id)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .jobs()
+            .fail_git_compaction_claim(&failed, "bounded failure", 10)
+            .await
+            .unwrap();
+
+        schedule_git_compaction(store.db.as_ref(), "scheduler/repo", 2, 11)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .jobs()
+                .claim_git_compaction("worker-b", 2, 14, 30, &test_generated_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let retry = store
+            .jobs()
+            .claim_git_compaction("worker-b", 2, 15, 30, &test_generated_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.target_sequence, 2);
+        assert_eq!(retry.attempts, 1);
+    }
+
     #[tokio::test]
     async fn compaction_replaces_an_interior_pair_and_preserves_both_sides() {
         let store =
@@ -395,12 +795,16 @@ mod tests {
             .unwrap();
         }
 
-        let candidate = store
+        schedule_git_compaction(store.db.as_ref(), "repo_compaction", 4, 10)
+            .await
+            .unwrap();
+        let claim = store
             .jobs()
-            .git_compaction_candidate(3)
+            .claim_git_compaction("worker-a", 3, 10, 60, &test_generated_id)
             .await
             .unwrap()
             .unwrap();
+        let candidate = claim.candidate.unwrap();
         assert_eq!(
             candidate
                 .spans
