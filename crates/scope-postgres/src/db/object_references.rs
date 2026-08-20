@@ -85,7 +85,6 @@ where
     entities::object_reference::Entity::delete_many()
         .filter(entities::object_reference::Column::RefKind.is_in([
             "git_segment",
-            "git_segment_manifest",
             "file_change",
             "visibility_event",
             "push_trigger_source",

@@ -4,6 +4,7 @@ use crate::{
         tokens::generate_attempt_token,
     },
     error::ApiError,
+    git::run_source::materialize_run_source_bundle,
     persistence::unix_now,
     state::AppState,
 };
@@ -25,7 +26,6 @@ use scope_api_contract::{
 };
 use scope_domain::runs::cache::{CacheIdentity, CacheNamespace, CachePlatform};
 use scope_domain::runs::run::{AttemptConclusion, RunAttemptStep, RunLogChunk, StepConclusion};
-use scope_object_store::source_blob_bytes_bounded;
 
 const ATTEMPT_LEASE_SECONDS: u64 = 90;
 const MAX_SOURCE_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
@@ -62,7 +62,7 @@ pub(crate) async fn claim(
             repository_id: claim.run.workflow.repository_id().to_string(),
             workflow_path: claim.run.workflow.path().as_str().to_string(),
             git_oid: claim.run.source.git_oid().to_string(),
-            source_digest: claim.run.source.digest().to_string(),
+            source_digest: claim.run.source.source_identity().to_string(),
             pinned_container_image: claim.job.pinned_container_image.as_str().to_string(),
             definition: job_definition,
         },
@@ -189,9 +189,16 @@ pub(crate) async fn source(
     Path(attempt_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let claim = require_attempt(&state, &headers, &attempt_id).await?;
-    let source = claim.run.source.snapshot();
-    let bytes =
-        source_blob_bytes_bounded(state.object_store.as_ref(), source, MAX_SOURCE_BUNDLE_BYTES)?;
+    let source_identity = claim.run.source.source_identity().to_string();
+    let source = claim.run.source.clone();
+    let source_state = state.clone();
+    let materialized = tokio::task::spawn_blocking(move || {
+        materialize_run_source_bundle(&source_state, &source, MAX_SOURCE_BUNDLE_BYTES)
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal_message(format!("run source materialization failed: {error}"))
+    })??;
     let mut response_headers = HeaderMap::new();
     response_headers.insert(
         CONTENT_TYPE,
@@ -199,10 +206,16 @@ pub(crate) async fn source(
     );
     response_headers.insert(
         HeaderName::from_static("x-scope-source-sha256"),
-        HeaderValue::from_str(&source.sha256)
+        HeaderValue::from_str(&materialized.sha256)
             .map_err(|_| ApiError::internal_message("source digest is not a valid header value"))?,
     );
-    Ok((response_headers, bytes))
+    response_headers.insert(
+        HeaderName::from_static("x-scope-source-identity"),
+        HeaderValue::from_str(&source_identity).map_err(|_| {
+            ApiError::internal_message("source identity is not a valid header value")
+        })?,
+    );
+    Ok((response_headers, materialized.bytes))
 }
 
 pub(crate) async fn append_log(

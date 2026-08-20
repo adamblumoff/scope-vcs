@@ -5,7 +5,7 @@ use super::request_discussions::{
 use super::*;
 use crate::AppState;
 use crate::git::import::git_stdout_text;
-use crate::git::storage::restore_git_segments;
+use crate::git::storage::restore_git_pack_spans;
 use scope_domain::requests::RequestState;
 use scope_object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
 use std::sync::Arc;
@@ -164,18 +164,18 @@ async fn seed_catalog_git_segments_restore_raw_repositories() {
     state.data_dir = Arc::new(seed_snapshot_test_data_dir());
 
     let public_demo = catalog.repository("dev", "public-demo").unwrap();
-    assert_snapshot_file(
+    assert_repository_file(
         &state,
-        &public_demo.git_head.as_ref().unwrap().manifest,
+        public_demo,
         "public-demo-live",
         "README.html",
         PUBLIC_DEMO_README_HTML,
     );
 
     let update_demo = catalog.repository("dev", "update-demo").unwrap();
-    assert_snapshot_file(
+    assert_repository_file(
         &state,
-        &update_demo.git_head.as_ref().unwrap().manifest,
+        update_demo,
         "update-demo-live",
         "README.md",
         UPDATE_DEMO_INITIAL_README,
@@ -230,15 +230,21 @@ fn request_state(catalog: &scope_postgres::db::CatalogFixture, request_id: &str)
     catalog.requests.get(request_id).unwrap().state()
 }
 
-fn assert_snapshot_file(
+fn assert_repository_file(
     state: &AppState,
-    snapshot: &SourceBlob,
+    repo: &StoredRepository,
     label: &str,
     path: &str,
     expected: &str,
 ) {
     let repo_root = state.data_dir.join(format!("{label}.git"));
-    restore_git_segments(state, snapshot, &repo_root).unwrap();
+    restore_git_pack_spans(
+        state,
+        repo.git_head.as_ref().unwrap(),
+        &repo.git_pack_spans,
+        &repo_root,
+    )
+    .unwrap();
     let actual = git_stdout_text(
         &repo_root,
         &["show", &format!("{DEFAULT_GIT_BRANCH}:{path}")],

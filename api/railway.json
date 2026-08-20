@@ -11,6 +11,7 @@
     ]
   },
   "deploy": {
+    "startCommand": "exec ./bin/scope-vcs",
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 300,
     "multiRegionConfig": {

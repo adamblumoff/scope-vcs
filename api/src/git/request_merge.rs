@@ -8,7 +8,7 @@ use crate::{
         projection_repo::verify_projection_materialization,
         request_ref_public_safety::validate_public_request_merge_range,
         request_refs::attach_visible_request_refs,
-        storage::{cached_raw_git_repo, receive_pack_staging_repo_path, remove_dir_if_exists},
+        storage::{receive_pack_staging_repo_path, remove_dir_if_exists},
     },
     persistence::ensure_private_dir,
     repo_cleanup::best_effort_cleanup_rollback_source_blobs,
@@ -48,7 +48,12 @@ pub(crate) async fn prepare_request_merge(
         .git_head
         .as_ref()
         .ok_or_else(|| ApiError::conflict("repo has no accepted Git head"))?;
-    let base_repo = cached_raw_git_repo(state, &current.manifest)?;
+    let base_repo = state.repository_engine.materialize_repository(
+        state,
+        &repo.record.id,
+        current,
+        &repo.git_pack_spans,
+    )?;
     let staging_repo = receive_pack_staging_repo_path(state, owner, repo_name)?;
     if let Some(parent) = staging_repo.parent() {
         ensure_private_dir(parent)?;

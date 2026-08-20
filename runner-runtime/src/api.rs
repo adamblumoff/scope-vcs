@@ -88,12 +88,35 @@ impl RuntimeClient {
         Ok(response)
     }
 
-    pub fn download_source(&self, expected_digest: &str, destination: &Path) -> anyhow::Result<()> {
+    pub fn download_source(
+        &self,
+        expected_identity: &str,
+        destination: &Path,
+    ) -> anyhow::Result<()> {
         let mut response = self
             .auth(self.client.get(self.url("source")))
             .send()
             .context("download run source")?;
         ensure_success(&response, "download run source")?;
+        let source_identity = response
+            .headers()
+            .get("x-scope-source-identity")
+            .and_then(|value| value.to_str().ok())
+            .context("run source identity header is missing or invalid")?;
+        if source_identity != expected_identity {
+            bail!("downloaded source identity does not match attempt");
+        }
+        let expected_digest = response
+            .headers()
+            .get("x-scope-source-sha256")
+            .and_then(|value| value.to_str().ok())
+            .context("run source digest header is missing or invalid")?;
+        if expected_digest.len() != 64
+            || !expected_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("run source digest header is invalid");
+        }
+        let expected_digest = expected_digest.to_string();
         if response
             .content_length()
             .is_some_and(|length| length > MAX_SOURCE_BYTES)
@@ -125,7 +148,7 @@ impl RuntimeClient {
         }
         file.sync_all().context("sync source bundle")?;
         if hex::encode(hasher.finalize()) != expected_digest {
-            bail!("downloaded source digest does not match attempt");
+            bail!("downloaded source bytes do not match response digest");
         }
         Ok(())
     }

@@ -92,7 +92,6 @@ async fn cold_git_backed_projection_succeeds_with_one_build_permit() {
     let stored = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
-    let manifest = stored.git_head.as_ref().unwrap().manifest.clone();
     let projection = project_graph(
         &stored.graph,
         &stored.visibility_events,
@@ -109,7 +108,7 @@ async fn cold_git_backed_projection_succeeds_with_one_build_permit() {
         })
     }));
 
-    let cache_root = state.git_cache_root().unwrap();
+    let cache_root = state.repository_engine.cache_root().to_path_buf();
     fs::remove_dir_all(&cache_root).unwrap();
     fs::create_dir_all(&cache_root).unwrap();
     state.runtime_budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
@@ -117,8 +116,14 @@ async fn cold_git_backed_projection_succeeds_with_one_build_permit() {
         ..Default::default()
     }));
 
-    let projection_repo = projection_bare_repo_for_state(&state, &projection, Some(&manifest))
-        .expect("raw restore must release capacity before projection materialization");
+    let projection_repo = projection_bare_repo_for_state(
+        &state,
+        &stored.record.id,
+        &projection,
+        stored.git_head.as_ref(),
+        &stored.git_pack_spans,
+    )
+    .expect("raw restore must release capacity before projection materialization");
 
     assert_eq!(
         git_stdout_text(

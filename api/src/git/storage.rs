@@ -1,12 +1,9 @@
 use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
     error::ApiError,
+    git::import::{run_git, safe_repo_key},
     git::projection_repo::projection_bare_repo_for_state,
     git::upload::git_command_output_with_timeout,
-    git::{
-        cache::GitDerivedCacheNamespace,
-        import::{run_git, safe_repo_key},
-    },
     persistence::ensure_private_dir,
     repo_access::find_repo,
     runtime_budgets::RuntimeBudgets,
@@ -16,8 +13,9 @@ use axum::{body::Body, http::StatusCode, response::Response};
 use futures_util::StreamExt;
 use scope_domain::policy::Principal;
 use scope_domain::projection::{ProjectionViewKey, project_graph};
-use scope_domain::store::{RepoLifecycleState, SourceBlob};
-use scope_git::{GitSegmentManifest, is_git_segment_manifest};
+use scope_domain::store::{
+    GitHead, GitPackSpan, RepoLifecycleState, SourceBlob, validate_git_pack_layout,
+};
 use scope_object_store::source_blob_bytes;
 use sha2::{Digest, Sha256};
 use std::time::Instant;
@@ -25,11 +23,11 @@ use std::{
     fs,
     path::{Path as FsPath, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
 };
-use tokio::io::AsyncWriteExt;
-
-static RAW_GIT_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    task::JoinHandle,
+};
 
 pub(crate) fn receive_pack_staging_repo_path(
     state: &AppState,
@@ -85,77 +83,16 @@ pub(crate) fn git_repo_storage_root(state: &AppState) -> PathBuf {
     state.data_dir.as_ref().clone()
 }
 
-pub(crate) fn raw_git_cache_key(manifest: &SourceBlob) -> String {
-    manifest
-        .sha256
-        .get(..16)
-        .unwrap_or(manifest.sha256.as_str())
-        .to_string()
-}
-
-pub(crate) fn raw_git_cache_path(
-    state: &AppState,
-    snapshot: &SourceBlob,
-) -> Result<PathBuf, ApiError> {
-    Ok(state.raw_git_cache.path_for(snapshot))
-}
-
-pub(crate) fn cached_raw_git_repo(
-    state: &AppState,
-    snapshot: &SourceBlob,
-) -> Result<crate::git::cache::GitRepoHandle, ApiError> {
-    let repo = state.raw_git_cache.lease(snapshot)?;
-    let repo_path = repo.as_ref().to_path_buf();
-    let cache_root = state.git_cache_root()?;
-    let cache_key = raw_git_cache_key(snapshot);
-    let is_ready = || raw_git_cache_is_ready(&repo_path);
-    state.git_cache_builds.materialize(
-        GitDerivedCacheNamespace::RawSnapshot,
-        cache_key.clone(),
-        is_ready,
-        || {
-            let _permit = state.runtime_budgets.try_projection_build()?;
-            let attempt = RAW_GIT_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
-            let temp_path = cache_root.join(format!(
-                "raw-{cache_key}.{}.{}.tmp",
-                std::process::id(),
-                attempt
-            ));
-            if let Err(error) = restore_git_segments(state, snapshot, &temp_path) {
-                let _ = fs::remove_dir_all(&temp_path);
-                return Err(error);
-            }
-            match fs::rename(&temp_path, &repo_path) {
-                Ok(()) => Ok(()),
-                Err(error) if is_ready() => {
-                    let _ = fs::remove_dir_all(&temp_path);
-                    tracing::debug!(%error, path = %repo_path.display(), "using externally-created raw Git snapshot cache");
-                    Ok(())
-                }
-                Err(error) => {
-                    let _ = fs::remove_dir_all(&temp_path);
-                    Err(ApiError::internal(error))
-                }
-            }
-        },
-    )?;
-    state.raw_git_cache.note_materialized(&repo_path)?;
-    Ok(repo)
-}
-
-fn raw_git_cache_is_ready(repo_path: &FsPath) -> bool {
-    repo_path
-        .join("refs")
-        .join("heads")
-        .join(DEFAULT_GIT_BRANCH)
-        .is_file()
-}
-
 pub(crate) fn delete_repo_storage(
     state: &AppState,
     owner: &str,
     repo_name: &str,
 ) -> Result<(), ApiError> {
+    remove_dir_if_exists(
+        &state
+            .repository_engine
+            .repository_path(&scope_domain::store::repo_id(owner, repo_name)),
+    )?;
     remove_dir_if_exists(&owner_git_repo_path(state, owner, repo_name))?;
     remove_dir_if_exists(&staged_git_repo_path(state, owner, repo_name))?;
     remove_dir_if_exists(&request_ref_store_repo_path(state, owner, repo_name))?;
@@ -265,7 +202,12 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
         ensure_private_dir(parent)?;
     }
     if let Some(head) = repo.git_head.as_ref() {
-        let seed_repo = cached_raw_git_repo(state, &head.manifest)?;
+        let seed_repo = state.repository_engine.materialize_repository(
+            state,
+            &repo.repo_id,
+            head,
+            &repo.git_pack_spans,
+        )?;
         let seed = seed_repo.to_string_lossy().to_string();
         let target = repo_root.to_string_lossy().to_string();
         run_git(
@@ -283,8 +225,10 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
         let projection = project_graph(&repo.graph, &repo.visibility_events, view_key);
         let seed_repo = projection_bare_repo_for_state(
             state,
+            &repo.graph.repo_id,
             &projection,
-            repo.git_head.as_ref().map(|head| &head.manifest),
+            repo.git_head.as_ref(),
+            &repo.git_pack_spans,
         )?;
         let seed = seed_repo.to_string_lossy().to_string();
         let target = repo_root.to_string_lossy().to_string();
@@ -303,11 +247,28 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
     Ok(repo_root)
 }
 
-pub(crate) fn restore_git_segments(
+pub(crate) fn restore_git_pack_spans(
     state: &AppState,
-    snapshot: &scope_domain::store::SourceBlob,
+    head: &GitHead,
+    pack_spans: &[GitPackSpan],
     repo_root: &FsPath,
 ) -> Result<(), ApiError> {
+    validate_git_pack_layout(pack_spans)
+        .map_err(|error| ApiError::internal_message(error.to_string()))?;
+    if pack_spans.len() > state.runtime_budgets.git_storage_limits().max_pack_spans() {
+        return Err(ApiError::internal_message(format!(
+            "Git pack layout exceeds maximum span count of {}",
+            state.runtime_budgets.git_storage_limits().max_pack_spans()
+        )));
+    }
+    let final_span = pack_spans
+        .last()
+        .ok_or_else(|| ApiError::internal_message("Git head has no physical pack spans"))?;
+    if final_span.last_sequence != head.push_sequence || final_span.head_oid != head.head_oid {
+        return Err(ApiError::internal_message(
+            "Git pack layout frontier does not match the logical head",
+        ));
+    }
     if repo_root.exists() {
         fs::remove_dir_all(repo_root).map_err(ApiError::internal)?;
     }
@@ -316,52 +277,22 @@ pub(crate) fn restore_git_segments(
         &["init", "--bare", repo_root.to_string_lossy().as_ref()],
         "initializing Git snapshot repo",
     )?;
-    let mut segments = Vec::new();
-    let mut restored_head = None;
-    let mut cursor = Some(snapshot.clone());
-    let max_chain_depth = state.runtime_budgets.git_storage_limits().max_chain_depth();
-    while let Some(current) = cursor {
-        if segments.len() >= max_chain_depth {
-            return Err(ApiError::internal_message(format!(
-                "Git segment chain exceeds maximum depth of {max_chain_depth}"
-            )));
-        }
-        if is_git_segment_manifest(&current) {
-            let bytes = restore_object_bytes(state, &current, "manifest")?;
-            let manifest = GitSegmentManifest::decode(&bytes)?;
-            if !current.git_oid.is_empty() && manifest.head_oid != current.git_oid {
-                return Err(ApiError::internal_message(
-                    "Git segment manifest head does not match persisted head",
-                ));
-            }
-            restored_head.get_or_insert(manifest.head_oid.clone());
-            segments.push(manifest.segment);
-            cursor = manifest.previous;
-        } else {
-            return Err(ApiError::internal_message(
-                "raw Git cache requires a segment manifest",
-            ));
-        }
+    for span in pack_spans {
+        index_git_pack(state, repo_root, &span.object)?;
     }
-    segments.reverse();
-    for segment in segments {
-        index_git_pack(state, repo_root, &segment)?;
-    }
-    let head_oid = restored_head
-        .ok_or_else(|| ApiError::internal_message("Git segment chain did not contain a head"))?;
     run_git(
         Some(repo_root),
         &[
             "update-ref",
             &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
-            &head_oid,
+            &head.head_oid,
         ],
-        "restoring Git segment head",
+        "restoring Git pack-layout head",
     )?;
     run_git(
         Some(repo_root),
-        &["fsck", "--connectivity-only", &head_oid],
-        "verifying restored Git segment chain",
+        &["fsck", "--connectivity-only", &head.head_oid],
+        "verifying restored Git pack layout",
     )?;
     run_git(
         Some(repo_root),
@@ -375,12 +306,12 @@ pub(crate) fn restore_git_segments(
     Ok(())
 }
 
-fn index_git_pack(
+pub(crate) fn index_git_pack(
     state: &AppState,
     repo_root: &FsPath,
-    segment: &SourceBlob,
+    pack: &SourceBlob,
 ) -> Result<(), ApiError> {
-    let bytes = restore_object_bytes(state, segment, "segment")?;
+    let bytes = restore_object_bytes(state, pack, "pack")?;
     let size_bytes = bytes.len();
     let started_at = Instant::now();
     let output = crate::git::upload::git_process_output_with_timeout(
@@ -404,7 +335,7 @@ fn index_git_pack(
     let output = output?;
     if !output.status.success() {
         return Err(ApiError::infrastructure_unavailable(format!(
-            "restoring Git segment: {}",
+            "restoring Git pack: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
@@ -581,6 +512,7 @@ pub(crate) async fn git_http_backend_streaming(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    scope_git_process::configure_process_group(command.as_std_mut());
     if let Some(content_length) = content_length {
         command.env("CONTENT_LENGTH", content_length.to_string());
     }
@@ -589,21 +521,36 @@ pub(crate) async fn git_http_backend_streaming(
     }
 
     let mut child = command.spawn().map_err(ApiError::internal)?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| ApiError::internal_message("opening git http-backend stdin failed"))?;
-    let mut output_task = tokio::spawn(async move { child.wait_with_output().await });
+    let mut process_group = GitProcessGroupGuard::new(child.id());
+    let Some(mut stdin) = child.stdin.take() else {
+        terminate_and_reap_git_child(&mut child, &mut process_group).await;
+        return Err(ApiError::internal_message(
+            "opening git http-backend stdin failed",
+        ));
+    };
+    let Some(stdout) = child.stdout.take() else {
+        terminate_and_reap_git_child(&mut child, &mut process_group).await;
+        return Err(ApiError::internal_message(
+            "opening git http-backend stdout failed",
+        ));
+    };
+    let Some(stderr) = child.stderr.take() else {
+        terminate_and_reap_git_child(&mut child, &mut process_group).await;
+        return Err(ApiError::internal_message(
+            "opening git http-backend stderr failed",
+        ));
+    };
+    let mut stdout_task = tokio::spawn(read_git_pipe(stdout));
+    let mut stderr_task = tokio::spawn(read_git_pipe(stderr));
+    let process_timeout = RuntimeBudgets::default_git_command_timeout();
+    let process_deadline = tokio::time::Instant::now() + process_timeout;
     let writer = async move {
         let mut stream = body.into_data_stream();
         let mut written = 0usize;
         loop {
-            let next =
-                tokio::time::timeout(RuntimeBudgets::default_git_command_timeout(), stream.next())
-                    .await
-                    .map_err(|_| {
-                        ApiError::infrastructure_unavailable("git request upload stalled")
-                    })?;
+            let next = tokio::time::timeout_at(process_deadline, stream.next())
+                .await
+                .map_err(|_| ApiError::infrastructure_unavailable("git request upload stalled"))?;
             let Some(chunk) = next else {
                 break;
             };
@@ -621,31 +568,62 @@ pub(crate) async fn git_http_backend_streaming(
         stdin.shutdown().await.map_err(ApiError::internal)?;
         Ok::<usize, ApiError>(written)
     };
-    let request_bytes = match writer.await {
-        Ok(written) => written,
-        Err(error) => {
-            output_task.abort();
-            let _ = output_task.await;
+    let request_bytes = match tokio::time::timeout_at(process_deadline, writer).await {
+        Ok(Ok(written)) => written,
+        Ok(Err(error)) => {
+            stop_git_http_backend(
+                &mut child,
+                &mut process_group,
+                &mut stdout_task,
+                &mut stderr_task,
+            )
+            .await;
             return Err(error);
         }
+        Err(_) => {
+            stop_git_http_backend(
+                &mut child,
+                &mut process_group,
+                &mut stdout_task,
+                &mut stderr_task,
+            )
+            .await;
+            return Err(ApiError::infrastructure_unavailable(
+                "git request upload timed out",
+            ));
+        }
     };
-    let output = match tokio::time::timeout(
-        RuntimeBudgets::default_git_command_timeout(),
-        &mut output_task,
+    let output = match tokio::time::timeout_at(
+        process_deadline,
+        collect_git_http_backend_output(&mut child, &mut stdout_task, &mut stderr_task),
     )
     .await
     {
-        Ok(output) => output
-            .map_err(|_| ApiError::internal_message("git http-backend task panicked"))?
-            .map_err(ApiError::internal)?,
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            stop_git_http_backend(
+                &mut child,
+                &mut process_group,
+                &mut stdout_task,
+                &mut stderr_task,
+            )
+            .await;
+            return Err(error);
+        }
         Err(_) => {
-            output_task.abort();
-            let _ = output_task.await;
+            stop_git_http_backend(
+                &mut child,
+                &mut process_group,
+                &mut stdout_task,
+                &mut stderr_task,
+            )
+            .await;
             return Err(ApiError::infrastructure_unavailable(
                 "git http-backend timed out",
             ));
         }
     };
+    process_group.disarm();
     if !output.status.success() {
         return Err(ApiError::infrastructure_unavailable(format!(
             "git http-backend failed: {}",
@@ -658,6 +636,84 @@ pub(crate) async fn git_http_backend_streaming(
         "streamed Git receive-pack body"
     );
     CgiResponse::parse(output.stdout)
+}
+
+async fn read_git_pipe(mut pipe: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    pipe.read_to_end(&mut bytes).await?;
+    Ok(bytes)
+}
+
+async fn collect_git_http_backend_output(
+    child: &mut tokio::process::Child,
+    stdout_task: &mut JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr_task: &mut JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<std::process::Output, ApiError> {
+    let stdout = join_git_pipe(stdout_task, "stdout").await?;
+    let stderr = join_git_pipe(stderr_task, "stderr").await?;
+    let status = child.wait().await.map_err(ApiError::internal)?;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+async fn join_git_pipe(
+    task: &mut JoinHandle<std::io::Result<Vec<u8>>>,
+    pipe: &str,
+) -> Result<Vec<u8>, ApiError> {
+    task.await
+        .map_err(|_| ApiError::internal_message(format!("git http-backend {pipe} task panicked")))?
+        .map_err(ApiError::internal)
+}
+
+async fn stop_git_http_backend(
+    child: &mut tokio::process::Child,
+    process_group: &mut GitProcessGroupGuard,
+    stdout_task: &mut JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr_task: &mut JoinHandle<std::io::Result<Vec<u8>>>,
+) {
+    terminate_and_reap_git_child(child, process_group).await;
+    stdout_task.abort();
+    stderr_task.abort();
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+}
+
+async fn terminate_and_reap_git_child(
+    child: &mut tokio::process::Child,
+    process_group: &mut GitProcessGroupGuard,
+) {
+    process_group.kill();
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+struct GitProcessGroupGuard {
+    process_id: Option<u32>,
+}
+
+impl GitProcessGroupGuard {
+    fn new(process_id: Option<u32>) -> Self {
+        Self { process_id }
+    }
+
+    fn kill(&mut self) {
+        if let Some(process_id) = self.process_id.take() {
+            scope_git_process::kill_process_group(process_id);
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.process_id = None;
+    }
+}
+
+impl Drop for GitProcessGroupGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
 }
 
 pub(crate) struct CgiResponse {
@@ -727,4 +783,57 @@ pub(crate) fn find_header_end(bytes: &[u8]) -> Option<(usize, usize)> {
                 .position(|window| window == b"\n\n")
                 .map(|index| (index, 2))
         })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod process_tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    #[tokio::test]
+    async fn terminating_git_child_reaps_child_and_kills_its_process_group() {
+        let mut command = tokio::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 30 & printf '%s\\n' $!; wait")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        scope_git_process::configure_process_group(command.as_std_mut());
+
+        let mut child = command.spawn().expect("spawn test process group");
+        let stdout = child.stdout.take().expect("test child stdout");
+        let mut stdout = BufReader::new(stdout);
+        let mut descendant = String::new();
+        stdout
+            .read_line(&mut descendant)
+            .await
+            .expect("read descendant pid");
+        let descendant = descendant.trim().parse::<u32>().expect("descendant pid");
+
+        let mut process_group = GitProcessGroupGuard::new(child.id());
+        terminate_and_reap_git_child(&mut child, &mut process_group).await;
+
+        assert!(child.id().is_none(), "direct child was not reaped");
+        let mut descendant_state = None;
+        for _ in 0..100 {
+            descendant_state = fs::read_to_string(format!("/proc/{descendant}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    let command_end = stat.rfind(')')?;
+                    stat[command_end + 2..]
+                        .split_whitespace()
+                        .next()
+                        .map(str::to_string)
+                });
+            if descendant_state.as_deref().is_none_or(|state| state == "Z") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            descendant_state.as_deref().is_none_or(|state| state == "Z"),
+            "descendant survived process-group kill in state {descendant_state:?}"
+        );
+    }
 }

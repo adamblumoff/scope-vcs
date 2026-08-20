@@ -9,6 +9,7 @@ fn content_push_requires_rules_in_the_resulting_tree() {
         policy: repo.policy.clone(),
         repo_config: config.clone(),
         live_files: repo.live_tree(),
+        git_head: repo.git_head.clone(),
     };
 
     let deletion = accept_content_push(
@@ -31,6 +32,7 @@ fn content_push_requires_rules_in_the_resulting_tree() {
         policy: Policy::new(Visibility::Public),
         repo_config: config.clone(),
         live_files: Default::default(),
+        git_head: None,
     };
     let missing = accept_content_push(
         missing_state.clone(),
@@ -69,6 +71,7 @@ fn request_merge_accepts_unchanged_tree_without_weakening_push_rules() {
         policy: repo.policy.clone(),
         repo_config: config.clone(),
         live_files: repo.live_tree(),
+        git_head: repo.git_head.clone(),
     };
     let update = reviewed_update(
         "3333333333333333333333333333333333333333",

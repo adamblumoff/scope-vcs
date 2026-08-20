@@ -245,11 +245,15 @@ fn apply_update_with_head(
     previous_config: Option<RepoConfig>,
     config: RepoConfig,
 ) {
-    apply_reviewed_update_to_repo(
-        repo,
-        reviewed_update(head_oid, message, changes, previous_config, config),
-    )
-    .unwrap();
+    let mut update = reviewed_update(head_oid, message, changes, previous_config, config);
+    if let Some(previous) = repo.git_head.as_ref() {
+        let sequence = previous.push_sequence + 1;
+        update.git_head.push_sequence = sequence;
+        update.git_pack_span.first_sequence = sequence;
+        update.git_pack_span.last_sequence = sequence;
+        update.git_pack_span.base_oid = Some(previous.head_oid.clone());
+    }
+    apply_reviewed_update_to_repo(repo, update).unwrap();
 }
 
 fn reviewed_update(
@@ -259,27 +263,58 @@ fn reviewed_update(
     previous_config: Option<RepoConfig>,
     config: RepoConfig,
 ) -> ReviewedUpdateInput {
+    let mut manifest = blob("manifest v2");
+    manifest.git_oid = head_oid.to_string();
     ReviewedUpdateInput {
         branch: "main".to_string(),
         author_id: "owner".to_string(),
         message: message.to_string(),
         git_head: scope_domain::store::GitHead {
             head_oid: head_oid.to_string(),
-            segment_sequence: 1,
+            push_sequence: 1,
             change_version: 1,
-            manifest: blob("manifest v2"),
+            manifest,
         },
-        git_segment: scope_domain::store::GitSegment {
-            sequence: 1,
+        git_pack_span: scope_domain::store::GitPackSpan {
+            first_sequence: 1,
+            last_sequence: 1,
+            geometric_tier: 0,
             base_oid: None,
             head_oid: head_oid.to_string(),
             object: blob("segment v2"),
-            manifest: blob("manifest segment v2"),
         },
         changes,
         previous_config,
         config,
     }
+}
+
+#[test]
+fn reviewed_push_rejects_a_pack_span_that_does_not_advance_the_current_frontier() {
+    let mut repo = published_repo_with_public_file("initial", "/README.md", "hello");
+    let config = repo.repo_config.clone();
+    apply_update_with_head(
+        &mut repo,
+        "1111111111111111111111111111111111111111",
+        "first push",
+        vec![reviewed_change("/README.md", Some("second"))],
+        Some(config.clone()),
+        config.clone(),
+    );
+
+    let stale = reviewed_update(
+        "2222222222222222222222222222222222222222",
+        "stale push",
+        vec![reviewed_change("/README.md", Some("third"))],
+        Some(config.clone()),
+        config,
+    );
+    let error = apply_reviewed_update_to_repo(&mut repo, stale).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ReviewedUpdateError::Conflict("Git push does not advance the current pack frontier")
+    ));
 }
 
 #[test]
@@ -296,6 +331,7 @@ fn content_push_command_returns_normalized_effects_without_previous_config() {
             policy: repo.policy.clone(),
             repo_config: config.clone(),
             live_files: repo.live_tree(),
+            git_head: repo.git_head.clone(),
         },
         reviewed_update(
             "3333333333333333333333333333333333333333",
@@ -333,6 +369,7 @@ fn public_request_merge_requires_an_ordered_public_native_range() {
         policy: repo.policy.clone(),
         repo_config: config.clone(),
         live_files: repo.live_tree(),
+        git_head: repo.git_head.clone(),
     };
     let update = reviewed_update(
         "3333333333333333333333333333333333333333",
@@ -443,6 +480,7 @@ fn public_request_merge_rejects_private_changes() {
             policy: repo.policy.clone(),
             repo_config: config.clone(),
             live_files: repo.live_tree(),
+            git_head: repo.git_head.clone(),
         },
         reviewed_update(
             "3333333333333333333333333333333333333333",
@@ -482,6 +520,7 @@ fn public_request_merge_rejects_private_intermediate_native_paths() {
             policy: repo.policy.clone(),
             repo_config: config.clone(),
             live_files: repo.live_tree(),
+            git_head: repo.git_head.clone(),
         },
         reviewed_update(
             "3333333333333333333333333333333333333333",

@@ -5,7 +5,7 @@ use super::{
     repository_rows::save_repository_delta,
 };
 use sea_orm::{EntityTrait, TransactionTrait};
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, time::Instant};
 use {
     crate::error::PostgresError,
     scope_domain::error::DomainError,
@@ -95,9 +95,13 @@ impl RepositoryStore {
         let owner = owner.to_string();
         let name = name.to_string();
         let db = Arc::clone(&self.db);
+        let transaction_started = Instant::now();
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
+        let lock_started = Instant::now();
         acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
-        let repo = entities::repository::Entity::find_by_id(repo_id)
+        let lock_wait = lock_started.elapsed();
+        let serialized_started = Instant::now();
+        let repo = entities::repository::Entity::find_by_id(&repo_id)
             .one(&tx)
             .await
             .map_err(PostgresError::internal)?
@@ -116,6 +120,7 @@ impl RepositoryStore {
                 &tx,
                 &repo.record.id,
                 head,
+                &repo.git_pack_spans,
                 &input,
                 now_unix,
                 generated_ids,
@@ -131,7 +136,20 @@ impl RepositoryStore {
             )
             .await?;
         }
+        let commit_started = Instant::now();
         tx.commit().await.map_err(PostgresError::internal)?;
+        tracing::info!(
+            repository_id = repo_id,
+            protocol = "aggregate-mutation",
+            lock_wait_us = lock_wait.as_micros(),
+            body_us = commit_started
+                .duration_since(serialized_started)
+                .as_micros(),
+            serialized_us = serialized_started.elapsed().as_micros(),
+            commit_us = commit_started.elapsed().as_micros(),
+            total_us = transaction_started.elapsed().as_micros(),
+            "repository mutation persistence timing"
+        );
         Ok(mutation.result)
     }
 }

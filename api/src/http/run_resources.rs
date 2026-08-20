@@ -131,7 +131,13 @@ fn current_workflows_blocking(
     state: &AppState,
     repo: &StoredRepository,
 ) -> Result<Vec<WorkflowRevision>, ApiError> {
-    let manifest = repo.git_head.as_ref().map(|head| &head.manifest);
+    let git_source = repo.git_head.as_ref().map(|head| {
+        (
+            repo.record.id.as_str(),
+            head,
+            repo.git_pack_spans.as_slice(),
+        )
+    });
     let mut definitions = Vec::new();
     for (path, blob) in &repo.live_files {
         let Some(RepoControlPath::Workflow(workflow_path)) = classify_repo_control_path(path)
@@ -140,7 +146,7 @@ fn current_workflows_blocking(
         };
         definitions.push((
             workflow_path.as_str().to_string(),
-            source_content_bytes(state, blob, manifest)?,
+            source_content_bytes(state, blob, git_source)?,
         ));
     }
     scope_run_config::parse_workflow_set(

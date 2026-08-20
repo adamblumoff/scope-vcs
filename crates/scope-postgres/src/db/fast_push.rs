@@ -3,6 +3,7 @@ use super::{
     content_push_transactions::accept_and_persist_content_push, entities,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+use std::time::Instant;
 use {
     crate::error::PostgresError,
     scope_domain::{
@@ -39,8 +40,12 @@ impl RepositoryStore {
             now_unix,
         } = command;
         let repo_id = scope_domain::store::repo_id(&owner, &name);
+        let transaction_started = Instant::now();
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let lock_started = Instant::now();
         acquire_aggregate_lock(&tx, "repository", &repo_id).await?;
+        let lock_wait = lock_started.elapsed();
+        let serialized_started = Instant::now();
         let repo_row = entities::repository::Entity::find_by_id(repo_id.clone())
             .one(&tx)
             .await
@@ -97,7 +102,20 @@ impl RepositoryStore {
             generated_ids,
         )
         .await?;
+        let commit_started = Instant::now();
         tx.commit().await.map_err(PostgresError::internal)?;
+        tracing::info!(
+            repository_id = repo_id,
+            protocol = "focused-content-push",
+            lock_wait_us = lock_wait.as_micros(),
+            body_us = commit_started
+                .duration_since(serialized_started)
+                .as_micros(),
+            serialized_us = serialized_started.elapsed().as_micros(),
+            commit_us = commit_started.elapsed().as_micros(),
+            total_us = transaction_started.elapsed().as_micros(),
+            "Git push persistence timing"
+        );
         Ok(Some(git_head))
     }
 }

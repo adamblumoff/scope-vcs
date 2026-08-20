@@ -122,6 +122,12 @@ async fn accept_and_persist_content_update(
     let change_version = u64::try_from(repo_row.change_version).map_err(|_| {
         PostgresError::internal_message("repository change version cannot be negative")
     })?;
+    let git_head = entities::git_head::Entity::find_by_id(repo_id)
+        .one(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .map(entities::git_head::Model::try_into_domain)
+        .transpose()?;
     update.previous_config = Some(repo_config.clone());
     let (accepted, push_trigger_input) = {
         let state = ContentPushState {
@@ -129,6 +135,7 @@ async fn accept_and_persist_content_update(
             policy,
             repo_config,
             live_files,
+            git_head,
         };
         match kind {
             ContentUpdateKind::MainPush(input) => (accept_content_push(state, update), Some(input)),
@@ -141,7 +148,7 @@ async fn accept_and_persist_content_update(
         change_version,
         policy,
         git_head,
-        git_segment,
+        git_pack_span,
         logical_commit,
     } = accepted.map_err(reviewed_update_domain_error)?;
 
@@ -165,20 +172,22 @@ async fn accept_and_persist_content_update(
         .await
         .map_err(PostgresError::internal)?;
     replace_object_reference(tx, "git_manifest", repo_id, Some(&git_head.manifest)).await?;
-    entities::git_segment::Model::from_domain(repo_id, &git_segment)?
+    entities::git_pack_span::Model::from_domain(repo_id, &git_pack_span)?
         .into_active_model()
         .insert(tx)
         .await
         .map_err(PostgresError::internal)?;
-    let segment_ref_id = format!("{repo_id}:{}", git_segment.sequence);
-    insert_object_reference(tx, "git_segment", &segment_ref_id, &git_segment.object).await?;
-    insert_object_reference(
-        tx,
-        "git_segment_manifest",
-        &segment_ref_id,
-        &git_segment.manifest,
-    )
-    .await?;
+    let segment_ref_id = format!("{repo_id}:{}", git_pack_span.first_sequence);
+    insert_object_reference(tx, "git_segment", &segment_ref_id, &git_pack_span.object).await?;
+    let pinned_pack_spans = entities::git_pack_span::Entity::find()
+        .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.to_string()))
+        .order_by_asc(entities::git_pack_span::Column::FirstSequence)
+        .all(tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(entities::git_pack_span::Model::try_into_domain)
+        .collect::<Result<Vec<_>, _>>()?;
     let ordinal = usize::try_from(next_ordinal)
         .map_err(|_| PostgresError::internal_message("logical commit ordinal is invalid"))?;
     insert_commits(tx, repo_id, ordinal, std::slice::from_ref(&logical_commit)).await?;
@@ -192,6 +201,7 @@ async fn accept_and_persist_content_update(
             tx,
             repo_id,
             &git_head,
+            &pinned_pack_spans,
             &input,
             now_unix,
             generated_ids,
