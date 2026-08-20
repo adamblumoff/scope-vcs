@@ -20,6 +20,7 @@ const PUSH_INTENT_KIND: &str = "scope.push-intent";
 const PUSH_INTENT_VERSION: u8 = 1;
 const PUSH_INTENT_SIGNING_KEY_ENV: &str = "SCOPE_PUSH_INTENT_SIGNING_KEY";
 const PUSH_INTENT_SIGNING_KEY_FILE: &str = "push-intent-signing-key";
+const PUSH_INTENT_KEY_DERIVATION_CONTEXT: &[u8] = b"scope.push-intent.signing-key.v1";
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -112,9 +113,15 @@ impl AppState {
     }
 }
 
-pub(crate) fn push_intent_signing_key(data_dir: &Path) -> Result<Arc<[u8]>, ApiError> {
+pub(crate) fn push_intent_signing_key(
+    data_dir: &Path,
+    shared_root_key: Option<&[u8]>,
+) -> Result<Arc<[u8]>, ApiError> {
     if let Some(secret) = non_empty_env(PUSH_INTENT_SIGNING_KEY_ENV) {
         return Ok(Arc::from(secret.into_bytes()));
+    }
+    if let Some(shared_root_key) = shared_root_key {
+        return derive_push_intent_signing_key(shared_root_key);
     }
 
     ensure_private_dir(data_dir)?;
@@ -139,6 +146,12 @@ pub(crate) fn push_intent_signing_key(data_dir: &Path) -> Result<Arc<[u8]>, ApiE
     let secret = URL_SAFE_NO_PAD.encode(bytes);
     fs::write(&key_path, format!("{secret}\n")).map_err(ApiError::internal)?;
     Ok(Arc::from(secret.into_bytes()))
+}
+
+fn derive_push_intent_signing_key(shared_root_key: &[u8]) -> Result<Arc<[u8]>, ApiError> {
+    let mut mac = HmacSha256::new_from_slice(shared_root_key).map_err(ApiError::internal)?;
+    mac.update(PUSH_INTENT_KEY_DERIVATION_CONTEXT);
+    Ok(Arc::from(mac.finalize().into_bytes().to_vec()))
 }
 
 pub(crate) fn repo_config_fingerprint(config: &RepoConfig) -> Result<String, ApiError> {
@@ -211,4 +224,21 @@ fn verify_push_intent_signature(
     mac.update(payload);
     mac.verify_slice(signature)
         .map_err(|_| ApiError::forbidden("valid Scope push intent required"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_push_intent_signing_key;
+
+    #[test]
+    fn shared_root_key_derives_one_domain_separated_signing_key() {
+        let root = [7_u8; 32];
+        let first = derive_push_intent_signing_key(&root).unwrap();
+        let second = derive_push_intent_signing_key(&root).unwrap();
+        let other = derive_push_intent_signing_key(&[8_u8; 32]).unwrap();
+
+        assert_eq!(first.as_ref(), second.as_ref());
+        assert_ne!(first.as_ref(), root.as_slice());
+        assert_ne!(first.as_ref(), other.as_ref());
+    }
 }

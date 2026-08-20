@@ -33,12 +33,13 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let data_dir = data_dir(&repo_root);
     ensure_private_dir(&data_dir)
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
-    let push_intent_signing_key = push_intent_signing_key(&data_dir)
+    let object_encryption_key = encryption_key_from_env()?;
+    let push_intent_signing_key = push_intent_signing_key(&data_dir, Some(&object_encryption_key))
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
 
     let raw_object_store = Arc::new(EncryptedObjectStore::new(
         Arc::new(file_from_env(&data_dir.join("objects"))),
-        encryption_key_from_env()?,
+        object_encryption_key,
     ));
     let catalog =
         seed::catalog(raw_object_store.as_ref(), settings.seed_user).map_err(|error| {

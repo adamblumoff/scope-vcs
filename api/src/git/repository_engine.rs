@@ -193,7 +193,11 @@ impl RepositoryEngine {
         expected_head: &str,
         push_sequence: u64,
     ) -> Result<(), ApiError> {
-        let target = self.cache.path_for(repository_id);
+        // Post-commit synchronization mutates the same disposable replica as
+        // readers. Keep it leased so the periodic cache reaper cannot remove it
+        // while Git is replacing refs or pack files.
+        let repo = self.cache.lease(repository_id)?;
+        let target = repo.as_ref().to_path_buf();
         let is_ready = || {
             self.cache
                 .applied_sequence(&target)
