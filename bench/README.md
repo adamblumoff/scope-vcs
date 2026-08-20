@@ -77,6 +77,8 @@ SCOPE_BENCH_RUN_LABEL=current-api1-2026-08-20 \
 node bench/railway-load.mjs
 ```
 
+The report labels the API's per-process permits. Defaults are 4 receive-pack operations, 8 upload-pack operations, 2 projection builds, and 16 object-store operations. If the deployment overrides them, pass the matching `SCOPE_BENCH_RECEIVE_PACK_CONCURRENCY`, `SCOPE_BENCH_UPLOAD_PACK_CONCURRENCY`, `SCOPE_BENCH_PROJECTION_BUILD_CONCURRENCY`, and `SCOPE_BENCH_OBJECT_STORE_CONCURRENCY` values. A 429 at one of these limits is admission control, not a hardware ceiling.
+
 Then run the write-size matrix and longer staircase:
 
 ```bash
@@ -108,6 +110,8 @@ SCOPE_LOAD_PROTOCOL_LABEL=batched-wal SCOPE_LOAD_NODE_SCALE_LABEL=api-1 ...
 ```
 
 Repeat the winner at one, two, and four nodes. Do not compare runs unless fixture sizes, stage controls, database and object-store class, region, and build are identical.
+
+Run `railway-telemetry.mjs` for the same interval. Its report separates capacity rejections from scheduler outcomes and records peak CPU, RSS, cgroup PIDs, open file descriptors, and zombie children. Use those counters to tell a fixed permit ceiling from CPU, memory, process, or shared-service saturation.
 
 The benchmark does not fake CAS or WAL behavior with a SQL-only microbenchmark. Such a test omits pack durability, object-store calls, serialization, recovery, and read visibility. It cannot select the production protocol honestly. Deploy callable production variants, run this black-box suite, then delete the losing variants.
 

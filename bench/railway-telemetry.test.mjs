@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  compactionFields, numericFields, objectStoreFields, pushPersistenceFields, stripAnsi,
-  summarizeCompactions, summarizeObjectStore, summarizePushPersistence, summarizeSnapshots,
+  capacityRejectionFields, compactionFields, numericFields, objectStoreFields,
+  pushPersistenceFields, stripAnsi, summarizeCapacityRejections, summarizeCompactions,
+  summarizeObjectStore, summarizePushPersistence, summarizeSnapshots,
 } from './railway-telemetry.mjs';
 
 test('runtime snapshot parsing strips tracing colors and reads numeric fields', () => {
@@ -42,6 +43,28 @@ test('compaction outcomes are parsed without tracing quotes', () => {
     attempts: { minimum: 1, p50: 1, p95: 1, p99: 1, maximum: 1 },
     totalMs: { minimum: 42, p50: 42, p95: 42, p99: 42, maximum: 42 },
   });
+});
+
+test('capacity rejection telemetry names each fixed API permit', () => {
+  const events = [
+    capacityRejectionFields('Git receive-pack capacity is exhausted; retry later'),
+    capacityRejectionFields('fatal: remote error: Git projection build capacity is exhausted; retry later'),
+    capacityRejectionFields('Git receive-pack capacity is exhausted; retry later'),
+  ];
+  assert.deepEqual(events, [
+    { operation: 'Git receive-pack' },
+    { operation: 'Git projection build' },
+    { operation: 'Git receive-pack' },
+  ]);
+  assert.deepEqual(summarizeCapacityRejections(events), {
+    'Git receive-pack': 2,
+    'Git projection build': 1,
+  });
+  assert.deepEqual(
+    capacityRejectionFields('runtime capacity permit rejected operation="Git upload-pack"'),
+    { operation: 'Git upload-pack' },
+  );
+  assert.equal(capacityRejectionFields('ordinary infrastructure error'), null);
 });
 
 test('push persistence timings retain protocol and lock-held phases', () => {

@@ -35,7 +35,7 @@ pub(crate) async fn run(
         }
         let made_progress = match compact_one_git_repository(
             &metadata,
-            object_store.as_ref(),
+            Arc::clone(&object_store),
             &settings.worker_id,
             settings.git_compaction_spans,
             settings.git_storage_limits,
@@ -68,7 +68,7 @@ pub(crate) async fn run(
 
 pub(crate) async fn compact_one_git_repository(
     metadata: &MetadataStore,
-    object_store: &dyn ObjectStore,
+    object_store: Arc<dyn ObjectStore>,
     worker_id: &str,
     minimum_spans: usize,
     storage_limits: GitStorageLimits,
@@ -101,7 +101,46 @@ pub(crate) async fn compact_one_git_repository(
         return Ok(CompactionOutcome::Drained);
     };
     let candidate_query_ms = elapsed_ms(candidate_started);
-    let built = match build_compacted_span(object_store, candidate, storage_limits, timeout) {
+    let build_candidate = candidate.clone();
+    let build_store = Arc::clone(&object_store);
+    let mut build = tokio::task::spawn_blocking(move || {
+        build_compacted_span(
+            build_store.as_ref(),
+            &build_candidate,
+            storage_limits,
+            timeout,
+        )
+    });
+    let renewal_interval = Duration::from_secs((lease_seconds / 3).max(1));
+    let mut renewal = tokio::time::interval(renewal_interval);
+    renewal.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    renewal.tick().await;
+    let built = loop {
+        tokio::select! {
+            result = &mut build => {
+                break result.map_err(|error| anyhow::anyhow!("Git compaction task failed: {error}"))?;
+            }
+            _ = renewal.tick() => {
+                match metadata.jobs().renew_git_compaction_claim(
+                    &claim,
+                    super::unix_now()?,
+                    lease_seconds,
+                ).await {
+                    Ok(true) => {}
+                    Ok(false) => tracing::warn!(
+                        target_sequence = claim.target_sequence,
+                        "Git compaction lease was lost while external work was still running"
+                    ),
+                    Err(error) => tracing::warn!(
+                        error = %error.message,
+                        target_sequence = claim.target_sequence,
+                        "Git compaction lease renewal failed"
+                    ),
+                }
+            }
+        }
+    };
+    let built = match built {
         Ok(compaction) => compaction,
         Err(failure) => {
             let failure_now_unix = super::unix_now()?;
@@ -113,7 +152,7 @@ pub(crate) async fn compact_one_git_repository(
             if !failure.orphan_objects.is_empty() {
                 queue_or_delete_failed_compaction_objects(
                     metadata,
-                    object_store,
+                    object_store.as_ref(),
                     &failure.orphan_objects,
                     failure_now_unix,
                 )
@@ -126,6 +165,26 @@ pub(crate) async fn compact_one_git_repository(
         }
     };
     let stored_objects = [built.replacement.object.clone()];
+    let final_renewal = metadata
+        .jobs()
+        .renew_git_compaction_claim(&claim, super::unix_now()?, lease_seconds)
+        .await;
+    if !matches!(final_renewal, Ok(true)) {
+        queue_or_delete_failed_compaction_objects(
+            metadata,
+            object_store.as_ref(),
+            &stored_objects,
+            super::unix_now()?,
+        )
+        .await?;
+        if let Err(error) = final_renewal {
+            return Err(anyhow::anyhow!(
+                "renewing Git compaction lease before publication: {}",
+                error.message
+            ));
+        }
+        return Ok(CompactionOutcome::Stale);
+    }
     let persist_now_unix = super::unix_now()?;
     let persist_started = Instant::now();
     let persisted = metadata
@@ -149,7 +208,7 @@ pub(crate) async fn compact_one_git_repository(
             let outcome = if applied { "applied" } else { "stale" };
             log_compaction_attempt(
                 &claim,
-                &candidate,
+                candidate,
                 &built.metrics,
                 candidate_query_ms,
                 persist_ms,

@@ -39,8 +39,10 @@ impl AppState {
         let data_dir = data_dir(&repo_root);
         ensure_private_dir(&data_dir)
             .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
-        let push_intent_signing_key = push_intent_signing_key(&data_dir)
-            .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
+        let object_encryption_key = encryption_key_from_env()?;
+        let push_intent_signing_key =
+            push_intent_signing_key(&data_dir, Some(&object_encryption_key))
+                .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
         let metadata = MetadataStore::connect(database_url_from_env()?).await?;
         let repo_events = RepoChangeBus::default();
         let runtime_budgets = Arc::new(RuntimeBudgets::from_env()?);
@@ -48,7 +50,7 @@ impl AppState {
         let object_store = Arc::new(BudgetedObjectStore::new(
             Arc::new(EncryptedObjectStore::new(
                 Arc::new(s3),
-                encryption_key_from_env()?,
+                object_encryption_key,
             )),
             runtime_budgets.clone(),
         ));
