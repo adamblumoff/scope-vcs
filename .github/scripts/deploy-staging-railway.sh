@@ -6,7 +6,6 @@ shift
 manifest_path="${SCOPE_DEPLOYMENT_MANIFEST:-.github/deployment-services.json}"
 maintenance_binary="${SCOPE_MAINTENANCE_BINARY:-./target/release/scope-maintenance}"
 seed_binary="${SCOPE_SMOKE_SEED_BINARY:-./target/release/scope-smoke-seed}"
-cutover_path="${SCOPE_STAGING_CUTOVER_PATH:-staging-cutover-committed}"
 evidence_path="${SCOPE_STAGING_EVIDENCE_PATH:-staging-deployments.json}"
 
 if [[ -z "${RAILWAY_TOKEN:-}" || -n "${RAILWAY_API_TOKEN:-}" ]]; then
@@ -68,7 +67,7 @@ for (const id of [process.env.API_SERVICE, process.env.WORKER_SERVICE]) {
   const service = services.find((candidate) => candidate.id === id);
   if (!service) process.exit(1);
   const replicas = service.replicas || {};
-  if (expected === 0 && (replicas.configured || 0) === 0 && (replicas.running || 0) === 0) continue;
+  if (expected === 0 && (replicas.running || 0) === 0 && (replicas.crashed || 0) === 0) continue;
   if (expected === 1 && service.status === "SUCCESS" && (replicas.configured || 0) >= 1 &&
       (replicas.running || 0) >= 1 && (replicas.crashed || 0) === 0) continue;
   process.exit(1);
@@ -97,10 +96,9 @@ case "$action" in
     railway run "${railway_scope[@]}" --service "$database_service" --no-local -- \
       sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" exec "$@"' \
       scope-maintenance "$maintenance_binary" apply
-    printf '%s\n' "${GITHUB_SHA:-candidate}" > "$cutover_path"
     bash .github/scripts/deploy-railway.sh "$cache_service" "$1"
-    bash .github/scripts/deploy-railway.sh "$worker_service" "$2" stopped
-    bash .github/scripts/deploy-railway.sh "$api_service" "$3" stopped
+    bash .github/scripts/deploy-railway.sh "$worker_service" "$2"
+    bash .github/scripts/deploy-railway.sh "$api_service" "$3"
     ;;
   finish)
     if [[ "$#" -ne 1 || ! -x "$seed_binary" ]]; then

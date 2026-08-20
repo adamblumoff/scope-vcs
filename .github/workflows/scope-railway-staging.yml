@@ -128,9 +128,9 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: |
           unset RAILWAY_TOKEN
-          bash .github/scripts/scale-staging-writers.sh close
+          bash .github/scripts/stop-staging-writers.sh
 
-      - name: Migrate and deploy stopped staging services
+      - name: Migrate and deploy staging services
         shell: bash
         env:
           GITHUB_SHA: ${{ inputs.source_sha }}
@@ -139,14 +139,6 @@ jobs:
             .railway-staging-upload/cache-service \
             .railway-staging-upload/worker \
             .railway-staging-upload/api
-
-      - name: Open staging writers
-        shell: bash
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-        run: |
-          unset RAILWAY_TOKEN
-          bash .github/scripts/scale-staging-writers.sh open
 
       - name: Seed and deploy staging web
         shell: bash
@@ -192,11 +184,7 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: |
           unset RAILWAY_TOKEN
-          if [[ -f staging-cutover-committed ]]; then
-            bash .github/scripts/scale-staging-writers.sh close
-          else
-            bash .github/scripts/scale-staging-writers.sh open
-          fi
+          bash .github/scripts/stop-staging-writers.sh
 
       - name: Delete staging-scoped Railway token
         if: always() && steps.railway-token-create.outcome != 'skipped'
