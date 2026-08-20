@@ -26,6 +26,7 @@ project_id="$(jq -er '.railway.projectId' "$manifest_path")"
 production_environment_id="$(jq -er '.railway.environmentId' "$manifest_path")"
 staging_environment_id="$(jq -er '.railway.staging.environmentId' "$manifest_path")"
 staging_environment_name="$(jq -er '.railway.staging.environmentName' "$manifest_path")"
+staging_cache_url="https://$(jq -er '.railway.staging.cacheDomain' "$manifest_path")"
 database_service="$(jq -er '.railway.databaseServiceId' "$manifest_path")"
 cache_service="$(jq -er '.services.cache.id' "$manifest_path")"
 worker_service="$(jq -er '.services.worker.id' "$manifest_path")"
@@ -47,6 +48,13 @@ SCOPE_DEPLOYMENT_MANIFEST_JSON="$manifest_json" \
   SCOPE_RAILWAY_STATUS_JSON="$status_json" \
   SCOPE_RAILWAY_SERVICES_JSON="$services_json" \
   node .github/scripts/verify-staging-target.mjs >/dev/null
+
+api_variables="$(railway variable list "${railway_scope[@]}" --service "$api_service" --json)"
+if ! jq -e --arg expected "$staging_cache_url" '.SCOPE_CACHE_URL == $expected' \
+  <<< "$api_variables" >/dev/null; then
+  echo "Staging API SCOPE_CACHE_URL does not match the reviewed staging cache domain." >&2
+  exit 1
+fi
 
 export RAILWAY_PROJECT_ID="$project_id"
 export SCOPE_RAILWAY_ENVIRONMENT_ID="$staging_environment_id"
