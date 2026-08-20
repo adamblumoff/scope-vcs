@@ -8,6 +8,8 @@ type RepoFileReadyTiming = RepoParams & {
   path: string
 }
 
+let documentNavigationClaimed = false
+
 const reportRepoFileReady = createServerFn({ method: 'POST' })
   .validator(parseRepoFileReadyTiming)
   .handler(({ data }) => {
@@ -28,6 +30,7 @@ export function useRepoFileReadyTiming({
   repo: string
 }) {
   const firstIdentity = useRef(true)
+  const claimDocumentNavigation = useRef(false)
   const measurement = useRef<{
     identity: string | null
     navigationKind: 'client' | 'document'
@@ -39,13 +42,24 @@ export function useRepoFileReadyTiming({
     typeof performance !== 'undefined' &&
     measurement.current.identity !== identity
   ) {
+    const navigationKind = firstIdentity.current
+      ? initialNavigationKind()
+      : 'client'
     measurement.current = {
       identity,
-      navigationKind: firstIdentity.current ? 'document' : 'client',
-      startedAt: firstIdentity.current ? 0 : performance.now(),
+      navigationKind,
+      startedAt: navigationKind === 'document' ? 0 : performance.now(),
     }
+    claimDocumentNavigation.current = navigationKind === 'document'
     firstIdentity.current = false
   }
+
+  useEffect(() => {
+    if (claimDocumentNavigation.current) {
+      documentNavigationClaimed = true
+      claimDocumentNavigation.current = false
+    }
+  })
 
   useEffect(() => {
     if (!identity || !path || !ready || reportedIdentity.current === identity) {
@@ -67,6 +81,22 @@ export function useRepoFileReadyTiming({
     })
     return () => cancelAnimationFrame(frame)
   }, [identity, owner, path, ready, repo])
+}
+
+function initialNavigationKind(): 'client' | 'document' {
+  if (documentNavigationClaimed || typeof window === 'undefined') {
+    return 'client'
+  }
+  const [navigation] = performance.getEntriesByType('navigation')
+  if (!navigation) return 'client'
+
+  const documentUrl = new URL(navigation.name)
+  const currentUrl = new URL(window.location.href)
+  return documentUrl.origin === currentUrl.origin &&
+    documentUrl.pathname === currentUrl.pathname &&
+    documentUrl.search === currentUrl.search
+    ? 'document'
+    : 'client'
 }
 
 function parseRepoFileReadyTiming(input: RepoFileReadyTiming) {
