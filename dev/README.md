@@ -34,10 +34,11 @@ The local dev stack intentionally does not start the CLI installer service.
 Seeded repositories are the default UI development path until a separate CLI dev
 environment exists.
 
-Run `./dev/scope-dev bench` while the stack is up to collect the Phase 0 local
-data-architecture baseline. The benchmark harness lives under `bench/`, uses
-the seeded local repos, reuses the local Scope CLI session when available, and
-writes ignored reports to `.tmp/bench/phase0/`.
+Run `./dev/scope-dev bench` while the stack is up for a short read/write capacity
+run against disposable repositories. It exercises warm fetches, full clones,
+tree/blob/history reads, mixed traffic, and strict read-after-write consistency.
+The same environment variables documented in `bench/README.md` can widen the
+local run or target an isolated Railway environment.
 
 With the stack running, exercise the highest-value anonymous web routes with:
 
