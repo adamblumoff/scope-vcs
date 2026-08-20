@@ -8,6 +8,7 @@ use sea_orm_migration::MigratorTrait;
 use std::sync::Arc;
 
 mod cache_service_cutover;
+mod git_compaction_scheduler;
 mod git_pack_spans;
 mod maintenance_cutover;
 mod request_revisions;
@@ -43,6 +44,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0021_cache_service_cutover",
     "m0022_git_pack_spans",
     "m0023_logical_run_sources",
+    "m0024_git_compaction_scheduler",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -243,7 +245,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 44);
+    assert_eq!(scope_table_count, 45);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
     assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
     let review_columns = db

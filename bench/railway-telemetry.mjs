@@ -91,6 +91,7 @@ async function main() {
       resourceSummary: summarizeMetrics(metrics),
       snapshots,
       compactions,
+      compactionSummary: summarizeCompactions(compactions),
       pushPersistence,
       pushPersistenceSummary: summarizePushPersistence(pushPersistence),
       objectStoreOperations,
@@ -142,6 +143,9 @@ export function numericFields(message, names) {
 
 export function compactionFields(message) {
   const numeric = numericFields(message, [
+    'target_sequence',
+    'scheduler_attempts',
+    'scheduler_queue_delay_ms',
     'source_span_count',
     'source_pack_bytes',
     'predecessor_pack_bytes',
@@ -162,6 +166,16 @@ export function compactionFields(message) {
     outcome: message.match(/\boutcome="?([^"\s]+)"?/)?.[1] || 'unknown',
     repoId: message.match(/\brepo_id=([^\s]+)/)?.[1] || null,
     ...numeric,
+  };
+}
+
+export function summarizeCompactions(events) {
+  return {
+    count: events.length,
+    outcomes: Object.fromEntries(groupBy(events, (event) => event.outcome).map(([outcome, values]) => [outcome, values.length])),
+    queueDelayMs: timingSummary(events, 'scheduler_queue_delay_ms'),
+    attempts: timingSummary(events, 'scheduler_attempts'),
+    totalMs: timingSummary(events, 'total_ms'),
   };
 }
 
@@ -259,6 +273,11 @@ function parseJsonLines(value) {
 }
 
 function telemetryMarkdown(report) {
+  const compactionRows = Object.entries(report.services).map(([service, data]) => {
+    const summary = data.compactionSummary;
+    const outcomes = Object.entries(summary.outcomes).map(([name, count]) => `${name}:${count}`).join(', ') || 'none';
+    return `| ${service} | ${summary.count} | ${outcomes} | ${summary.queueDelayMs?.p95 ?? 'n/a'} | ${summary.attempts?.maximum ?? 'n/a'} | ${summary.totalMs?.p95 ?? 'n/a'} |`;
+  }).join('\n');
   const persistenceRows = Object.entries(report.services).flatMap(([service, data]) =>
     Object.entries(data.pushPersistenceSummary).map(([protocol, summary]) =>
       `| ${service} | ${protocol} | ${summary.count} | ${summary.lockWaitUs?.p95 ?? 'n/a'} | ${summary.bodyUs?.p95 ?? 'n/a'} | ${summary.commitUs?.p95 ?? 'n/a'} | ${summary.totalUs?.p95 ?? 'n/a'} |`,
@@ -267,7 +286,7 @@ function telemetryMarkdown(report) {
     Object.entries(data.objectStoreSummary).map(([operation, summary]) =>
       `| ${service} | ${operation} | ${summary.count} | ${summary.failures} | ${summary.elapsedUs?.p95 ?? 'n/a'} | ${summary.totalBytes} | ${summary.serviceTimeMiBPerSecond ?? 'n/a'} |`,
     )).join('\n');
-  return `# Railway Git storage telemetry\n\nGenerated: ${report.generatedAt}\n\nRun label: ${report.runLabel}\n\nEnvironment: ${report.environment}\n\n## Push persistence\n\n| Service | Protocol | Count | Lock wait p95 us | Body p95 us | Commit p95 us | Total p95 us |\n|---|---|---:|---:|---:|---:|---:|\n${persistenceRows}\n\n## Object storage\n\n| Service | Operation | Count | Failures | Latency p95 us | Bytes | Service-time MiB/s |\n|---|---|---:|---:|---:|---:|---:|\n${objectRows}\n`;
+  return `# Railway Git storage telemetry\n\nGenerated: ${report.generatedAt}\n\nRun label: ${report.runLabel}\n\nEnvironment: ${report.environment}\n\n## Compaction scheduler\n\n| Service | Count | Outcomes | Queue delay p95 ms | Max attempts | Total p95 ms |\n|---|---:|---|---:|---:|---:|\n${compactionRows}\n\n## Push persistence\n\n| Service | Protocol | Count | Lock wait p95 us | Body p95 us | Commit p95 us | Total p95 us |\n|---|---|---:|---:|---:|---:|---:|\n${persistenceRows}\n\n## Object storage\n\n| Service | Operation | Count | Failures | Latency p95 us | Bytes | Service-time MiB/s |\n|---|---|---:|---:|---:|---:|---:|\n${objectRows}\n`;
 }
 
 function required(name) {

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import {
   compactionFields, numericFields, objectStoreFields, pushPersistenceFields, stripAnsi,
-  summarizeObjectStore, summarizePushPersistence, summarizeSnapshots,
+  summarizeCompactions, summarizeObjectStore, summarizePushPersistence, summarizeSnapshots,
 } from './railway-telemetry.mjs';
 
 test('runtime snapshot parsing strips tracing colors and reads numeric fields', () => {
@@ -27,10 +27,21 @@ test('process summaries retain minimum, maximum, and final values', () => {
 });
 
 test('compaction outcomes are parsed without tracing quotes', () => {
+  const parsed = compactionFields('Git compaction attempt completed outcome="stale" repo_id=owner/repo target_sequence=64 scheduler_attempts=1 scheduler_queue_delay_ms=250 total_ms=42');
   assert.deepEqual(
-    compactionFields('Git compaction attempt completed outcome="stale" repo_id=owner/repo total_ms=42'),
-    { outcome: 'stale', repoId: 'owner/repo', total_ms: 42 },
+    parsed,
+    {
+      outcome: 'stale', repoId: 'owner/repo', target_sequence: 64, scheduler_attempts: 1,
+      scheduler_queue_delay_ms: 250, total_ms: 42,
+    },
   );
+  assert.deepEqual(summarizeCompactions([parsed]), {
+    count: 1,
+    outcomes: { stale: 1 },
+    queueDelayMs: { minimum: 250, p50: 250, p95: 250, p99: 250, maximum: 250 },
+    attempts: { minimum: 1, p50: 1, p95: 1, p99: 1, maximum: 1 },
+    totalMs: { minimum: 42, p50: 42, p95: 42, p99: 42, maximum: 42 },
+  });
 });
 
 test('push persistence timings retain protocol and lock-held phases', () => {

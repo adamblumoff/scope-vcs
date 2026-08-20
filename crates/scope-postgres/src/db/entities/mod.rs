@@ -87,7 +87,10 @@ pub use auth::{
 };
 pub use collaboration::{repository_invite, repository_member};
 pub use history::{file_change, live_file, logical_commit, object_reference, visibility_event};
-pub use jobs::{metadata_lock, outbox_job, repo_storage_cleanup_job, source_blob_cleanup_job};
+pub use jobs::{
+    git_compaction_job, metadata_lock, outbox_job, repo_storage_cleanup_job,
+    source_blob_cleanup_job,
+};
 pub use read_models::{projection_file, projection_read_model};
 pub use repositories::{
     git_head, git_pack_span, repository, repository_first_push_token, repository_git_push_token,

@@ -109,6 +109,32 @@ pub mod outbox_job {
         format!("projection_read_model_rebuild:{repo_id}:{repo_version}")
     }
 }
+
+pub mod git_compaction_job {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_git_compaction_jobs")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        pub target_sequence: i64,
+        pub attempts: i32,
+        pub next_run_at_unix: i64,
+        pub lease_generation: Option<String>,
+        pub lease_owner: Option<String>,
+        pub lease_expires_at_unix: Option<i64>,
+        pub last_error: Option<String>,
+        pub created_at_unix: i64,
+        pub updated_at_unix: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub mod metadata_lock {
     use super::*;
 

@@ -21,9 +21,9 @@ const CLEANUP_BATCH_SIZE: u64 = 100;
 const CLEANUP_CLAIM_SECONDS: i64 = 300;
 const MAX_CLEANUP_RETRY_SECONDS: i64 = 3_600;
 #[cfg(not(feature = "test-support"))]
-const SOURCE_BLOB_DELETE_GRACE_SECONDS: u64 = 300;
+pub(super) const SOURCE_BLOB_DELETE_GRACE_SECONDS: u64 = 600;
 #[cfg(feature = "test-support")]
-const SOURCE_BLOB_DELETE_GRACE_SECONDS: u64 = 0;
+pub(super) const SOURCE_BLOB_DELETE_GRACE_SECONDS: u64 = 0;
 
 #[derive(Clone)]
 struct LoadedRepoStorageCleanup {
