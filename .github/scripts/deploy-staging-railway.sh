@@ -1,25 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cache_upload_root="${1:?usage: deploy-staging-railway.sh <cache-root> <worker-root> <api-root> <web-root>}"
-worker_upload_root="${2:?usage: deploy-staging-railway.sh <cache-root> <worker-root> <api-root> <web-root>}"
-api_upload_root="${3:?usage: deploy-staging-railway.sh <cache-root> <worker-root> <api-root> <web-root>}"
-web_upload_root="${4:?usage: deploy-staging-railway.sh <cache-root> <worker-root> <api-root> <web-root>}"
+action="${1:?usage: deploy-staging-railway.sh <prepare|finish> <upload-roots...>}"
+shift
 manifest_path="${SCOPE_DEPLOYMENT_MANIFEST:-.github/deployment-services.json}"
 maintenance_binary="${SCOPE_MAINTENANCE_BINARY:-./target/release/scope-maintenance}"
 seed_binary="${SCOPE_SMOKE_SEED_BINARY:-./target/release/scope-smoke-seed}"
+cutover_path="${SCOPE_STAGING_CUTOVER_PATH:-staging-cutover-committed}"
 evidence_path="${SCOPE_STAGING_EVIDENCE_PATH:-staging-deployments.json}"
 
 if [[ -z "${RAILWAY_TOKEN:-}" || -n "${RAILWAY_API_TOKEN:-}" ]]; then
   echo "Staging deployment requires only a staging-scoped RAILWAY_TOKEN." >&2
   exit 1
 fi
-for binary in "$maintenance_binary" "$seed_binary"; do
-  if [[ ! -x "$binary" ]]; then
-    echo "Required staging command is not executable: $binary" >&2
-    exit 1
-  fi
-done
 
 manifest_json="$(jq -c . "$manifest_path")"
 project_id="$(jq -er '.railway.projectId' "$manifest_path")"
@@ -27,7 +20,6 @@ production_environment_id="$(jq -er '.railway.environmentId' "$manifest_path")"
 staging_environment_id="$(jq -er '.railway.staging.environmentId' "$manifest_path")"
 staging_environment_name="$(jq -er '.railway.staging.environmentName' "$manifest_path")"
 staging_cache_url="https://$(jq -er '.railway.staging.cacheDomain' "$manifest_path")"
-staging_region="$(jq -er '.railway.regionId' "$manifest_path")"
 database_service="$(jq -er '.railway.databaseServiceId' "$manifest_path")"
 cache_service="$(jq -er '.services.cache.id' "$manifest_path")"
 worker_service="$(jq -er '.services.worker.id' "$manifest_path")"
@@ -61,142 +53,94 @@ export RAILWAY_PROJECT_ID="$project_id"
 export SCOPE_RAILWAY_ENVIRONMENT_ID="$staging_environment_id"
 export RAILWAY_DEPLOY_MESSAGE="Staging ${GITHUB_SHA:-candidate}"
 
-evidence_lines="$(mktemp)"
-api_closed=0
-worker_closed=0
-cutover_committed=0
-
-scale_service() {
-  local service="$1"
-  local replicas="$2"
-  railway service scale "${railway_scope[@]}" --service "$service" \
-    "$staging_region=$replicas" --json >/dev/null
+assert_writer_state() {
+  local expected_running="$1"
+  local current_services
+  current_services="$(railway service list "${railway_scope[@]}" --json)"
+  SERVICES_JSON="$current_services" \
+    API_SERVICE="$api_service" \
+    WORKER_SERVICE="$worker_service" \
+    EXPECTED_RUNNING="$expected_running" \
+    node -e '
+const services = JSON.parse(process.env.SERVICES_JSON || "[]");
+const expected = Number(process.env.EXPECTED_RUNNING);
+for (const id of [process.env.API_SERVICE, process.env.WORKER_SERVICE]) {
+  const service = services.find((candidate) => candidate.id === id);
+  if (!service) process.exit(1);
+  const replicas = service.replicas || {};
+  if (expected === 0 && (replicas.configured || 0) === 0 && (replicas.running || 0) === 0) continue;
+  if (expected === 1 && service.status === "SUCCESS" && (replicas.configured || 0) >= 1 &&
+      (replicas.running || 0) >= 1 && (replicas.crashed || 0) === 0) continue;
+  process.exit(1);
+}
+'
 }
 
-wait_for_replica_state() {
+record_deployment() {
   local service="$1"
-  local expected_running="$2"
-  local deadline=$((SECONDS + 300))
-  local state
-  local status configured running crashed
+  railway deployment list "${railway_scope[@]}" --service "$service" --limit 1 --json |
+    jq -ec --arg service "$service" '
+      first | select(.status == "SUCCESS") |
+      {service: $service, deploymentId: .id, status: .status}
+    '
+}
 
-  while [[ "$SECONDS" -lt "$deadline" ]]; do
-    state="$(
-      railway service list "${railway_scope[@]}" --json |
-        jq -er --arg service "$service" '
-          .[] | select(.id == $service) |
-          [.status, (.replicas.configured // 0), (.replicas.running // 0), (.replicas.crashed // 0)] |
-          @tsv
-        '
+case "$action" in
+  prepare)
+    if [[ "$#" -ne 3 || ! -x "$maintenance_binary" ]]; then
+      echo "usage: deploy-staging-railway.sh prepare <cache-root> <worker-root> <api-root>" >&2
+      exit 2
+    fi
+    assert_writer_state 0
+    # The remote shell expands the Railway-provided database URL.
+    # shellcheck disable=SC2016
+    railway run "${railway_scope[@]}" --service "$database_service" --no-local -- \
+      sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" exec "$@"' \
+      scope-maintenance "$maintenance_binary" apply
+    printf '%s\n' "${GITHUB_SHA:-candidate}" > "$cutover_path"
+    bash .github/scripts/deploy-railway.sh "$cache_service" "$1"
+    bash .github/scripts/deploy-railway.sh "$worker_service" "$2" stopped
+    bash .github/scripts/deploy-railway.sh "$api_service" "$3" stopped
+    ;;
+  finish)
+    if [[ "$#" -ne 1 || ! -x "$seed_binary" ]]; then
+      echo "usage: deploy-staging-railway.sh finish <web-root>" >&2
+      exit 2
+    fi
+    assert_writer_state 1
+    database_variables="$(railway variable list "${railway_scope[@]}" --service "$database_service" --json)"
+    SCOPE_STAGING_DATABASE_PUBLIC_URL="$(
+      jq -er '.DATABASE_PUBLIC_URL | strings | select(length > 0)' <<< "$database_variables"
     )"
-    IFS=$'\t' read -r status configured running crashed <<< "$state"
-    if [[ "$expected_running" == "0" && "$configured" == "0" && "$running" == "0" ]]; then
-      return 0
-    fi
-    if [[ "$expected_running" == "1" && "$status" == "SUCCESS" \
-      && "$configured" -ge 1 && "$running" -ge 1 && "$crashed" == "0" ]]; then
-      return 0
-    fi
-    sleep 5
-  done
+    export SCOPE_STAGING_DATABASE_PUBLIC_URL
+    export SCOPE_ALLOW_STAGING_SMOKE_SEED=1
+    export SCOPE_SMOKE_SEED_PROJECT_ID="$project_id"
+    export SCOPE_SMOKE_SEED_ENVIRONMENT_ID="$staging_environment_id"
+    export SCOPE_SMOKE_SEED_ENVIRONMENT_NAME="$staging_environment_name"
+    export SCOPE_PRODUCTION_ENVIRONMENT_ID="$production_environment_id"
+    export SCOPE_SMOKE_SEED_USER_EMAIL="smoke@example.test"
+    export SCOPE_SMOKE_SEED_USER_HANDLE="dev"
+    # The remote shell expands the locally supplied staging URL.
+    # shellcheck disable=SC2016
+    railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
+      sh -c 'DATABASE_URL="$SCOPE_STAGING_DATABASE_PUBLIC_URL" exec "$@"' \
+      scope-smoke-seed "$seed_binary"
+    unset SCOPE_STAGING_DATABASE_PUBLIC_URL
 
-  echo "Timed out waiting for staging service $service to reach $expected_running running replicas." >&2
-  return 1
-}
-
-cleanup() {
-  local exit_status=$?
-  trap - EXIT
-  if [[ "$exit_status" -ne 0 && "$cutover_committed" == "0" ]]; then
-    [[ "$worker_closed" == "0" ]] || scale_service "$worker_service" 1 || true
-    [[ "$api_closed" == "0" ]] || scale_service "$api_service" 1 || true
-  elif [[ "$exit_status" -ne 0 && "$cutover_committed" == "1" ]]; then
-    scale_service "$api_service" 0 || true
-    scale_service "$worker_service" 0 || true
-    echo "Staging migration committed; writers remain closed until the proof is rerun." >&2
-  fi
-  rm -f "$evidence_lines"
-  exit "$exit_status"
-}
-trap cleanup EXIT
-
-scale_service "$api_service" 0
-api_closed=1
-scale_service "$worker_service" 0
-worker_closed=1
-wait_for_replica_state "$api_service" 0
-wait_for_replica_state "$worker_service" 0
-
-# The remote shell expands the Railway-provided database URL.
-# shellcheck disable=SC2016
-railway run "${railway_scope[@]}" --service "$database_service" --no-local -- \
-  sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" exec "$@"' \
-  scope-maintenance "$maintenance_binary" apply
-cutover_committed=1
-
-deploy_service() {
-  local service="$1"
-  local upload_root="$2"
-  local deployment_json
-
-  bash .github/scripts/deploy-railway.sh "$service" "$upload_root"
-  deployment_json="$(
-    railway deployment list "${railway_scope[@]}" --service "$service" --limit 1 --json |
-      jq -ec --arg service "$service" '
-        first | select(.status == "SUCCESS") |
-        {service: $service, deploymentId: .id, status: .status}
-      '
-  )"
-  printf '%s\n' "$deployment_json" >> "$evidence_lines"
-}
-
-deploy_writer() {
-  local service="$1"
-  local upload_root="$2"
-  local deployment_json
-
-  bash .github/scripts/deploy-railway.sh "$service" "$upload_root" stopped
-  scale_service "$service" 1
-  wait_for_replica_state "$service" 1
-  deployment_json="$(
-    railway deployment list "${railway_scope[@]}" --service "$service" --limit 1 --json |
-      jq -ec --arg service "$service" '
-        first | select(.status == "SUCCESS") |
-        {service: $service, deploymentId: .id, status: .status}
-      '
-  )"
-  printf '%s\n' "$deployment_json" >> "$evidence_lines"
-}
-
-deploy_service "$cache_service" "$cache_upload_root"
-deploy_writer "$worker_service" "$worker_upload_root"
-worker_closed=0
-deploy_writer "$api_service" "$api_upload_root"
-api_closed=0
-
-database_variables="$(railway variable list "${railway_scope[@]}" --service "$database_service" --json)"
-SCOPE_STAGING_DATABASE_PUBLIC_URL="$(
-  jq -er '.DATABASE_PUBLIC_URL | strings | select(length > 0)' <<< "$database_variables"
-)"
-export SCOPE_STAGING_DATABASE_PUBLIC_URL
-export SCOPE_ALLOW_STAGING_SMOKE_SEED=1
-export SCOPE_SMOKE_SEED_PROJECT_ID="$project_id"
-export SCOPE_SMOKE_SEED_ENVIRONMENT_ID="$staging_environment_id"
-export SCOPE_SMOKE_SEED_ENVIRONMENT_NAME="$staging_environment_name"
-export SCOPE_PRODUCTION_ENVIRONMENT_ID="$production_environment_id"
-export SCOPE_SMOKE_SEED_USER_EMAIL="smoke@example.test"
-export SCOPE_SMOKE_SEED_USER_HANDLE="dev"
-# The remote shell expands the locally supplied staging URL.
-# shellcheck disable=SC2016
-railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
-  sh -c 'DATABASE_URL="$SCOPE_STAGING_DATABASE_PUBLIC_URL" exec "$@"' \
-  scope-smoke-seed "$seed_binary"
-unset SCOPE_STAGING_DATABASE_PUBLIC_URL
-
-deploy_service "$web_service" "$web_upload_root"
-
-jq -s \
-  --arg commit "${GITHUB_SHA:-unknown}" \
-  --arg environmentId "$staging_environment_id" \
-  '{commit: $commit, environmentId: $environmentId, deployments: .}' \
-  "$evidence_lines" > "$evidence_path"
+    bash .github/scripts/deploy-railway.sh "$web_service" "$1"
+    evidence_lines="$(mktemp)"
+    trap 'rm -f "$evidence_lines"' EXIT
+    for service in "$cache_service" "$worker_service" "$api_service" "$web_service"; do
+      record_deployment "$service" >> "$evidence_lines"
+    done
+    jq -s \
+      --arg commit "${GITHUB_SHA:-unknown}" \
+      --arg environmentId "$staging_environment_id" \
+      '{commit: $commit, environmentId: $environmentId, deployments: .}' \
+      "$evidence_lines" > "$evidence_path"
+    ;;
+  *)
+    echo "usage: deploy-staging-railway.sh <prepare|finish> <upload-roots...>" >&2
+    exit 2
+    ;;
+esac

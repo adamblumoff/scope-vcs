@@ -121,16 +121,40 @@ jobs:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
         run: bash .github/scripts/staging-railway-token.sh create
 
-      - name: Deploy, migrate, and seed staging
+      - name: Close staging writers
+        id: staging-close
+        shell: bash
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: |
+          unset RAILWAY_TOKEN
+          bash .github/scripts/scale-staging-writers.sh close
+
+      - name: Migrate and deploy stopped staging services
+        shell: bash
+        env:
+          GITHUB_SHA: ${{ inputs.source_sha }}
+        run: |
+          bash .github/scripts/deploy-staging-railway.sh prepare \
+            .railway-staging-upload/cache-service \
+            .railway-staging-upload/worker \
+            .railway-staging-upload/api
+
+      - name: Open staging writers
+        shell: bash
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: |
+          unset RAILWAY_TOKEN
+          bash .github/scripts/scale-staging-writers.sh open
+
+      - name: Seed and deploy staging web
         shell: bash
         env:
           GITHUB_SHA: ${{ inputs.source_sha }}
           SCOPE_STAGING_EVIDENCE_PATH: staging-deployments.json
         run: |
-          bash .github/scripts/deploy-staging-railway.sh \
-            .railway-staging-upload/cache-service \
-            .railway-staging-upload/worker \
-            .railway-staging-upload/api \
+          bash .github/scripts/deploy-staging-railway.sh finish \
             .railway-staging-upload/web-root
 
       - name: Enable pnpm
@@ -160,6 +184,19 @@ jobs:
           path: staging-deployments.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Recover staging writers after failure
+        if: failure() && steps.staging-close.outcome != 'skipped'
+        shell: bash
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: |
+          unset RAILWAY_TOKEN
+          if [[ -f staging-cutover-committed ]]; then
+            bash .github/scripts/scale-staging-writers.sh close
+          else
+            bash .github/scripts/scale-staging-writers.sh open
+          fi
 
       - name: Delete staging-scoped Railway token
         if: always() && steps.railway-token-create.outcome != 'skipped'
