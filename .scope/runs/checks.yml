@@ -11,7 +11,7 @@ caches: []
 env:
   CARGO_HOME: /scope/cache/cargo
   CARGO_TARGET_DIR: /workspace/target
-  RUSTUP_TOOLCHAIN: 1.94.0-x86_64-unknown-linux-gnu
+  RUSTUP_TOOLCHAIN: 1.98.0-x86_64-unknown-linux-gnu
 jobs:
   backend:
     timeout: 45m
