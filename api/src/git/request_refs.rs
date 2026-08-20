@@ -8,8 +8,8 @@ use crate::{
         projection_repo::projection_bare_repo_for_state,
         request_ref_public_safety::ensure_public_request_ref_is_public_safe,
         storage::{
-            cached_raw_git_repo, receive_pack_staging_repo_path, remove_dir_if_exists,
-            request_ref_store_repo_path, write_receive_pack_hook,
+            receive_pack_staging_repo_path, remove_dir_if_exists, request_ref_store_repo_path,
+            write_receive_pack_hook,
         },
     },
     persistence::unix_now,
@@ -188,13 +188,20 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
             );
             GitRepoHandle::from_path(projection_bare_repo_for_state(
                 state,
+                &repo.record.id,
                 &projection,
-                repo.git_head.as_ref().map(|head| &head.manifest),
+                repo.git_head.as_ref(),
+                &repo.git_pack_spans,
             )?)
         }
         RepositoryActor::Owner | RepositoryActor::Member => {
             if let Some(head) = repo.git_head.as_ref() {
-                cached_raw_git_repo(state, &head.manifest)?
+                state.repository_engine.materialize_repository(
+                    state,
+                    &repo.record.id,
+                    head,
+                    &repo.git_pack_spans,
+                )?
             } else {
                 let principal = principal_for_user_id(&repo, actor_user_id);
                 let projection = project_graph(
@@ -204,8 +211,10 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
                 );
                 GitRepoHandle::from_path(projection_bare_repo_for_state(
                     state,
+                    &repo.record.id,
                     &projection,
-                    repo.git_head.as_ref().map(|head| &head.manifest),
+                    repo.git_head.as_ref(),
+                    &repo.git_pack_spans,
                 )?)
             }
         }
@@ -283,8 +292,10 @@ pub(crate) async fn seed_editable_request_refs(
         );
         Some(projection_bare_repo_for_state(
             state,
+            &repo.record.id,
             &projection,
-            repo.git_head.as_ref().map(|head| &head.manifest),
+            repo.git_head.as_ref(),
+            &repo.git_pack_spans,
         )?)
     } else {
         None

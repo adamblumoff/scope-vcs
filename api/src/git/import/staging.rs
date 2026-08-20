@@ -3,7 +3,7 @@ use scope_domain::reviewed_updates::{
     ReviewedContentChange, ReviewedUpdateInput, apply_reviewed_update_to_repo,
 };
 use scope_domain::runs::trigger::PushTriggerInput;
-use scope_domain::store::{GitHead, GitSegment, SourceBlob, StoredRepository};
+use scope_domain::store::{GitHead, GitPackSpan, SourceBlob, StoredRepository};
 use scope_domain::{
     error::DomainError, policy::ScopePath, repo_actions::reviewed_update_domain_error,
 };
@@ -38,7 +38,7 @@ pub(crate) struct ReceivePackUpdate {
     pub(crate) author_id: String,
     pub(crate) message: String,
     pub(crate) git_head: GitHead,
-    pub(crate) git_segment: GitSegment,
+    pub(crate) git_pack_span: GitPackSpan,
     pub(crate) durable_objects: Vec<SourceBlob>,
     pub(crate) push_trigger_input: Option<PushTriggerInput>,
     pub(crate) changes: Vec<ReceivePackFileChange>,
@@ -63,7 +63,7 @@ impl ReceivePackUpdate {
             author_id: self.author_id,
             message: self.message,
             git_head: self.git_head,
-            git_segment: self.git_segment,
+            git_pack_span: self.git_pack_span,
             changes: self
                 .changes
                 .into_iter()

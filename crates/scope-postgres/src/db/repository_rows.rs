@@ -16,7 +16,7 @@ use sea_orm::{
 use std::collections::BTreeMap;
 use {
     crate::error::PostgresError,
-    scope_domain::store::{FirstPushToken, GitHead, GitPushToken, GitSegment, StoredRepository},
+    scope_domain::store::{FirstPushToken, GitHead, GitPackSpan, GitPushToken, StoredRepository},
 };
 
 #[derive(Default)]
@@ -24,7 +24,7 @@ pub struct RepositoryFactRows {
     pub first_push_token: Option<FirstPushToken>,
     pub git_push_token: Option<GitPushToken>,
     pub git_head: Option<GitHead>,
-    pub git_segments: Vec<GitSegment>,
+    pub git_pack_spans: Vec<GitPackSpan>,
 }
 
 impl RepositoryFactRows {
@@ -33,7 +33,7 @@ impl RepositoryFactRows {
             first_push_token: self.first_push_token,
             git_push_token: self.git_push_token,
             git_head: self.git_head,
-            git_segments: self.git_segments,
+            git_pack_spans: self.git_pack_spans,
         }
     }
 }
@@ -172,8 +172,8 @@ where
             .map_err(PostgresError::internal)?;
         insert_object_reference(conn, "git_manifest", &repo_id, &head.manifest).await?;
     }
-    for segment in &repo.git_segments {
-        entities::git_segment::Model::from_domain(&repo_id, segment)?
+    for span in &repo.git_pack_spans {
+        entities::git_pack_span::Model::from_domain(&repo_id, span)?
             .into_active_model()
             .insert(conn)
             .await
@@ -181,15 +181,8 @@ where
         insert_object_reference(
             conn,
             "git_segment",
-            &format!("{repo_id}:{}", segment.sequence),
-            &segment.object,
-        )
-        .await?;
-        insert_object_reference(
-            conn,
-            "git_segment_manifest",
-            &format!("{repo_id}:{}", segment.sequence),
-            &segment.manifest,
+            &format!("{repo_id}:{}", span.first_sequence),
+            &span.object,
         )
         .await?;
     }
@@ -252,30 +245,24 @@ where
         )
         .await?;
     }
-    let segments_are_append_only = after.git_segments.len() >= before.git_segments.len()
-        && after.git_segments[..before.git_segments.len()] == before.git_segments[..];
-    if !segments_are_append_only {
-        for segment in &before.git_segments {
+    let spans_are_append_only = after.git_pack_spans.len() >= before.git_pack_spans.len()
+        && after.git_pack_spans[..before.git_pack_spans.len()] == before.git_pack_spans[..];
+    if !spans_are_append_only {
+        for span in &before.git_pack_spans {
             delete_object_reference(
                 conn,
                 "git_segment",
-                &format!("{repo_id}:{}", segment.sequence),
-            )
-            .await?;
-            delete_object_reference(
-                conn,
-                "git_segment_manifest",
-                &format!("{repo_id}:{}", segment.sequence),
+                &format!("{repo_id}:{}", span.first_sequence),
             )
             .await?;
         }
-        entities::git_segment::Entity::delete_many()
-            .filter(entities::git_segment::Column::RepoId.eq(repo_id.clone()))
+        entities::git_pack_span::Entity::delete_many()
+            .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.clone()))
             .exec(conn)
             .await
             .map_err(PostgresError::internal)?;
-        for segment in &after.git_segments {
-            entities::git_segment::Model::from_domain(repo_id, segment)?
+        for span in &after.git_pack_spans {
+            entities::git_pack_span::Model::from_domain(repo_id, span)?
                 .into_active_model()
                 .insert(conn)
                 .await
@@ -283,21 +270,14 @@ where
             insert_object_reference(
                 conn,
                 "git_segment",
-                &format!("{repo_id}:{}", segment.sequence),
-                &segment.object,
-            )
-            .await?;
-            insert_object_reference(
-                conn,
-                "git_segment_manifest",
-                &format!("{repo_id}:{}", segment.sequence),
-                &segment.manifest,
+                &format!("{repo_id}:{}", span.first_sequence),
+                &span.object,
             )
             .await?;
         }
     } else {
-        for segment in &after.git_segments[before.git_segments.len()..] {
-            entities::git_segment::Model::from_domain(repo_id, segment)?
+        for span in &after.git_pack_spans[before.git_pack_spans.len()..] {
+            entities::git_pack_span::Model::from_domain(repo_id, span)?
                 .into_active_model()
                 .insert(conn)
                 .await
@@ -305,15 +285,8 @@ where
             insert_object_reference(
                 conn,
                 "git_segment",
-                &format!("{repo_id}:{}", segment.sequence),
-                &segment.object,
-            )
-            .await?;
-            insert_object_reference(
-                conn,
-                "git_segment_manifest",
-                &format!("{repo_id}:{}", segment.sequence),
-                &segment.manifest,
+                &format!("{repo_id}:{}", span.first_sequence),
+                &span.object,
             )
             .await?;
         }
@@ -485,16 +458,16 @@ where
             fact.git_head = Some(row.try_into_domain()?);
         }
     }
-    let git_segments = entities::git_segment::Entity::find()
-        .filter(entities::git_segment::Column::RepoId.is_in(repo_ids.to_vec()))
-        .order_by_asc(entities::git_segment::Column::RepoId)
-        .order_by_asc(entities::git_segment::Column::Sequence)
+    let git_pack_spans = entities::git_pack_span::Entity::find()
+        .filter(entities::git_pack_span::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::git_pack_span::Column::RepoId)
+        .order_by_asc(entities::git_pack_span::Column::FirstSequence)
         .all(conn)
         .await
         .map_err(PostgresError::internal)?;
-    for row in git_segments {
+    for row in git_pack_spans {
         if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.git_segments.push(row.try_into_domain()?);
+            fact.git_pack_spans.push(row.try_into_domain()?);
         }
     }
 

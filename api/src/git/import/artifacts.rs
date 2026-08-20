@@ -1,7 +1,6 @@
 use super::repo_io::{
-    describe_refs, git_changed_tree_entries, git_refs, git_segment_manifest_from_repo,
-    git_snapshot_from_ref, git_tree_entries_under, pushed_commit_message, queue_failed_segments,
-    run_git_output, validate_pushed_commit_range,
+    describe_refs, git_changed_tree_entries, git_push_from_repo, git_refs, git_tree_entries_under,
+    pushed_commit_message, queue_failed_git_objects, run_git_output, validate_pushed_commit_range,
 };
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
@@ -11,7 +10,6 @@ use scope_domain::runs::{
     workflow::WorkflowPath,
 };
 use scope_domain::store::RepoLifecycleState;
-use scope_git::DEFAULT_GIT_BRANCH;
 use std::{path::Path as FsPath, time::Instant};
 
 const MAX_PUSH_WORKFLOW_FILES: usize = 64;
@@ -121,20 +119,26 @@ async fn reviewed_update_from_staging_repo_mode(
             "receive-pack update did not change the live tree",
         ));
     }
-    let segment_started = Instant::now();
-    let mut created_segment =
-        match git_segment_manifest_from_repo(state, staging_repo, repo.git_head.as_ref()).await {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-    created_segment.head.change_version = repo.change_version.saturating_add(1);
-    let segment_put_ms = segment_started.elapsed().as_millis();
-    let segment_bytes = created_segment.segment.object.size_bytes;
-    let mut durable_objects = vec![
-        created_segment.segment.object.clone(),
-        created_segment.head.manifest.clone(),
+    let pack_started = Instant::now();
+    let mut created_push = match git_push_from_repo(
+        state,
+        staging_repo,
+        repo.git_head.as_ref(),
+        repo.git_pack_spans.len(),
+    )
+    .await
+    {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return Err(error);
+        }
+    };
+    created_push.head.change_version = repo.change_version.saturating_add(1);
+    let pack_put_ms = pack_started.elapsed().as_millis();
+    let pack_bytes = created_push.pack_span.object.size_bytes;
+    let durable_objects = vec![
+        created_push.pack_span.object.clone(),
+        created_push.head.manifest.clone(),
     ];
     let changes = match pushed_entries
         .into_iter()
@@ -144,7 +148,7 @@ async fn reviewed_update_from_staging_repo_mode(
                 content: entry
                     .map(|entry| {
                         git_blob_reference(
-                            &created_segment.head.manifest,
+                            &created_push.head.manifest,
                             entry.oid,
                             entry.mode,
                             entry.size_bytes,
@@ -157,7 +161,7 @@ async fn reviewed_update_from_staging_repo_mode(
     {
         Ok(changes) => changes,
         Err(error) => {
-            queue_failed_segments(state, durable_objects).await?;
+            queue_failed_git_objects(state, durable_objects).await?;
             return Err(error);
         }
     };
@@ -166,22 +170,20 @@ async fn reviewed_update_from_staging_repo_mode(
         owner,
         repo = repo_name,
         changed_files = changes.len(),
-        segment_bytes,
+        pack_bytes,
         diff_ms,
-        segment_put_ms,
-        "prepared durable Git segment"
+        pack_put_ms,
+        "prepared durable Git push objects"
     );
 
     let push_trigger_input = match prepare_push_trigger_input(
-        state,
         staging_repo,
         &head_oid,
         mode == ReviewedUpdateMode::RequestMerge,
-        &mut durable_objects,
     ) {
         Ok(input) => input,
         Err(error) => {
-            queue_failed_segments(state, durable_objects).await?;
+            queue_failed_git_objects(state, durable_objects).await?;
             return Err(error);
         }
     };
@@ -191,8 +193,8 @@ async fn reviewed_update_from_staging_repo_mode(
         base_git_manifest_ref: None,
         author_id: author_id.to_string(),
         message,
-        git_head: created_segment.head,
-        git_segment: created_segment.segment,
+        git_head: created_push.head,
+        git_pack_span: created_push.pack_span,
         durable_objects,
         push_trigger_input,
         changes,
@@ -203,11 +205,9 @@ async fn reviewed_update_from_staging_repo_mode(
 }
 
 fn prepare_push_trigger_input(
-    state: &AppState,
     staging_repo: &FsPath,
     head_oid: &str,
     skip: bool,
-    durable_objects: &mut Vec<scope_domain::store::SourceBlob>,
 ) -> Result<Option<PushTriggerInput>, ApiError> {
     if skip {
         return Ok(None);
@@ -247,18 +247,7 @@ fn prepare_push_trigger_input(
                 .push(PushWorkflowFile::new(path, output.stdout).map_err(ApiError::bad_request)?);
         }
     }
-    let snapshot = git_snapshot_from_ref(
-        state,
-        staging_repo,
-        &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
-    )?;
-    durable_objects.push(snapshot.clone());
-    PushTriggerInput::new(
-        head_oid.to_string(),
-        snapshot,
-        workflows,
-        configuration_error,
-    )
-    .map(Some)
-    .map_err(ApiError::bad_request)
+    PushTriggerInput::new(head_oid.to_string(), workflows, configuration_error)
+        .map(Some)
+        .map_err(ApiError::bad_request)
 }

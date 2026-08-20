@@ -208,7 +208,7 @@ async fn create_push_intent_rejects_stale_config_only_review() {
 }
 
 #[tokio::test]
-async fn incremental_git_segment_restores_after_cache_loss() {
+async fn incremental_git_pack_layout_restores_after_cache_loss() {
     let (state, source, _head_oid) = published_git_fixture("segment-restore").await;
     let first_snapshot = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
@@ -249,25 +249,31 @@ async fn incremental_git_segment_restores_after_cache_loss() {
 
     let manifest_bytes =
         scope_object_store::source_blob_bytes(state.object_store.as_ref(), &snapshot).unwrap();
-    let manifest = scope_git::GitSegmentManifest::decode(&manifest_bytes).unwrap();
+    let manifest = scope_git::GitSnapshotManifest::decode(&manifest_bytes).unwrap();
     assert_eq!(manifest.head_oid, expected_head);
-    assert_eq!(manifest.previous, Some(first_snapshot.manifest));
-    assert!(matches!(
-        manifest.segment.content_ref,
-        scope_domain::content_ref::ContentRef::GitSegmentSha256(_)
-    ));
+    assert_eq!(manifest.push_sequence, first_snapshot.push_sequence + 1);
+
+    let stored = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
 
     let restored = TempGitRepo(std::env::temp_dir().join(format!(
         "scope-vcs-segment-restore-{}-{}",
         std::process::id(),
         unix_now()
     )));
-    crate::git::storage::restore_git_segments(&state, &snapshot, &restored).unwrap();
+    crate::git::storage::restore_git_pack_spans(
+        &state,
+        stored.git_head.as_ref().unwrap(),
+        &stored.git_pack_spans,
+        &restored,
+    )
+    .unwrap();
     assert_eq!(git_head_oid(&restored), expected_head);
 }
 
 #[test]
-fn segment_restore_rejects_manifest_chains_over_the_limit() {
+fn pack_restore_rejects_layouts_over_the_span_limit() {
     let state = test_state_with_repo();
     let segment = scope_object_store::put_content_object(
         state.object_store.as_ref(),
@@ -275,21 +281,24 @@ fn segment_restore_rejects_manifest_chains_over_the_limit() {
         b"segment",
     )
     .unwrap();
-    let mut snapshot = None;
-    let max_chain_depth = crate::config::default_git_storage_limits().max_chain_depth();
-    for index in 0..=max_chain_depth {
-        let head_oid = format!("{index:040x}");
-        let manifest =
-            scope_git::GitSegmentManifest::new(head_oid.clone(), snapshot, segment.clone());
-        let mut stored_manifest = scope_object_store::put_content_object(
-            state.object_store.as_ref(),
-            scope_object_store::ContentObjectKind::GitManifest,
-            &manifest.encode().unwrap(),
-        )
-        .unwrap();
-        stored_manifest.git_oid = head_oid;
-        snapshot = Some(stored_manifest);
-    }
+    let max_pack_spans = crate::config::default_git_storage_limits().max_pack_spans();
+    let spans = (1..=u64::try_from(max_pack_spans + 1).unwrap())
+        .map(|sequence| scope_domain::store::GitPackSpan {
+            first_sequence: sequence,
+            last_sequence: sequence,
+            geometric_tier: 0,
+            base_oid: (sequence > 1).then(|| format!("{:040x}", sequence - 1)),
+            head_oid: format!("{sequence:040x}"),
+            object: segment.clone(),
+        })
+        .collect::<Vec<_>>();
+    let final_sequence = spans.last().unwrap().last_sequence;
+    let head = scope_domain::store::GitHead {
+        head_oid: spans.last().unwrap().head_oid.clone(),
+        push_sequence: final_sequence,
+        change_version: final_sequence,
+        manifest: source_blob(&state, "logical snapshot"),
+    };
     let restored = TempGitRepo(std::env::temp_dir().join(format!(
         "scope-vcs-segment-depth-{}-{}",
         std::process::id(),
@@ -297,21 +306,20 @@ fn segment_restore_rejects_manifest_chains_over_the_limit() {
     )));
 
     let error =
-        crate::git::storage::restore_git_segments(&state, snapshot.as_ref().unwrap(), &restored)
-            .unwrap_err();
+        crate::git::storage::restore_git_pack_spans(&state, &head, &spans, &restored).unwrap_err();
 
     assert_eq!(
         error.operator_diagnostic(),
         format!(
-            "Git segment chain exceeds maximum depth of {}",
-            max_chain_depth
+            "Git pack layout exceeds maximum span count of {}",
+            max_pack_spans
         )
     );
     assert_eq!(error.public_message(), "Scope hit an internal error.");
 }
 
 #[tokio::test]
-async fn segment_creation_rejects_chain_at_limit_before_side_effects() {
+async fn push_creation_rejects_full_pack_layout_before_side_effects() {
     use scope_domain::store::{DEFAULT_GIT_FILE_MODE, GitHead, SourceBlob};
     use scope_git::GitStorageLimits;
 
@@ -326,7 +334,7 @@ async fn segment_creation_rejects_chain_at_limit_before_side_effects() {
     state.test_object_store = raw_store.clone();
     let previous = GitHead {
         head_oid: TEST_PUSH_HEAD_OID.to_string(),
-        segment_sequence: 2,
+        push_sequence: 2,
         change_version: 2,
         manifest: SourceBlob {
             content_ref: scope_domain::content_ref::ContentRef::git_manifest_sha256("previous"),
@@ -339,7 +347,7 @@ async fn segment_creation_rejects_chain_at_limit_before_side_effects() {
     let missing_repo = PathBuf::from("/scope-test-missing-git-repo");
     let object_count = raw_store.object_count();
 
-    let error = match git_segment_manifest_from_repo(&state, &missing_repo, Some(&previous)).await {
+    let error = match git_push_from_repo(&state, &missing_repo, Some(&previous), 2).await {
         Ok(_) => panic!("over-depth segment creation unexpectedly succeeded"),
         Err(error) => error,
     };
@@ -347,7 +355,7 @@ async fn segment_creation_rejects_chain_at_limit_before_side_effects() {
     assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         error.operator_diagnostic(),
-        "Git segment chain has reached maximum depth of 2; retry after compaction"
+        "Git pack layout has reached its maximum of 2 spans; retry after compaction"
     );
     assert_eq!(
         error.public_message(),

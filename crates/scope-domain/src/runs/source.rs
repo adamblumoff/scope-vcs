@@ -1,6 +1,9 @@
 use super::run::validate_sha256_hash;
 use crate::{
-    content_ref::ContentRef, error::DomainError, projection::ProjectionViewKey, store::SourceBlob,
+    content_ref::ContentRef,
+    error::DomainError,
+    projection::ProjectionViewKey,
+    store::{GitHead, GitPackSpan, SourceBlob, validate_git_pack_layout},
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,10 +20,10 @@ pub enum RunSource {
     EphemeralGitBundle {
         object: SourceBlob,
     },
-    AcceptedRevision {
-        change_version: u64,
-        manifest: SourceBlob,
-        snapshot: SourceBlob,
+    AcceptedGitHead {
+        repository_id: String,
+        head: GitHead,
+        pack_spans: Vec<GitPackSpan>,
         audience: ProjectionViewKey,
     },
 }
@@ -36,71 +39,113 @@ impl RunSource {
         Ok(Self::EphemeralGitBundle { object })
     }
 
-    pub fn accepted_revision(
-        change_version: u64,
-        manifest: SourceBlob,
-        snapshot: SourceBlob,
+    pub fn accepted_git_head(
+        repository_id: impl Into<String>,
+        head: GitHead,
+        pack_spans: Vec<GitPackSpan>,
         audience: ProjectionViewKey,
     ) -> Result<Self, DomainError> {
-        if change_version == 0 {
+        let repository_id = repository_id.into();
+        if repository_id.trim().is_empty() {
             return Err(DomainError::invalid_input(
-                "accepted run source change version must be positive",
+                "accepted run source repository id is required",
             ));
         }
-        validate_source_blob(&manifest, "run source manifest")?;
-        if !matches!(manifest.content_ref, ContentRef::GitManifestSha256(_)) {
+        if head.push_sequence == 0 || head.change_version == 0 {
+            return Err(DomainError::invalid_input(
+                "accepted run source sequence and change version must be positive",
+            ));
+        }
+        validate_git_oid("accepted run source head", &head.head_oid)?;
+        validate_source_blob(&head.manifest, "run source manifest")?;
+        if !matches!(head.manifest.content_ref, ContentRef::GitManifestSha256(_)) {
             return Err(DomainError::invalid_input(
                 "accepted run source must use a Git manifest",
             ));
         }
-        validate_source_blob(&snapshot, "accepted run source snapshot")?;
-        if !matches!(snapshot.content_ref, ContentRef::GitBundleSha256(_)) {
+        if head.manifest.git_oid != head.head_oid {
             return Err(DomainError::invalid_input(
-                "accepted run source snapshot must be a Git bundle",
+                "accepted run source manifest head does not match the accepted head",
             ));
         }
-        if snapshot.git_oid != manifest.git_oid {
+        if pack_spans.is_empty() {
             return Err(DomainError::invalid_input(
-                "accepted run source snapshot and manifest heads do not match",
+                "accepted run source must pin at least one Git pack span",
             ));
         }
-        Ok(Self::AcceptedRevision {
-            change_version,
-            manifest,
-            snapshot,
+        validate_git_pack_layout(&pack_spans)
+            .map_err(|error| DomainError::invalid_input(error.to_string()))?;
+        for span in &pack_spans {
+            validate_source_blob(&span.object, "run source Git pack")?;
+            if !matches!(span.object.content_ref, ContentRef::GitSegmentSha256(_)) {
+                return Err(DomainError::invalid_input(
+                    "accepted run source packs must be Git segments",
+                ));
+            }
+        }
+        let final_span = pack_spans.last().expect("empty pack spans were rejected");
+        if final_span.last_sequence != head.push_sequence || final_span.head_oid != head.head_oid {
+            return Err(DomainError::invalid_input(
+                "accepted run source packs do not reach the accepted head",
+            ));
+        }
+        Ok(Self::AcceptedGitHead {
+            repository_id,
+            head,
+            pack_spans,
             audience,
         })
     }
 
-    pub fn snapshot(&self) -> &SourceBlob {
+    pub fn ephemeral_bundle(&self) -> Option<&SourceBlob> {
         match self {
-            Self::EphemeralGitBundle { object } => object,
-            Self::AcceptedRevision { snapshot, .. } => snapshot,
+            Self::EphemeralGitBundle { object } => Some(object),
+            Self::AcceptedGitHead { .. } => None,
         }
     }
 
     pub fn retained_objects(&self) -> Vec<&SourceBlob> {
         match self {
             Self::EphemeralGitBundle { object } => vec![object],
-            Self::AcceptedRevision {
-                manifest, snapshot, ..
-            } => vec![manifest, snapshot],
+            Self::AcceptedGitHead {
+                head, pack_spans, ..
+            } => std::iter::once(&head.manifest)
+                .chain(pack_spans.iter().map(|span| &span.object))
+                .collect(),
         }
     }
 
-    pub fn digest(&self) -> &str {
-        &self.snapshot().sha256
+    pub fn source_identity(&self) -> &str {
+        match self {
+            Self::EphemeralGitBundle { object } => &object.sha256,
+            Self::AcceptedGitHead { head, .. } => &head.manifest.sha256,
+        }
     }
 
     pub fn git_oid(&self) -> &str {
-        &self.snapshot().git_oid
+        match self {
+            Self::EphemeralGitBundle { object } => &object.git_oid,
+            Self::AcceptedGitHead { head, .. } => &head.head_oid,
+        }
+    }
+
+    pub fn logical_git_head(&self) -> Option<(&str, &GitHead, &[GitPackSpan])> {
+        match self {
+            Self::AcceptedGitHead {
+                repository_id,
+                head,
+                pack_spans,
+                ..
+            } => Some((repository_id, head, pack_spans)),
+            Self::EphemeralGitBundle { .. } => None,
+        }
     }
 
     pub fn is_private_only(&self) -> bool {
         matches!(
             self,
             Self::EphemeralGitBundle { .. }
-                | Self::AcceptedRevision {
+                | Self::AcceptedGitHead {
                     audience: ProjectionViewKey::Private,
                     ..
                 }
@@ -125,4 +170,91 @@ fn validate_git_oid(label: &str, git_oid: &str) -> Result<(), DomainError> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::DEFAULT_GIT_FILE_MODE;
+
+    #[test]
+    fn accepted_git_head_pins_the_exact_pack_layout() {
+        let head_oid = "a".repeat(40);
+        let manifest = source_blob(
+            ContentRef::git_manifest_sha256("b".repeat(64)),
+            'b',
+            &head_oid,
+        );
+        let pack = GitPackSpan {
+            first_sequence: 1,
+            last_sequence: 1,
+            geometric_tier: 0,
+            base_oid: None,
+            head_oid: head_oid.clone(),
+            object: source_blob(
+                ContentRef::git_segment_sha256("c".repeat(64)),
+                'c',
+                &head_oid,
+            ),
+        };
+        let source = RunSource::accepted_git_head(
+            "owner/repo",
+            GitHead {
+                head_oid: head_oid.clone(),
+                push_sequence: 1,
+                change_version: 7,
+                manifest: manifest.clone(),
+            },
+            vec![pack.clone()],
+            ProjectionViewKey::Private,
+        )
+        .unwrap();
+
+        assert_eq!(source.git_oid(), head_oid);
+        assert_eq!(source.source_identity(), manifest.sha256);
+        assert_eq!(source.retained_objects(), vec![&manifest, &pack.object]);
+    }
+
+    #[test]
+    fn accepted_git_head_rejects_a_frontier_that_does_not_match_its_head() {
+        let head_oid = "a".repeat(40);
+        let source = RunSource::accepted_git_head(
+            "owner/repo",
+            GitHead {
+                head_oid: head_oid.clone(),
+                push_sequence: 2,
+                change_version: 7,
+                manifest: source_blob(
+                    ContentRef::git_manifest_sha256("b".repeat(64)),
+                    'b',
+                    &head_oid,
+                ),
+            },
+            vec![GitPackSpan {
+                first_sequence: 1,
+                last_sequence: 1,
+                geometric_tier: 0,
+                base_oid: None,
+                head_oid: head_oid.clone(),
+                object: source_blob(
+                    ContentRef::git_segment_sha256("c".repeat(64)),
+                    'c',
+                    &head_oid,
+                ),
+            }],
+            ProjectionViewKey::Private,
+        );
+
+        assert!(source.unwrap_err().message.contains("do not reach"));
+    }
+
+    fn source_blob(content_ref: ContentRef, character: char, git_oid: &str) -> SourceBlob {
+        SourceBlob {
+            content_ref,
+            sha256: character.to_string().repeat(64),
+            git_oid: git_oid.to_string(),
+            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+            size_bytes: 1,
+        }
+    }
 }

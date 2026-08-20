@@ -3,9 +3,11 @@ pub(crate) mod content;
 mod credentials;
 pub(crate) mod import;
 pub(crate) mod projection_repo;
+pub(crate) mod repository_engine;
 pub(crate) mod request_merge;
 mod request_ref_public_safety;
 pub(crate) mod request_refs;
+pub(crate) mod run_source;
 pub(crate) mod storage;
 pub(crate) mod upload;
 
@@ -16,7 +18,6 @@ use crate::{
     config::*,
     error::ApiError,
     git::{
-        cache::sanitize_raw_git_cache_repo,
         import::{
             persist_main_push_update_and_promote, receive_pack_update_from_staging_repo,
             reviewed_update_from_staging_repo,
@@ -68,20 +69,6 @@ enum ReceivePackBody {
 impl TemporaryRepository {
     fn new(path: PathBuf) -> Self {
         Self(Some(path))
-    }
-
-    fn promote_to(&mut self, target: &FsPath) -> Result<(), ApiError> {
-        let source = self
-            .0
-            .as_ref()
-            .ok_or_else(|| ApiError::internal_message("temporary Git repository is missing"))?;
-        if target.exists() {
-            fs::remove_dir_all(source).map_err(ApiError::internal)?;
-        } else {
-            fs::rename(source, target).map_err(ApiError::internal)?;
-        }
-        self.0 = None;
-        Ok(())
     }
 }
 
@@ -610,7 +597,7 @@ async fn handle_git_receive_pack_body(
     content_type: Option<String>,
     access: ReceivePackAccess,
 ) -> Result<Response, ApiError> {
-    let mut staging_repo = TemporaryRepository::new(match &access {
+    let staging_repo = TemporaryRepository::new(match &access {
         ReceivePackAccess::FirstPush { .. } => {
             ensure_first_push_receive_pack_staging_repo(state, owner, repo_name)?
         }
@@ -898,22 +885,18 @@ async fn handle_git_receive_pack_body(
                     head.manifest.content_ref == committed_git_head.manifest.content_ref
                 });
                 if is_still_current {
-                    match raw_git_cache_path(state, &committed_git_head.manifest).and_then(
-                        |cache_path| {
-                            sanitize_raw_git_cache_repo(
-                                &staging_repo,
-                                &committed_git_head.head_oid,
-                            )?;
-                            staging_repo.promote_to(&cache_path)?;
-                            state.raw_git_cache.note_materialized(&cache_path)
-                        },
+                    match state.repository_engine.sync_after_push(
+                        &scope_domain::store::repo_id(owner, repo_name),
+                        &staging_repo,
+                        &committed_git_head.head_oid,
+                        committed_git_head.push_sequence,
                     ) {
                         Ok(()) => {}
                         Err(error) => tracing::warn!(
                             owner,
                             repo = repo_name,
                             error = %error.operator_diagnostic(),
-                            "push committed but raw Git cache promotion failed"
+                            "push committed but repository Git cache synchronization failed"
                         ),
                     }
                 }

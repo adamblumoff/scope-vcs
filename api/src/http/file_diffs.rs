@@ -4,13 +4,13 @@ use crate::{
     http::responses::{ReviewFileContentResponse, ReviewFileDiffResponse},
     state::AppState,
 };
-use scope_domain::store::{FileChangeKind, SourceBlob};
+use scope_domain::store::{FileChangeKind, GitHead, GitPackSpan, SourceBlob};
 
 pub(crate) const MAX_RENDERED_TEXT_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn review_file_diff_response_for_blobs(
     state: &AppState,
-    git_manifest: Option<&SourceBlob>,
+    git_source: Option<(&str, &GitHead, &[GitPackSpan])>,
     path: String,
     kind: FileChangeKind,
     old_content: Option<&SourceBlob>,
@@ -22,10 +22,10 @@ pub(crate) fn review_file_diff_response_for_blobs(
         old_mode: old_content.map(|blob| blob.git_file_mode.clone()),
         new_mode: new_content.map(|blob| blob.git_file_mode.clone()),
         old_content: old_content
-            .map(|blob| review_content_response_for_blob(state, blob, git_manifest))
+            .map(|blob| review_content_response_for_blob(state, blob, git_source))
             .transpose()?,
         new_content: new_content
-            .map(|blob| review_content_response_for_blob(state, blob, git_manifest))
+            .map(|blob| review_content_response_for_blob(state, blob, git_source))
             .transpose()?,
     })
 }
@@ -33,13 +33,13 @@ pub(crate) fn review_file_diff_response_for_blobs(
 pub(crate) fn review_content_response_for_blob(
     state: &AppState,
     blob: &SourceBlob,
-    git_manifest: Option<&SourceBlob>,
+    git_source: Option<(&str, &GitHead, &[GitPackSpan])>,
 ) -> Result<ReviewFileContentResponse, ApiError> {
     if nonrenderable_blob(blob) {
         return Ok(binary_content(blob));
     }
 
-    let bytes = source_content_bytes(state, blob, git_manifest)?;
+    let bytes = source_content_bytes(state, blob, git_source)?;
     Ok(review_content_from_bytes(blob, &bytes))
 }
 

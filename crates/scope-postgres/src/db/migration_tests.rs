@@ -8,6 +8,7 @@ use sea_orm_migration::MigratorTrait;
 use std::sync::Arc;
 
 mod cache_service_cutover;
+mod git_pack_spans;
 mod maintenance_cutover;
 mod request_revisions;
 
@@ -40,6 +41,8 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0019_run_attempt_cache_observations",
     "m0020_cloud_execution",
     "m0021_cache_service_cutover",
+    "m0022_git_pack_spans",
+    "m0023_logical_run_sources",
 ];
 
 pub(super) async fn isolated_database() -> (

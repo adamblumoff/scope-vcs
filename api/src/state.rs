@@ -2,9 +2,10 @@ use crate::{
     auth::clerk::ClerkVerifier,
     cache_grants::CacheGrantIssuer,
     config::{
-        SCOPE_OPERATOR_TOKEN_ENV, data_dir, database_url_from_env, git_repo_root, non_empty_env,
+        SCOPE_OPERATOR_TOKEN_ENV, data_dir, database_url_from_env, git_cache_max_bytes_from_env,
+        git_repo_root, non_empty_env,
     },
-    git::cache::{GitDerivedCacheCoordinator, RawGitCacheRegistry},
+    git::repository_engine::RepositoryEngine,
     object_store_config::{encryption_key_from_env, s3_from_env},
     persistence::ensure_private_dir,
     push_intents::push_intent_signing_key,
@@ -27,8 +28,7 @@ pub struct AppState {
     pub(crate) operator_token: Option<Arc<str>>,
     pub(crate) repo_events: RepoChangeBus,
     pub(crate) push_intent_signing_key: Arc<[u8]>,
-    pub(crate) raw_git_cache: Arc<RawGitCacheRegistry>,
-    pub(crate) git_cache_builds: Arc<GitDerivedCacheCoordinator>,
+    pub(crate) repository_engine: Arc<RepositoryEngine>,
     #[cfg(test)]
     pub(crate) test_object_store: Arc<scope_object_store::MemoryObjectStore>,
 }
@@ -59,8 +59,9 @@ impl AppState {
             .start_repo_change_listener(move |payload| {
                 listener_bus.publish_notification_payload(&payload)
             })?;
-        let raw_git_cache = RawGitCacheRegistry::new(data_dir.join("git-cache"))
-            .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
+        let repository_engine =
+            RepositoryEngine::new(data_dir.join("git-cache"), git_cache_max_bytes_from_env()?)
+                .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
 
         let state = Self {
             metadata,
@@ -72,12 +73,11 @@ impl AppState {
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
             repo_events,
             push_intent_signing_key,
-            raw_git_cache: raw_git_cache.clone(),
-            git_cache_builds: Arc::new(GitDerivedCacheCoordinator::default()),
+            repository_engine: repository_engine.clone(),
             #[cfg(test)]
             test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
         };
-        state.start_raw_git_cache_reaper();
+        repository_engine.start_reaper();
         state.start_run_attempt_recovery();
         state.start_run_retention();
         best_effort_drain_pending_repo_storage_deletions(&state).await;
@@ -113,8 +113,11 @@ impl AppState {
             operator_token: None,
             repo_events: RepoChangeBus::default(),
             push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
-            raw_git_cache: RawGitCacheRegistry::new(data_dir.join("git-cache")).unwrap(),
-            git_cache_builds: Arc::new(GitDerivedCacheCoordinator::default()),
+            repository_engine: RepositoryEngine::new(
+                data_dir.join("git-cache"),
+                crate::config::DEFAULT_GIT_CACHE_MAX_BYTES,
+            )
+            .unwrap(),
             #[cfg(test)]
             test_object_store,
         }

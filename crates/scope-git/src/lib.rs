@@ -8,42 +8,40 @@ pub use projection_identity::{
 };
 #[cfg(feature = "storage")]
 pub use snapshot::{
-    GitSnapshotMaterializationError, StoredGitSegment, materialize_compacted_git_segment,
-    materialize_incremental_git_segment,
+    GitSnapshotMaterializationError, StoredGitPush, materialize_git_push, store_compacted_git_pack,
 };
 pub use tree_path::{GitTreePath, GitTreePathError};
 
 use scope_domain::content_ref::ContentRef;
-use scope_domain::store::{GitHead, GitSegment, SourceBlob};
+use scope_domain::store::SourceBlob;
 #[cfg(feature = "storage")]
 use scope_object_store::ObjectStoreError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const DEFAULT_GIT_BRANCH: &str = "main";
-
-pub const GIT_SEGMENT_MANIFEST_VERSION: u8 = 1;
+pub const GIT_SNAPSHOT_MANIFEST_VERSION: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GitStorageLimits {
     max_object_bytes: usize,
-    max_chain_depth: usize,
+    max_pack_spans: usize,
 }
 
 impl GitStorageLimits {
     pub fn new(
         max_object_bytes: usize,
-        max_chain_depth: usize,
+        max_pack_spans: usize,
     ) -> Result<Self, GitStorageLimitError> {
         if max_object_bytes == 0 {
             return Err(GitStorageLimitError::ZeroObjectBytes);
         }
-        if max_chain_depth == 0 {
-            return Err(GitStorageLimitError::ZeroChainDepth);
+        if max_pack_spans == 0 {
+            return Err(GitStorageLimitError::ZeroPackSpans);
         }
         Ok(Self {
             max_object_bytes,
-            max_chain_depth,
+            max_pack_spans,
         })
     }
 
@@ -51,25 +49,30 @@ impl GitStorageLimits {
         self.max_object_bytes
     }
 
-    pub fn max_chain_depth(self) -> usize {
-        self.max_chain_depth
+    pub fn max_pack_spans(self) -> usize {
+        self.max_pack_spans
     }
 
-    pub fn next_segment_sequence(
+    pub fn next_push_sequence(
         self,
         previous_sequence: Option<u64>,
     ) -> Result<u64, GitStorageLimitError> {
-        let previous_sequence = previous_sequence.unwrap_or(0);
-        let previous_depth = usize::try_from(previous_sequence)
-            .map_err(|_| GitStorageLimitError::SequenceOverflow)?;
-        if previous_depth >= self.max_chain_depth {
-            return Err(GitStorageLimitError::ChainDepthReached {
-                max_chain_depth: self.max_chain_depth,
-            });
-        }
         previous_sequence
+            .unwrap_or(0)
             .checked_add(1)
             .ok_or(GitStorageLimitError::SequenceOverflow)
+    }
+
+    pub fn ensure_pack_span_capacity(
+        self,
+        current_span_count: usize,
+    ) -> Result<(), GitStorageLimitError> {
+        if current_span_count >= self.max_pack_spans {
+            return Err(GitStorageLimitError::PackSpanCapacityReached {
+                max_pack_spans: self.max_pack_spans,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -77,43 +80,12 @@ impl GitStorageLimits {
 pub enum GitStorageLimitError {
     #[error("Git object size limit must be greater than zero")]
     ZeroObjectBytes,
-    #[error("Git segment chain depth limit must be greater than zero")]
-    ZeroChainDepth,
-    #[error("Git segment chain has reached maximum depth of {max_chain_depth}")]
-    ChainDepthReached { max_chain_depth: usize },
-    #[error("Git segment sequence overflow")]
+    #[error("Git pack span limit must be greater than zero")]
+    ZeroPackSpans,
+    #[error("Git pack layout has reached its maximum of {max_pack_spans} spans")]
+    PackSpanCapacityReached { max_pack_spans: usize },
+    #[error("Git push sequence overflow")]
     SequenceOverflow,
-}
-
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub enum GitCompactionContractError {
-    #[error("Git compaction replacement must contain exactly one segment")]
-    InvalidSequence,
-    #[error("Git compaction replacement segment must not have a base")]
-    UnexpectedBase,
-    #[error("Git compaction replacement must preserve the visible head")]
-    HeadMismatch,
-    #[error("Git compaction replacement head and segment must share a manifest")]
-    ManifestMismatch,
-}
-
-pub fn validate_compacted_replacement(
-    head: &GitHead,
-    segment: &GitSegment,
-) -> Result<(), GitCompactionContractError> {
-    if head.segment_sequence != 1 || segment.sequence != 1 {
-        return Err(GitCompactionContractError::InvalidSequence);
-    }
-    if segment.base_oid.is_some() {
-        return Err(GitCompactionContractError::UnexpectedBase);
-    }
-    if head.head_oid != segment.head_oid {
-        return Err(GitCompactionContractError::HeadMismatch);
-    }
-    if head.manifest != segment.manifest {
-        return Err(GitCompactionContractError::ManifestMismatch);
-    }
-    Ok(())
 }
 
 #[derive(Debug, Error)]
@@ -123,31 +95,29 @@ pub enum GitStorageError {
     #[cfg(feature = "storage")]
     #[error(transparent)]
     ObjectStore(#[from] ObjectStoreError),
-    #[error("failed to encode Git segment manifest: {0}")]
+    #[error("failed to encode Git snapshot manifest: {0}")]
     ManifestEncode(#[source] serde_json::Error),
-    #[error("failed to decode Git segment manifest: {0}")]
+    #[error("failed to decode Git snapshot manifest: {0}")]
     ManifestDecode(#[source] serde_json::Error),
-    #[error("unsupported Git segment manifest version {version}")]
+    #[error("unsupported Git snapshot manifest version {version}")]
     UnsupportedManifestVersion { version: u8 },
     #[error("Git blob reference requires a manifest")]
     ManifestReferenceRequired,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct GitSegmentManifest {
+pub struct GitSnapshotManifest {
     pub version: u8,
     pub head_oid: String,
-    pub previous: Option<SourceBlob>,
-    pub segment: SourceBlob,
+    pub push_sequence: u64,
 }
 
-impl GitSegmentManifest {
-    pub fn new(head_oid: String, previous: Option<SourceBlob>, segment: SourceBlob) -> Self {
+impl GitSnapshotManifest {
+    pub fn new(head_oid: String, push_sequence: u64) -> Self {
         Self {
-            version: GIT_SEGMENT_MANIFEST_VERSION,
+            version: GIT_SNAPSHOT_MANIFEST_VERSION,
             head_oid,
-            previous,
-            segment,
+            push_sequence,
         }
     }
 
@@ -158,7 +128,7 @@ impl GitSegmentManifest {
     pub fn decode(bytes: &[u8]) -> Result<Self, GitStorageError> {
         let manifest: Self =
             serde_json::from_slice(bytes).map_err(GitStorageError::ManifestDecode)?;
-        if manifest.version != GIT_SEGMENT_MANIFEST_VERSION {
+        if manifest.version != GIT_SNAPSHOT_MANIFEST_VERSION {
             return Err(GitStorageError::UnsupportedManifestVersion {
                 version: manifest.version,
             });
@@ -167,7 +137,7 @@ impl GitSegmentManifest {
     }
 }
 
-pub fn is_git_segment_manifest(snapshot: &SourceBlob) -> bool {
+pub fn is_git_snapshot_manifest(snapshot: &SourceBlob) -> bool {
     matches!(snapshot.content_ref, ContentRef::GitManifestSha256(_))
 }
 
@@ -194,7 +164,7 @@ mod tests {
     use super::*;
     use scope_domain::store::DEFAULT_GIT_FILE_MODE;
 
-    fn manifest(_id: &str, sha256: &str) -> SourceBlob {
+    fn manifest(sha256: &str) -> SourceBlob {
         SourceBlob {
             content_ref: ContentRef::git_manifest_sha256(sha256),
             sha256: sha256.to_string(),
@@ -207,14 +177,14 @@ mod tests {
     #[test]
     fn git_blob_identity_does_not_depend_on_manifest() {
         let old = git_blob_reference(
-            &manifest("old", "old-sha"),
+            &manifest("old-sha"),
             "blob-oid".to_string(),
             DEFAULT_GIT_FILE_MODE.to_string(),
             42,
         )
         .unwrap();
         let new = git_blob_reference(
-            &manifest("new", "new-sha"),
+            &manifest("new-sha"),
             "blob-oid".to_string(),
             DEFAULT_GIT_FILE_MODE.to_string(),
             42,
@@ -226,14 +196,15 @@ mod tests {
     }
 
     #[test]
-    fn storage_limits_accept_exact_chain_boundary_and_reject_the_next_segment() {
+    fn storage_limits_bound_physical_spans_without_bounding_logical_sequence() {
         let limits = GitStorageLimits::new(4, 2).unwrap();
 
-        assert_eq!(limits.next_segment_sequence(None).unwrap(), 1);
-        assert_eq!(limits.next_segment_sequence(Some(1)).unwrap(), 2);
+        assert_eq!(limits.next_push_sequence(None).unwrap(), 1);
+        assert_eq!(limits.next_push_sequence(Some(2)).unwrap(), 3);
+        assert_eq!(limits.ensure_pack_span_capacity(1), Ok(()));
         assert_eq!(
-            limits.next_segment_sequence(Some(2)).unwrap_err(),
-            GitStorageLimitError::ChainDepthReached { max_chain_depth: 2 }
+            limits.ensure_pack_span_capacity(2).unwrap_err(),
+            GitStorageLimitError::PackSpanCapacityReached { max_pack_spans: 2 }
         );
     }
 
@@ -245,44 +216,28 @@ mod tests {
         );
         assert_eq!(
             GitStorageLimits::new(1, 0).unwrap_err(),
-            GitStorageLimitError::ZeroChainDepth
+            GitStorageLimitError::ZeroPackSpans
         );
     }
 
     #[test]
-    fn compacted_replacement_contract_requires_one_root_segment_for_the_same_head() {
-        let new_manifest = manifest("new", "new-sha");
-        let head = GitHead {
-            head_oid: "head".to_string(),
-            segment_sequence: 1,
-            change_version: 2,
-            manifest: new_manifest.clone(),
-        };
-        let segment = GitSegment {
-            sequence: 1,
-            base_oid: None,
-            head_oid: "head".to_string(),
-            object: manifest("segment", "segment-sha"),
-            manifest: new_manifest,
-        };
+    fn snapshot_manifest_contains_no_physical_pack_topology() {
+        let manifest = GitSnapshotManifest::new("head".to_string(), 42);
+        let encoded = manifest.encode().unwrap();
+        let decoded = GitSnapshotManifest::decode(&encoded).unwrap();
 
-        validate_compacted_replacement(&head, &segment).unwrap();
-
-        let mut invalid = segment.clone();
-        invalid.base_oid = Some("base".to_string());
-        assert_eq!(
-            validate_compacted_replacement(&head, &invalid).unwrap_err(),
-            GitCompactionContractError::UnexpectedBase
-        );
+        assert_eq!(decoded.head_oid, "head");
+        assert_eq!(decoded.push_sequence, 42);
+        assert!(!String::from_utf8(encoded).unwrap().contains("segment"));
     }
 
     #[test]
-    fn manifests_reject_unsupported_versions() {
-        let encoded = br#"{"version":2,"head_oid":"head","previous":null,"segment":{"content_ref":{"GitSegmentSha256":"sha"},"sha256":"sha","git_oid":"head","git_file_mode":"100644","size_bytes":1}}"#;
+    fn snapshot_manifests_reject_unsupported_versions() {
+        let encoded = br#"{"version":1,"head_oid":"head","push_sequence":1}"#;
 
         assert!(matches!(
-            GitSegmentManifest::decode(encoded),
-            Err(GitStorageError::UnsupportedManifestVersion { version: 2 })
+            GitSnapshotManifest::decode(encoded),
+            Err(GitStorageError::UnsupportedManifestVersion { version: 1 })
         ));
     }
 }

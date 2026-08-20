@@ -20,8 +20,8 @@ use scope_domain::{
         start_request,
     },
     store::{
-        GitHead, GitSegment, LogicalCommitOrigin, RepoLifecycleState, SourceBlob, StoredRepository,
-        UserAccount,
+        GitHead, GitPackSpan, LogicalCommitOrigin, RepoLifecycleState, SourceBlob,
+        StoredRepository, UserAccount,
     },
 };
 use scope_object_store::{ContentObjectKind, ObjectStore, put_content_object, put_source_blob};
@@ -246,7 +246,7 @@ fn published_demo(
     ));
     populate_seed_live_files(&mut repo);
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
-    let (head, segment) = git_segment_state(
+    let (head, pack_span) = git_pack_state(
         object_store,
         "public-demo-live",
         &[SeedGitCommit {
@@ -259,7 +259,7 @@ fn published_demo(
         }],
     )?;
     repo.git_head = Some(head);
-    repo.git_segments.push(segment);
+    repo.git_pack_spans.push(pack_span);
     Ok(repo)
 }
 
@@ -310,9 +310,9 @@ fn update_demo(
         files: &[("docs/release.md", UPDATE_DEMO_RELEASE_GUIDE)],
         message: "Document release flow",
     };
-    let (head, segment, gallery) = update_demo_git_snapshot(object_store, initial, accepted)?;
+    let (head, pack_span, gallery) = update_demo_git_snapshot(object_store, initial, accepted)?;
     repo.git_head = Some(head);
-    repo.git_segments.push(segment);
+    repo.git_pack_spans.push(pack_span);
     Ok((repo, gallery))
 }
 
@@ -536,14 +536,14 @@ struct SeedGitCommit<'a> {
     message: &'a str,
 }
 
-fn git_segment_state(
+fn git_pack_state(
     object_store: &dyn ObjectStore,
     label: &str,
     commits: &[SeedGitCommit<'_>],
-) -> Result<(GitHead, GitSegment), ApiError> {
+) -> Result<(GitHead, GitPackSpan), ApiError> {
     with_seed_git_repo(label, |repo_path| {
         apply_seed_commits(repo_path, commits)?;
-        store_seed_git_segment(object_store, repo_path)
+        store_seed_git_pack(object_store, repo_path)
     })
 }
 
@@ -551,7 +551,7 @@ fn update_demo_git_snapshot(
     object_store: &dyn ObjectStore,
     initial: SeedGitCommit<'_>,
     accepted: SeedGitCommit<'_>,
-) -> Result<(GitHead, GitSegment, SeedRequestGallery), ApiError> {
+) -> Result<(GitHead, GitPackSpan, SeedRequestGallery), ApiError> {
     with_seed_git_repo("update-demo-live", |repo_path| {
         apply_seed_commits(repo_path, &[initial])?;
         let initial_oid = seed_git_head(repo_path)?;
@@ -622,7 +622,7 @@ fn update_demo_git_snapshot(
             },
             &main_oid,
         )?;
-        let (main_head, main_segment) = store_seed_git_segment(object_store, repo_path)?;
+        let (main_head, main_pack_span) = store_seed_git_pack(object_store, repo_path)?;
         let working_snapshot = store_seed_bundle(
             object_store,
             repo_path,
@@ -738,14 +738,14 @@ fn update_demo_git_snapshot(
                 now_unix: 1_800_000_500,
             },
         ];
-        Ok((main_head, main_segment, gallery))
+        Ok((main_head, main_pack_span, gallery))
     })
 }
 
-fn store_seed_git_segment(
+fn store_seed_git_pack(
     object_store: &dyn ObjectStore,
     repo_path: &FsPath,
-) -> Result<(GitHead, GitSegment), ApiError> {
+) -> Result<(GitHead, GitPackSpan), ApiError> {
     let head_oid = seed_git_head(repo_path)?;
     let mut child = Command::new("git")
         .arg("-C")
@@ -765,11 +765,11 @@ fn store_seed_git_segment(
     let output = child.wait_with_output().map_err(ApiError::internal)?;
     if !output.status.success() {
         return Err(ApiError::infrastructure_unavailable(format!(
-            "creating seeded Git segment: {}",
+            "creating seeded Git pack: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let stored = scope_git::materialize_incremental_git_segment(
+    let stored = scope_git::materialize_git_push(
         object_store,
         &output.stdout,
         head_oid,
@@ -777,7 +777,7 @@ fn store_seed_git_segment(
         crate::config::default_git_storage_limits(),
     )
     .map_err(|failure| failure.into_parts().0)?;
-    Ok((stored.head, stored.segment))
+    Ok((stored.head, stored.pack_span))
 }
 
 fn seed_request_branch(

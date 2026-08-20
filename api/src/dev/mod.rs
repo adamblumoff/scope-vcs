@@ -6,7 +6,6 @@ use crate::{
     auth::{clerk::ClerkVerifier, cli::CliAuthService},
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     error::ApiError,
-    git::cache::RawGitCacheRegistry,
     object_store_config::{encryption_key_from_env, file_from_env},
     persistence::{ensure_private_dir, unix_now},
     push_intents::push_intent_signing_key,
@@ -75,8 +74,11 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         runtime_budgets.clone(),
     ));
 
-    let raw_git_cache = RawGitCacheRegistry::new(data_dir.join("git-cache"))
-        .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
+    let repository_engine = crate::git::repository_engine::RepositoryEngine::new(
+        data_dir.join("git-cache"),
+        crate::config::git_cache_max_bytes_from_env()?,
+    )
+    .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
     let state = AppState {
         metadata,
         data_dir: Arc::new(data_dir),
@@ -87,12 +89,11 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
         repo_events,
         push_intent_signing_key,
-        raw_git_cache,
-        git_cache_builds: Arc::new(crate::git::cache::GitDerivedCacheCoordinator::default()),
+        repository_engine: repository_engine.clone(),
         #[cfg(test)]
         test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
     };
-    state.start_raw_git_cache_reaper();
+    repository_engine.start_reaper();
     state.start_run_attempt_recovery();
     state.start_run_retention();
     Ok(state)

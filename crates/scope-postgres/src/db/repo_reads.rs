@@ -18,6 +18,7 @@ use {
         policy::{Policy, Principal, PrincipalKind, ScopePath},
         projection_views::{
             ProjectionViewFile, ProjectionViewFileContent, has_visible_projected_non_control_files,
+            projected_file_content as domain_projected_file_content,
             projected_files as domain_projected_files,
         },
         store::{
@@ -246,9 +247,9 @@ where
         ProjectionFileLookup::Found(content) => Some(content),
         ProjectionFileLookup::Missing => None,
         ProjectionFileLookup::NotReady => {
-            return Err(PostgresError::unavailable(
-                "repository projection is rebuilding; retry shortly",
-            ));
+            let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
+            let principal = principal_for_access(viewer_user_id, access);
+            domain_projected_file_content(&repo, &principal, path)
         }
     };
     Ok(content)

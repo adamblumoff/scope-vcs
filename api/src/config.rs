@@ -18,7 +18,8 @@ pub const SCOPE_BUCKET_SECRET_ACCESS_KEY_ENV: &str = "SCOPE_BUCKET_SECRET_ACCESS
 pub const SCOPE_BUCKET_FORCE_PATH_STYLE_ENV: &str = "SCOPE_BUCKET_FORCE_PATH_STYLE";
 pub const SCOPE_OBJECT_ENCRYPTION_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_KEY";
 pub const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
-pub const SCOPE_GIT_SEGMENT_MAX_DEPTH_ENV: &str = "SCOPE_GIT_SEGMENT_MAX_DEPTH";
+pub const SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV: &str = "SCOPE_GIT_PACK_SPAN_MAX_COUNT";
+pub const SCOPE_GIT_CACHE_MAX_BYTES_ENV: &str = "SCOPE_GIT_CACHE_MAX_BYTES";
 pub const SCOPE_OPERATOR_TOKEN_ENV: &str = "SCOPE_OPERATOR_TOKEN";
 pub const CLERK_ISSUER_ENV: &str = "CLERK_ISSUER";
 pub const CLERK_JWKS_URL_ENV: &str = "CLERK_JWKS_URL";
@@ -35,9 +36,10 @@ pub const EMPTY_GIT_OID: &str = "0000000000000000000000000000000000000000";
 pub const GIT_UPLOAD_PACK: &str = "git-upload-pack";
 pub const GIT_RECEIVE_PACK: &str = "git-receive-pack";
 pub const DEFAULT_GIT_BRANCH: &str = "main";
-pub const DEFAULT_GIT_COMPACTION_SEGMENTS: usize = 32;
+pub const DEFAULT_GIT_COMPACTION_SPANS: usize = 32;
 pub const DEFAULT_OBJECT_STORE_MAX_BYTES: usize = 128 * 1024 * 1024;
-pub const DEFAULT_GIT_SEGMENT_MAX_DEPTH: usize = 2 * DEFAULT_GIT_COMPACTION_SEGMENTS;
+pub const DEFAULT_GIT_PACK_SPAN_MAX_COUNT: usize = 2 * DEFAULT_GIT_COMPACTION_SPANS;
+pub const DEFAULT_GIT_CACHE_MAX_BYTES: usize = 10 * 1024 * 1024 * 1024;
 pub const AWAITING_FIRST_PUSH_GIT_ERROR: &str = "repo is awaiting its first push";
 pub const MAX_RECEIVE_PACK_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_UPLOAD_PACK_BYTES: usize = 64 * 1024 * 1024;
@@ -57,7 +59,7 @@ pub fn non_empty_env(name: &str) -> Option<String> {
 pub fn default_git_storage_limits() -> GitStorageLimits {
     GitStorageLimits::new(
         DEFAULT_OBJECT_STORE_MAX_BYTES,
-        DEFAULT_GIT_SEGMENT_MAX_DEPTH,
+        DEFAULT_GIT_PACK_SPAN_MAX_COUNT,
     )
     .expect("default Git storage limits are valid")
 }
@@ -67,11 +69,19 @@ pub fn git_storage_limits_from_env() -> anyhow::Result<GitStorageLimits> {
         SCOPE_OBJECT_STORE_MAX_BYTES_ENV,
         DEFAULT_OBJECT_STORE_MAX_BYTES,
     )?;
-    let max_chain_depth = parse_usize_env(
-        SCOPE_GIT_SEGMENT_MAX_DEPTH_ENV,
-        DEFAULT_GIT_SEGMENT_MAX_DEPTH,
+    let max_pack_spans = parse_usize_env(
+        SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV,
+        DEFAULT_GIT_PACK_SPAN_MAX_COUNT,
     )?;
-    GitStorageLimits::new(max_object_bytes, max_chain_depth).map_err(anyhow::Error::from)
+    GitStorageLimits::new(max_object_bytes, max_pack_spans).map_err(anyhow::Error::from)
+}
+
+pub fn git_cache_max_bytes_from_env() -> anyhow::Result<usize> {
+    let bytes = parse_usize_env(SCOPE_GIT_CACHE_MAX_BYTES_ENV, DEFAULT_GIT_CACHE_MAX_BYTES)?;
+    if bytes == 0 {
+        anyhow::bail!("{SCOPE_GIT_CACHE_MAX_BYTES_ENV} must be greater than zero");
+    }
+    Ok(bytes)
 }
 
 fn parse_usize_env(name: &str, default: usize) -> anyhow::Result<usize> {

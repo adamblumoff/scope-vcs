@@ -179,8 +179,10 @@ fn fetch_current_public_projection(
         .collect::<BTreeSet<_>>();
     let public_repo = projection_bare_repo_for_state(
         state,
+        &repo.record.id,
         &public_projection,
-        repo.git_head.as_ref().map(|head| &head.manifest),
+        repo.git_head.as_ref(),
+        &repo.git_pack_spans,
     )?;
     let refspec = format!("+refs/heads/{DEFAULT_GIT_BRANCH}:{PUBLIC_REQUEST_BASE_REF}");
     run_git(

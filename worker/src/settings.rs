@@ -3,11 +3,11 @@ use std::{path::PathBuf, time::Duration};
 
 const DATABASE_URL_ENV: &str = "DATABASE_URL";
 const SCOPE_DATA_DIR_ENV: &str = "SCOPE_DATA_DIR";
-const SCOPE_GIT_SEGMENT_MAX_DEPTH_ENV: &str = "SCOPE_GIT_SEGMENT_MAX_DEPTH";
+const SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV: &str = "SCOPE_GIT_PACK_SPAN_MAX_COUNT";
 const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
-const DEFAULT_GIT_COMPACTION_SEGMENTS: usize = 32;
+const DEFAULT_GIT_COMPACTION_SPANS: usize = 32;
 const DEFAULT_OBJECT_STORE_MAX_BYTES: usize = 128 * 1024 * 1024;
-const DEFAULT_GIT_SEGMENT_MAX_DEPTH: usize = 2 * DEFAULT_GIT_COMPACTION_SEGMENTS;
+const DEFAULT_GIT_PACK_SPAN_MAX_COUNT: usize = 2 * DEFAULT_GIT_COMPACTION_SPANS;
 
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
@@ -21,7 +21,7 @@ pub(crate) struct WorkerSettings {
     pub(crate) worker_id: String,
     pub(crate) batch_size: usize,
     pub(crate) poll_interval: Duration,
-    pub(crate) git_compaction_segments: usize,
+    pub(crate) git_compaction_spans: usize,
     pub(crate) git_compaction_timeout: Duration,
     pub(crate) git_storage_limits: GitStorageLimits,
     pub(crate) data_dir: PathBuf,
@@ -57,12 +57,10 @@ impl WorkerSettings {
         let batch_size = parse_usize_env("SCOPE_WORKER_BATCH_SIZE", DEFAULT_BATCH_SIZE)?;
         let poll_interval_ms =
             parse_u64_env("SCOPE_WORKER_POLL_INTERVAL_MS", DEFAULT_POLL_INTERVAL_MS)?;
-        let git_compaction_segments = parse_usize_env(
-            "SCOPE_GIT_COMPACTION_SEGMENTS",
-            DEFAULT_GIT_COMPACTION_SEGMENTS,
-        )?;
-        if git_compaction_segments < 2 {
-            anyhow::bail!("SCOPE_GIT_COMPACTION_SEGMENTS must be at least 2");
+        let git_compaction_spans =
+            parse_usize_env("SCOPE_GIT_COMPACTION_SPANS", DEFAULT_GIT_COMPACTION_SPANS)?;
+        if git_compaction_spans < 2 {
+            anyhow::bail!("SCOPE_GIT_COMPACTION_SPANS must be at least 2");
         }
         let git_compaction_timeout_secs = parse_u64_env(
             "SCOPE_GIT_COMPACTION_TIMEOUT_SECS",
@@ -72,10 +70,13 @@ impl WorkerSettings {
             anyhow::bail!("SCOPE_GIT_COMPACTION_TIMEOUT_SECS must be greater than zero");
         }
         let git_storage_limits = git_storage_limits_from_env()?;
-        if git_compaction_segments >= git_storage_limits.max_chain_depth() {
+        let minimum_span_capacity = git_compaction_spans
+            .checked_add(2)
+            .ok_or_else(|| anyhow::anyhow!("SCOPE_GIT_COMPACTION_SPANS is too large"))?;
+        if git_storage_limits.max_pack_spans() < minimum_span_capacity {
             anyhow::bail!(
-                "SCOPE_GIT_COMPACTION_SEGMENTS ({git_compaction_segments}) must be lower than SCOPE_GIT_SEGMENT_MAX_DEPTH ({})",
-                git_storage_limits.max_chain_depth()
+                "SCOPE_GIT_PACK_SPAN_MAX_COUNT ({}) must be at least two higher than SCOPE_GIT_COMPACTION_SPANS ({git_compaction_spans})",
+                git_storage_limits.max_pack_spans()
             );
         }
         let data_dir = non_empty_env(SCOPE_DATA_DIR_ENV)
@@ -88,7 +89,7 @@ impl WorkerSettings {
             worker_id,
             batch_size: batch_size.max(1),
             poll_interval: Duration::from_millis(poll_interval_ms.max(100)),
-            git_compaction_segments,
+            git_compaction_spans,
             git_compaction_timeout: Duration::from_secs(git_compaction_timeout_secs),
             git_storage_limits,
             data_dir,
@@ -147,8 +148,8 @@ fn git_storage_limits_from_env() -> anyhow::Result<GitStorageLimits> {
             DEFAULT_OBJECT_STORE_MAX_BYTES,
         )?,
         parse_usize_env(
-            SCOPE_GIT_SEGMENT_MAX_DEPTH_ENV,
-            DEFAULT_GIT_SEGMENT_MAX_DEPTH,
+            SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV,
+            DEFAULT_GIT_PACK_SPAN_MAX_COUNT,
         )?,
     )
     .map_err(anyhow::Error::from)

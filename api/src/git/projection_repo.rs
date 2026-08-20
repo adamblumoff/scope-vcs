@@ -4,7 +4,6 @@ use crate::{
     git::{
         cache::GitDerivedCacheNamespace,
         content::source_content_bytes_from_repo,
-        storage::cached_raw_git_repo,
         upload::{git_command_output, git_process_output_with_timeout, truncated_git_stderr},
     },
     runtime_budgets::RuntimeBudgets,
@@ -395,25 +394,33 @@ fn git_is_ancestor(
 
 pub(crate) fn projection_bare_repo_for_state(
     state: &AppState,
+    repository_id: &str,
     projection: &Projection,
-    git_manifest: Option<&scope_domain::store::SourceBlob>,
+    git_head: Option<&scope_domain::store::GitHead>,
+    git_pack_spans: &[scope_domain::store::GitPackSpan],
 ) -> Result<PathBuf, ApiError> {
-    let cache_root = state.git_cache_root()?;
+    let cache_root = state.repository_engine.cache_root().to_path_buf();
     let cache_key = projection_cache_key(projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
     let is_ready = || projection_cache_is_ready(&repo_path);
-    state.git_cache_builds.materialize(
+    state.repository_engine.materialize_derived(
+        repository_id,
         GitDerivedCacheNamespace::Projection,
         cache_key,
         is_ready,
         || {
             let raw_source_repo = if projection_requires_raw_source(projection) {
-                let manifest = git_manifest.ok_or_else(|| {
+                let head = git_head.ok_or_else(|| {
                     ApiError::internal_message(
-                        "Git-backed projection requires a canonical Git manifest",
+                        "Git-backed projection requires a canonical Git head",
                     )
                 })?;
-                Some(cached_raw_git_repo(state, manifest)?)
+                Some(state.repository_engine.materialize_repository(
+                    state,
+                    repository_id,
+                    head,
+                    git_pack_spans,
+                )?)
             } else {
                 None
             };
@@ -436,7 +443,7 @@ pub(crate) fn verify_projection_materialization(
     native_source_repo: &FsPath,
     _git_manifest: &scope_domain::store::SourceBlob,
 ) -> Result<(), ApiError> {
-    let cache_root = state.git_cache_root()?;
+    let cache_root = state.repository_engine.cache_root().to_path_buf();
     let attempt = PROJECTION_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
     let verification_root = cache_root.join(format!(
         ".projection-preflight.{}.{}",
