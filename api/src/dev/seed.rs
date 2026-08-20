@@ -1,9 +1,12 @@
-use super::env::DevSeedUser;
+#[path = "seed/request_discussions.rs"]
 mod request_discussions;
+#[path = "seed/request_revisions.rs"]
 mod request_revisions;
 #[cfg(test)]
+#[path = "seed/tests.rs"]
 mod tests;
-pub(super) use request_discussions::seed_request_discussion_gallery;
+#[cfg(any(feature = "local-dev", feature = "smoke-seed"))]
+pub(crate) use request_discussions::seed_request_discussion_gallery;
 use request_revisions::SeedRequestRevision;
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
@@ -32,7 +35,13 @@ use std::{
 
 static SEED_TEMP_REPO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-pub(super) const DEV_SEED_USER_ID: &str = "scope_usr_dev_seed";
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DevSeedUser {
+    pub(crate) email: String,
+    pub(crate) handle: String,
+}
+
+pub(crate) const DEV_SEED_USER_ID: &str = "scope_usr_dev_seed";
 const PUBLIC_DEMO_README_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>
@@ -168,7 +177,7 @@ const UPDATE_DEMO_QUEUE_DRAFT: &str =
 const UPDATE_DEMO_CACHE_NOTE: &str =
     "# Cache note\n\nRecord the tradeoff without changing repository behavior.\n";
 
-pub(super) fn catalog(
+pub(crate) fn catalog(
     object_store: &dyn ObjectStore,
     seed_user: DevSeedUser,
 ) -> Result<scope_postgres::db::CatalogFixture, ApiError> {
@@ -193,7 +202,7 @@ pub(super) fn catalog(
     Ok(catalog)
 }
 
-pub(super) fn seed_user_account(seed_user: DevSeedUser) -> UserAccount {
+pub(crate) fn seed_user_account(seed_user: DevSeedUser) -> UserAccount {
     UserAccount {
         id: DEV_SEED_USER_ID.to_string(),
         handle: seed_user.handle,
@@ -202,7 +211,8 @@ pub(super) fn seed_user_account(seed_user: DevSeedUser) -> UserAccount {
     }
 }
 
-pub(super) fn actor_account(seed_user: DevSeedUser, handle: &str) -> Option<UserAccount> {
+#[cfg(any(test, feature = "local-dev"))]
+pub(crate) fn actor_account(seed_user: DevSeedUser, handle: &str) -> Option<UserAccount> {
     let owner = seed_user_account(seed_user);
     if owner.handle == handle {
         return Some(owner);

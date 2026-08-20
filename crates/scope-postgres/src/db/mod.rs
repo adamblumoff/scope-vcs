@@ -5,9 +5,19 @@
 //! the workflow being persisted.
 
 mod auth;
-#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
+#[cfg(any(
+    test,
+    feature = "local-dev",
+    feature = "smoke-seed",
+    feature = "test-support"
+))]
 mod catalog_fixture;
-#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
+#[cfg(any(
+    test,
+    feature = "local-dev",
+    feature = "smoke-seed",
+    feature = "test-support"
+))]
 pub use catalog_fixture::CatalogFixture;
 mod cli_auth_results;
 pub use cli_auth_results::{
@@ -95,7 +105,12 @@ pub use run_dispatch::CloudAttemptAbort;
 pub use run_history::{RepositoryRun, RunHistoryCursor, RunHistoryPageQuery};
 pub use run_log_reads::{RecentRunLogs, StoredAttemptStepLogs, StoredRunLog};
 pub use runs::DispatchClaim;
-#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
+#[cfg(any(
+    test,
+    feature = "local-dev",
+    feature = "smoke-seed",
+    feature = "test-support"
+))]
 mod test_support;
 mod visibility_changes;
 

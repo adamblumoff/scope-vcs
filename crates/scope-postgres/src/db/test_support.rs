@@ -150,8 +150,8 @@ pub(super) async fn connect_isolated_test_database(
 }
 
 impl AdminStore {
-    #[cfg(feature = "local-dev")]
-    pub async fn replace_catalog_for_local_dev(
+    #[cfg(any(feature = "local-dev", feature = "smoke-seed"))]
+    pub async fn replace_catalog_for_seed(
         &self,
         catalog: CatalogFixture,
     ) -> Result<(), PostgresError> {
@@ -402,7 +402,7 @@ where
     Ok(())
 }
 
-#[cfg(feature = "local-dev")]
+#[cfg(any(feature = "local-dev", feature = "smoke-seed"))]
 async fn replace_catalog(
     db: &sea_orm::DatabaseConnection,
     catalog: CatalogFixture,

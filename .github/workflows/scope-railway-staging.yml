@@ -1,0 +1,170 @@
+name: Scope Railway staging proof
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact repository commit SHA to deploy
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scope-railway-staging
+  cancel-in-progress: false
+
+jobs:
+  prove:
+    name: Deploy and smoke staging
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      SCOPE_RAILWAY_PROJECT_TOKEN_NAME: scope-staging-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Validate requested revision
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a lowercase 40-character commit SHA." >&2
+            exit 2
+          fi
+
+      - name: Checkout exact revision
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          ref: ${{ inputs.source_sha }}
+
+      - name: Verify checked out revision
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Load staging target from manifest
+        shell: bash
+        run: |
+          {
+            echo "SCOPE_RAILWAY_PROJECT_ID=$(jq -er '.railway.projectId' .github/deployment-services.json)"
+            echo "SCOPE_RAILWAY_STAGING_ENVIRONMENT_ID=$(jq -er '.railway.staging.environmentId' .github/deployment-services.json)"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.94.0
+
+      - name: Cache Rust build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-staging-cargo-${{ hashFiles('Cargo.lock') }}-${{ inputs.source_sha }}
+          restore-keys: |
+            ${{ runner.os }}-staging-cargo-${{ hashFiles('Cargo.lock') }}
+            ${{ runner.os }}-staging-cargo-
+
+      - name: Build staging commands
+        run: |
+          cargo build --release --locked -p api --bin scope-maintenance
+          cargo build --release --locked -p api --bin scope-smoke-seed --features smoke-seed
+
+      - name: Stage exact upload roots
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          rm -rf .railway-staging-upload
+          for service in api worker cache-service; do
+            root=".railway-staging-upload/$service"
+            mkdir -p "$root"
+            cp Cargo.toml Cargo.lock rust-toolchain.toml "$root/"
+            cp "$service/railpack.json" "$root/railpack.json"
+            cp "$service/railway.json" "$root/railway.json"
+            cp -a api cache-service worker crates runner-runtime "$root/"
+            printf '%s\n' "$SOURCE_SHA" > "$root/$service/.scope-deployment-sha"
+          done
+          mkdir -p .railway-staging-upload/web-root/web
+          cp -a web/. .railway-staging-upload/web-root/web/
+          test -s .railway-staging-upload/api/api/.scope-deployment-sha
+          test -s .railway-staging-upload/worker/worker/.scope-deployment-sha
+          test -s .railway-staging-upload/cache-service/cache-service/.scope-deployment-sha
+          test -s .railway-staging-upload/web-root/web/package.json
+
+      - name: Install Railway CLI
+        run: |
+          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
+          npm install -g "@railway/cli@$railway_cli_version"
+
+      - name: Create staging-scoped Railway token
+        id: railway-token-create
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: bash .github/scripts/staging-railway-token.sh create
+
+      - name: Deploy, migrate, and seed staging
+        shell: bash
+        env:
+          GITHUB_SHA: ${{ inputs.source_sha }}
+          SCOPE_STAGING_EVIDENCE_PATH: staging-deployments.json
+        run: |
+          bash .github/scripts/deploy-staging-railway.sh \
+            .railway-staging-upload/cache-service \
+            .railway-staging-upload/worker \
+            .railway-staging-upload/api \
+            .railway-staging-upload/web-root
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.0 --activate
+
+      - name: Install browser smoke dependencies
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser smoke against staging
+        working-directory: web
+        env:
+          SCOPE_SMOKE_REPO: dev/public-demo
+        run: |
+          web_domain="$(jq -er '.railway.staging.webDomain' ../.github/deployment-services.json)"
+          SCOPE_WEB_BASE_URL="https://$web_domain" pnpm test:smoke
+
+      - name: Upload staging deployment evidence
+        if: always() && hashFiles('staging-deployments.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-deployments-${{ inputs.source_sha }}
+          path: staging-deployments.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Delete staging-scoped Railway token
+        if: always() && steps.railway-token-create.outcome != 'skipped'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+        run: |
+          unset RAILWAY_TOKEN
+          bash .github/scripts/staging-railway-token.sh delete

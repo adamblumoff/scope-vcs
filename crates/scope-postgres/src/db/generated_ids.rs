@@ -28,7 +28,12 @@ pub(super) fn generate_id(
     })
 }
 
-#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
+#[cfg(any(
+    test,
+    feature = "local-dev",
+    feature = "smoke-seed",
+    feature = "test-support"
+))]
 pub(crate) fn test_generated_id(kind: GeneratedIdKind) -> Result<String, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
 

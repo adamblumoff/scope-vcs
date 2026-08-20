@@ -62,6 +62,12 @@ jobs:
       - name: Test deployment planner
         run: node --test .github/scripts/plan-production-deployment.test.mjs
 
+      - name: Check Rust toolchain replicas
+        run: node .github/scripts/check-rust-toolchain-sync.mjs
+
+      - name: Test Rust toolchain replica checker
+        run: node --test .github/scripts/check-rust-toolchain-sync.test.mjs
+
   checks-image:
     name: Checks image
     needs: plan
@@ -69,6 +75,20 @@ jobs:
     uses: ./.github/workflows/scope-checks-image.yml
     with:
       publish: ${{ github.event_name != 'pull_request' }}
+      source_sha: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && inputs.scope == 'checksImage' && github.sha || '' }}
+    secrets: inherit
+
+  staging-proof:
+    name: Railway staging proof
+    needs: checks-image
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref != 'refs/heads/main' &&
+      inputs.scope == 'checksImage' &&
+      needs.checks-image.result == 'success'
+    uses: ./.github/workflows/scope-railway-staging.yml
+    with:
+      source_sha: ${{ github.sha }}
     secrets: inherit
 
   backend:
@@ -124,7 +144,12 @@ jobs:
       needs.plan.outputs.api != 'true'
     uses: ./.github/workflows/scope-cli-build.yml
     with:
-      deploy: ${{ github.event_name != 'pull_request' }}
+      deploy: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      validate_targets: >-
+        ${{ github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]') }}
     secrets: inherit
 
   cli-after-backend:
@@ -138,5 +163,10 @@ jobs:
       needs.backend.result == 'success'
     uses: ./.github/workflows/scope-cli-build.yml
     with:
-      deploy: ${{ github.event_name != 'pull_request' }}
+      deploy: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      validate_targets: >-
+        ${{ github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]') }}
     secrets: inherit

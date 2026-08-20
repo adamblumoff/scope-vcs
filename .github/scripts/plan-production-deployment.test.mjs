@@ -39,6 +39,17 @@ test("runner changes publish the image before the backend lane", () => {
   });
 });
 
+test("toolchain changes publish the checks image and rebuild Rust services", () => {
+  assert.deepEqual(classifyChanges(manifest, ["rust-toolchain.toml"]), {
+    checksImage: true,
+    cache: true,
+    worker: true,
+    api: true,
+    web: false,
+    cli: true,
+  });
+});
+
 test("web-only changes deploy only web", () => {
   assert.deepEqual(classifyChanges(manifest, ["web/src/routes/+page.svelte"]), {
     checksImage: false,

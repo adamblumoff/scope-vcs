@@ -309,7 +309,7 @@ fn user(id: &str, handle: &str, email: &str) -> UserAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dev::env::DevSeedUser;
+    use crate::demo_seed::DevSeedUser;
     use scope_domain::requests::RequestEventKind;
     use scope_object_store::{EncryptedObjectStore, MemoryObjectStore};
     use std::sync::Arc;
@@ -327,11 +327,7 @@ mod tests {
         .unwrap();
         let target = scope_postgres::db::TestDatabaseTarget::required().unwrap();
         let metadata = MetadataStore::connect_fresh_for_tests(&target).unwrap();
-        metadata
-            .admin()
-            .replace_catalog_for_local_dev(catalog)
-            .await
-            .unwrap();
+        metadata.admin().seed_catalog_for_tests(catalog).unwrap();
 
         seed_request_discussion_gallery(&metadata).await.unwrap();
 

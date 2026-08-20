@@ -6,6 +6,9 @@ on:
       deploy:
         type: boolean
         default: false
+      validate_targets:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,7 +20,9 @@ env:
 jobs:
   prepare:
     name: Prepare distribution matrix
-    if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: >-
+      inputs.validate_targets ||
+      (inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
@@ -79,7 +84,9 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     needs: [checks, prepare]
-    if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: >-
+      inputs.validate_targets ||
+      (inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
