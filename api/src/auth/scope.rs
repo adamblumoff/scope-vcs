@@ -66,7 +66,7 @@ async fn reconcile_clerk_scope_user(
     let resolution = state
         .metadata
         .auth()
-        .resolve_clerk_user(&identity, unix_now()?)
+        .resolve_clerk_user(identity, unix_now()?)
         .await?;
     if resolution.created {
         state
