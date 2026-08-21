@@ -143,6 +143,19 @@ maintenance_read() {
   return 1
 }
 
+wait_for_writer_fence() {
+  local deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
+    if maintenance fence; then
+      return 0
+    fi
+    echo "Metadata writers are still draining; retrying the fence probe." >&2
+    sleep 2
+  done
+  echo "Timed out waiting for metadata writers to release the database fence." >&2
+  return 1
+}
+
 plan_requires_maintenance() {
   PLAN_JSON="$1" node -e '
 const plan = JSON.parse(process.env.PLAN_JSON || "{}");
@@ -448,6 +461,7 @@ if ! service_is_healthy "$api_service" || ! service_is_healthy "$worker_service"
 fi
 
 quiesce_writers
+wait_for_writer_fence
 if ! maintenance apply; then
   # Once apply starts, an error does not prove its transaction rolled back. Fail closed unless a
   # fresh ledger read positively proves that the pre-migration state is unchanged.

@@ -34,6 +34,13 @@ case "${1:-}" in
     [[ "${FAKE_FAIL_APPLY:-0}" == "committed-error" ]] && exit 1
     echo '{"exact":true,"migration":"applied"}'
     ;;
+  fence)
+    if [[ "${FAKE_FAIL_FIRST_FENCE:-0}" == "1" && ! -f "$FAKE_RAILWAY_STATE/fence-failed" ]]; then
+      touch "$FAKE_RAILWAY_STATE/fence-failed"
+      exit 1
+    fi
+    echo '{"available":true}'
+    ;;
   verify)
     [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
     echo '{"exact":true}'
@@ -260,6 +267,7 @@ run_cutover() {
   local deploy_cache="${18:-1}"
   local deploy_worker="${19:-1}"
   local deploy_api="${20:-1}"
+  local fail_first_fence="${21:-0}"
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
   mkdir -p "$state"
@@ -285,6 +293,7 @@ run_cutover() {
     FAKE_STORED_API_REGION="$stored_api_region" \
     FAKE_FAIL_RECOVERY_PLAN="$fail_recovery_plan" \
     FAKE_FAIL_FIRST_PLAN="$fail_first_plan" \
+    FAKE_FAIL_FIRST_FENCE="$fail_first_fence" \
     FAKE_DENY_DEPLOYMENT_ACTION_SERVICE="$deny_deployment_action_service" \
     RAILWAY_PROJECT_ID="project-test" \
     RAILWAY_API_TOKEN="token-graphql" \
@@ -332,11 +341,21 @@ assert_in_order "$test_dir/success-trace" \
   "$test_dir/maintenance plan" \
   "graphql stop scope-api old-scope-api" \
   "graphql stop scope-worker old-scope-worker" \
+  "$test_dir/maintenance fence" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance verify" \
   "up $test_dir/cache" \
   "up $test_dir/worker" \
   "up $test_dir/api"
+
+run_cutover draining-writer 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 1 1 1 1
+[[ "$(cat "$test_dir/draining-writer-result")" == "0" ]]
+[[ "$(grep -F -x -c "$test_dir/maintenance fence" "$test_dir/draining-writer-trace")" == "2" ]]
+assert_in_order "$test_dir/draining-writer-trace" \
+  "graphql stop scope-worker old-scope-worker" \
+  "$test_dir/maintenance fence" \
+  "$test_dir/maintenance apply"
 
 run_cutover degraded 0 0 "" 0 0 0 0 "" 0 "" "" 1 scope-worker
 [[ "$(cat "$test_dir/degraded-result")" != "0" ]]

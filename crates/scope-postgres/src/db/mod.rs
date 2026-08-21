@@ -332,6 +332,13 @@ pub async fn verify_schema(database_url: String) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn verify_writer_fence_available(database_url: String) -> anyhow::Result<()> {
+    ExclusiveWriterFence::acquire(&database_url)
+        .await?
+        .release()
+        .await
+}
+
 pub async fn apply_maintenance_migrations(database_url: String) -> anyhow::Result<()> {
     let fence = ExclusiveWriterFence::acquire(&database_url).await?;
     let db = Database::connect(database_url).await?;
