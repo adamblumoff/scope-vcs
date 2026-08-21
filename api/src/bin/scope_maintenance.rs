@@ -1,14 +1,17 @@
 use scope_postgres::db::{
-    apply_maintenance_migrations, migration_plan, verify_schema, verify_writer_fence_available,
+    apply_maintenance_migrations, migration_plan, terminate_metadata_writer_sessions,
+    verify_schema, verify_writer_fence_available,
 };
+
+const USAGE: &str = "usage: scope-maintenance <plan|fence|drain-writers|apply|verify>";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let command = std::env::args()
         .nth(1)
-        .ok_or_else(|| anyhow::anyhow!("usage: scope-maintenance <plan|fence|apply|verify>"))?;
+        .ok_or_else(|| anyhow::anyhow!(USAGE))?;
     if std::env::args().nth(2).is_some() {
-        anyhow::bail!("usage: scope-maintenance <plan|fence|apply|verify>");
+        anyhow::bail!(USAGE);
     }
     let database_url = maintenance_database_url()?;
 
@@ -28,11 +31,15 @@ async fn main() -> anyhow::Result<()> {
             verify_writer_fence_available(database_url).await?;
             println!(r#"{{"available":true}}"#);
         }
+        "drain-writers" => {
+            let terminated = terminate_metadata_writer_sessions(database_url).await?;
+            println!(r#"{{"terminated":{terminated}}}"#);
+        }
         "verify" => {
             verify_schema(database_url).await?;
             println!(r#"{{"exact":true}}"#);
         }
-        _ => anyhow::bail!("usage: scope-maintenance <plan|fence|apply|verify>"),
+        _ => anyhow::bail!(USAGE),
     }
     Ok(())
 }

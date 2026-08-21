@@ -339,6 +339,32 @@ pub async fn verify_writer_fence_available(database_url: String) -> anyhow::Resu
         .await
 }
 
+pub async fn terminate_metadata_writer_sessions(database_url: String) -> anyhow::Result<u64> {
+    let mut connection = PgConnection::connect(&database_url).await?;
+    let terminated: Vec<bool> = sqlx::query_scalar(&format!(
+        "WITH fence AS (
+            SELECT hashtextextended(
+                '{WRITER_FENCE_KEY}:' || current_database() || ':' || current_schema(),
+                0
+            ) AS key
+        )
+        SELECT pg_terminate_backend(locks.pid)
+        FROM pg_locks locks
+        CROSS JOIN fence
+        WHERE locks.locktype = 'advisory'
+            AND locks.mode = 'ShareLock'
+            AND locks.granted
+            AND locks.objsubid = 1
+            AND locks.classid::bigint = ((fence.key >> 32) & 4294967295)
+            AND locks.objid::bigint = (fence.key & 4294967295)
+            AND locks.pid <> pg_backend_pid()"
+    ))
+    .fetch_all(&mut connection)
+    .await?;
+    connection.close().await?;
+    Ok(terminated.into_iter().filter(|value| *value).count() as u64)
+}
+
 pub async fn apply_maintenance_migrations(database_url: String) -> anyhow::Result<()> {
     let fence = ExclusiveWriterFence::acquire(&database_url).await?;
     let db = Database::connect(database_url).await?;

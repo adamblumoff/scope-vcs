@@ -144,10 +144,17 @@ maintenance_read() {
 }
 
 wait_for_writer_fence() {
+  local grace_seconds="${SCOPE_WRITER_FENCE_GRACE_SECONDS:-10}"
+  local grace_deadline=$((SECONDS + grace_seconds))
   local deadline=$((SECONDS + 120))
+  local drained=0
   while (( SECONDS < deadline )); do
     if maintenance fence; then
       return 0
+    fi
+    if [[ "$drained" == "0" && "$SECONDS" -ge "$grace_deadline" ]]; then
+      maintenance drain-writers
+      drained=1
     fi
     echo "Metadata writers are still draining; retrying the fence probe." >&2
     sleep 2

@@ -1,7 +1,7 @@
 use super::*;
 use crate::db::{
     apply_maintenance_migrations, connect_postgres_worker_store, connect_writer_database,
-    verify_writer_fence_available,
+    terminate_metadata_writer_sessions, verify_writer_fence_available,
 };
 
 #[tokio::test]
@@ -200,6 +200,12 @@ async fn maintenance_cutover_refuses_a_writer_after_its_pool_reconnects() {
     assert!(migration_error.to_string().contains("writer still holds"));
     assert!(relation_exists(db.as_ref(), "scope_request_change_blocks").await);
 
+    assert_eq!(
+        terminate_metadata_writer_sessions(database_url.clone())
+            .await
+            .unwrap(),
+        1
+    );
     writer.close().await.unwrap();
     verify_writer_fence_available(database_url.clone())
         .await

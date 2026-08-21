@@ -35,11 +35,14 @@ case "${1:-}" in
     echo '{"exact":true,"migration":"applied"}'
     ;;
   fence)
-    if [[ "${FAKE_FAIL_FIRST_FENCE:-0}" == "1" && ! -f "$FAKE_RAILWAY_STATE/fence-failed" ]]; then
-      touch "$FAKE_RAILWAY_STATE/fence-failed"
+    if [[ "${FAKE_STUCK_FENCE:-0}" == "1" && ! -f "$FAKE_RAILWAY_STATE/writers-drained" ]]; then
       exit 1
     fi
     echo '{"available":true}'
+    ;;
+  drain-writers)
+    touch "$FAKE_RAILWAY_STATE/writers-drained"
+    echo '{"terminated":1}'
     ;;
   verify)
     [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
@@ -267,7 +270,7 @@ run_cutover() {
   local deploy_cache="${18:-1}"
   local deploy_worker="${19:-1}"
   local deploy_api="${20:-1}"
-  local fail_first_fence="${21:-0}"
+  local stuck_fence="${21:-0}"
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
   mkdir -p "$state"
@@ -293,7 +296,7 @@ run_cutover() {
     FAKE_STORED_API_REGION="$stored_api_region" \
     FAKE_FAIL_RECOVERY_PLAN="$fail_recovery_plan" \
     FAKE_FAIL_FIRST_PLAN="$fail_first_plan" \
-    FAKE_FAIL_FIRST_FENCE="$fail_first_fence" \
+    FAKE_STUCK_FENCE="$stuck_fence" \
     FAKE_DENY_DEPLOYMENT_ACTION_SERVICE="$deny_deployment_action_service" \
     RAILWAY_PROJECT_ID="project-test" \
     RAILWAY_API_TOKEN="token-graphql" \
@@ -308,6 +311,7 @@ run_cutover() {
     SCOPE_DEPLOY_CACHE="$deploy_cache" \
     SCOPE_DEPLOY_WORKER="$deploy_worker" \
     SCOPE_DEPLOY_API="$deploy_api" \
+    SCOPE_WRITER_FENCE_GRACE_SECONDS="0" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
     SCOPE_RECOVER_CLOSED_CUTOVER="$recover_closed_cutover" \
     bash "$root/.github/scripts/deploy-backend-railway.sh" \
@@ -354,6 +358,8 @@ run_cutover draining-writer 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
 [[ "$(grep -F -x -c "$test_dir/maintenance fence" "$test_dir/draining-writer-trace")" == "2" ]]
 assert_in_order "$test_dir/draining-writer-trace" \
   "graphql stop scope-worker old-scope-worker" \
+  "$test_dir/maintenance fence" \
+  "$test_dir/maintenance drain-writers" \
   "$test_dir/maintenance fence" \
   "$test_dir/maintenance apply"
 
