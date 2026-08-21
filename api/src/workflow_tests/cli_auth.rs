@@ -268,7 +268,7 @@ fn test_clerk_identity() -> ClerkIdentity {
 
 async fn state_with_clerk_snapshot() -> AppState {
     let state = test_state_with_jwks();
-    state
+    let _ = state
         .metadata
         .auth()
         .resolve_clerk_user(&test_clerk_identity(), unix_now())

@@ -44,6 +44,7 @@ hmac = "0.12.1"
 http = "1.4.0"
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
 getrandom = "0.3.4"
+posthog-rs = { version = "0.24.0", default-features = false, features = ["async-client"] }
 reqwest = { version = "0.12.26", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.147"

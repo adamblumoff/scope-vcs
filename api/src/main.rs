@@ -83,18 +83,20 @@ async fn app_state_from_env() -> anyhow::Result<AppState> {
 }
 
 async fn serve(addr: SocketAddr, state: AppState) -> anyhow::Result<()> {
+    let shutdown_state = state.clone();
     let app = router(state);
     tracing::info!(%addr, "starting api");
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("binding server on {addr}"))?;
-    axum::serve(listener, app)
+    let result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .context("serving api")?;
+        .context("serving api");
+    shutdown_state.shutdown_product_analytics().await;
 
-    Ok(())
+    result
 }
 
 async fn shutdown_signal() {

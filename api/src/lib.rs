@@ -15,6 +15,7 @@ pub(crate) mod http;
 pub(crate) mod object_store_config;
 pub(crate) mod persistence;
 pub(crate) mod persistence_ids;
+pub(crate) mod product_analytics;
 pub(crate) mod push_intents;
 pub(crate) mod repo_access;
 pub(crate) mod repo_cleanup;

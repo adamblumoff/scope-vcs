@@ -4,6 +4,7 @@ use crate::{
     git::{request_merge::prepare_request_merge, request_refs::delete_request_ref_from_store},
     http::responses::*,
     persistence::unix_now,
+    product_analytics::{ProductEvent, RequestCloseOutcome},
     repo_access::{ensure_repo_read, find_repo},
     repo_events::RepoChangeReason,
     state::AppState,
@@ -140,6 +141,8 @@ pub(crate) async fn submit_request(
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
+    let analytics_event =
+        ProductEvent::request_submitted(&user.id, request.audience, request_actor_role(access));
     let mutation = state
         .metadata
         .requests()
@@ -152,6 +155,7 @@ pub(crate) async fn submit_request(
             now_unix: unix_now()?,
         })
         .await?;
+    state.product_analytics.capture(analytics_event);
     lifecycle_response(
         &state,
         &repo,
@@ -171,6 +175,8 @@ pub(crate) async fn merge_request(
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
+    let analytics_event =
+        ProductEvent::request_merged(&user.id, request.audience, request_actor_role(access));
     if !request_policy(&request, RequestViewer::new(access, Some(&user.id), false))
         .permissions
         .can_merge
@@ -217,6 +223,7 @@ pub(crate) async fn merge_request(
             return Err(error.into());
         }
     };
+    state.product_analytics.capture(analytics_event);
     state
         .publish_repo_change(
             &repo.record.id,
@@ -285,6 +292,8 @@ pub(crate) async fn close_request(
     let user = require_scope_user(&state, &headers).await?;
     let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
+    let request_audience = request.audience;
+    let actor_role = request_actor_role(access);
     if !request_policy(&request, RequestViewer::new(access, Some(&user.id), false))
         .permissions
         .can_close
@@ -309,6 +318,14 @@ pub(crate) async fn close_request(
         .await?;
     match mutation {
         CloseRequestMutation::DeletedDraft { .. } => {
+            state
+                .product_analytics
+                .capture(ProductEvent::request_closed(
+                    &user.id,
+                    request_audience,
+                    actor_role,
+                    RequestCloseOutcome::DraftDeleted,
+                ));
             delete_request_ref_from_store(&state, &owner, &repo_name, &request_ref)?;
             state
                 .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestDeleted)
@@ -319,6 +336,14 @@ pub(crate) async fn close_request(
             }))
         }
         CloseRequestMutation::Closed { request, .. } => {
+            state
+                .product_analytics
+                .capture(ProductEvent::request_closed(
+                    &user.id,
+                    request_audience,
+                    actor_role,
+                    RequestCloseOutcome::Closed,
+                ));
             let current_main_oid = committed_main_oid_for_access(&repo, access)?;
             let request = request_response_for_viewer(
                 &state,
@@ -377,6 +402,13 @@ pub(crate) async fn start_request(
             now_unix,
         })
         .await?;
+    state
+        .product_analytics
+        .capture(ProductEvent::request_started(
+            &user.id,
+            audience,
+            request_actor_role(access),
+        ));
     let current_main_oid = committed_main_oid_for_access(&repo, access)?;
     let request = request_response_for_viewer(
         &state,
