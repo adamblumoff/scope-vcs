@@ -1,6 +1,20 @@
 use super::*;
 use std::process::Command;
 
+const LARGE_REPOSITORY_FILE_BYTES: u64 = 24 * 1024 * 1024;
+const LARGE_REPOSITORY_FILE_COUNT: usize = 5;
+
+fn add_shared_large_files(repo: &FsPath) {
+    let first_path = repo.join("large-0.bin");
+    let large = fs::File::create(&first_path).unwrap();
+    large.set_len(LARGE_REPOSITORY_FILE_BYTES).unwrap();
+    drop(large);
+    for index in 1..LARGE_REPOSITORY_FILE_COUNT {
+        fs::hard_link(&first_path, repo.join(format!("large-{index}.bin"))).unwrap();
+    }
+    run_git(Some(repo), &["add", "."], "add large files").unwrap();
+}
+
 #[test]
 fn pushed_tree_rejects_case_insensitive_dot_git_from_a_raw_tree_object() {
     let repo = temp_git_repo("reserved-dot-git-test");
@@ -220,6 +234,58 @@ fn oversized_binary_push_names_path_and_limit() {
             .public_message()
             .contains(&MAX_PENDING_IMPORT_BLOB_BYTES.to_string())
     );
+}
+
+#[test]
+fn pushed_tree_does_not_cap_total_repository_bytes() {
+    let repo = temp_git_repo("large-repository-test");
+    add_shared_large_files(&repo);
+    commit_all(&repo, "large repository");
+
+    validate_pushed_tree(&repo, "HEAD").unwrap();
+}
+
+#[tokio::test]
+async fn pushed_delta_does_not_cap_total_changed_bytes() {
+    let state = test_state_with_repo();
+    replace_test_repo(&state, repo_with_readme(&state)).await;
+    let staging_repo = published_staging_repo(&state).await;
+    let clone = clone_test_repo(&staging_repo, "large-delta-clone", false);
+    add_shared_large_files(&clone);
+    commit_all(&clone, "large delta");
+    run_git(
+        Some(&clone),
+        &["push", "origin", DEFAULT_GIT_BRANCH],
+        "push large delta",
+    )
+    .unwrap();
+
+    let update = receive_pack_update_from_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &staging_repo,
+        &test_owner_id(),
+        repo_config(Visibility::Public),
+    )
+    .await
+    .unwrap();
+
+    let large_changes = update
+        .changes
+        .iter()
+        .filter(|change| change.path.as_str().starts_with("/large-"))
+        .collect::<Vec<_>>();
+    assert_eq!(large_changes.len(), LARGE_REPOSITORY_FILE_COUNT);
+    assert_eq!(
+        large_changes
+            .iter()
+            .filter_map(|change| change.content.as_ref())
+            .map(|content| content.size_bytes)
+            .sum::<u64>(),
+        LARGE_REPOSITORY_FILE_BYTES * LARGE_REPOSITORY_FILE_COUNT as u64
+    );
+    let _ = fs::remove_dir_all(staging_repo);
 }
 
 #[test]
