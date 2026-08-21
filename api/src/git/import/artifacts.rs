@@ -1,9 +1,15 @@
 use super::repo_io::{
-    describe_refs, git_changed_tree_entries, git_push_from_repo, git_refs, git_tree_entries_under,
-    pushed_commit_message, queue_failed_git_objects, run_git_output, validate_pushed_commit_range,
+    GitTreeFile, describe_refs, git_changed_tree_entries, git_push_from_repo, git_refs,
+    git_tree_entries_under, pushed_commit_message, queue_failed_git_objects, run_git_output,
+    run_git_output_bounded, validate_pushed_commit_range,
 };
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
+use scope_domain::landing_file::{
+    MAX_REPOSITORY_LANDING_FILE_BYTES, REPOSITORY_LANDING_FILE_PATH, RepositoryLandingFile,
+    RepositoryLandingFileMutation,
+};
+use scope_domain::policy::ScopePath;
 use scope_domain::repo_config::RepoConfig;
 use scope_domain::runs::{
     trigger::{PushTriggerInput, PushWorkflowFile},
@@ -134,6 +140,17 @@ async fn reviewed_update_from_staging_repo_mode(
         created_push.pack_span.object.clone(),
         created_push.head.manifest.clone(),
     ];
+    let landing_file_mutation = match repository_landing_file_mutation(
+        staging_repo,
+        &pushed_entries,
+        &created_push.head.manifest,
+    ) {
+        Ok(mutation) => mutation,
+        Err(error) => {
+            queue_failed_git_objects(state, durable_objects).await?;
+            return Err(error);
+        }
+    };
     let changes = match pushed_entries
         .into_iter()
         .map(|(path, entry)| {
@@ -191,11 +208,52 @@ async fn reviewed_update_from_staging_repo_mode(
         git_pack_span: created_push.pack_span,
         durable_objects,
         push_trigger_input,
+        landing_file_mutation,
         changes,
         previous_config: Some(repo.repo_config.clone()),
         base_config_hash: crate::push_intents::repo_config_fingerprint(&repo.repo_config)?,
         config,
     })
+}
+
+fn repository_landing_file_mutation(
+    staging_repo: &FsPath,
+    pushed_entries: &[(ScopePath, Option<GitTreeFile>)],
+    git_manifest: &scope_domain::store::SourceBlob,
+) -> Result<RepositoryLandingFileMutation, ApiError> {
+    let Some((_, entry)) = pushed_entries
+        .iter()
+        .find(|(path, _)| path.as_str() == REPOSITORY_LANDING_FILE_PATH)
+    else {
+        return Ok(RepositoryLandingFileMutation::Unchanged);
+    };
+    let Some(entry) = entry else {
+        return Ok(RepositoryLandingFileMutation::Delete);
+    };
+    if entry.size_bytes > MAX_REPOSITORY_LANDING_FILE_BYTES {
+        return Ok(RepositoryLandingFileMutation::Delete);
+    }
+
+    let source = git_blob_reference(
+        git_manifest,
+        entry.oid.clone(),
+        entry.mode.clone(),
+        entry.size_bytes,
+    )?;
+    let output = run_git_output_bounded(
+        Some(staging_repo),
+        &["cat-file", "blob", &entry.oid],
+        "reading repository landing file",
+        MAX_REPOSITORY_LANDING_FILE_BYTES,
+    )?;
+    if !output.status.success() || output.stdout.len() != entry.size_bytes {
+        return Err(ApiError::infrastructure_unavailable(
+            "reading repository landing file failed",
+        ));
+    }
+    RepositoryLandingFile::from_source_blob(&source, output.stdout)
+        .map(RepositoryLandingFileMutation::Upsert)
+        .map_err(ApiError::from)
 }
 
 fn prepare_push_trigger_input(
@@ -244,4 +302,123 @@ fn prepare_push_trigger_input(
     PushTriggerInput::new(head_oid.to_string(), workflows, configuration_error)
         .map(Some)
         .map_err(ApiError::bad_request)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::import::{run_git, validate_pushed_file_path};
+    use scope_domain::{
+        content_ref::ContentRef,
+        policy::ScopePath,
+        store::{DEFAULT_GIT_FILE_MODE, SourceBlob},
+    };
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn landing_file_mutation_distinguishes_unchanged_delete_and_oversized() {
+        let manifest = git_manifest();
+        assert_eq!(
+            repository_landing_file_mutation(FsPath::new("unused"), &[], &manifest).unwrap(),
+            RepositoryLandingFileMutation::Unchanged
+        );
+
+        let path = ScopePath::parse(REPOSITORY_LANDING_FILE_PATH).unwrap();
+        assert_eq!(
+            repository_landing_file_mutation(
+                FsPath::new("unused"),
+                &[(path.clone(), None)],
+                &manifest,
+            )
+            .unwrap(),
+            RepositoryLandingFileMutation::Delete
+        );
+
+        let oversized = GitTreeFile {
+            path: validate_pushed_file_path("README.html").unwrap(),
+            mode: DEFAULT_GIT_FILE_MODE.to_string(),
+            oid: "unused".to_string(),
+            size_bytes: MAX_REPOSITORY_LANDING_FILE_BYTES + 1,
+        };
+        assert_eq!(
+            repository_landing_file_mutation(
+                FsPath::new("unused"),
+                &[(path, Some(oversized))],
+                &manifest,
+            )
+            .unwrap(),
+            RepositoryLandingFileMutation::Delete
+        );
+    }
+
+    #[test]
+    fn landing_file_upsert_reads_the_changed_git_blob() {
+        let repo = temp_repo_path("landing-file");
+        run_git(
+            None,
+            &[
+                "init",
+                "--initial-branch=main",
+                repo.to_string_lossy().as_ref(),
+            ],
+            "initializing landing file test repository",
+        )
+        .unwrap();
+        let bytes = b"<!doctype html><h1>fast</h1>";
+        fs::write(repo.join("README.html"), bytes).unwrap();
+        let output = run_git_output(
+            Some(&repo),
+            &["hash-object", "-w", "README.html"],
+            "writing landing file test blob",
+        )
+        .unwrap();
+        assert!(output.status.success());
+        let oid = String::from_utf8(output.stdout).unwrap().trim().to_string();
+        let entry = GitTreeFile {
+            path: validate_pushed_file_path("README.html").unwrap(),
+            mode: DEFAULT_GIT_FILE_MODE.to_string(),
+            oid: oid.clone(),
+            size_bytes: bytes.len(),
+        };
+
+        let mutation = repository_landing_file_mutation(
+            &repo,
+            &[(
+                ScopePath::parse(REPOSITORY_LANDING_FILE_PATH).unwrap(),
+                Some(entry),
+            )],
+            &git_manifest(),
+        )
+        .unwrap();
+        let RepositoryLandingFileMutation::Upsert(file) = mutation else {
+            panic!("expected landing file upsert");
+        };
+        assert_eq!(file.oid, oid);
+        assert_eq!(file.content_bytes, bytes);
+        assert_eq!(file.size_bytes, bytes.len() as u64);
+
+        fs::remove_dir_all(repo).unwrap();
+    }
+
+    fn git_manifest() -> SourceBlob {
+        SourceBlob {
+            content_ref: ContentRef::git_manifest_sha256("manifest"),
+            sha256: "manifest".to_string(),
+            git_oid: "head".to_string(),
+            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+            size_bytes: 1,
+        }
+    }
+
+    fn temp_repo_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("scope-{label}-{}-{nonce}", std::process::id()))
+    }
 }

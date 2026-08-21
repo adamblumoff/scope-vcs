@@ -71,6 +71,69 @@ pub mod repository {
         }
     }
 }
+
+pub mod repository_landing_file {
+    use super::*;
+    use scope_domain::landing_file::{REPOSITORY_LANDING_FILE_PATH, RepositoryLandingFile};
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repository_landing_files")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        pub path: String,
+        pub oid: String,
+        pub sha256: String,
+        pub size_bytes: i64,
+        pub git_file_mode: String,
+        pub content_bytes: Vec<u8>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(
+            repo_id: &str,
+            landing_file: RepositoryLandingFile,
+        ) -> Result<Self, PostgresError> {
+            landing_file
+                .validate_integrity()
+                .map_err(PostgresError::internal)?;
+            Ok(Self {
+                repo_id: repo_id.to_string(),
+                path: REPOSITORY_LANDING_FILE_PATH.to_string(),
+                oid: landing_file.oid,
+                sha256: landing_file.sha256,
+                size_bytes: u64_to_i64(landing_file.size_bytes, "repository landing file size")?,
+                git_file_mode: landing_file.git_file_mode,
+                content_bytes: landing_file.content_bytes,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<RepositoryLandingFile, PostgresError> {
+            if self.path != REPOSITORY_LANDING_FILE_PATH {
+                return Err(PostgresError::internal_message(
+                    "repository landing file has an unexpected path",
+                ));
+            }
+            let size_bytes = i64_to_u64(self.size_bytes, "repository landing file size")?;
+            let landing_file = RepositoryLandingFile {
+                oid: self.oid,
+                sha256: self.sha256,
+                size_bytes,
+                git_file_mode: self.git_file_mode,
+                content_bytes: self.content_bytes,
+            };
+            landing_file
+                .validate_integrity()
+                .map_err(PostgresError::internal)?;
+            Ok(landing_file)
+        }
+    }
+}
 pub mod repository_first_push_token {
     use super::*;
 

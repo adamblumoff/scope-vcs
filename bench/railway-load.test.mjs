@@ -4,7 +4,8 @@ import test from 'node:test';
 import {
   abortTimeoutMs, apiHeaders, assertSafeTarget, capacityRejectionBreakdown, chooseWrite,
   consistencyStats, evaluateStage, failureBreakdown,
-  historySizeSlope, parseByteSizes, parseRates, parseStages, stageResult, stats, writeSizeSlope,
+  historySizeSlope, landingFileSizeSlope, parseByteSizes, parseRates, parseStages, stageResult, stats,
+  writeSizeSlope,
 } from './railway-load.mjs';
 
 test('visibility polling rounds fractional AbortSignal timeouts up', () => {
@@ -88,6 +89,21 @@ test('write-size slope separates payload sizes', () => {
   });
 });
 
+test('landing-file slope separates unrelated pushes from bounded README updates', () => {
+  assert.deepEqual(landingFileSizeSlope([
+    { ok: true, durationMs: 10, ttfbMs: 10, bytes: 1, logicalBytes: 1, landingFileBytes: 0 },
+    { ok: true, durationMs: 20, ttfbMs: 20, bytes: 1, logicalBytes: 4096, landingFileBytes: 4096 },
+    { ok: true, durationMs: 30, ttfbMs: 30, bytes: 1, logicalBytes: 1048576, landingFileBytes: 1048576 },
+  ]), {
+    points: [
+      { landingFileBytes: 0, count: 1, ok: 1, meanMs: 10, p50Ms: 10, p95Ms: 10, p99Ms: 10, ttfbP50Ms: 10, ttfbP95Ms: 10, ttfbP99Ms: 10, scheduleDelayP95Ms: 0, bytes: 1, logicalBytes: 1 },
+      { landingFileBytes: 4096, count: 1, ok: 1, meanMs: 20, p50Ms: 20, p95Ms: 20, p99Ms: 20, ttfbP50Ms: 20, ttfbP95Ms: 20, ttfbP99Ms: 20, scheduleDelayP95Ms: 0, bytes: 1, logicalBytes: 4096 },
+      { landingFileBytes: 1048576, count: 1, ok: 1, meanMs: 30, p50Ms: 30, p95Ms: 30, p99Ms: 30, ttfbP50Ms: 30, ttfbP95Ms: 30, ttfbP99Ms: 30, scheduleDelayP95Ms: 0, bytes: 1, logicalBytes: 1048576 },
+    ],
+    p95MsPerMiB: 20,
+  });
+});
+
 test('consistency statistics expose projection convergence instead of hiding polls', () => {
   assert.deepEqual(consistencyStats([
     { visibilityMs: 20, visibilityAttempts: 1, transientReadErrors: 0, staleReads: 0 },
@@ -105,9 +121,22 @@ test('consistency statistics expose projection convergence instead of hiding pol
 });
 
 test('stage gate rejects errors and latency above twice baseline', () => {
-  const stage = { errorRate: 0.02, stats: { p95Ms: 210, scheduleDelayP95Ms: 0 } };
+  const stage = { name: 'blob-read', errorRate: 0.02, stats: { p95Ms: 210, scheduleDelayP95Ms: 0 }, landingFileSizeSlope: { points: [] } };
   assert.equal(evaluateStage(stage, 100).healthy, false);
-  assert.equal(evaluateStage({ errorRate: 0.01, stats: { p95Ms: 100, scheduleDelayP95Ms: 0 } }, 100).healthy, true);
+  assert.equal(evaluateStage({ name: 'blob-read', errorRate: 0.01, stats: { p95Ms: 100, scheduleDelayP95Ms: 0 }, landingFileSizeSlope: { points: [] } }, 100).healthy, true);
+});
+
+test('push stage gate enforces the optional fifteen-percent regression budget', () => {
+  const stage = {
+    name: 'mixed', errorRate: 0, stats: { p95Ms: 100, scheduleDelayP95Ms: 0 },
+    landingFileSizeSlope: { points: [{ landingFileBytes: 1048576, p95Ms: 116 }] },
+  };
+  assert.deepEqual(evaluateStage(stage, 100, 100), {
+    healthy: false,
+    reasons: ['push p95 116ms > 1.15x baseline 100ms'],
+  });
+  stage.landingFileSizeSlope.points[0].p95Ms = 115;
+  assert.equal(evaluateStage(stage, 100, 100).healthy, true);
 });
 
 test('failure breakdown separates service responses from client saturation', () => {

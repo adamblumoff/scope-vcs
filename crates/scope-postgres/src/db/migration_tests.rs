@@ -12,6 +12,7 @@ mod git_compaction_scheduler;
 mod git_pack_spans;
 mod logical_run_sources;
 mod maintenance_cutover;
+mod repository_landing_files;
 mod request_revisions;
 mod visibility_change_sets;
 
@@ -48,6 +49,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0023_logical_run_sources",
     "m0024_git_compaction_scheduler",
     "m0025_visibility_change_sets",
+    "m0026_repository_landing_files",
 ];
 
 pub(super) async fn isolated_database() -> (

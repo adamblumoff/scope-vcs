@@ -15,6 +15,7 @@ use crate::{
     state::AppState,
 };
 use scope_domain::{
+    landing_file::RepositoryLandingFileMutation,
     projection::{ProjectionViewKey, project_graph},
     repo_actions::reviewed_update_domain_error,
     requests::{Request, RequestAudience, canonical_request_ref},
@@ -27,6 +28,7 @@ pub(crate) struct PreparedRequestMerge {
     pub(crate) expected_repo_change_version: u64,
     pub(crate) prepared_request_head_oid: String,
     pub(crate) origin: RequestMergeOrigin,
+    pub(crate) landing_file_mutation: RepositoryLandingFileMutation,
     pub(crate) update: ReceivePackUpdate,
 }
 
@@ -157,6 +159,7 @@ pub(crate) async fn prepare_request_merge(
             expected_repo_change_version: repo.record.change_version,
             prepared_request_head_oid: request.head_oid.clone(),
             origin,
+            landing_file_mutation: update.landing_file_mutation.clone(),
             update,
         })
     }

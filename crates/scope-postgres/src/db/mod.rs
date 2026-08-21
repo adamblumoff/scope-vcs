@@ -53,6 +53,8 @@ pub use cache_service::{
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
 mod history_rows;
+mod landing_files;
+pub use landing_files::RepositoryLandingFileBackfillCandidate;
 mod locks;
 mod object_references;
 mod outbox;
@@ -129,7 +131,7 @@ pub use repo_collaboration::{
 };
 pub use repo_lifecycle::{CreateRepositoryCommand, RepositoryCreationError};
 pub use repo_mutation::{RepositoryMutation, RepositoryMutationError};
-pub use repo_reads::RepoSummaryRead;
+pub use repo_reads::{RepoLiveFileWithLandingContent, RepoSummaryRead};
 use repository_rows::load_repository_facts;
 use scope_domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, repo_id};
 use sea_orm::{

@@ -1,6 +1,7 @@
 use super::{
     GeneratedIdSource, RepositoryStore, acquire_aggregate_lock,
     cleanup_queue::queue_pending_source_blob_deletion_rows, entities,
+    landing_files::apply_repository_landing_file_mutation,
     push_triggers::enqueue_push_main_trigger_evaluation, repository_from_model,
     repository_rows::save_repository_delta,
 };
@@ -8,8 +9,8 @@ use sea_orm::{EntityTrait, TransactionTrait};
 use std::{fmt, sync::Arc, time::Instant};
 use {
     crate::error::PostgresError,
-    scope_domain::error::DomainError,
     scope_domain::store::{SourceBlob, StoredRepository, repo_id},
+    scope_domain::{error::DomainError, landing_file::RepositoryLandingFileMutation},
 };
 
 #[derive(Debug)]
@@ -45,6 +46,7 @@ pub struct RepositoryMutation<R> {
     pub result: R,
     pub orphan_objects: Vec<SourceBlob>,
     pub push_trigger_input: Option<scope_domain::runs::trigger::PushTriggerInput>,
+    pub landing_file_mutation: RepositoryLandingFileMutation,
 }
 
 impl<R> RepositoryMutation<R> {
@@ -53,6 +55,7 @@ impl<R> RepositoryMutation<R> {
             result,
             orphan_objects: Vec::new(),
             push_trigger_input: None,
+            landing_file_mutation: RepositoryLandingFileMutation::Unchanged,
         }
     }
 
@@ -61,17 +64,20 @@ impl<R> RepositoryMutation<R> {
             result,
             orphan_objects,
             push_trigger_input: None,
+            landing_file_mutation: RepositoryLandingFileMutation::Unchanged,
         }
     }
 
     pub fn with_push_trigger_input(
         result: R,
         push_trigger_input: scope_domain::runs::trigger::PushTriggerInput,
+        landing_file_mutation: RepositoryLandingFileMutation,
     ) -> Self {
         Self {
             result,
             orphan_objects: Vec::new(),
             push_trigger_input: Some(push_trigger_input),
+            landing_file_mutation,
         }
     }
 }
@@ -110,6 +116,12 @@ impl RepositoryStore {
         let before = repo.clone();
         let mutation = op(&mut repo)?;
         save_repository_delta(&tx, &before, &repo, now_unix, generated_ids).await?;
+        apply_repository_landing_file_mutation(
+            &tx,
+            &repo.record.id,
+            mutation.landing_file_mutation,
+        )
+        .await?;
         if let Some(input) = mutation.push_trigger_input {
             let head = repo.git_head.as_ref().ok_or_else(|| {
                 PostgresError::internal_message(

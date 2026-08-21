@@ -24,6 +24,7 @@ use scope_api_contract::{
     CreatePushIntentRequest, CreatePushIntentResponse, CreateRepoRequest, CreateRepoResponse,
     OwnerProfileResponse, RepoConfigResponse, RepoSummaryResponse,
 };
+use scope_domain::landing_file::{MAX_REPOSITORY_LANDING_FILE_BYTES, REPOSITORY_LANDING_FILE_PATH};
 use scope_domain::repo_actions::reviewed_update_domain_error;
 use scope_domain::repo_config::{
     is_repo_config_fingerprint, repo_config_fingerprint as domain_repo_config_fingerprint,
@@ -402,7 +403,7 @@ pub(crate) async fn get_file_content(
     let projected = state
         .metadata
         .repositories()
-        .repo_live_file_content(
+        .repo_live_file_with_landing_content(
             &owner,
             &repo_name,
             user.as_ref().map(|user| user.id.as_str()),
@@ -410,32 +411,67 @@ pub(crate) async fn get_file_content(
         )
         .await?
         .ok_or_else(|| ApiError::not_found("file not found"))?;
-    let repo = find_repo(&state, &owner, &repo_name).await?;
     let span = tracing::info_span!(
         "repo_file_content",
         owner = %owner,
         repo_name = %repo_name,
         file_path = %path.as_str(),
     );
-    let content = span.in_scope(|| {
-        crate::http::file_diffs::review_content_response_for_blob(
-            &state,
-            &projected.blob,
-            repo.git_head.as_ref().map(|head| {
-                (
-                    repo.record.id.as_str(),
-                    head,
-                    repo.git_pack_spans.as_slice(),
-                )
-            }),
-        )
-    })?;
+    let content = if path.as_str() == REPOSITORY_LANDING_FILE_PATH {
+        if projected.projected.blob.size_bytes > MAX_REPOSITORY_LANDING_FILE_BYTES as u64 {
+            crate::http::file_diffs::binary_content_response(
+                &projected.projected.blob.git_oid,
+                projected.projected.blob.size_bytes,
+            )
+        } else {
+            let landing_file = projected.landing_file.as_ref().ok_or_else(|| {
+                tracing::error!(
+                    owner,
+                    repo_name,
+                    file_path = REPOSITORY_LANDING_FILE_PATH,
+                    oid = projected.projected.blob.git_oid,
+                    "repository landing file snapshot is missing"
+                );
+                ApiError::internal_message("repository landing file snapshot requires rebuild")
+            })?;
+            if let Err(error) = landing_file.verify_source(&projected.projected.blob) {
+                tracing::error!(
+                    owner,
+                    repo_name,
+                    file_path = REPOSITORY_LANDING_FILE_PATH,
+                    oid = projected.projected.blob.git_oid,
+                    %error,
+                    "repository landing file snapshot failed verification"
+                );
+                return Err(ApiError::from(error));
+            }
+            crate::http::file_diffs::review_content_response_for_bytes(
+                &projected.projected.blob.git_oid,
+                &landing_file.content_bytes,
+            )
+        }
+    } else {
+        let repo = find_repo(&state, &owner, &repo_name).await?;
+        span.in_scope(|| {
+            crate::http::file_diffs::review_content_response_for_blob(
+                &state,
+                &projected.projected.blob,
+                repo.git_head.as_ref().map(|head| {
+                    (
+                        repo.record.id.as_str(),
+                        head,
+                        repo.git_pack_spans.as_slice(),
+                    )
+                }),
+            )
+        })?
+    };
 
     Ok(Json(RepoFileContentResponse {
-        path: projected.file.path.as_str().to_string(),
-        oid: projected.file.oid,
-        visibility: projected.file.visibility.into(),
-        size_bytes: projected.blob.size_bytes,
+        path: projected.projected.file.path.as_str().to_string(),
+        oid: projected.projected.file.oid,
+        visibility: projected.projected.file.visibility.into(),
+        size_bytes: projected.projected.blob.size_bytes,
         content,
     }))
 }

@@ -16,9 +16,14 @@ maintenance-required plan it:
    replicas for each.
 3. Runs `scope-maintenance apply` once. The command also refuses unless it can
    acquire the database's exclusive writer fence.
-4. Verifies the exact migration ledger while traffic remains closed.
+4. Verifies the exact migration ledger while traffic remains closed, then runs
+   `scope-maintenance backfill-landing-files` with the API service's object-store
+   configuration. The command is idempotent and verifies each row against the
+   current live-file metadata before it commits.
 5. Uploads and health-checks the worker from the checked-out revision, then
-   uploads and health-checks the API from that same revision.
+    uploads and health-checks the API from that same revision.
+
+`backfill-landing-files` and its deploy hook are temporary m0026 cutover code. Remove both after production has completed the migration and a rerun reports zero rows to backfill.
 
 The successful migration transaction is the point of no return. After a failed
 apply command, the workflow redeploys the exact stopped worker and API deployment

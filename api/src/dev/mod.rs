@@ -96,6 +96,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         #[cfg(test)]
         test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
     };
+    state.backfill_repository_landing_files().await?;
     repository_engine.start_reaper();
     state.start_run_attempt_recovery();
     state.start_run_retention();

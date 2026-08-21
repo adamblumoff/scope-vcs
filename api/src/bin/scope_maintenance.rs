@@ -3,7 +3,8 @@ use scope_postgres::db::{
     verify_schema, verify_writer_fence_available,
 };
 
-const USAGE: &str = "usage: scope-maintenance <plan|fence|drain-writers|apply|verify>";
+const USAGE: &str =
+    "usage: scope-maintenance <plan|fence|drain-writers|apply|backfill-landing-files|verify>";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -26,6 +27,12 @@ async fn main() -> anyhow::Result<()> {
             apply_maintenance_migrations(database_url.clone()).await?;
             verify_schema(database_url).await?;
             println!(r#"{{"exact":true,"migration":"applied"}}"#);
+        }
+        "backfill-landing-files" => {
+            verify_schema(database_url).await?;
+            let state = api::AppState::from_env().await?;
+            let stored = state.backfill_repository_landing_files().await?;
+            println!(r#"{{"landingFilesBackfilled":{stored}}}"#);
         }
         "fence" => {
             verify_writer_fence_available(database_url).await?;

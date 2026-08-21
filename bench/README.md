@@ -95,9 +95,21 @@ SCOPE_BENCH_RUN_LABEL=current-api1-2026-08-20 \
 node bench/railway-load.mjs
 ```
 
+To measure landing-file write cost, run the mixed and consistency workloads with unrelated pushes plus 4 KiB and 1 MiB `README.html` updates. Record the pre-change push p95 and pass it to the post-change run; the runner marks a stage unhealthy if its measured push p95 regresses by more than 15%:
+
+```bash
+SCOPE_LOAD_WORKLOADS=mixed,consistency \
+SCOPE_LOAD_WRITE_DELTA_BYTES=0 \
+SCOPE_LOAD_LANDING_FILE_BYTES=0,4096,1048576 \
+SCOPE_LOAD_PUSH_BASELINE_P95_MS=250 \
+node bench/railway-load.mjs
+```
+
+`SCOPE_LOAD_LANDING_FILE_BYTES=0` means the push changes only an unrelated file. Positive values create and update an exact-size `README.html`. Reports group push latency by landing-file size and include its p95 milliseconds-per-MiB slope.
+
 Use `SCOPE_LOAD_RATES=1,2,4` for an open-loop arrival-rate staircase. The runner stops above 1% errors, twice the first-stage p95, or one arrival interval of client scheduling delay. `safeMaxPerSecond` is 70% of the last confirmed healthy throughput. It is a test result, not a production capacity promise.
 
-Reports contain operations/s, logical MiB/s, observed MiB/s, p50/p95/p99 completion and TTFB, error classes, history-size slope, and write-size slope. API bytes are response bytes. Git bytes are local received-object deltas or cloned directory sizes. These are not wire-level counters.
+Reports contain operations/s, logical MiB/s, observed MiB/s, p50/p95/p99 completion and TTFB, error classes, history-size slope, write-size slope, and landing-file-size slope. API bytes are response bytes. Git bytes are local received-object deltas or cloned directory sizes. These are not wire-level counters.
 
 ### Protocol and topology tournament
 

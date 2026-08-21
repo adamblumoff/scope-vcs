@@ -4,6 +4,7 @@ use super::{
     GeneratedIdSource, entities,
     git_compaction::schedule_git_compaction,
     history_rows::{insert_commits, save_live_file},
+    landing_files::apply_repository_landing_file_mutation,
     object_references::{insert_object_reference, replace_object_reference},
     outbox::enqueue_projection_read_model_rebuild,
     push_triggers::enqueue_push_main_trigger_evaluation,
@@ -16,6 +17,7 @@ use std::collections::BTreeMap;
 use {
     crate::error::PostgresError,
     scope_domain::{
+        landing_file::RepositoryLandingFileMutation,
         policy::{Policy, ScopePath},
         repo_actions::reviewed_update_domain_error,
         repo_config::RepoConfig,
@@ -31,18 +33,18 @@ use {
 
 pub(super) async fn accept_and_persist_content_push(
     tx: &DatabaseTransaction,
-    repo_id: &str,
     repo_row: entities::repository::Model,
     update: ReviewedUpdateInput,
+    landing_file_mutation: RepositoryLandingFileMutation,
     push_trigger_input: PushTriggerInput,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
     accept_and_persist_content_update(
         tx,
-        repo_id,
         repo_row,
         update,
+        landing_file_mutation,
         ContentUpdateKind::MainPush(push_trigger_input),
         now_unix,
         generated_ids,
@@ -52,18 +54,18 @@ pub(super) async fn accept_and_persist_content_push(
 
 pub(super) async fn accept_and_persist_request_merge(
     tx: &DatabaseTransaction,
-    repo_id: &str,
     repo_row: entities::repository::Model,
     update: ReviewedUpdateInput,
+    landing_file_mutation: RepositoryLandingFileMutation,
     origin: RequestMergeOrigin,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
     accept_and_persist_content_update(
         tx,
-        repo_id,
         repo_row,
         update,
+        landing_file_mutation,
         ContentUpdateKind::RequestMerge(origin),
         now_unix,
         generated_ids,
@@ -78,13 +80,14 @@ enum ContentUpdateKind {
 
 async fn accept_and_persist_content_update(
     tx: &DatabaseTransaction,
-    repo_id: &str,
     repo_row: entities::repository::Model,
     mut update: ReviewedUpdateInput,
+    landing_file_mutation: RepositoryLandingFileMutation,
     kind: ContentUpdateKind,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
+    let repo_id = repo_row.id.clone();
     let mut changed_paths = update
         .changes
         .iter()
@@ -94,7 +97,7 @@ async fn accept_and_persist_content_update(
         changed_paths.push(REPO_RULES_PATH.to_string());
     }
     let live_files = entities::live_file::Entity::find()
-        .filter(entities::live_file::Column::RepoId.eq(repo_id))
+        .filter(entities::live_file::Column::RepoId.eq(&repo_id))
         .filter(entities::live_file::Column::Path.is_in(changed_paths))
         .all(tx)
         .await
@@ -108,7 +111,7 @@ async fn accept_and_persist_content_update(
         })
         .collect::<Result<BTreeMap<_, _>, PostgresError>>()?;
     let previous_commit = entities::logical_commit::Entity::find()
-        .filter(entities::logical_commit::Column::RepoId.eq(repo_id))
+        .filter(entities::logical_commit::Column::RepoId.eq(&repo_id))
         .order_by_desc(entities::logical_commit::Column::Ordinal)
         .one(tx)
         .await
@@ -123,7 +126,7 @@ async fn accept_and_persist_content_update(
     let change_version = u64::try_from(repo_row.change_version).map_err(|_| {
         PostgresError::internal_message("repository change version cannot be negative")
     })?;
-    let git_head = entities::git_head::Entity::find_by_id(repo_id)
+    let git_head = entities::git_head::Entity::find_by_id(&repo_id)
         .one(tx)
         .await
         .map_err(PostgresError::internal)?
@@ -163,26 +166,26 @@ async fn accept_and_persist_content_update(
         .update(tx)
         .await
         .map_err(PostgresError::internal)?;
-    entities::git_head::Entity::delete_by_id(repo_id)
+    entities::git_head::Entity::delete_by_id(&repo_id)
         .exec(tx)
         .await
         .map_err(PostgresError::internal)?;
-    entities::git_head::Model::from_domain(repo_id, &git_head)?
+    entities::git_head::Model::from_domain(&repo_id, &git_head)?
         .into_active_model()
         .insert(tx)
         .await
         .map_err(PostgresError::internal)?;
-    replace_object_reference(tx, "git_manifest", repo_id, Some(&git_head.manifest)).await?;
-    entities::git_pack_span::Model::from_domain(repo_id, &git_pack_span)?
+    replace_object_reference(tx, "git_manifest", &repo_id, Some(&git_head.manifest)).await?;
+    entities::git_pack_span::Model::from_domain(&repo_id, &git_pack_span)?
         .into_active_model()
         .insert(tx)
         .await
         .map_err(PostgresError::internal)?;
     let segment_ref_id = format!("{repo_id}:{}", git_pack_span.first_sequence);
     insert_object_reference(tx, "git_segment", &segment_ref_id, &git_pack_span.object).await?;
-    schedule_git_compaction(tx, repo_id, git_head.push_sequence, now_unix).await?;
+    schedule_git_compaction(tx, &repo_id, git_head.push_sequence, now_unix).await?;
     let pinned_pack_spans = entities::git_pack_span::Entity::find()
-        .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::git_pack_span::Column::RepoId.eq(&repo_id))
         .order_by_asc(entities::git_pack_span::Column::FirstSequence)
         .all(tx)
         .await
@@ -192,16 +195,17 @@ async fn accept_and_persist_content_update(
         .collect::<Result<Vec<_>, _>>()?;
     let ordinal = usize::try_from(next_ordinal)
         .map_err(|_| PostgresError::internal_message("logical commit ordinal is invalid"))?;
-    insert_commits(tx, repo_id, ordinal, std::slice::from_ref(&logical_commit)).await?;
+    insert_commits(tx, &repo_id, ordinal, std::slice::from_ref(&logical_commit)).await?;
     for change in &logical_commit.changes {
-        save_live_file(tx, repo_id, &change.path, change.new_content.as_ref()).await?;
+        save_live_file(tx, &repo_id, &change.path, change.new_content.as_ref()).await?;
     }
-    enqueue_projection_read_model_rebuild(tx, repo_id, change_version, now_unix, generated_ids)
+    apply_repository_landing_file_mutation(tx, &repo_id, landing_file_mutation).await?;
+    enqueue_projection_read_model_rebuild(tx, &repo_id, change_version, now_unix, generated_ids)
         .await?;
     if let Some(input) = push_trigger_input {
         enqueue_push_main_trigger_evaluation(
             tx,
-            repo_id,
+            &repo_id,
             &git_head,
             &pinned_pack_spans,
             &input,

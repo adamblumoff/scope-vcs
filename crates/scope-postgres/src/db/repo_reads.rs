@@ -1,5 +1,6 @@
 use super::{
     RepositoryStore, begin_metadata_read_snapshot, entities,
+    landing_files::repository_landing_file,
     projection_encoding::ProjectionAudience,
     projection_read_models::{
         ProjectionFileLookup, live_projection_has_non_control_file_for_audience,
@@ -15,6 +16,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use {
     crate::error::PostgresError,
     scope_domain::{
+        landing_file::{REPOSITORY_LANDING_FILE_PATH, RepositoryLandingFile},
         policy::{Policy, Principal, PrincipalKind, ScopePath},
         projection_views::{
             ProjectionViewFile, ProjectionViewFileContent, has_visible_projected_non_control_files,
@@ -42,6 +44,12 @@ pub struct RepoSummaryRead {
 pub struct OwnerProfileRead {
     pub handle: String,
     pub repositories: Vec<RepoSummaryRead>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepoLiveFileWithLandingContent {
+    pub projected: ProjectionViewFileContent,
+    pub landing_file: Option<RepositoryLandingFile>,
 }
 
 #[derive(Clone, Debug, FromQueryResult)]
@@ -109,14 +117,33 @@ impl RepositoryStore {
         viewer_user_id: Option<&str>,
         path: &ScopePath,
     ) -> Result<Option<ProjectionViewFileContent>, PostgresError> {
+        Ok(self
+            .repo_live_file_with_landing_content(owner, name, viewer_user_id, path)
+            .await?
+            .map(|content| content.projected))
+    }
+
+    pub async fn repo_live_file_with_landing_content(
+        &self,
+        owner: &str,
+        name: &str,
+        viewer_user_id: Option<&str>,
+        path: &ScopePath,
+    ) -> Result<Option<RepoLiveFileWithLandingContent>, PostgresError> {
         let owner = owner.to_string();
         let name = name.to_string();
         let viewer_user_id = viewer_user_id.map(str::to_string);
         let path = path.clone();
         let db = Arc::clone(&self.db);
         let tx = begin_metadata_read_snapshot(db.as_ref()).await?;
-        let content =
-            repo_live_file_content_tx(&tx, &owner, &name, viewer_user_id.as_deref(), &path).await?;
+        let content = repo_live_file_with_landing_content_tx(
+            &tx,
+            &owner,
+            &name,
+            viewer_user_id.as_deref(),
+            &path,
+        )
+        .await?;
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(content)
     }
@@ -213,13 +240,13 @@ where
     Ok(Some(domain_projected_files(&repo, &principal)))
 }
 
-async fn repo_live_file_content_tx<C>(
+async fn repo_live_file_with_landing_content_tx<C>(
     conn: &C,
     owner: &str,
     name: &str,
     viewer_user_id: Option<&str>,
     path: &ScopePath,
-) -> Result<Option<ProjectionViewFileContent>, PostgresError>
+) -> Result<Option<RepoLiveFileWithLandingContent>, PostgresError>
 where
     C: ConnectionTrait,
 {
@@ -252,7 +279,18 @@ where
             domain_projected_file_content(&repo, &principal, path)
         }
     };
-    Ok(content)
+    let Some(projected) = content else {
+        return Ok(None);
+    };
+    let landing_file = if path.as_str() == REPOSITORY_LANDING_FILE_PATH {
+        repository_landing_file(conn, &row.id).await?
+    } else {
+        None
+    };
+    Ok(Some(RepoLiveFileWithLandingContent {
+        projected,
+        landing_file,
+    }))
 }
 
 async fn repo_read_row_by_owner_name<C>(

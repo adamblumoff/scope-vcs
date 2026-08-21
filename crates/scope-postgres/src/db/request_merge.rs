@@ -10,6 +10,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use {
     crate::error::PostgresError,
     scope_domain::{
+        landing_file::RepositoryLandingFileMutation,
         requests::{MergeRequestInput, RequestLifecycleMutation, merge_request},
         reviewed_updates::ReviewedUpdateInput,
         store::{GitHead, RepoLifecycleState, RequestMergeOrigin},
@@ -32,6 +33,7 @@ impl RequestStore {
         expected_repo_change_version: u64,
         expected_request_head_oid: &str,
         update: ReviewedUpdateInput,
+        landing_file_mutation: RepositoryLandingFileMutation,
         origin: RequestMergeOrigin,
         mut input: MergeRequestInput,
         generated_ids: &dyn GeneratedIdSource,
@@ -100,9 +102,9 @@ impl RequestStore {
 
         let git_head = accept_and_persist_request_merge(
             &tx,
-            &repo_id,
             repo_row,
             update,
+            landing_file_mutation,
             origin,
             now_unix,
             generated_ids,

@@ -75,6 +75,15 @@ async fn merge_route_persists_git_content_once() {
         "second request change",
     )
     .unwrap();
+    push_change(
+        &source,
+        &remote,
+        REQUEST_REF,
+        "README.html",
+        "<h1>Merged request landing page</h1>\n",
+        "add request landing page",
+    )
+    .unwrap();
     let request_head = git_head_oid(&source);
     let app = router(state.clone());
 
@@ -135,6 +144,24 @@ async fn merge_route_persists_git_content_once() {
             .await
             .as_deref(),
         Some("second request commit\n")
+    );
+    let landing = state
+        .metadata
+        .repositories()
+        .repo_live_file_with_landing_content(
+            TEST_REPO_OWNER,
+            TEST_REPO_NAME,
+            None,
+            &ScopePath::parse("/README.html").unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .landing_file
+        .unwrap();
+    assert_eq!(
+        landing.content_bytes,
+        b"<h1>Merged request landing page</h1>\n"
     );
 
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
