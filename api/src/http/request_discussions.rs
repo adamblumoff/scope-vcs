@@ -7,6 +7,7 @@ use crate::{
         responses::*,
     },
     persistence::unix_now,
+    product_analytics::ProductEvent,
     state::AppState,
 };
 use axum::{
@@ -25,7 +26,7 @@ use scope_api_contract::{
 use scope_domain::requests::{
     CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
     MarkRequestDiscussionReadInput, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
-    ReopenAndReplyToRequestDiscussionInput, RequestViewer, request_policy,
+    ReopenAndReplyToRequestDiscussionInput, RequestViewer, request_actor_role, request_policy,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -185,6 +186,16 @@ pub(crate) async fn create_discussion(
             now_unix: unix_now()?,
         })
         .await?;
+    if mutation.created {
+        state
+            .product_analytics
+            .capture(ProductEvent::discussion_created(
+                &actor_user_id,
+                request.audience,
+                request_actor_role(access),
+                mutation.discussion.anchor.is_some(),
+            ));
+    }
     let through_position = mutation.discussion.last_activity_position;
     let discussion_id = mutation.discussion.id.clone();
     let projection = DiscussionProjection {
@@ -568,6 +579,15 @@ async fn transition_discussion(
             )
             .await?
     };
+    if resolve {
+        state
+            .product_analytics
+            .capture(ProductEvent::discussion_resolved(
+                &actor_user_id,
+                request.audience,
+                request_actor_role(access),
+            ));
+    }
     let through_position = discussion.last_activity_position;
     let projection = DiscussionProjection {
         state: &state,

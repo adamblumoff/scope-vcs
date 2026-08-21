@@ -265,6 +265,7 @@ impl RequestStore {
             };
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(CreateRequestDiscussionMutation {
+                created: false,
                 request,
                 discussion,
                 read_state: state,

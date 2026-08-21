@@ -739,6 +739,7 @@ async fn handle_git_receive_pack_body(
         }
 
         let main_push_event;
+        let repository_initialized;
         let committed_git_head;
         match access {
             ReceivePackAccess::RequestContributor { .. } => {
@@ -797,6 +798,7 @@ async fn handle_git_receive_pack_body(
                     }
                 };
                 main_push_event = RepoChangeReason::FirstPushApplied;
+                repository_initialized = true;
                 tracing::info!(
                     owner,
                     repo = repo_name,
@@ -857,6 +859,7 @@ async fn handle_git_receive_pack_body(
                     }
                 };
                 main_push_event = RepoChangeReason::PushReceived;
+                repository_initialized = false;
                 tracing::info!(
                     owner,
                     repo = repo_name,
@@ -866,6 +869,13 @@ async fn handle_git_receive_pack_body(
                     "git receive-pack ready-repository update persisted"
                 );
             }
+        }
+        if repository_initialized {
+            state.product_analytics.capture(
+                crate::product_analytics::ProductEvent::repository_initialized(
+                    &main_push_author_id,
+                ),
+            );
         }
         state
             .publish_repo_change(

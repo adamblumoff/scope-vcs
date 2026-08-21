@@ -6,6 +6,7 @@ use crate::{
     config::CLI_SESSION_TOKEN_PREFIX,
     error::ApiError,
     persistence::unix_now,
+    product_analytics::ProductEvent,
     state::AppState,
 };
 use axum::http::HeaderMap;
@@ -55,11 +56,24 @@ pub(crate) async fn require_reconciled_clerk_scope_user(
     headers: &HeaderMap,
 ) -> Result<UserAccount, ApiError> {
     let identity = require_clerk_identity(state, headers).await?;
-    Ok(state
+    reconcile_clerk_scope_user(state, &identity).await
+}
+
+async fn reconcile_clerk_scope_user(
+    state: &AppState,
+    identity: &ClerkIdentity,
+) -> Result<UserAccount, ApiError> {
+    let resolution = state
         .metadata
         .auth()
-        .resolve_clerk_user(&identity, unix_now()?)
-        .await?)
+        .resolve_clerk_user(identity, unix_now()?)
+        .await?;
+    if resolution.created {
+        state
+            .product_analytics
+            .capture(ProductEvent::account_created(&resolution.user.id));
+    }
+    Ok(resolution.user)
 }
 
 pub(crate) async fn require_clerk_identity(
@@ -84,11 +98,7 @@ async fn resolve_clerk_scope_user(
         .await?
     {
         Some(user) => Ok(user),
-        None => Ok(state
-            .metadata
-            .auth()
-            .resolve_clerk_user(identity, unix_now()?)
-            .await?),
+        None => reconcile_clerk_scope_user(state, identity).await,
     }
 }
 

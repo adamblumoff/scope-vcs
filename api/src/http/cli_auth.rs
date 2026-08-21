@@ -12,6 +12,7 @@ use crate::{
         },
     },
     persistence::unix_now,
+    product_analytics::{CliSessionMethod, ProductEvent},
     state::AppState,
 };
 use axum::{
@@ -68,6 +69,12 @@ pub(crate) async fn exchange_cli_browser_login(
             unix_now()?,
         )
         .await?;
+    state
+        .product_analytics
+        .capture(ProductEvent::cli_session_created(
+            &token.identity.user_id,
+            CliSessionMethod::Browser,
+        ));
 
     Ok(Json(CliSessionTokenResponse {
         session_token: token.session_token,
@@ -98,6 +105,12 @@ pub(crate) async fn exchange_cli_grant(
     let token = CliAuthService::new(state.metadata.auth())
         .exchange_grant(&request.exchange_token, unix_now()?)
         .await?;
+    state
+        .product_analytics
+        .capture(ProductEvent::cli_session_created(
+            &token.identity.user_id,
+            CliSessionMethod::ExchangeGrant,
+        ));
 
     Ok(Json(CliSessionTokenResponse {
         session_token: token.session_token,

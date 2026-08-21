@@ -320,6 +320,7 @@ pub(crate) async fn persist_request_ref_revision(
     )
     .await?;
     let request_repo_id = request.repo_id.clone();
+    let request_audience = request.audience;
     let now_unix = unix_now()?;
     let expected_old_head_oid = update
         .old_head_oid
@@ -347,6 +348,12 @@ pub(crate) async fn persist_request_ref_revision(
         )
         .await;
     if mutation.is_ok() {
+        state
+            .product_analytics
+            .capture(crate::product_analytics::ProductEvent::request_revised(
+                actor_user_id,
+                request_audience,
+            ));
         state
             .publish_request_summary_refresh(&request_repo_id, RepoChangeReason::RequestRevised)
             .await;

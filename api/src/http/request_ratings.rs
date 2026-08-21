@@ -1,7 +1,7 @@
 use super::requests::{random_id, repo_and_access, visible_request};
 use crate::{
     auth::scope::require_scope_user, error::ApiError, persistence::unix_now,
-    repo_events::RepoChangeReason, state::AppState,
+    product_analytics::ProductEvent, repo_events::RepoChangeReason, state::AppState,
 };
 use axum::{
     Json,
@@ -57,6 +57,11 @@ pub(crate) async fn create_request_rating(
             now_unix: unix_now()?,
         })
         .await?;
+    state.product_analytics.capture(ProductEvent::request_rated(
+        &user.id,
+        request.audience,
+        rating.score,
+    ));
     state
         .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestRated)
         .await;

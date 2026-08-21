@@ -8,10 +8,14 @@ import {
   Scripts,
   createRootRoute,
 } from '@tanstack/react-router'
-import type { ReactNode } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { Toaster } from 'sonner'
 import { scopeClerkAppearance } from '../clerk-appearance'
 import '../styles.css'
+
+const AnalyticsRoot = lazy(() => import('@/analytics/analytics-root').then(
+  ({ AnalyticsRoot: component }) => ({ default: component }),
+))
 
 export const Route = createRootRoute({
   head: () => ({
@@ -128,6 +132,9 @@ function RootDocument({ children }: { children: ReactNode }) {
             : {})}
         >
           {children}
+          <Suspense fallback={null}>
+            <AnalyticsRoot />
+          </Suspense>
           <Toaster richColors position="bottom-right" />
           <Scripts />
         </ClerkProvider>

@@ -71,6 +71,7 @@ pub struct CreateRequestDiscussionInput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateRequestDiscussionMutation {
+    pub created: bool,
     pub request: Request,
     pub discussion: RequestDiscussion,
     pub read_state: RequestDiscussionReadState,
@@ -200,6 +201,7 @@ pub fn create_request_discussion(
     let read_state = read_state(&discussion, &input.actor_user_id, position, input.now_unix);
     discussions.insert(discussion.id.clone(), discussion.clone());
     Ok(CreateRequestDiscussionMutation {
+        created: true,
         request: request.clone(),
         discussion,
         read_state,

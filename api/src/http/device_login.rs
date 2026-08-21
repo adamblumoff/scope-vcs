@@ -8,6 +8,7 @@ use crate::{
     error::ApiError,
     http::{origins::public_app_origin, responses::DeviceLoginCompleteResponse},
     persistence::unix_now,
+    product_analytics::{CliSessionMethod, ProductEvent},
     state::AppState,
 };
 use axum::{
@@ -67,12 +68,20 @@ pub(crate) async fn poll_cli_device_login(
             session_token,
             expires_at_unix,
             identity,
-        } => Ok(Json(DeviceLoginPollResponse {
-            status: DeviceLoginStatus::Complete,
-            session_token: Some(session_token),
-            expires_at_unix,
-            identity: Some(identity.into()),
-        })),
+        } => {
+            state
+                .product_analytics
+                .capture(ProductEvent::cli_session_created(
+                    &identity.user_id,
+                    CliSessionMethod::Device,
+                ));
+            Ok(Json(DeviceLoginPollResponse {
+                status: DeviceLoginStatus::Complete,
+                session_token: Some(session_token),
+                expires_at_unix,
+                identity: Some(identity.into()),
+            }))
+        }
     }
 }
 

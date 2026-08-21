@@ -271,9 +271,11 @@ async fn request_list_pages_one_hundred_and_one_visible_rows_without_overlap() {
 
 #[tokio::test]
 async fn request_lifecycle_exposes_one_way_submit_and_merge_actions() {
-    let state = test_state_with_repo();
+    let mut state = test_state_with_repo();
     cache_test_jwks(&state);
     create_owner_request(&state, "req_lifecycle", REQUEST_HEAD).await;
+    let (analytics, recording) = crate::product_analytics::ProductAnalytics::recording();
+    state.product_analytics = analytics;
     let app = router(state);
     let bearer = bearer_header();
 
@@ -288,6 +290,7 @@ async fn request_lifecycle_exposes_one_way_submit_and_merge_actions() {
     assert_eq!(submitted.status(), StatusCode::OK);
     let submitted = response_json(submitted).await;
     assert_eq!(submitted["request"]["state"], "Open");
+    assert_eq!(recording.event_names(), ["request:request_submit"]);
 
     let repeated = api_request(
         app.clone(),
@@ -298,6 +301,7 @@ async fn request_lifecycle_exposes_one_way_submit_and_merge_actions() {
     )
     .await;
     assert_eq!(repeated.status(), StatusCode::CONFLICT);
+    assert_eq!(recording.event_names(), ["request:request_submit"]);
 }
 
 #[tokio::test]

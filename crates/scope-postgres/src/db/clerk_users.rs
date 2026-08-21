@@ -9,6 +9,12 @@ use sea_orm::{
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClerkUserResolution {
+    pub user: UserAccount,
+    pub created: bool,
+}
+
 impl AuthStore {
     pub async fn resolve_existing_clerk_user(
         &self,
@@ -23,7 +29,7 @@ impl AuthStore {
         &self,
         identity: &ExternalIdentity,
         now_unix: u64,
-    ) -> Result<UserAccount, PostgresError> {
+    ) -> Result<ClerkUserResolution, PostgresError> {
         let identity = identity.clone();
         let verified_email = verified_identity_email(&identity)?;
         let db = Arc::clone(&self.db);
@@ -31,10 +37,10 @@ impl AuthStore {
         let identity_key = format!("{}:{}", identity.provider, identity.subject);
         acquire_aggregate_lock(&tx, "auth-identity", &identity_key).await?;
         acquire_aggregate_lock(&tx, "auth-email", &verified_email).await?;
-        let user = resolve_clerk_user_in_tx(&tx, &identity, &verified_email).await?;
+        let resolution = resolve_clerk_user_in_tx(&tx, &identity, &verified_email).await?;
         let _ = now_unix;
         tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(user)
+        Ok(resolution)
     }
 }
 
@@ -73,7 +79,7 @@ async fn resolve_clerk_user_in_tx<C>(
     conn: &C,
     identity: &ExternalIdentity,
     verified_email: &str,
-) -> Result<UserAccount, PostgresError>
+) -> Result<ClerkUserResolution, PostgresError>
 where
     C: sea_orm::ConnectionTrait,
 {
@@ -94,7 +100,10 @@ where
         }
         update_user_snapshot(&mut user, identity);
         update_user(conn, &user).await?;
-        return Ok(user);
+        return Ok(ClerkUserResolution {
+            user,
+            created: false,
+        });
     }
 
     let user_id = scope_user_id_for_auth_identity(identity.provider.as_str(), &identity.subject);
@@ -142,7 +151,10 @@ where
     .await
     .map_err(PostgresError::internal)?;
 
-    Ok(user)
+    Ok(ClerkUserResolution {
+        user,
+        created: !is_existing,
+    })
 }
 
 async fn update_user<C>(conn: &C, user: &UserAccount) -> Result<(), PostgresError>
@@ -314,7 +326,7 @@ mod tests {
     async fn resolve_concurrently(
         store: MetadataStore,
         identities: Vec<ExternalIdentity>,
-    ) -> Vec<UserAccount> {
+    ) -> Vec<ClerkUserResolution> {
         let barrier = Arc::new(Barrier::new(identities.len()));
         let mut tasks = JoinSet::new();
         for identity in identities {
@@ -329,11 +341,11 @@ mod tests {
             });
         }
 
-        let mut users = Vec::new();
+        let mut resolutions = Vec::new();
         while let Some(result) = tasks.join_next().await {
-            users.push(result.unwrap().unwrap());
+            resolutions.push(result.unwrap().unwrap());
         }
-        users
+        resolutions
     }
 
     #[tokio::test]
@@ -349,9 +361,20 @@ mod tests {
             })
             .collect();
 
-        let users = resolve_concurrently(store.clone(), identities).await;
+        let resolutions = resolve_concurrently(store.clone(), identities).await;
 
-        assert!(users.iter().all(|user| user.id == users[0].id));
+        assert!(
+            resolutions
+                .iter()
+                .all(|resolution| resolution.user.id == resolutions[0].user.id)
+        );
+        assert_eq!(
+            resolutions
+                .iter()
+                .filter(|resolution| resolution.created)
+                .count(),
+            1
+        );
         assert_eq!(store.auth().user_count_for_tests().await.unwrap(), 1);
     }
 
@@ -368,15 +391,19 @@ mod tests {
             })
             .collect();
 
-        let users = resolve_concurrently(store, identities).await;
-        let user_ids = users.iter().map(|user| &user.id).collect::<HashSet<_>>();
-        let handles = users
+        let resolutions = resolve_concurrently(store, identities).await;
+        let user_ids = resolutions
             .iter()
-            .map(|user| &user.handle)
+            .map(|resolution| &resolution.user.id)
+            .collect::<HashSet<_>>();
+        let handles = resolutions
+            .iter()
+            .map(|resolution| &resolution.user.handle)
             .collect::<HashSet<_>>();
 
-        assert_eq!(user_ids.len(), users.len());
-        assert_eq!(handles.len(), users.len());
+        assert_eq!(user_ids.len(), resolutions.len());
+        assert_eq!(handles.len(), resolutions.len());
+        assert!(resolutions.iter().all(|resolution| resolution.created));
         assert!(handles.contains(&"shared".to_string()));
         assert!(handles.iter().all(|handle| handle.starts_with("shared")));
     }

@@ -25,7 +25,6 @@ import {
   loadRepoFileWhenReady,
   type RepoFileLoadResult,
 } from '@/features/repo-detail/repo-code-route-data'
-import { useRepoFileReadyTiming } from '@/features/repo-detail/repo-file-ready-telemetry'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import {
   displayRouteFilePath,
@@ -148,14 +147,6 @@ function RepoIndexRoute() {
     read: readRepoFileCache,
     write: writeRepoFileCache,
   })
-  useRepoFileReadyTiming({
-    identity: selectedFileIdentity,
-    owner,
-    path: selectedFilePath,
-    ready: selectedFileResource.status === 'loaded',
-    repo: repoName,
-  })
-
   const selectFile = useCallback((path: string) => {
     const nextPath = displayRouteFilePath(path)
     if (nextPath === displayRouteFilePath(selectedPath)) return

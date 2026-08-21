@@ -15,5 +15,9 @@
         "rules": ["react-doctor/jsx-no-jsx-as-prop"]
       }
     ]
+  },
+  "supplyChain": {
+    "enabled": true,
+    "minScore": 46
   }
 }

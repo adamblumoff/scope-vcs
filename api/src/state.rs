@@ -8,6 +8,7 @@ use crate::{
     git::repository_engine::RepositoryEngine,
     object_store_config::{encryption_key_from_env, s3_from_env},
     persistence::ensure_private_dir,
+    product_analytics::ProductAnalytics,
     push_intents::push_intent_signing_key,
     repo_cleanup::best_effort_drain_pending_repo_storage_deletions,
     repo_events::RepoChangeBus,
@@ -26,6 +27,7 @@ pub struct AppState {
     pub(crate) cache_grants: CacheGrantIssuer,
     pub(crate) runtime_budgets: Arc<RuntimeBudgets>,
     pub(crate) operator_token: Option<Arc<str>>,
+    pub(crate) product_analytics: ProductAnalytics,
     pub(crate) repo_events: RepoChangeBus,
     pub(crate) push_intent_signing_key: Arc<[u8]>,
     pub(crate) repository_engine: Arc<RepositoryEngine>,
@@ -64,6 +66,7 @@ impl AppState {
         let repository_engine =
             RepositoryEngine::new(data_dir.join("git-cache"), git_cache_max_bytes_from_env()?)
                 .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
+        let product_analytics = ProductAnalytics::from_env().await?;
 
         let state = Self {
             metadata,
@@ -73,6 +76,7 @@ impl AppState {
             cache_grants,
             runtime_budgets,
             operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
+            product_analytics,
             repo_events,
             push_intent_signing_key,
             repository_engine: repository_engine.clone(),
@@ -84,6 +88,10 @@ impl AppState {
         state.start_run_retention();
         best_effort_drain_pending_repo_storage_deletions(&state).await;
         Ok(state)
+    }
+
+    pub async fn shutdown_product_analytics(&self) {
+        self.product_analytics.shutdown().await;
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -113,6 +121,7 @@ impl AppState {
             cache_grants: CacheGrantIssuer::test(),
             runtime_budgets,
             operator_token: None,
+            product_analytics: ProductAnalytics::disabled(),
             repo_events: RepoChangeBus::default(),
             push_intent_signing_key: Arc::from(b"scope-test-push-intent-signing-key".as_slice()),
             repository_engine: RepositoryEngine::new(
