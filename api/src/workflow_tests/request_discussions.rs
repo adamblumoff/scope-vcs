@@ -3,9 +3,11 @@ use tokio_stream::StreamExt;
 
 #[tokio::test]
 async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts() {
-    let state = test_state_with_readme().await;
+    let mut state = test_state_with_readme().await;
     super::requests::rebuild_request_projection(&state).await;
     cache_test_jwks(&state);
+    let (analytics, recording) = crate::product_analytics::ProductAnalytics::recording();
+    state.product_analytics = analytics;
     let app = router(state.clone());
     let bearer = bearer_header();
     let started = api_request(
@@ -111,6 +113,14 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     assert_eq!(retried.status(), StatusCode::OK);
     let retried = response_json(retried).await;
     assert_eq!(retried["discussion"]["id"], discussion_id);
+    assert_eq!(
+        recording
+            .event_names()
+            .into_iter()
+            .filter(|name| *name == "discussion:discussion_create")
+            .count(),
+        1
+    );
 
     let reply = api_request(
         app.clone(),

@@ -76,6 +76,7 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
         })
         .await
         .unwrap();
+    assert!(first.created);
     let mut request = store
         .requests()
         .request_for_tests("req_1")
@@ -114,6 +115,7 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
         })
         .await
         .unwrap();
+    assert!(!retried.created);
     assert_eq!(retried.discussion.id, first.discussion.id);
     assert_eq!(
         retried.read_state.read_through_position,

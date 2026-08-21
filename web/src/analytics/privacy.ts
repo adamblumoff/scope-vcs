@@ -7,7 +7,6 @@ import {
 const transportPropertyNames = [
   '$anon_distinct_id',
   '$device_id',
-  '$geoip_disable',
   '$is_identified',
   '$lib',
   '$lib_version',
@@ -113,7 +112,7 @@ function withoutPersonMutations(
 }
 
 function transportProperties(properties: Properties) {
-  const allowed: Properties = {}
+  const allowed: Properties = { $geoip_disable: true }
   for (const propertyName of transportPropertyNames) {
     const value = properties[propertyName]
     if (isPostHogProperty(value)) allowed[propertyName] = value

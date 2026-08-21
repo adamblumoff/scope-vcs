@@ -149,7 +149,6 @@ function initializeAnalyticsClient() {
     save_referrer: false,
     api_host: config.host,
   })
-  client.register({ $geoip_disable: true })
   return client
 }
 

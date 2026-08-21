@@ -172,7 +172,6 @@ pub(crate) async fn create_discussion(
         ),
         None => None,
     };
-    let anchored = anchor.is_some();
     let mutation = state
         .metadata
         .requests()
@@ -187,14 +186,16 @@ pub(crate) async fn create_discussion(
             now_unix: unix_now()?,
         })
         .await?;
-    state
-        .product_analytics
-        .capture(ProductEvent::discussion_created(
-            &actor_user_id,
-            request.audience,
-            request_actor_role(access),
-            anchored,
-        ));
+    if mutation.created {
+        state
+            .product_analytics
+            .capture(ProductEvent::discussion_created(
+                &actor_user_id,
+                request.audience,
+                request_actor_role(access),
+                mutation.discussion.anchor.is_some(),
+            ));
+    }
     let through_position = mutation.discussion.last_activity_position;
     let discussion_id = mutation.discussion.id.clone();
     let projection = DiscussionProjection {

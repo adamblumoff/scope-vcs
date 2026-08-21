@@ -33,7 +33,7 @@ test('privacy boundary removes route parameters, query values, and unknown prope
     properties: {
       $current_url: 'https://scopevcs.com/adam/private-repo/code?path=secret.rs',
       $host: 'scopevcs.com',
-      $geoip_disable: true,
+      $geoip_disable: false,
       $pathname: '/adam/private-repo/code',
       $referrer: 'https://scopevcs.com/adam/private-repo',
       distinct_id: 'anonymous-id',
@@ -80,7 +80,6 @@ test('identify keeps identity linkage but drops person and URL properties', () =
     properties: {
       $anon_distinct_id: 'anonymous-id',
       $current_url: 'https://scopevcs.com/adam/private-repo',
-      $geoip_disable: true,
       distinct_id: 'scope_usr_123',
       email: 'private@example.com',
       token: 'phc_project',
