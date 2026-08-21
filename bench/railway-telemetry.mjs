@@ -190,7 +190,7 @@ export function capacityRejectionFields(message) {
     const operation = textField(message, 'operation');
     return operation ? { operation } : null;
   }
-  const match = message.match(/(Git receive-pack|Git upload-pack|Git projection build|object store (?:read|write|delete)) capacity is exhausted/i);
+  const match = message.match(/(Git receive-pack|Git upload-pack|Git materialization|object store (?:read|write|delete)) capacity is exhausted/i);
   return match ? { operation: match[1] } : null;
 }
 

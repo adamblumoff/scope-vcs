@@ -425,7 +425,7 @@ pub(crate) fn projection_bare_repo_for_state(
             } else {
                 None
             };
-            let _permit = state.runtime_budgets.try_projection_build()?;
+            let _permit = state.runtime_budgets.try_git_materialization()?;
             projection_bare_repo_with_loader(
                 &cache_root,
                 projection,

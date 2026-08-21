@@ -91,7 +91,6 @@ async fn run() -> anyhow::Result<()> {
         poll_interval_ms = settings.poll_interval.as_millis(),
         git_compaction_spans = settings.git_compaction_spans,
         git_compaction_timeout_secs = settings.git_compaction_timeout.as_secs(),
-        git_pack_span_max_count = settings.git_storage_limits.max_pack_spans(),
         git_object_max_bytes = settings.git_storage_limits.max_object_bytes(),
         "starting worker"
     );

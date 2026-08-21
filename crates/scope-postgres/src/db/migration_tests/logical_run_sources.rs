@@ -78,6 +78,45 @@ async fn accepted_revision_runs_keep_their_exact_bundle_after_cutover() {
                 (jsonb_build_object('GitManifestSha256', repeat('d', 64))::text, 'run_source', 'legacy_shared'),
                 (jsonb_build_object('GitBundleSha256', repeat('e', 64))::text, 'run_source', 'legacy_shared'),
                 (jsonb_build_object('GitManifestSha256', repeat('d', 64))::text, 'git_manifest', 'legacy_run_repo');
+            INSERT INTO scope_push_trigger_evaluations (
+                repo_id, change_version, head_oid, state, message, checks,
+                created_at_unix, completed_at_unix
+            ) VALUES (
+                'legacy_run_repo', 2, repeat('7', 40), 'pending', NULL, '[]'::jsonb, 1, NULL
+            );
+            INSERT INTO scope_outbox_jobs (
+                id, idempotency_key, kind, repo_id, repo_version, payload,
+                state, attempts, next_run_at_unix, lease_owner, lease_expires_at_unix,
+                last_error, created_at_unix, updated_at_unix, completed_at_unix
+            ) VALUES (
+                'legacy_push_job', 'push_main_trigger_evaluation:legacy_run_repo:2',
+                'push_main_trigger_evaluation', 'legacy_run_repo', 2,
+                jsonb_build_object(
+                    'workflow_schema_version', 4,
+                    'manifest', jsonb_build_object(
+                        'content_ref', jsonb_build_object('GitManifestSha256', repeat('8', 64)),
+                        'sha256', repeat('8', 64), 'git_oid', repeat('7', 40),
+                        'git_file_mode', '100644', 'size_bytes', 30
+                    ),
+                    'input', jsonb_build_object(
+                        'head_oid', repeat('7', 40),
+                        'snapshot', jsonb_build_object(
+                            'content_ref', jsonb_build_object('GitBundleSha256', repeat('9', 64)),
+                            'sha256', repeat('9', 64), 'git_oid', repeat('7', 40),
+                            'git_file_mode', '100644', 'size_bytes', 300
+                        ),
+                        'workflows', '[]'::jsonb,
+                        'configuration_error', NULL
+                    )
+                ),
+                'ready', 0, 1, NULL, NULL, NULL, 1, 1, NULL
+            );
+            INSERT INTO scope_object_references (object_key, ref_kind, ref_id)
+            VALUES
+                (jsonb_build_object('GitManifestSha256', repeat('8', 64))::text,
+                 'push_trigger_source', 'legacy_run_repo:2'),
+                (jsonb_build_object('GitBundleSha256', repeat('9', 64))::text,
+                 'push_trigger_source', 'legacy_run_repo:2');
         "#,
     )
     .await
@@ -146,6 +185,35 @@ async fn accepted_revision_runs_keep_their_exact_bundle_after_cutover() {
     );
     assert_eq!(references.try_get::<i64>("", "bundle_refs").unwrap(), 2);
 
+    let retired_push = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"
+                SELECT
+                    (SELECT count(*) FROM scope_outbox_jobs
+                     WHERE id = 'legacy_push_job') AS legacy_jobs,
+                    (SELECT count(*) FROM scope_object_references
+                     WHERE ref_kind = 'push_trigger_source'
+                       AND ref_id = 'legacy_run_repo:2') AS legacy_refs,
+                    (SELECT count(*) FROM scope_push_trigger_evaluations
+                     WHERE repo_id = 'legacy_run_repo' AND change_version = 2
+                       AND state = 'failed' AND completed_at_unix IS NOT NULL
+                       AND message LIKE 'retired by%') AS failed_evaluations
+            "#
+            .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retired_push.try_get::<i64>("", "legacy_jobs").unwrap(), 0);
+    assert_eq!(retired_push.try_get::<i64>("", "legacy_refs").unwrap(), 0);
+    assert_eq!(
+        retired_push
+            .try_get::<i64>("", "failed_evaluations")
+            .unwrap(),
+        1
+    );
+
     let cleanup = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -160,7 +228,14 @@ async fn accepted_revision_runs_keep_their_exact_bundle_after_cutover() {
                         WHERE object_key::jsonb = jsonb_build_object(
                             'GitManifestSha256', repeat('d', 64)
                         )
-                    ) AS shared_manifest_jobs
+                    ) AS shared_manifest_jobs,
+                    count(*) FILTER (
+                        WHERE object_key::jsonb = jsonb_build_object(
+                            'GitManifestSha256', repeat('8', 64)
+                        ) OR object_key::jsonb = jsonb_build_object(
+                            'GitBundleSha256', repeat('9', 64)
+                        )
+                    ) AS retired_push_source_jobs
                 FROM scope_orphan_object_jobs
             "#
             .to_string(),
@@ -175,5 +250,11 @@ async fn accepted_revision_runs_keep_their_exact_bundle_after_cutover() {
     assert_eq!(
         cleanup.try_get::<i64>("", "shared_manifest_jobs").unwrap(),
         0
+    );
+    assert_eq!(
+        cleanup
+            .try_get::<i64>("", "retired_push_source_jobs")
+            .unwrap(),
+        2
     );
 }

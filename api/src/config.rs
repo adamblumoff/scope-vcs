@@ -3,9 +3,7 @@ use std::{
     process::Command,
 };
 
-use scope_git::{
-    DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES, DEFAULT_GIT_STORAGE_MAX_PACK_SPANS, GitStorageLimits,
-};
+use scope_git::{DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES, GitStorageLimits};
 
 pub const SCOPE_APP_ORIGIN_ENV: &str = "SCOPE_APP_ORIGIN";
 pub const SCOPE_API_PUBLIC_URL_ENV: &str = "SCOPE_API_PUBLIC_URL";
@@ -20,7 +18,6 @@ pub const SCOPE_BUCKET_SECRET_ACCESS_KEY_ENV: &str = "SCOPE_BUCKET_SECRET_ACCESS
 pub const SCOPE_BUCKET_FORCE_PATH_STYLE_ENV: &str = "SCOPE_BUCKET_FORCE_PATH_STYLE";
 pub const SCOPE_OBJECT_ENCRYPTION_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_KEY";
 pub const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
-pub const SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV: &str = "SCOPE_GIT_PACK_SPAN_MAX_COUNT";
 pub const SCOPE_GIT_CACHE_MAX_BYTES_ENV: &str = "SCOPE_GIT_CACHE_MAX_BYTES";
 pub const SCOPE_OPERATOR_TOKEN_ENV: &str = "SCOPE_OPERATOR_TOKEN";
 pub const CLERK_ISSUER_ENV: &str = "CLERK_ISSUER";
@@ -63,11 +60,7 @@ pub fn git_storage_limits_from_env() -> anyhow::Result<GitStorageLimits> {
         SCOPE_OBJECT_STORE_MAX_BYTES_ENV,
         DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
     )?;
-    let max_pack_spans = parse_usize_env(
-        SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV,
-        DEFAULT_GIT_STORAGE_MAX_PACK_SPANS,
-    )?;
-    GitStorageLimits::new(max_object_bytes, max_pack_spans).map_err(anyhow::Error::from)
+    GitStorageLimits::new(max_object_bytes).map_err(anyhow::Error::from)
 }
 
 pub fn git_cache_max_bytes_from_env() -> anyhow::Result<usize> {

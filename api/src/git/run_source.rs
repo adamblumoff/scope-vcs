@@ -139,7 +139,7 @@ mod tests {
         )
         .unwrap();
 
-        let pushed = git_push_from_repo(&state, repository.path(), None, 0)
+        let pushed = git_push_from_repo(&state, repository.path(), None)
             .await
             .unwrap();
         let source = RunSource::accepted_git_head(

@@ -48,17 +48,17 @@ test('compaction outcomes are parsed without tracing quotes', () => {
 test('capacity rejection telemetry names each fixed API permit', () => {
   const events = [
     capacityRejectionFields('Git receive-pack capacity is exhausted; retry later'),
-    capacityRejectionFields('fatal: remote error: Git projection build capacity is exhausted; retry later'),
+    capacityRejectionFields('fatal: remote error: Git materialization capacity is exhausted; retry later'),
     capacityRejectionFields('Git receive-pack capacity is exhausted; retry later'),
   ];
   assert.deepEqual(events, [
     { operation: 'Git receive-pack' },
-    { operation: 'Git projection build' },
+    { operation: 'Git materialization' },
     { operation: 'Git receive-pack' },
   ]);
   assert.deepEqual(summarizeCapacityRejections(events), {
     'Git receive-pack': 2,
-    'Git projection build': 1,
+    'Git materialization': 1,
   });
   assert.deepEqual(
     capacityRejectionFields('runtime capacity permit rejected operation="Git upload-pack"'),

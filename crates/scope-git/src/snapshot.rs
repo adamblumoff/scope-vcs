@@ -172,7 +172,7 @@ mod tests {
             b"pack",
             "head-2".to_string(),
             Some(&previous),
-            GitStorageLimits::new(4096, 10).unwrap(),
+            GitStorageLimits::new(4096).unwrap(),
         )
         .unwrap();
 
@@ -198,7 +198,7 @@ mod tests {
     fn compacted_pack_storage_does_not_create_a_snapshot_manifest() {
         let store = MemoryObjectStore::new();
         let stored =
-            store_compacted_git_pack(&store, b"pack", GitStorageLimits::new(4096, 10).unwrap())
+            store_compacted_git_pack(&store, b"pack", GitStorageLimits::new(4096).unwrap())
                 .unwrap();
 
         assert!(matches!(
@@ -215,7 +215,7 @@ mod tests {
             b"x",
             "head".to_string(),
             None,
-            GitStorageLimits::new(1, 10).unwrap(),
+            GitStorageLimits::new(1).unwrap(),
         )
         .unwrap_err();
         let (_, orphans) = failure.into_parts();

@@ -59,10 +59,10 @@ async fn receive_pack_capacity_exhaustion_returns_backpressure() {
 }
 
 #[tokio::test]
-async fn upload_pack_capacity_exhaustion_happens_before_projection_build() {
+async fn upload_pack_capacity_exhaustion_happens_before_materialization() {
     let state = state_with_budget_config(RuntimeBudgetConfig {
         upload_pack_concurrency: 0,
-        projection_build_concurrency: 0,
+        git_materialization_concurrency: 0,
         ..Default::default()
     });
 
@@ -82,7 +82,26 @@ async fn upload_pack_capacity_exhaustion_happens_before_projection_build() {
     let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let body = String::from_utf8_lossy(&body);
     assert!(body.contains("Git upload-pack capacity is exhausted; retry later"));
-    assert!(!body.contains("Git projection build capacity"));
+    assert!(!body.contains("Git materialization capacity"));
+}
+
+#[test]
+fn git_materialization_capacity_returns_backpressure() {
+    let budgets = RuntimeBudgets::from_config(RuntimeBudgetConfig {
+        git_materialization_concurrency: 0,
+        ..Default::default()
+    });
+
+    let error = match budgets.try_git_materialization() {
+        Ok(_) => panic!("zero-capacity Git materialization unexpectedly acquired a permit"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        error.public_message(),
+        "Git materialization capacity is exhausted; retry later"
+    );
 }
 
 #[tokio::test]
@@ -112,7 +131,7 @@ async fn cold_git_backed_projection_succeeds_with_one_build_permit() {
     fs::remove_dir_all(&cache_root).unwrap();
     fs::create_dir_all(&cache_root).unwrap();
     state.runtime_budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
-        projection_build_concurrency: 1,
+        git_materialization_concurrency: 1,
         ..Default::default()
     }));
 
@@ -169,7 +188,7 @@ async fn object_store_readiness_bypasses_operation_capacity() {
 fn object_store_size_limits_cover_writes_and_reads() {
     let key = "tests/budget/read-too-large";
     let (raw, store) = budgeted_store(RuntimeBudgetConfig {
-        git_storage_limits: GitStorageLimits::new(4, 64).unwrap(),
+        git_storage_limits: GitStorageLimits::new(4).unwrap(),
         ..Default::default()
     });
     store.put("tests/budget/write-at-limit", b"1234").unwrap();

@@ -108,7 +108,7 @@ impl RepositoryEngine {
         let built = AtomicBool::new(false);
         let result = self.coordinate_repository(repository_id, is_ready, || {
             built.store(true, Ordering::Relaxed);
-            let _permit = state.runtime_budgets.try_projection_build()?;
+            let _permit = state.runtime_budgets.try_git_materialization()?;
             match self.cache.applied_sequence(&repo_path) {
                 Some(applied) if applied < head.push_sequence && repo_path.is_dir() => {
                     self.catch_up(state, head, pack_spans, applied, &repo_path)?;

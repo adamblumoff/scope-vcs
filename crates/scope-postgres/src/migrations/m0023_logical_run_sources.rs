@@ -16,8 +16,91 @@ impl MigrationTrait for Migration {
             .get_connection()
             .execute_unprepared(
                 r#"
-                LOCK TABLE scope_runs, scope_outbox_jobs, scope_object_references,
-                    scope_orphan_object_jobs IN ACCESS EXCLUSIVE MODE;
+                LOCK TABLE scope_runs, scope_outbox_jobs, scope_push_trigger_evaluations,
+                    scope_object_references, scope_orphan_object_jobs
+                    IN ACCESS EXCLUSIVE MODE;
+
+                WITH legacy_jobs AS (
+                    SELECT repo_id, repo_version, payload
+                    FROM scope_outbox_jobs
+                    WHERE kind = 'push_main_trigger_evaluation'
+                      AND completed_at_unix IS NULL
+                      AND payload @> '{"workflow_schema_version": 4}'::jsonb
+                ), legacy_sources AS (
+                    SELECT jobs.repo_id, jobs.repo_version, sources.object
+                    FROM legacy_jobs jobs
+                    CROSS JOIN LATERAL (
+                        VALUES (jobs.payload->'manifest'), (jobs.payload#>'{input,snapshot}')
+                    ) AS sources(object)
+                    WHERE sources.object IS NOT NULL
+                )
+                INSERT INTO scope_orphan_object_jobs (
+                    object_key, generation, sha256, git_oid, size_bytes,
+                    attempts, next_run_at_unix, last_error, completed_at_unix,
+                    created_at_unix, updated_at_unix
+                )
+                SELECT DISTINCT ON (refs.object_key)
+                    refs.object_key,
+                    'm0023_logical_run_sources',
+                    sources.object->>'sha256',
+                    sources.object->>'git_oid',
+                    (sources.object->>'size_bytes')::bigint,
+                    0, 0, NULL, NULL, 0, 0
+                FROM legacy_sources sources
+                JOIN scope_object_references refs
+                  ON refs.ref_kind = 'push_trigger_source'
+                 AND refs.ref_id = sources.repo_id || ':' || sources.repo_version::text
+                 AND refs.object_key::jsonb = sources.object->'content_ref'
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM scope_object_references other_refs
+                    WHERE other_refs.object_key = refs.object_key
+                      AND NOT (
+                          other_refs.ref_kind = 'push_trigger_source'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM legacy_jobs other_jobs
+                              WHERE other_refs.ref_id =
+                                  other_jobs.repo_id || ':' || other_jobs.repo_version::text
+                          )
+                      )
+                )
+                ORDER BY refs.object_key
+                ON CONFLICT (object_key) DO NOTHING;
+
+                WITH legacy_jobs AS (
+                    SELECT repo_id, repo_version
+                    FROM scope_outbox_jobs
+                    WHERE kind = 'push_main_trigger_evaluation'
+                      AND completed_at_unix IS NULL
+                      AND payload @> '{"workflow_schema_version": 4}'::jsonb
+                ), cutover_time AS (
+                    SELECT extract(epoch FROM clock_timestamp())::bigint AS now_unix
+                )
+                UPDATE scope_push_trigger_evaluations evaluations
+                SET state = 'failed',
+                    message = 'retired by the logical Git source cutover; a later push will reevaluate workflows',
+                    completed_at_unix = GREATEST(evaluations.created_at_unix, cutover_time.now_unix)
+                FROM legacy_jobs, cutover_time
+                WHERE evaluations.repo_id = legacy_jobs.repo_id
+                  AND evaluations.change_version = legacy_jobs.repo_version
+                  AND evaluations.state = 'pending';
+
+                DELETE FROM scope_object_references refs
+                WHERE refs.ref_kind = 'push_trigger_source'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM scope_outbox_jobs jobs
+                      WHERE jobs.kind = 'push_main_trigger_evaluation'
+                        AND jobs.completed_at_unix IS NULL
+                        AND jobs.payload @> '{"workflow_schema_version": 4}'::jsonb
+                        AND refs.ref_id = jobs.repo_id || ':' || jobs.repo_version::text
+                  );
+
+                DELETE FROM scope_outbox_jobs
+                WHERE kind = 'push_main_trigger_evaluation'
+                  AND completed_at_unix IS NULL
+                  AND payload @> '{"workflow_schema_version": 4}'::jsonb;
 
                 INSERT INTO scope_orphan_object_jobs (
                     object_key, generation, sha256, git_oid, size_bytes,

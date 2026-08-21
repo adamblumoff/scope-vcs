@@ -315,13 +315,8 @@ pub(crate) async fn git_push_from_repo(
     state: &AppState,
     repo: &FsPath,
     previous: Option<&GitHead>,
-    current_pack_span_count: usize,
 ) -> Result<StoredGitPush, ApiError> {
     let storage_limits = state.runtime_budgets.git_storage_limits();
-    storage_limits
-        .ensure_pack_span_capacity(current_pack_span_count)
-        .map_err(scope_git::GitStorageError::from)
-        .map_err(ApiError::from)?;
     let refname = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
     let head_oid = git_stdout_text(repo, &["rev-parse", &refname], "reading pushed Git head")?
         .trim()

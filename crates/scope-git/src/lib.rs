@@ -23,37 +23,22 @@ pub const DEFAULT_GIT_BRANCH: &str = "main";
 pub const GIT_SNAPSHOT_MANIFEST_VERSION: u8 = 2;
 pub const DEFAULT_GIT_COMPACTION_SPANS: usize = 32;
 pub const DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES: usize = 128 * 1024 * 1024;
-pub const DEFAULT_GIT_STORAGE_MAX_PACK_SPANS: usize = 2 * DEFAULT_GIT_COMPACTION_SPANS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GitStorageLimits {
     max_object_bytes: usize,
-    max_pack_spans: usize,
 }
 
 impl GitStorageLimits {
-    pub fn new(
-        max_object_bytes: usize,
-        max_pack_spans: usize,
-    ) -> Result<Self, GitStorageLimitError> {
+    pub fn new(max_object_bytes: usize) -> Result<Self, GitStorageLimitError> {
         if max_object_bytes == 0 {
             return Err(GitStorageLimitError::ZeroObjectBytes);
         }
-        if max_pack_spans == 0 {
-            return Err(GitStorageLimitError::ZeroPackSpans);
-        }
-        Ok(Self {
-            max_object_bytes,
-            max_pack_spans,
-        })
+        Ok(Self { max_object_bytes })
     }
 
     pub fn max_object_bytes(self) -> usize {
         self.max_object_bytes
-    }
-
-    pub fn max_pack_spans(self) -> usize {
-        self.max_pack_spans
     }
 
     pub fn next_push_sequence(
@@ -65,25 +50,12 @@ impl GitStorageLimits {
             .checked_add(1)
             .ok_or(GitStorageLimitError::SequenceOverflow)
     }
-
-    pub fn ensure_pack_span_capacity(
-        self,
-        current_span_count: usize,
-    ) -> Result<(), GitStorageLimitError> {
-        if current_span_count >= self.max_pack_spans {
-            return Err(GitStorageLimitError::PackSpanCapacityReached {
-                max_pack_spans: self.max_pack_spans,
-            });
-        }
-        Ok(())
-    }
 }
 
 impl Default for GitStorageLimits {
     fn default() -> Self {
         Self {
             max_object_bytes: DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
-            max_pack_spans: DEFAULT_GIT_STORAGE_MAX_PACK_SPANS,
         }
     }
 }
@@ -92,10 +64,6 @@ impl Default for GitStorageLimits {
 pub enum GitStorageLimitError {
     #[error("Git object size limit must be greater than zero")]
     ZeroObjectBytes,
-    #[error("Git pack span limit must be greater than zero")]
-    ZeroPackSpans,
-    #[error("Git pack layout has reached its maximum of {max_pack_spans} spans")]
-    PackSpanCapacityReached { max_pack_spans: usize },
     #[error("Git push sequence overflow")]
     SequenceOverflow,
 }
@@ -208,27 +176,18 @@ mod tests {
     }
 
     #[test]
-    fn storage_limits_bound_physical_spans_without_bounding_logical_sequence() {
-        let limits = GitStorageLimits::new(4, 2).unwrap();
+    fn storage_limits_do_not_bound_logical_sequence() {
+        let limits = GitStorageLimits::new(4).unwrap();
 
         assert_eq!(limits.next_push_sequence(None).unwrap(), 1);
         assert_eq!(limits.next_push_sequence(Some(2)).unwrap(), 3);
-        assert_eq!(limits.ensure_pack_span_capacity(1), Ok(()));
-        assert_eq!(
-            limits.ensure_pack_span_capacity(2).unwrap_err(),
-            GitStorageLimitError::PackSpanCapacityReached { max_pack_spans: 2 }
-        );
     }
 
     #[test]
     fn storage_limits_reject_zero_values() {
         assert_eq!(
-            GitStorageLimits::new(0, 1).unwrap_err(),
+            GitStorageLimits::new(0).unwrap_err(),
             GitStorageLimitError::ZeroObjectBytes
-        );
-        assert_eq!(
-            GitStorageLimits::new(1, 0).unwrap_err(),
-            GitStorageLimitError::ZeroPackSpans
         );
     }
 
@@ -240,7 +199,6 @@ mod tests {
             limits.max_object_bytes(),
             DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES
         );
-        assert_eq!(limits.max_pack_spans(), DEFAULT_GIT_STORAGE_MAX_PACK_SPANS);
     }
 
     #[test]

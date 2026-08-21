@@ -192,6 +192,11 @@ pub(crate) async fn source(
     let source_identity = claim.run.source.source_identity().to_string();
     let source = claim.run.source.clone();
     let source_state = state.clone();
+    let _materialization_permit = source
+        .logical_git_head()
+        .is_some()
+        .then(|| state.runtime_budgets.try_git_materialization())
+        .transpose()?;
     let materialized = tokio::task::spawn_blocking(move || {
         materialize_run_source_bundle(&source_state, &source, MAX_SOURCE_BUNDLE_BYTES)
     })
