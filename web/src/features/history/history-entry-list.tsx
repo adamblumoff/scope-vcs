@@ -36,7 +36,7 @@ export function HistoryEntryList({
                 ? 'bg-accent shadow-[inset_2px_0_0_0_var(--brand)]'
                 : 'hover:bg-accent/50',
             )}
-            key={entry.id}
+            key={entry.source_id}
             onClick={() => onSelectEntry(entry)}
             title={entry.source_id}
             type="button"
@@ -50,11 +50,12 @@ export function HistoryEntryList({
                 </span>
                 <span className="mt-0.5 block truncate font-mono text-[11px] leading-4 text-muted-foreground">
                   {labels.compactId}
+                  {labels.visibilityBreakdown ? ` · ${labels.visibilityBreakdown}` : null}
                 </span>
               </span>
             </span>
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
-              {entry.change_count}
+              {labels.count}
             </span>
           </button>
         )

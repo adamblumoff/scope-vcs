@@ -113,7 +113,7 @@ async fn cold_git_backed_projection_succeeds_with_one_build_permit() {
         .unwrap();
     let projection = project_graph(
         &stored.graph,
-        &stored.visibility_events,
+        &stored.visibility_change_sets,
         ProjectionViewKey::Public,
     );
     assert!(projection.commits.iter().any(|commit| {

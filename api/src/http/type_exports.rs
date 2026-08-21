@@ -118,6 +118,8 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<HistoryEntryKind>(&ts_config),
         declaration::<HistoryEntryDetailResponse>(&ts_config),
         declaration::<HistoryEntryFileResponse>(&ts_config),
+        declaration::<HistoryVisibilitySummaryResponse>(&ts_config),
+        declaration::<HistoryVisibilityChangeResponse>(&ts_config),
         declaration::<CommitFileResponse>(&ts_config),
         declaration::<ProjectionPreviewRequest>(&ts_config),
         declaration::<ProjectionPreviewResponse>(&ts_config),

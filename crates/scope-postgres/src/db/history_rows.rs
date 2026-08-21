@@ -4,7 +4,8 @@ use crate::error::PostgresError;
 use scope_domain::store::SourceBlob;
 use scope_domain::{
     policy::ScopePath,
-    projection::{FileChange, LogicalCommit, SourceGraph, VisibilityEvent},
+    projection::{FileChange, LogicalCommit, SourceGraph},
+    visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
@@ -14,27 +15,27 @@ use std::collections::BTreeMap;
 
 pub struct RepositoryHistory {
     pub graph: SourceGraph,
-    pub visibility_events: Vec<VisibilityEvent>,
+    pub visibility_change_sets: Vec<VisibilityChangeSet>,
     pub live_files: BTreeMap<ScopePath, SourceBlob>,
 }
 
 pub async fn insert_repository_history<C>(
     conn: &C,
     graph: &SourceGraph,
-    visibility_events: &[VisibilityEvent],
+    visibility_change_sets: &[VisibilityChangeSet],
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
 {
     insert_commits(conn, &graph.repo_id, 0, &graph.commits).await?;
-    insert_visibility_events(conn, &graph.repo_id, 0, visibility_events).await
+    insert_visibility_change_sets(conn, &graph.repo_id, 0, visibility_change_sets).await
 }
 
 pub struct RepositoryHistoryDelta<'a> {
     pub before_graph: &'a SourceGraph,
     pub after_graph: &'a SourceGraph,
-    pub before_events: &'a [VisibilityEvent],
-    pub after_events: &'a [VisibilityEvent],
+    pub before_visibility_change_sets: &'a [VisibilityChangeSet],
+    pub after_visibility_change_sets: &'a [VisibilityChangeSet],
     pub before_live_files: &'a BTreeMap<ScopePath, SourceBlob>,
     pub after_live_files: &'a BTreeMap<ScopePath, SourceBlob>,
     pub history_rewritten: bool,
@@ -50,18 +51,21 @@ where
     let RepositoryHistoryDelta {
         before_graph,
         after_graph,
-        before_events,
-        after_events,
+        before_visibility_change_sets,
+        after_visibility_change_sets,
         before_live_files,
         after_live_files,
         history_rewritten,
     } = delta;
     let commits_are_append_only = after_graph.commits.len() >= before_graph.commits.len()
         && after_graph.commits[..before_graph.commits.len()] == before_graph.commits[..];
-    let events_are_append_only = after_events.len() >= before_events.len()
-        && after_events[..before_events.len()] == before_events[..];
+    let visibility_change_sets_are_append_only = after_visibility_change_sets.len()
+        >= before_visibility_change_sets.len()
+        && after_visibility_change_sets[..before_visibility_change_sets.len()]
+            == before_visibility_change_sets[..];
     let commits_rewritten = history_rewritten || !commits_are_append_only;
-    let events_rewritten = history_rewritten || !events_are_append_only;
+    let visibility_change_sets_rewritten =
+        history_rewritten || !visibility_change_sets_are_append_only;
 
     if commits_rewritten {
         delete_owned_history_references(conn, "file_change", &after_graph.repo_id).await?;
@@ -76,20 +80,21 @@ where
         .await?;
     }
 
-    if events_rewritten {
-        delete_owned_history_references(conn, "visibility_event", &after_graph.repo_id).await?;
-        entities::visibility_event::Entity::delete_many()
-            .filter(entities::visibility_event::Column::RepoId.eq(after_graph.repo_id.clone()))
+    if visibility_change_sets_rewritten {
+        delete_owned_history_references(conn, "visibility_change", &after_graph.repo_id).await?;
+        entities::visibility_change_set::Entity::delete_many()
+            .filter(entities::visibility_change_set::Column::RepoId.eq(after_graph.repo_id.clone()))
             .exec(conn)
             .await
             .map_err(PostgresError::internal)?;
-        insert_visibility_events(conn, &after_graph.repo_id, 0, after_events).await?;
-    } else if after_events.len() > before_events.len() {
-        insert_visibility_events(
+        insert_visibility_change_sets(conn, &after_graph.repo_id, 0, after_visibility_change_sets)
+            .await?;
+    } else if after_visibility_change_sets.len() > before_visibility_change_sets.len() {
+        insert_visibility_change_sets(
             conn,
             &after_graph.repo_id,
-            before_events.len(),
-            &after_events[before_events.len()..],
+            before_visibility_change_sets.len(),
+            &after_visibility_change_sets[before_visibility_change_sets.len()..],
         )
         .await?;
     }
@@ -128,7 +133,7 @@ where
                         repo_id: repo_id.clone(),
                         commits: Vec::new(),
                     },
-                    visibility_events: Vec::new(),
+                    visibility_change_sets: Vec::new(),
                     live_files: BTreeMap::new(),
                 },
             )
@@ -183,24 +188,49 @@ where
         }
     }
 
-    for row in entities::visibility_event::Entity::find()
-        .filter(entities::visibility_event::Column::RepoId.is_in(repo_ids.to_vec()))
-        .order_by_asc(entities::visibility_event::Column::RepoId)
-        .order_by_asc(entities::visibility_event::Column::Ordinal)
+    let set_rows = entities::visibility_change_set::Entity::find()
+        .filter(entities::visibility_change_set::Column::RepoId.is_in(repo_ids.to_vec()))
+        .order_by_asc(entities::visibility_change_set::Column::RepoId)
+        .order_by_asc(entities::visibility_change_set::Column::Ordinal)
         .all(conn)
         .await
-        .map_err(PostgresError::internal)?
-    {
+        .map_err(PostgresError::internal)?;
+    let set_ids = set_rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    let mut changes_by_set = BTreeMap::<(String, String), Vec<VisibilityChange>>::new();
+    if !set_ids.is_empty() {
+        for row in entities::visibility_change::Entity::find()
+            .filter(entities::visibility_change::Column::RepoId.is_in(repo_ids.to_vec()))
+            .filter(entities::visibility_change::Column::ChangeSetId.is_in(set_ids))
+            .order_by_asc(entities::visibility_change::Column::RepoId)
+            .order_by_asc(entities::visibility_change::Column::ChangeSetId)
+            .order_by_asc(entities::visibility_change::Column::Ordinal)
+            .all(conn)
+            .await
+            .map_err(PostgresError::internal)?
+        {
+            changes_by_set
+                .entry((row.repo_id.clone(), row.change_set_id.clone()))
+                .or_default()
+                .push(VisibilityChange {
+                    path: ScopePath::parse(row.path).map_err(PostgresError::internal)?,
+                    old_visibility: decode_enum(row.old_visibility)?,
+                    new_visibility: decode_enum(row.new_visibility)?,
+                    current_content: decode_optional(row.current_content)?,
+                });
+        }
+    }
+    for row in set_rows {
         if let Some(history) = histories.get_mut(&row.repo_id) {
-            history.visibility_events.push(VisibilityEvent {
+            let key = (row.repo_id.clone(), row.id.clone());
+            history.visibility_change_sets.push(VisibilityChangeSet {
                 id: row.id,
-                after_commit_id: row.after_commit_id,
-                source_commit_id: row.source_commit_id,
+                anchor_commit_id: row.anchor_commit_id,
+                source_update_id: row.source_update_id,
                 author_id: row.author_id,
-                path: ScopePath::parse(row.path).map_err(PostgresError::internal)?,
-                old_visibility: decode_enum(row.old_visibility)?,
-                new_visibility: decode_enum(row.new_visibility)?,
-                current_content: decode_optional(row.current_content)?,
+                changes: changes_by_set.remove(&key).unwrap_or_default(),
             });
         }
     }
@@ -367,45 +397,56 @@ where
     Ok(())
 }
 
-async fn insert_visibility_events<C>(
+async fn insert_visibility_change_sets<C>(
     conn: &C,
     repo_id: &str,
     ordinal_offset: usize,
-    events: &[VisibilityEvent],
+    sets: &[VisibilityChangeSet],
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
 {
-    for (offset, event) in events.iter().enumerate() {
-        entities::visibility_event::Model {
+    for (offset, set) in sets.iter().enumerate() {
+        entities::visibility_change_set::Model {
             repo_id: repo_id.to_string(),
-            id: event.id.clone(),
+            id: set.id.clone(),
             ordinal: usize_to_i64(ordinal_offset + offset)?,
-            after_commit_id: event.after_commit_id.clone(),
-            source_commit_id: event.source_commit_id.clone(),
-            author_id: event.author_id.clone(),
-            path: event.path.as_str().to_string(),
-            old_visibility: encode_enum(&event.old_visibility)?,
-            new_visibility: encode_enum(&event.new_visibility)?,
-            current_content: encode_optional(event.current_content.as_ref())?,
+            anchor_commit_id: set.anchor_commit_id.clone(),
+            source_update_id: set.source_update_id.clone(),
+            author_id: set.author_id.clone(),
         }
         .into_active_model()
         .insert(conn)
         .await
         .map_err(PostgresError::internal)?;
-        if let Some(content) = event.current_content.as_ref()
-            && !matches!(
-                content.content_ref,
-                scope_domain::content_ref::ContentRef::GitBlob { .. }
-            )
-        {
-            insert_object_reference(
-                conn,
-                "visibility_event",
-                &format!("{repo_id}:{}", event.id),
-                content,
-            )
-            .await?;
+        for (ordinal, change) in set.changes.iter().enumerate() {
+            entities::visibility_change::Model {
+                repo_id: repo_id.to_string(),
+                change_set_id: set.id.clone(),
+                ordinal: usize_to_i64(ordinal)?,
+                path: change.path.as_str().to_string(),
+                old_visibility: encode_enum(&change.old_visibility)?,
+                new_visibility: encode_enum(&change.new_visibility)?,
+                current_content: encode_optional(change.current_content.as_ref())?,
+            }
+            .into_active_model()
+            .insert(conn)
+            .await
+            .map_err(PostgresError::internal)?;
+            if let Some(content) = change.current_content.as_ref()
+                && !matches!(
+                    content.content_ref,
+                    scope_domain::content_ref::ContentRef::GitBlob { .. }
+                )
+            {
+                insert_object_reference(
+                    conn,
+                    "visibility_change",
+                    &format!("{repo_id}:{}:{ordinal}", set.id),
+                    content,
+                )
+                .await?;
+            }
         }
     }
     Ok(())

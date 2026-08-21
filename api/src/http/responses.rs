@@ -19,7 +19,8 @@ pub(crate) use scope_api_contract::{
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 use scope_domain::history::{
-    HistoryEntry, HistoryEntryFile, HistoryEntryKind as DomainHistoryEntryKind, HistoryView,
+    HistoryEntry, HistoryEntryFile, HistoryEntryKind as DomainHistoryEntryKind,
+    HistoryEntryVisibilityChange, HistoryView,
 };
 use scope_domain::policy::ScopePath;
 use scope_domain::store::{
@@ -274,7 +275,8 @@ pub(crate) struct HistoryEntrySummaryResponse {
     pub(crate) kind: HistoryEntryKind,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
-    pub(crate) change_count: usize,
+    pub(crate) file_change_count: usize,
+    pub(crate) visibility_summary: HistoryVisibilitySummaryResponse,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -299,8 +301,25 @@ pub(crate) struct HistoryEntryDetailResponse {
     pub(crate) kind: HistoryEntryKind,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
-    pub(crate) change_count: usize,
+    pub(crate) file_change_count: usize,
+    pub(crate) visibility_summary: HistoryVisibilitySummaryResponse,
     pub(crate) files: Vec<HistoryEntryFileResponse>,
+    pub(crate) visibility_changes: Vec<HistoryVisibilityChangeResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct HistoryVisibilitySummaryResponse {
+    pub(crate) made_public_count: usize,
+    pub(crate) made_private_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct HistoryVisibilityChangeResponse {
+    pub(crate) path: String,
+    pub(crate) old_visibility: Visibility,
+    pub(crate) new_visibility: Visibility,
 }
 
 #[derive(Debug, Serialize)]
@@ -516,11 +535,17 @@ pub(crate) fn history_entry_detail_response(
         kind: entry.kind.into(),
         author: entry.author.clone(),
         message: entry.message.clone(),
-        change_count: entry.files.len(),
+        file_change_count: entry.files.len(),
+        visibility_summary: history_visibility_summary_response(entry),
         files: entry
             .files
             .iter()
             .map(history_entry_file_response)
+            .collect(),
+        visibility_changes: entry
+            .visibility_changes
+            .iter()
+            .map(history_visibility_change_response)
             .collect(),
     }
 }
@@ -533,7 +558,30 @@ fn history_entry_summary_response(entry: &HistoryEntry) -> HistoryEntrySummaryRe
         kind: entry.kind.into(),
         author: entry.author.clone(),
         message: entry.message.clone(),
-        change_count: entry.files.len(),
+        file_change_count: entry.files.len(),
+        visibility_summary: history_visibility_summary_response(entry),
+    }
+}
+
+fn history_visibility_summary_response(entry: &HistoryEntry) -> HistoryVisibilitySummaryResponse {
+    let made_public_count = entry
+        .visibility_changes
+        .iter()
+        .filter(|change| change.new_visibility == scope_domain::policy::Visibility::Public)
+        .count();
+    HistoryVisibilitySummaryResponse {
+        made_public_count,
+        made_private_count: entry.visibility_changes.len() - made_public_count,
+    }
+}
+
+fn history_visibility_change_response(
+    change: &HistoryEntryVisibilityChange,
+) -> HistoryVisibilityChangeResponse {
+    HistoryVisibilityChangeResponse {
+        path: change.path.as_str().to_string(),
+        old_visibility: change.old_visibility.into(),
+        new_visibility: change.new_visibility.into(),
     }
 }
 

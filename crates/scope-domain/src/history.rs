@@ -1,14 +1,13 @@
 use super::{
     policy::{ScopePath, Visibility},
-    projection::{
-        ProjectedCommit, Projection, ProjectionViewKey, SourceGraph, VisibilityEvent, project_graph,
-    },
+    projection::{ProjectedCommit, Projection, ProjectionViewKey, SourceGraph, project_graph},
     store::{FileChangeKind, LogicalCommitOrigin, SourceBlob},
+    visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-const HISTORY_GENERATION_VERSION: &str = "v3";
+const HISTORY_GENERATION_VERSION: &str = "v4";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryView {
@@ -27,6 +26,7 @@ pub struct HistoryEntry {
     pub author: Option<String>,
     pub message: String,
     pub files: Vec<HistoryEntryFile>,
+    pub visibility_changes: Vec<HistoryEntryVisibilityChange>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,43 +45,45 @@ pub struct HistoryEntryFile {
     pub visibility: Visibility,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryEntryVisibilityChange {
+    pub path: ScopePath,
+    pub old_visibility: Visibility,
+    pub new_visibility: Visibility,
+}
+
 pub fn history_view(
     graph: &SourceGraph,
-    visibility_events: &[VisibilityEvent],
+    visibility_change_sets: &[VisibilityChangeSet],
     view_key: ProjectionViewKey,
 ) -> HistoryView {
-    let projection = project_graph(graph, visibility_events, view_key);
-    history_view_from_projection(projection, graph, visibility_events)
+    let projection = project_graph(graph, visibility_change_sets, view_key);
+    history_view_from_projection(projection, graph, visibility_change_sets)
 }
 
 pub fn history_view_from_projection(
     projection: Projection,
     graph: &SourceGraph,
-    visibility_events: &[VisibilityEvent],
+    visibility_change_sets: &[VisibilityChangeSet],
 ) -> HistoryView {
-    let entry_kinds = history_entry_kinds(graph, visibility_events);
+    let entry_kinds = history_entry_kinds(graph, visibility_change_sets);
     let repo_id = projection.repo_id.clone();
     let view_key = projection.view_key;
     let mut tree = BTreeMap::new();
     let mut entries = if view_key == ProjectionViewKey::Private {
         private_history_entries(
             projection.commits,
-            visibility_events,
+            visibility_change_sets,
             &entry_kinds,
             &mut tree,
         )
     } else {
-        projection
-            .commits
-            .into_iter()
-            .map(|commit| {
-                let kind = entry_kinds
-                    .get(commit.logical_commit_id.as_str())
-                    .copied()
-                    .expect("projected history entry must retain its source kind");
-                history_entry(&mut tree, commit, kind)
-            })
-            .collect::<Vec<_>>()
+        public_history_entries(
+            projection.commits,
+            visibility_change_sets,
+            &entry_kinds,
+            &mut tree,
+        )
     };
     let generation = history_generation(&repo_id, view_key, &entries);
     entries.reverse();
@@ -94,27 +96,80 @@ pub fn history_view_from_projection(
     }
 }
 
+fn public_history_entries(
+    commits: Vec<ProjectedCommit>,
+    visibility_change_sets: &[VisibilityChangeSet],
+    entry_kinds: &HashMap<String, HistoryEntryKind>,
+    tree: &mut BTreeMap<ScopePath, SourceBlob>,
+) -> Vec<HistoryEntry> {
+    let mut entries = Vec::<HistoryEntry>::new();
+    for commit in commits {
+        let source_id = commit.logical_commit_id.clone();
+        let kind = entry_kinds
+            .get(source_id.as_str())
+            .copied()
+            .expect("projected history entry must retain its source kind");
+        let fragment = history_entry(tree, commit, kind);
+        if let Some(previous) = entries
+            .last_mut()
+            .filter(|previous| previous.source_id == fragment.source_id)
+        {
+            previous.files.extend(fragment.files);
+            if fragment.author.is_some() {
+                previous.author = fragment.author;
+            }
+            if !matches!(
+                fragment.message.as_str(),
+                "Projection baseline" | "Projection visibility boundary"
+            ) {
+                previous.message = fragment.message;
+            }
+        } else {
+            entries.push(fragment);
+        }
+    }
+
+    for entry in &mut entries {
+        let visible_paths = entry
+            .files
+            .iter()
+            .map(|file| &file.path)
+            .collect::<BTreeSet<_>>();
+        entry.visibility_changes = visibility_change_sets
+            .iter()
+            .filter(|set| set_source_id(set) == entry.source_id)
+            .flat_map(|set| &set.changes)
+            .filter(|change| visible_paths.contains(&change.path))
+            .map(history_visibility_change)
+            .collect();
+        if entry.kind == HistoryEntryKind::VisibilityChange {
+            entry.message = visibility_change_message(&entry.visibility_changes);
+        }
+    }
+    relink_semantic_parents(&mut entries);
+    entries
+}
+
 fn private_history_entries(
     commits: Vec<ProjectedCommit>,
-    visibility_events: &[VisibilityEvent],
+    visibility_change_sets: &[VisibilityChangeSet],
     entry_kinds: &HashMap<String, HistoryEntryKind>,
     tree: &mut BTreeMap<ScopePath, SourceBlob>,
 ) -> Vec<HistoryEntry> {
     let mut before_graph = Vec::new();
-    let mut events_by_anchor: HashMap<&str, Vec<&VisibilityEvent>> = HashMap::new();
-    for event in visibility_events
+    let mut sets_by_anchor: HashMap<&str, Vec<&VisibilityChangeSet>> = HashMap::new();
+    for set in visibility_change_sets
         .iter()
-        .filter(|event| event.source_commit_id.is_none())
+        .filter(|set| set.source_update_id.is_none())
     {
-        match event.after_commit_id.as_deref() {
-            Some(anchor) => events_by_anchor.entry(anchor).or_default().push(event),
-            None => before_graph.push(event),
+        match set.anchor_commit_id.as_deref() {
+            Some(anchor) => sets_by_anchor.entry(anchor).or_default().push(set),
+            None => before_graph.push(set),
         }
     }
 
     let mut entries = Vec::new();
-    let mut parent_id = None;
-    append_private_visibility_entries(&mut entries, &mut parent_id, before_graph);
+    append_private_visibility_entries(&mut entries, before_graph);
     for commit in commits {
         let source_id = commit.logical_commit_id.clone();
         let kind = entry_kinds
@@ -122,57 +177,87 @@ fn private_history_entries(
             .copied()
             .expect("private history entry must retain its source kind");
         let mut entry = history_entry(tree, commit, kind);
-        entry.parent_id = parent_id.clone();
-        parent_id = Some(entry.id.clone());
+        entry.visibility_changes = visibility_change_sets
+            .iter()
+            .filter(|set| set.source_update_id.as_deref() == Some(source_id.as_str()))
+            .flat_map(|set| &set.changes)
+            .map(history_visibility_change)
+            .collect();
         entries.push(entry);
         append_private_visibility_entries(
             &mut entries,
-            &mut parent_id,
-            events_by_anchor
+            sets_by_anchor
                 .remove(source_id.as_str())
                 .unwrap_or_default(),
         );
     }
+    relink_semantic_parents(&mut entries);
     entries
 }
 
 fn append_private_visibility_entries(
     entries: &mut Vec<HistoryEntry>,
-    parent_id: &mut Option<String>,
-    events: Vec<&VisibilityEvent>,
+    sets: Vec<&VisibilityChangeSet>,
 ) {
-    for event in events {
-        let id = event.id.clone();
-        let files = vec![HistoryEntryFile {
-            path: event.path.clone(),
-            kind: FileChangeKind::Modified,
-            old_content: event.current_content.clone(),
-            new_content: event.current_content.clone(),
-            visibility: event.new_visibility,
-        }];
-        entries.push(HistoryEntry {
-            id: id.clone(),
-            source_id: event.id.clone(),
-            parent_id: parent_id.clone(),
+    entries.extend(sets.into_iter().map(|set| {
+        let visibility_changes = set
+            .changes
+            .iter()
+            .map(history_visibility_change)
+            .collect::<Vec<_>>();
+        HistoryEntry {
+            id: set.id.clone(),
+            source_id: set.id.clone(),
+            parent_id: None,
             kind: HistoryEntryKind::VisibilityChange,
-            author: Some(event.author_id.clone()),
-            message: format!(
-                "Changed {} visibility to {}",
-                event.path.as_str(),
-                match event.new_visibility {
-                    Visibility::Public => "public",
-                    Visibility::Private => "private",
-                }
-            ),
-            files,
-        });
-        *parent_id = Some(id);
+            author: Some(set.author_id.clone()),
+            message: visibility_change_message(&visibility_changes),
+            files: Vec::new(),
+            visibility_changes,
+        }
+    }));
+}
+
+fn relink_semantic_parents(entries: &mut [HistoryEntry]) {
+    let mut parent_id = None;
+    for entry in entries {
+        entry.parent_id = parent_id;
+        parent_id = Some(entry.source_id.clone());
     }
+}
+
+fn set_source_id(set: &VisibilityChangeSet) -> &str {
+    set.source_update_id.as_deref().unwrap_or(&set.id)
+}
+
+fn history_visibility_change(change: &VisibilityChange) -> HistoryEntryVisibilityChange {
+    HistoryEntryVisibilityChange {
+        path: change.path.clone(),
+        old_visibility: change.old_visibility,
+        new_visibility: change.new_visibility,
+    }
+}
+
+fn visibility_change_message(changes: &[HistoryEntryVisibilityChange]) -> String {
+    let made_public = changes
+        .iter()
+        .filter(|change| change.new_visibility == Visibility::Public)
+        .count();
+    let made_private = changes.len().saturating_sub(made_public);
+    match (made_public, made_private) {
+        (public, 0) => format!("Made {public} {} public", file_word(public)),
+        (0, private) => format!("Made {private} {} private", file_word(private)),
+        _ => format!("Updated visibility for {} files", changes.len()),
+    }
+}
+
+fn file_word(count: usize) -> &'static str {
+    if count == 1 { "file" } else { "files" }
 }
 
 fn history_entry_kinds(
     graph: &SourceGraph,
-    visibility_events: &[VisibilityEvent],
+    visibility_change_sets: &[VisibilityChangeSet],
 ) -> HashMap<String, HistoryEntryKind> {
     let mut kinds = graph
         .commits
@@ -187,9 +272,10 @@ fn history_entry_kinds(
         })
         .collect::<HashMap<_, _>>();
     kinds.extend(
-        visibility_events
+        visibility_change_sets
             .iter()
-            .map(|event| (event.id.clone(), HistoryEntryKind::VisibilityChange)),
+            .filter(|set| set.source_update_id.is_none())
+            .map(|set| (set.id.clone(), HistoryEntryKind::VisibilityChange)),
     );
     kinds
 }
@@ -227,16 +313,37 @@ fn history_generation(
             hash_field(
                 &mut hasher,
                 b"visibility",
-                match file.visibility {
-                    Visibility::Public => b"public",
-                    Visibility::Private => b"private",
-                },
+                visibility_bytes(file.visibility),
             );
             hash_optional_blob(&mut hasher, b"old", file.old_content.as_ref());
             hash_optional_blob(&mut hasher, b"new", file.new_content.as_ref());
         }
+        for change in &entry.visibility_changes {
+            hash_field(
+                &mut hasher,
+                b"visibility_path",
+                change.path.as_str().as_bytes(),
+            );
+            hash_field(
+                &mut hasher,
+                b"old_visibility",
+                visibility_bytes(change.old_visibility),
+            );
+            hash_field(
+                &mut hasher,
+                b"new_visibility",
+                visibility_bytes(change.new_visibility),
+            );
+        }
     }
     hex::encode(hasher.finalize())
+}
+
+fn visibility_bytes(visibility: Visibility) -> &'static [u8] {
+    match visibility {
+        Visibility::Public => b"public",
+        Visibility::Private => b"private",
+    }
 }
 
 fn hash_optional_blob(hasher: &mut Sha256, label: &[u8], blob: Option<&SourceBlob>) {
@@ -302,13 +409,14 @@ fn history_entry(
         .collect();
 
     HistoryEntry {
-        id: commit.projected_id,
+        id: commit.logical_commit_id.clone(),
         source_id: commit.logical_commit_id,
-        parent_id: commit.parent_projected_id,
+        parent_id: None,
         kind,
         author: commit.author,
         message: commit.message,
         files,
+        visibility_changes: Vec::new(),
     }
 }
 

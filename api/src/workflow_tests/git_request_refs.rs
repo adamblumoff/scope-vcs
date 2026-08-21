@@ -98,7 +98,7 @@ async fn start_request_for_author(
         .unwrap();
     let projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         ProjectionViewKey::Public,
     );
     let projection_repo = projection_bare_repo_for_state(

@@ -53,7 +53,7 @@ where
         .await
         .map_err(PostgresError::internal)?;
     insert_repository_fact_rows(conn, repo).await?;
-    insert_repository_history(conn, &repo.graph, &repo.visibility_events).await?;
+    insert_repository_history(conn, &repo.graph, &repo.visibility_change_sets).await?;
     insert_repository_live_files(conn, &repo.record.id, &repo.live_files).await?;
     insert_repository_relations(conn, repo).await?;
     enqueue_projection_read_model_rebuild(
@@ -120,8 +120,8 @@ where
         RepositoryHistoryDelta {
             before_graph: &before.graph,
             after_graph: &after.graph,
-            before_events: &before.visibility_events,
-            after_events: &after.visibility_events,
+            before_visibility_change_sets: &before.visibility_change_sets,
+            after_visibility_change_sets: &after.visibility_change_sets,
             before_live_files: &before.live_files,
             after_live_files: &after.live_files,
             history_rewritten: before.repo_config.history.rewrites

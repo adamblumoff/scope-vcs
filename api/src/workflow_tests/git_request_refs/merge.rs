@@ -142,7 +142,7 @@ async fn merge_route_persists_git_content_once() {
         .unwrap();
     let public_projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         ProjectionViewKey::Public,
     );
     let public_repo = projection_bare_repo_for_state(

@@ -271,7 +271,7 @@ fn committed_main_oid_for_access(
     }
     let projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         ProjectionViewKey::from_access(access),
     );
     scope_git::projection_head_oid(&projection).map_err(ApiError::internal)

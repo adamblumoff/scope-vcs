@@ -24,6 +24,13 @@ test('does not duplicate an overlapping boundary entry', () => {
   assert.deepEqual(loaded.entries.map((item) => item.id), ['entry-0', 'entry-1', 'entry-2'])
 })
 
+test('deduplicates the same causal update when its projected id changes', () => {
+  const original = entry(1)
+  const renumbered = { ...original, id: 'renumbered-projection-id' }
+  const loaded = appendHistoryPage(page([original], 'cursor-2'), page([renumbered], null))
+  assert.deepEqual(loaded.entries, [original])
+})
+
 test('describes a partial page as the most recent updates', () => {
   assert.equal(historySummary([entry(0)], true), '1 most recent updates')
   assert.equal(historySummary([entry(0)], false), '1 update')
@@ -43,11 +50,12 @@ function page(entries: HistoryEntrySummary[], nextCursor: string | null): Histor
 function entry(index: number): HistoryEntrySummary {
   return {
     author: null,
-    change_count: 1,
+    file_change_count: 1,
     id: `entry-${index}`,
     kind: 'push',
     message: `Update ${index}`,
     parent_id: index === 0 ? null : `entry-${index - 1}`,
     source_id: `source-${index}`,
+    visibility_summary: { made_private_count: 0, made_public_count: 0 },
   }
 }

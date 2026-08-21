@@ -1,6 +1,7 @@
-import type { CommitFile } from '@/api/types'
+import type { CommitFile, HistoryEntryDetail } from '@/api/types'
 import { PanelState, EmptyState } from '@/components/empty-state'
 import { FileSystemTree } from '@/components/file-system-tree'
+import { VisibilityBadge } from '@/components/visibility-badge'
 import { PendingSurface } from '@/components/pending-surface'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,7 +11,7 @@ import type {
   CommitDetailState,
   CommitFileDiffState,
 } from '@/features/history/history-state'
-import { GitCommit, TriangleAlert } from 'lucide-react'
+import { ArrowRight, GitCommit, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 
@@ -27,6 +28,7 @@ export function CommitDetailPanel({
   onSelectFile,
   selectedFilePath,
   terminology = 'commit',
+  visibilityChanges = [],
 }: {
   commitContext?: ReactNode
   commitState: CommitDetailState
@@ -40,6 +42,7 @@ export function CommitDetailPanel({
   onSelectFile: (file: CommitFile) => void
   selectedFilePath: string | null
   terminology?: 'commit' | 'update'
+  visibilityChanges?: HistoryEntryDetail['visibility_changes']
 }) {
   const fileNavigatorRef = useRef<HTMLDivElement>(null)
 
@@ -110,13 +113,16 @@ export function CommitDetailPanel({
           ref={fileNavigatorRef}
           tabIndex={-1}
         >
-          {commit.files.length === 0 ? (
+          {visibilityChanges.length > 0 ? (
+            <VisibilityChanges changes={visibilityChanges} />
+          ) : null}
+          {commit.files.length === 0 && visibilityChanges.length === 0 ? (
             <EmptyState
               inline
               className="px-5 py-8 sm:px-6"
               title={`No file changes in this ${terminology}.`}
             />
-          ) : (
+          ) : commit.files.length > 0 ? (
             <FileSystemTree
               compactVisibility
               files={commit.files}
@@ -125,7 +131,7 @@ export function CommitDetailPanel({
               onSelectFile={onSelectFile}
               selectedFilePath={selectedFilePath}
             />
-          )}
+          ) : null}
         </div>
         <div className="h-[70vh] min-h-[340px] max-h-[720px] min-w-0 overflow-hidden border-border xl:border-l">
           {diffOpen ? (
@@ -140,6 +146,10 @@ export function CommitDetailPanel({
               scrollTop={diffScrollTop}
               selectedPath={selectedFilePath}
             />
+          ) : commit.files.length === 0 && visibilityChanges.length > 0 ? (
+            <PanelState>
+              <span>Visibility changes do not have a content diff</span>
+            </PanelState>
           ) : (
             <PanelState>
               <span>Select a changed file</span>
@@ -148,6 +158,34 @@ export function CommitDetailPanel({
         </div>
       </div>
     </div>
+  )
+}
+
+function VisibilityChanges({
+  changes,
+}: {
+  changes: HistoryEntryDetail['visibility_changes']
+}) {
+  return (
+    <section aria-labelledby="history-visibility-changes" className="border-b border-border">
+      <div className="px-5 pb-2 pt-4 sm:px-6">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" id="history-visibility-changes">
+          Visibility changes
+        </h4>
+      </div>
+      <div className="divide-y divide-border">
+        {changes.map((change) => (
+          <div className="flex min-h-10 items-center gap-2 px-5 py-2 sm:px-6" key={change.path}>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={change.path}>
+              {change.path}
+            </span>
+            <VisibilityBadge compact visibility={change.old_visibility} />
+            <ArrowRight aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+            <VisibilityBadge compact visibility={change.new_visibility} />
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 

@@ -6,11 +6,11 @@ export function appendHistoryPage(
   current: LoadedHistory,
   page: HistoryPage,
 ): LoadedHistory {
-  const knownIds = new Set(current.entries.map((entry) => entry.id))
+  const knownIds = new Set(current.entries.map((entry) => entry.source_id))
   const entries = [...current.entries]
   for (const entry of page.entries) {
-    if (!knownIds.has(entry.id)) {
-      knownIds.add(entry.id)
+    if (!knownIds.has(entry.source_id)) {
+      knownIds.add(entry.source_id)
       entries.push(entry)
     }
   }

@@ -86,7 +86,7 @@ where
         .filter(entities::object_reference::Column::RefKind.is_in([
             "git_segment",
             "file_change",
-            "visibility_event",
+            "visibility_change",
             "push_trigger_source",
         ]))
         .filter(entities::object_reference::Column::RefId.starts_with(format!("{repo_id}:")))

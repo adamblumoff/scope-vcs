@@ -2,6 +2,7 @@ use super::{
     policy::{ScopePath, Visibility},
     repo_control::{is_private_control_path, is_repo_control_path},
     store::{LogicalCommitOrigin, RepositoryAccess, RepositoryActor, SourceBlob},
+    visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -12,18 +13,6 @@ pub struct FileChange {
     pub old_content: Option<SourceBlob>,
     pub new_content: Option<SourceBlob>,
     pub visibility: Visibility,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VisibilityEvent {
-    pub id: String,
-    pub after_commit_id: Option<String>,
-    pub source_commit_id: Option<String>,
-    pub author_id: String,
-    pub path: ScopePath,
-    pub old_visibility: Visibility,
-    pub new_visibility: Visibility,
-    pub current_content: Option<SourceBlob>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,7 +117,7 @@ impl Projection {
 
 pub fn project_graph(
     graph: &SourceGraph,
-    visibility_events: &[VisibilityEvent],
+    visibility_change_sets: &[VisibilityChangeSet],
     view_key: ProjectionViewKey,
 ) -> Projection {
     if view_key.can_read_private_files() {
@@ -137,7 +126,7 @@ pub fn project_graph(
 
     let mut commits = Vec::new();
     let mut last_visible: Option<String> = None;
-    let boundary_events = projection_boundary_events_by_anchor(visibility_events);
+    let boundary_events = projection_boundary_events_by_anchor(graph, visibility_change_sets);
 
     process_projection_boundary_events_after(
         &mut commits,
@@ -300,47 +289,71 @@ struct ProjectionBoundaryEventsByAnchor<'a> {
 
 #[derive(Clone, Copy)]
 struct ProjectionBoundaryEvent<'a> {
-    event: &'a VisibilityEvent,
+    set: &'a VisibilityChangeSet,
+    change: &'a VisibilityChange,
     new_content: Option<&'a SourceBlob>,
 }
 
 fn projection_boundary_events_by_anchor<'a>(
-    events: &'a [VisibilityEvent],
+    graph: &'a SourceGraph,
+    sets: &'a [VisibilityChangeSet],
 ) -> ProjectionBoundaryEventsByAnchor<'a> {
     let mut events_by_anchor = ProjectionBoundaryEventsByAnchor {
         before_graph: Vec::new(),
         after_commits: BTreeMap::new(),
     };
-    for event in events
-        .iter()
-        .filter(|event| !is_repo_control_path(&event.path))
-    {
-        let boundary = match (event.old_visibility, event.new_visibility) {
-            (Visibility::Private, Visibility::Public) if event.source_commit_id.is_none() => {
-                let Some(content) = event.current_content.as_ref() else {
-                    continue;
-                };
-                ProjectionBoundaryEvent {
-                    event,
-                    new_content: Some(content),
+    for set in sets {
+        for change in set
+            .changes
+            .iter()
+            .filter(|change| !is_repo_control_path(&change.path))
+        {
+            let boundary = match (change.old_visibility, change.new_visibility) {
+                (Visibility::Private, Visibility::Public)
+                    if !source_update_changes_path(graph, set, &change.path) =>
+                {
+                    let Some(content) = change.current_content.as_ref() else {
+                        continue;
+                    };
+                    ProjectionBoundaryEvent {
+                        set,
+                        change,
+                        new_content: Some(content),
+                    }
                 }
+                (Visibility::Public, Visibility::Private) => ProjectionBoundaryEvent {
+                    set,
+                    change,
+                    new_content: None,
+                },
+                _ => continue,
+            };
+            match set.anchor_commit_id.as_deref() {
+                Some(after_commit_id) => events_by_anchor
+                    .after_commits
+                    .entry(after_commit_id)
+                    .or_default()
+                    .push(boundary),
+                None => events_by_anchor.before_graph.push(boundary),
             }
-            (Visibility::Public, Visibility::Private) => ProjectionBoundaryEvent {
-                event,
-                new_content: None,
-            },
-            _ => continue,
-        };
-        match event.after_commit_id.as_deref() {
-            Some(after_commit_id) => events_by_anchor
-                .after_commits
-                .entry(after_commit_id)
-                .or_default()
-                .push(boundary),
-            None => events_by_anchor.before_graph.push(boundary),
         }
     }
     events_by_anchor
+}
+
+fn source_update_changes_path(
+    graph: &SourceGraph,
+    set: &VisibilityChangeSet,
+    path: &ScopePath,
+) -> bool {
+    let Some(source_update_id) = set.source_update_id.as_deref() else {
+        return false;
+    };
+    graph
+        .commits
+        .iter()
+        .find(|commit| commit.id == source_update_id)
+        .is_some_and(|commit| commit.changes.iter().any(|change| change.path == *path))
 }
 
 fn process_projection_boundary_events_after(
@@ -359,30 +372,60 @@ fn process_projection_boundary_events_after(
         None => boundary_events.before_graph.as_slice(),
     };
 
-    for boundary in events {
-        let event = boundary.event;
-        let projected_id = projected_id(view_key, &event.id, commits.len() + 1);
+    for (set_id, boundaries) in group_boundary_events_by_set(events) {
+        let set = boundaries[0].set;
+        let logical_commit_id = set
+            .source_update_id
+            .as_deref()
+            .unwrap_or(set.id.as_str())
+            .to_string();
+        let projected_id = projected_id(view_key, set_id, commits.len() + 1);
         commits.push(ProjectedCommit {
             projected_id: projected_id.clone(),
-            logical_commit_id: event.id.clone(),
+            logical_commit_id,
             parent_projected_id: last_visible.clone(),
             author: None,
-            message: if boundary.new_content.is_some() {
+            message: if set.source_update_id.is_some() {
+                "Projected public update".to_string()
+            } else if boundaries
+                .iter()
+                .all(|boundary| boundary.new_content.is_some())
+            {
                 "Projection baseline".to_string()
             } else {
                 "Projection visibility boundary".to_string()
             },
-            changes: vec![ProjectedChange {
-                path: event.path.clone(),
-                new_content: boundary.new_content.cloned(),
-                visibility: if boundary.new_content.is_some() {
-                    event.new_visibility
-                } else {
-                    event.old_visibility
-                },
-            }],
+            changes: boundaries
+                .into_iter()
+                .map(|boundary| ProjectedChange {
+                    path: boundary.change.path.clone(),
+                    new_content: boundary.new_content.cloned(),
+                    visibility: if boundary.new_content.is_some() {
+                        boundary.change.new_visibility
+                    } else {
+                        boundary.change.old_visibility
+                    },
+                })
+                .collect(),
             materialization: ProjectionMaterialization::Generate,
         });
         *last_visible = Some(projected_id);
     }
+}
+
+fn group_boundary_events_by_set<'a>(
+    events: &'a [ProjectionBoundaryEvent<'a>],
+) -> Vec<(&'a str, Vec<ProjectionBoundaryEvent<'a>>)> {
+    let mut groups = Vec::<(&str, Vec<ProjectionBoundaryEvent<'_>>)>::new();
+    for event in events {
+        if let Some((_, boundaries)) = groups
+            .iter_mut()
+            .find(|(set_id, _)| *set_id == event.set.id)
+        {
+            boundaries.push(*event);
+        } else {
+            groups.push((event.set.id.as_str(), vec![*event]));
+        }
+    }
+    groups
 }

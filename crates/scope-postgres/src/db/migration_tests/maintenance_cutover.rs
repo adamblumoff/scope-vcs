@@ -54,7 +54,7 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 7);
+    assert_eq!(plan.pending.len(), 8);
     assert_eq!(plan.pending[0].name, "m0018_truthful_run_log_truncation");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0019_run_attempt_cache_observations");
@@ -69,6 +69,8 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
     assert_eq!(plan.pending[5].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[6].name, "m0024_git_compaction_scheduler");
     assert_eq!(plan.pending[6].impact, MigrationImpact::Online);
+    assert_eq!(plan.pending[7].name, "m0025_visibility_change_sets");
+    assert_eq!(plan.pending[7].impact, MigrationImpact::MaintenanceRequired);
 }
 
 #[tokio::test]
@@ -80,7 +82,7 @@ async fn cache_service_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 4);
+    assert_eq!(plan.pending.len(), 5);
     assert_eq!(plan.pending[0].name, "m0021_cache_service_cutover");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0022_git_pack_spans");
@@ -89,6 +91,8 @@ async fn cache_service_cutover_requires_maintenance() {
     assert_eq!(plan.pending[2].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[3].name, "m0024_git_compaction_scheduler");
     assert_eq!(plan.pending[3].impact, MigrationImpact::Online);
+    assert_eq!(plan.pending[4].name, "m0025_visibility_change_sets");
+    assert_eq!(plan.pending[4].impact, MigrationImpact::MaintenanceRequired);
 }
 
 #[tokio::test]
@@ -99,11 +103,12 @@ async fn compaction_scheduler_is_an_online_additive_migration() {
         .unwrap();
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
-    assert_eq!(plan.pending.len(), 1);
+    assert_eq!(plan.pending.len(), 2);
     assert_eq!(plan.pending[0].name, "m0024_git_compaction_scheduler");
     assert_eq!(plan.pending[0].impact, MigrationImpact::Online);
 
-    migrations::apply_online(db.as_ref()).await.unwrap();
+    let error = migrations::apply_online(db.as_ref()).await.unwrap_err();
+    assert!(error.to_string().contains("m0025_visibility_change_sets"));
     assert!(relation_exists(db.as_ref(), "scope_git_compaction_jobs").await);
 }
 

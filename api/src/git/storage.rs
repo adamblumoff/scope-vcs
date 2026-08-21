@@ -222,7 +222,7 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
             kind: scope_domain::policy::PrincipalKind::User,
         };
         let view_key = ProjectionViewKey::from_access(repo.access_for_principal(&principal));
-        let projection = project_graph(&repo.graph, &repo.visibility_events, view_key);
+        let projection = project_graph(&repo.graph, &repo.visibility_change_sets, view_key);
         let seed_repo = projection_bare_repo_for_state(
             state,
             &repo.graph.repo_id,

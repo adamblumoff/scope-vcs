@@ -33,13 +33,38 @@ export function historyCommitTitle(commit: Pick<CommitSummary, 'message'>) {
 export function historyEntryLabels(entry: HistoryEntrySummary) {
   const title = historyCommitTitle(entry)
   const kind = historyEntryKindLabel(entry.kind)
-  const fileCount = `${entry.change_count} ${entry.change_count === 1 ? 'file' : 'files'}`
+  const visibilityCount = entry.visibility_summary.made_public_count
+    + entry.visibility_summary.made_private_count
+  const displayedFileCount = entry.kind === 'visibility_change' ? 0 : entry.file_change_count
+  const fileCount = `${displayedFileCount} ${displayedFileCount === 1 ? 'file change' : 'file changes'}`
+  const visibilityCountLabel = `${visibilityCount} ${visibilityCount === 1 ? 'visibility change' : 'visibility changes'}`
+  const counts = [
+    displayedFileCount > 0 ? fileCount : null,
+    visibilityCount > 0 ? visibilityCountLabel : null,
+  ].filter(Boolean).join(', ')
   return {
-    ariaLabel: `${kind}: ${title}, update ${entry.source_id}, ${fileCount}`,
+    ariaLabel: `${kind}: ${title}, update ${entry.source_id}, ${counts}`,
     compactId: compactHistorySourceId(entry.source_id),
+    count: displayedFileCount > 0 && visibilityCount > 0
+      ? `${displayedFileCount} + ${visibilityCount}`
+      : `${displayedFileCount || visibilityCount}`,
     kind,
     title,
+    visibilityBreakdown: visibilityBreakdown(entry),
   }
+}
+
+function visibilityBreakdown(entry: HistoryEntrySummary) {
+  const {
+    made_private_count: madePrivateCount,
+    made_public_count: madePublicCount,
+  } = entry.visibility_summary
+  if (madePublicCount > 0 && madePrivateCount > 0) {
+    return `${madePublicCount} public · ${madePrivateCount} private`
+  }
+  if (madePublicCount > 0) return `${madePublicCount} public`
+  if (madePrivateCount > 0) return `${madePrivateCount} private`
+  return null
 }
 
 function historyEntryKindLabel(kind: HistoryEntryKind) {

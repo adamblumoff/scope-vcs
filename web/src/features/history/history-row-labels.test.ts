@@ -51,20 +51,23 @@ test('uses singular file wording', () => {
 test('labels repository history entries by their actual update kind', () => {
   const base = {
     author: null,
-    change_count: 2,
+    file_change_count: 2,
     id: 'entry-1',
     message: 'Ship the history page',
     parent_id: null,
     source_id: 'push-1',
+    visibility_summary: { made_private_count: 1, made_public_count: 1 },
   }
 
   assert.equal(historyEntryLabels({ ...base, kind: 'push' }).kind, 'Push')
   assert.equal(historyEntryLabels({ ...base, kind: 'merged_request' }).kind, 'Merged')
   assert.deepEqual(historyEntryLabels({ ...base, kind: 'visibility_change' }), {
-    ariaLabel: 'Visibility: Ship the history page, update push-1, 2 files',
+    ariaLabel: 'Visibility: Ship the history page, update push-1, 2 visibility changes',
     compactId: 'push-1',
+    count: '2',
     kind: 'Visibility',
     title: 'Ship the history page',
+    visibilityBreakdown: '1 public · 1 private',
   })
 })
 

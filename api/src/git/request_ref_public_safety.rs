@@ -165,7 +165,7 @@ fn fetch_current_public_projection(
 ) -> Result<(String, BTreeSet<String>), ApiError> {
     let public_projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         ProjectionViewKey::Public,
     );
     if public_projection.commits.is_empty() {
@@ -425,11 +425,15 @@ fn repo_path_has_private_history(repo: &StoredRepository, scope_path: &ScopePath
         .any(|change| {
             change.path.as_str() == scope_path.as_str() && change.visibility == Visibility::Private
         })
-        || repo.visibility_events.iter().any(|event| {
-            event.path.as_str() == scope_path.as_str()
-                && (event.old_visibility == Visibility::Private
-                    || event.new_visibility == Visibility::Private)
-        })
+        || repo
+            .visibility_change_sets
+            .iter()
+            .flat_map(|set| &set.changes)
+            .any(|change| {
+                change.path.as_str() == scope_path.as_str()
+                    && (change.old_visibility == Visibility::Private
+                        || change.new_visibility == Visibility::Private)
+            })
 }
 
 #[cfg(test)]

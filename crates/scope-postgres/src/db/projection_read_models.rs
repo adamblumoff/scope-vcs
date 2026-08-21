@@ -51,7 +51,7 @@ where
     for audience in [ProjectionAudience::Private, ProjectionAudience::Public] {
         let projection = project_graph(
             &repo.graph,
-            &repo.visibility_events,
+            &repo.visibility_change_sets,
             projection_view_key(audience),
         );
         let head_oid =

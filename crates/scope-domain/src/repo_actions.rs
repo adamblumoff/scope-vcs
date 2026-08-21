@@ -1,6 +1,5 @@
 use super::{
     policy::{ScopePath, Visibility, VisibilityRule},
-    projection::VisibilityEvent,
     repo_config::repo_config_from_policy,
     reviewed_updates::ReviewedUpdateError,
     store::{
@@ -9,6 +8,7 @@ use super::{
     },
 };
 use crate::error::DomainError;
+use crate::visibility_changes::{VisibilityChange, VisibilityChangeSet, visibility_change_set_id};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RepoEffect {
@@ -167,18 +167,11 @@ pub fn set_visibility(
         Default::default()
     };
     let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
-    let mut visibility_events = Vec::new();
+    let mut visibility_changes = Vec::new();
     for update_path in update_paths {
         let old_visibility = repo.policy.effective_visibility(update_path);
         if record_visibility_history && old_visibility != visibility {
-            visibility_events.push(VisibilityEvent {
-                id: format!(
-                    "vis_{}",
-                    repo.visibility_events.len() + visibility_events.len() + 1
-                ),
-                after_commit_id: after_commit_id.clone(),
-                source_commit_id: None,
-                author_id: user_id.to_string(),
+            visibility_changes.push(VisibilityChange {
                 path: update_path.clone(),
                 old_visibility,
                 new_visibility: visibility,
@@ -193,7 +186,17 @@ pub fn set_visibility(
             .add_rule(rule)
             .map_err(DomainError::invalid_input)?;
     }
-    repo.visibility_events.extend(visibility_events);
+    if !visibility_changes.is_empty() {
+        let set = VisibilityChangeSet::new(
+            visibility_change_set_id(repo.record.change_version.saturating_add(1)),
+            after_commit_id,
+            None,
+            user_id.to_string(),
+            visibility_changes,
+        )
+        .map_err(DomainError::invalid_input)?;
+        repo.visibility_change_sets.push(set);
+    }
     let default_visibility = repo.repo_config.visibility.default_visibility().into();
     repo.repo_config = repo_config_from_policy(
         &repo.policy,
@@ -307,6 +310,50 @@ mod tests {
                 .rules
                 .iter()
                 .all(|rule| !rule.path.starts_with("/.scope"))
+        );
+    }
+
+    #[test]
+    fn direct_bulk_visibility_update_records_one_change_set() {
+        let owner = test_owner();
+        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        repo.record.lifecycle_state = RepoLifecycleState::Ready;
+        let first = ScopePath::parse("/one.md").unwrap();
+        let second = ScopePath::parse("/two.md").unwrap();
+        repo.live_files.insert(first.clone(), source_blob("one"));
+        repo.live_files.insert(second.clone(), source_blob("two"));
+        repo.graph.commits.push(crate::projection::LogicalCommit {
+            id: "rv1".into(),
+            origin: crate::store::LogicalCommitOrigin::CanonicalPush {
+                source_head_oid: "head-1".into(),
+            },
+            author_id: owner.id.clone(),
+            message: "initial".into(),
+            changes: Vec::new(),
+        });
+
+        set_visibility(
+            &mut repo,
+            &owner.id,
+            &[first.clone(), second.clone()],
+            Visibility::Private,
+        )
+        .unwrap();
+
+        assert_eq!(repo.visibility_change_sets.len(), 1);
+        let set = &repo.visibility_change_sets[0];
+        assert_eq!(set.id, "vchg_2");
+        assert_eq!(set.anchor_commit_id.as_deref(), Some("rv1"));
+        assert_eq!(set.source_update_id, None);
+        assert_eq!(
+            set.changes
+                .iter()
+                .map(|change| (&change.path, change.old_visibility, change.new_visibility))
+                .collect::<Vec<_>>(),
+            vec![
+                (&first, Visibility::Public, Visibility::Private),
+                (&second, Visibility::Public, Visibility::Private),
+            ]
         );
     }
 

@@ -138,7 +138,7 @@ pub(crate) async fn prepare_request_merge(
             .map_err(ApiError::from)?;
             let public_projection = project_graph(
                 &proposed_repo.graph,
-                &proposed_repo.visibility_events,
+                &proposed_repo.visibility_change_sets,
                 ProjectionViewKey::Public,
             );
             verify_projection_materialization(

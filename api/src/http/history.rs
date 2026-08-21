@@ -144,7 +144,7 @@ fn history_view_for_repo(
 ) -> Result<HistoryView, ApiError> {
     let projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         history_view_key(audience),
     );
     if projection.preserves_git_commits() {
@@ -155,7 +155,7 @@ fn history_view_for_repo(
     Ok(history_view_from_projection(
         projection,
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
     ))
 }
 

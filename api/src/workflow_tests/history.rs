@@ -85,6 +85,178 @@ async fn history_defaults_to_the_readers_broadest_audience() {
 }
 
 #[tokio::test]
+async fn mixed_visibility_set_is_one_update_with_exact_transitions() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let one = source_blob(&state, "one");
+    let two = source_blob(&state, "two");
+    let mut repo = history_repo(
+        vec![history_commit(
+            "rv1",
+            None,
+            "initial",
+            vec![
+                history_change("/one.md", Visibility::Public, None, Some(one.clone())),
+                history_change("/two.md", Visibility::Private, None, Some(two.clone())),
+            ],
+        )],
+        Some("/two.md"),
+    );
+    repo.visibility_change_sets.push(
+        scope_domain::visibility_changes::VisibilityChangeSet::new(
+            "vchg_2".into(),
+            Some("rv1".into()),
+            None,
+            test_owner_id(),
+            vec![
+                scope_domain::visibility_changes::VisibilityChange {
+                    path: ScopePath::parse("/one.md").unwrap(),
+                    old_visibility: Visibility::Public,
+                    new_visibility: Visibility::Private,
+                    current_content: Some(one),
+                },
+                scope_domain::visibility_changes::VisibilityChange {
+                    path: ScopePath::parse("/two.md").unwrap(),
+                    old_visibility: Visibility::Private,
+                    new_visibility: Visibility::Public,
+                    current_content: Some(two),
+                },
+            ],
+        )
+        .unwrap(),
+    );
+    replace_test_repo(&state, repo).await;
+
+    let private = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/history?audience=private",
+        true,
+    )
+    .await;
+    let private = response_json(private).await;
+    assert_eq!(private["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(private["entries"][0]["source_id"], "vchg_2");
+    assert_eq!(
+        private["entries"][0]["message"],
+        "Updated visibility for 2 files"
+    );
+    assert_eq!(private["entries"][0]["file_change_count"], 0);
+    assert_eq!(
+        private["entries"][0]["visibility_summary"]["made_public_count"],
+        1
+    );
+    assert_eq!(
+        private["entries"][0]["visibility_summary"]["made_private_count"],
+        1
+    );
+
+    let detail = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/history/vchg_2?audience=private",
+        true,
+    )
+    .await;
+    let detail = response_json(detail).await;
+    assert_eq!(detail["visibility_changes"].as_array().unwrap().len(), 2);
+    assert_eq!(detail["visibility_changes"][0]["path"], "/one.md");
+    assert_eq!(detail["visibility_changes"][0]["old_visibility"], "Public");
+    assert_eq!(detail["visibility_changes"][0]["new_visibility"], "Private");
+
+    let public = history_get(state, "/v1/repos/owner/repo/history?audience=public", false).await;
+    let public = response_json(public).await;
+    assert_eq!(public["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(public["entries"][0]["source_id"], "vchg_2");
+    assert_eq!(public["entries"][0]["file_change_count"], 2);
+    assert_eq!(
+        public["entries"][0]["visibility_summary"]["made_public_count"],
+        1
+    );
+    assert_eq!(
+        public["entries"][0]["visibility_summary"]["made_private_count"],
+        1
+    );
+}
+
+#[tokio::test]
+async fn push_visibility_changes_attach_to_the_push_for_changed_and_unchanged_paths() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let one = source_blob(&state, "one");
+    let two_old = source_blob(&state, "two-old");
+    let two_new = source_blob(&state, "two-new");
+    let mut repo = history_repo(
+        vec![
+            history_commit(
+                "rv1",
+                None,
+                "initial",
+                vec![
+                    history_change("/one.md", Visibility::Private, None, Some(one.clone())),
+                    history_change("/two.md", Visibility::Public, None, Some(two_old.clone())),
+                ],
+            ),
+            history_commit(
+                "rv2",
+                Some("rv1"),
+                "mixed policy push",
+                vec![history_change(
+                    "/two.md",
+                    Visibility::Private,
+                    Some(two_old),
+                    Some(two_new.clone()),
+                )],
+            ),
+        ],
+        Some("/one.md"),
+    );
+    repo.visibility_change_sets.push(
+        scope_domain::visibility_changes::VisibilityChangeSet::new(
+            "vchg_3".into(),
+            Some("rv1".into()),
+            Some("rv2".into()),
+            test_owner_id(),
+            vec![
+                scope_domain::visibility_changes::VisibilityChange {
+                    path: ScopePath::parse("/one.md").unwrap(),
+                    old_visibility: Visibility::Private,
+                    new_visibility: Visibility::Public,
+                    current_content: Some(one),
+                },
+                scope_domain::visibility_changes::VisibilityChange {
+                    path: ScopePath::parse("/two.md").unwrap(),
+                    old_visibility: Visibility::Public,
+                    new_visibility: Visibility::Private,
+                    current_content: Some(two_new),
+                },
+            ],
+        )
+        .unwrap(),
+    );
+    replace_test_repo(&state, repo).await;
+
+    for (audience, private) in [("private", true), ("public", false)] {
+        let response = history_get(
+            state.clone(),
+            format!("/v1/repos/owner/repo/history?audience={audience}"),
+            private,
+        )
+        .await;
+        let response = response_json(response).await;
+        assert_eq!(response["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(response["entries"][0]["source_id"], "rv2");
+        assert_eq!(response["entries"][0]["kind"], "push");
+        assert_eq!(
+            response["entries"][0]["visibility_summary"]["made_public_count"],
+            1
+        );
+        assert_eq!(
+            response["entries"][0]["visibility_summary"]["made_private_count"],
+            1
+        );
+    }
+}
+
+#[tokio::test]
 async fn public_commit_diff_does_not_leak_private_old_content() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -323,16 +495,18 @@ async fn history_cursor_and_entry_urls_survive_projection_id_renumbering() {
     let cursor = first["next_cursor"].as_str().unwrap();
 
     let mut repo = paged_history_repo(&state, 51);
-    repo.visibility_events
-        .push(scope_domain::projection::VisibilityEvent {
+    repo.visibility_change_sets
+        .push(scope_domain::visibility_changes::VisibilityChangeSet {
             id: "visibility-after-rv1".into(),
-            after_commit_id: Some("rv1".into()),
-            source_commit_id: None,
+            anchor_commit_id: Some("rv1".into()),
+            source_update_id: None,
             author_id: test_owner_id(),
-            path: ScopePath::parse("/README.md").unwrap(),
-            old_visibility: Visibility::Public,
-            new_visibility: Visibility::Private,
-            current_content: Some(source_blob(&state, "version 1")),
+            changes: vec![scope_domain::visibility_changes::VisibilityChange {
+                path: ScopePath::parse("/README.md").unwrap(),
+                old_visibility: Visibility::Public,
+                new_visibility: Visibility::Private,
+                current_content: Some(source_blob(&state, "version 1")),
+            }],
         });
     replace_test_repo(&state, repo).await;
 
@@ -357,7 +531,7 @@ async fn history_cursor_and_entry_urls_survive_projection_id_renumbering() {
     assert_eq!(detail.status(), StatusCode::OK);
     let detail = response_json(detail).await;
     assert_eq!(detail["source_id"], "rv2");
-    assert_ne!(detail["id"], original_id);
+    assert_eq!(detail["id"], original_id);
 }
 
 #[tokio::test]
@@ -436,16 +610,18 @@ async fn history_entries_report_their_update_kind() {
         ],
         Some("/README.md"),
     );
-    repo.visibility_events
-        .push(scope_domain::projection::VisibilityEvent {
+    repo.visibility_change_sets
+        .push(scope_domain::visibility_changes::VisibilityChangeSet {
             id: "visibility-1".into(),
-            after_commit_id: Some("rv2".into()),
-            source_commit_id: None,
+            anchor_commit_id: Some("rv2".into()),
+            source_update_id: None,
             author_id: test_owner_id(),
-            path: ScopePath::parse("/README.md").unwrap(),
-            old_visibility: Visibility::Public,
-            new_visibility: Visibility::Private,
-            current_content: Some(second),
+            changes: vec![scope_domain::visibility_changes::VisibilityChange {
+                path: ScopePath::parse("/README.md").unwrap(),
+                old_visibility: Visibility::Public,
+                new_visibility: Visibility::Private,
+                current_content: Some(second),
+            }],
         });
     replace_test_repo(&state, repo).await;
     cache_test_jwks(&state);
@@ -470,7 +646,11 @@ async fn history_entries_report_their_update_kind() {
     let private_entries = private["entries"].as_array().unwrap();
     assert_eq!(private_entries[0]["source_id"], "visibility-1");
     assert_eq!(private_entries[0]["kind"], "visibility_change");
-    assert_eq!(private_entries[0]["change_count"], 1);
+    assert_eq!(private_entries[0]["file_change_count"], 0);
+    assert_eq!(
+        private_entries[0]["visibility_summary"]["made_private_count"],
+        1
+    );
     assert_eq!(private_entries[1]["kind"], "merged_request");
     assert_eq!(private_entries[2]["kind"], "push");
 
@@ -482,10 +662,9 @@ async fn history_entries_report_their_update_kind() {
     .await;
     assert_eq!(detail.status(), StatusCode::OK);
     let detail = response_json(detail).await;
-    assert_eq!(
-        detail["message"],
-        "Changed /README.md visibility to private"
-    );
-    assert_eq!(detail["files"][0]["path"], "/README.md");
-    assert_eq!(detail["files"][0]["visibility"], "Private");
+    assert_eq!(detail["message"], "Made 1 file private");
+    assert!(detail["files"].as_array().unwrap().is_empty());
+    assert_eq!(detail["visibility_changes"][0]["path"], "/README.md");
+    assert_eq!(detail["visibility_changes"][0]["old_visibility"], "Public");
+    assert_eq!(detail["visibility_changes"][0]["new_visibility"], "Private");
 }

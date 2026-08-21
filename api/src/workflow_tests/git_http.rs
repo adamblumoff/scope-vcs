@@ -469,7 +469,7 @@ async fn chunked_real_git_published_push_over_http_accepts_image_context() {
     assert!(
         !project_graph(
             &repo.graph,
-            &repo.visibility_events,
+            &repo.visibility_change_sets,
             ProjectionViewKey::Public,
         )
         .visible_paths()
