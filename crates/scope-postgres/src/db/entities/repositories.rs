@@ -61,7 +61,7 @@ pub mod repository {
                 git_push_token: facts.git_push_token,
                 policy: decode_json::<Policy>(self.policy)?,
                 graph: history.graph,
-                visibility_events: history.visibility_events,
+                visibility_change_sets: history.visibility_change_sets,
                 live_files: history.live_files,
                 git_head: facts.git_head,
                 git_pack_spans: facts.git_pack_spans,

@@ -2,7 +2,7 @@ use scope_domain::{
     policy::{Policy, ScopePath, Visibility, VisibilityRule},
     projection::{
         FileChange, LogicalCommit, ProjectionMaterialization, ProjectionViewKey, SourceGraph,
-        VisibilityEvent, project_graph,
+        project_graph,
     },
     repo_config::{
         ConfigVisibility, HistoryRewriteAction, HistoryRewriteRequest, RepoConfig,
@@ -17,8 +17,11 @@ use scope_domain::{
         LogicalCommitOrigin, NativePublicCommit, RepoLifecycleState, RequestMergeOrigin,
         SourceBlob, StoredRepository, UserAccount,
     },
+    visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
 
+#[path = "domain_projection/history_rewrite_baselines.rs"]
+mod history_rewrite_baselines;
 #[path = "domain_projection/rules.rs"]
 mod rules;
 
@@ -80,26 +83,28 @@ fn visibility_event(
     path_value: &str,
     new_visibility: Visibility,
     current_content: SourceBlob,
-) -> VisibilityEvent {
-    VisibilityEvent {
+) -> VisibilityChangeSet {
+    VisibilityChangeSet {
         id: id.to_string(),
-        after_commit_id: after_commit_id.map(str::to_string),
-        source_commit_id: source_commit_id.map(str::to_string),
+        anchor_commit_id: after_commit_id.map(str::to_string),
+        source_update_id: source_commit_id.map(str::to_string),
         author_id: "owner".to_string(),
-        path: path(path_value),
-        old_visibility: match new_visibility {
-            Visibility::Public => Visibility::Private,
-            Visibility::Private => Visibility::Public,
-        },
-        new_visibility,
-        current_content: Some(current_content),
+        changes: vec![VisibilityChange {
+            path: path(path_value),
+            old_visibility: match new_visibility {
+                Visibility::Public => Visibility::Private,
+                Visibility::Private => Visibility::Public,
+            },
+            new_visibility,
+            current_content: Some(current_content),
+        }],
     }
 }
 
 fn project_public(
     _policy: &Policy,
     graph: &SourceGraph,
-    events: &[VisibilityEvent],
+    events: &[VisibilityChangeSet],
 ) -> scope_domain::projection::Projection {
     project_graph(graph, events, ProjectionViewKey::Public)
 }
@@ -210,7 +215,7 @@ fn project_repo(
     repo: &StoredRepository,
     view_key: ProjectionViewKey,
 ) -> scope_domain::projection::Projection {
-    project_graph(&repo.graph, &repo.visibility_events, view_key)
+    project_graph(&repo.graph, &repo.visibility_change_sets, view_key)
 }
 
 fn reviewed_change(path_value: &str, content: Option<&str>) -> ReviewedContentChange {
@@ -611,7 +616,7 @@ fn content_only_update_preserves_existing_visibility_override() {
         repo.graph.commits.last().unwrap().changes[0].visibility,
         Visibility::Private
     );
-    assert!(repo.visibility_events.is_empty());
+    assert!(repo.visibility_change_sets.is_empty());
 }
 
 #[test]
@@ -644,8 +649,8 @@ fn config_only_update_changes_policy_without_content_commit() {
         repo.policy.effective_visibility(&path("/README.md")),
         Visibility::Public
     );
-    assert_eq!(repo.visibility_events.len(), 1);
-    assert_eq!(repo.visibility_events[0].source_commit_id, None);
+    assert_eq!(repo.visibility_change_sets.len(), 1);
+    assert_eq!(repo.visibility_change_sets[0].source_update_id, None);
     assert_eq!(
         repo.repo_config.visibility_for_path(&path("/README.md")),
         Visibility::Public
@@ -770,59 +775,6 @@ fn public_projection_never_contains_tracked_workflow_definitions() {
     let projection = project_public(&policy, &graph, &[]);
 
     assert!(projection.visible_paths().is_empty());
-}
-
-#[test]
-fn destructive_rewrite_rebuilds_each_public_boundary_safely() {
-    for (name, next_content, stays_public, expected_commit) in [
-        (
-            "changed",
-            Some(Some("sanitized")),
-            true,
-            Some("rv_push_2222222222222222222222222222222222222222"),
-        ),
-        ("unchanged", None, true, Some("vis_1")),
-        ("private", None, false, None),
-        ("deleted", Some(None), false, None),
-    ] {
-        let path = "/leaked.txt";
-        let mut repo = published_repo_with_public_file("leaked", path, "secret");
-        let mut changes = vec![reviewed_change("/.scope/runs/test.yml", Some("name: Test"))];
-        if let Some(content) = next_content {
-            changes.insert(0, reviewed_change(path, content));
-        }
-        apply_update(
-            &mut repo,
-            name,
-            changes,
-            None,
-            config(
-                Visibility::Private,
-                stays_public.then_some((path, Visibility::Public)),
-                Some(path),
-            ),
-        );
-
-        let projection = project_repo(&repo, ProjectionViewKey::Public);
-        assert_eq!(
-            projection
-                .commits
-                .first()
-                .map(|commit| commit.logical_commit_id.as_str()),
-            expected_commit,
-            "{name}"
-        );
-        assert_eq!(
-            projection.visible_paths(),
-            if stays_public { vec![path] } else { vec![] }
-        );
-        assert!(
-            projection
-                .commits
-                .iter()
-                .all(|commit| commit.logical_commit_id != "rv1")
-        );
-    }
 }
 
 #[test]
@@ -962,7 +914,7 @@ fn public_projection_handles_reveal_and_private_gap_timelines() {
                 ("vis_1", Some("rv1"), Some("rv2"), Visibility::Private, "v2"),
                 ("vis_2", None, Some("rv3"), Visibility::Public, "v3"),
             ],
-            vec!["rv1", "vis_1", "rv3"],
+            vec!["rv1", "rv2", "rv3"],
         ),
         (
             Visibility::Public,

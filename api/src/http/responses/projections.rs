@@ -123,7 +123,7 @@ pub(crate) fn projection_preview_response(
     let projection_audience = ProjectionAudience::from(audience);
     let projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         projection_audience.into(),
     );
     if projection.preserves_git_commits() {

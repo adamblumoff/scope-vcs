@@ -24,3 +24,4 @@ mod requests_tests;
 pub mod reviewed_updates;
 pub mod runs;
 pub mod store;
+pub mod visibility_changes;

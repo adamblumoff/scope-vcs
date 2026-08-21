@@ -154,13 +154,17 @@ export type ReviewFileDiffResponse = { path: string, kind: FileChangeKind, old_m
 
 export type HistoryPageResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, generation: string, entries: Array<HistoryEntrySummaryResponse>, next_cursor: string | null, };
 
-export type HistoryEntrySummaryResponse = { id: string, source_id: string, parent_id: string | null, kind: HistoryEntryKind, author: string | null, message: string, change_count: number, };
+export type HistoryEntrySummaryResponse = { id: string, source_id: string, parent_id: string | null, kind: HistoryEntryKind, author: string | null, message: string, file_change_count: number, visibility_summary: HistoryVisibilitySummaryResponse, };
 
 export type HistoryEntryKind = "push" | "merged_request" | "visibility_change";
 
-export type HistoryEntryDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, id: string, source_id: string, parent_id: string | null, kind: HistoryEntryKind, author: string | null, message: string, change_count: number, files: Array<HistoryEntryFileResponse>, };
+export type HistoryEntryDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, id: string, source_id: string, parent_id: string | null, kind: HistoryEntryKind, author: string | null, message: string, file_change_count: number, visibility_summary: HistoryVisibilitySummaryResponse, files: Array<HistoryEntryFileResponse>, visibility_changes: Array<HistoryVisibilityChangeResponse>, };
 
 export type HistoryEntryFileResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
+
+export type HistoryVisibilitySummaryResponse = { made_public_count: number, made_private_count: number, };
+
+export type HistoryVisibilityChangeResponse = { path: string, old_visibility: Visibility, new_visibility: Visibility, };
 
 export type CommitFileResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 

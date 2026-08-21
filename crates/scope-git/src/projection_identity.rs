@@ -10,7 +10,7 @@ use std::{
 };
 use thiserror::Error;
 
-pub const PROJECTION_IDENTITY_VERSION: i16 = 1;
+pub const PROJECTION_IDENTITY_VERSION: i16 = 2;
 
 const GENERATED_COMMIT_NAME: &str = "Scope";
 const GENERATED_COMMIT_EMAIL: &str = "scope@example.invalid";

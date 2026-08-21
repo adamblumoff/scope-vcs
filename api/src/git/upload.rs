@@ -63,7 +63,7 @@ pub(crate) async fn git_projection_for_request(
     let view_key = ProjectionViewKey::from_access(access);
     Ok(project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         view_key,
     ))
 }
@@ -104,7 +104,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             None => {
                 let projection = project_graph(
                     &repo.graph,
-                    &repo.visibility_events,
+                    &repo.visibility_change_sets,
                     ProjectionViewKey::Private,
                 );
                 projection_bare_repo_for_state(
@@ -119,7 +119,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     } else {
         let projection = project_graph(
             &repo.graph,
-            &repo.visibility_events,
+            &repo.visibility_change_sets,
             ProjectionViewKey::Public,
         );
         projection_bare_repo_for_state(
@@ -167,7 +167,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         }) {
         let projection = project_graph(
             &repo.graph,
-            &repo.visibility_events,
+            &repo.visibility_change_sets,
             ProjectionViewKey::Public,
         );
         Some(projection_bare_repo_for_state(

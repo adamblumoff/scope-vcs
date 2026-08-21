@@ -84,7 +84,7 @@ pub fn projection_preview(
     include_private_counts: bool,
 ) -> ProjectionPreviewView {
     let view_key = ProjectionViewKey::from(audience);
-    let projection = project_graph(&repo.graph, &repo.visibility_events, view_key);
+    let projection = project_graph(&repo.graph, &repo.visibility_change_sets, view_key);
     let files = projection_preview_files(repo, &projection);
     let logical_commit_visibility = repo
         .graph
@@ -119,7 +119,7 @@ pub fn projection_preview(
         if audience == ProjectionAudience::Public && include_private_counts {
             let private_projection = project_graph(
                 &repo.graph,
-                &repo.visibility_events,
+                &repo.visibility_change_sets,
                 ProjectionViewKey::Private,
             );
             let private_files = projection_preview_files(repo, &private_projection);
@@ -175,7 +175,7 @@ pub fn projected_file_contents(
     let access = repo.access_for_principal(principal);
     let projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         ProjectionViewKey::from_access(access),
     );
     let mut live_files = BTreeMap::new();
@@ -218,7 +218,7 @@ pub fn projected_file_content(
 ) -> Option<ProjectionViewFileContent> {
     let projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         ProjectionViewKey::from_access(repo.access_for_principal(principal)),
     );
     let blob = projection
@@ -258,7 +258,7 @@ pub fn has_visible_projected_non_control_files(
 ) -> bool {
     let projection = project_graph(
         &repo.graph,
-        &repo.visibility_events,
+        &repo.visibility_change_sets,
         ProjectionViewKey::from_access(repo.access_for_principal(principal)),
     );
     projection_tree(&projection)

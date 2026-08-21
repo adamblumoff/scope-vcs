@@ -1,9 +1,10 @@
 use super::{
     policy::{Policy, PolicyError, Principal, PrincipalKind, ScopePath, Visibility},
-    projection::{SourceGraph, VisibilityEvent},
+    projection::SourceGraph,
     repo_config::{ConfigVisibility, RepoConfig},
 };
 use crate::content_ref::ContentRef;
+use crate::visibility_changes::VisibilityChangeSet;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -464,7 +465,7 @@ pub struct StoredRepository {
     pub git_push_token: Option<GitPushToken>,
     pub policy: Policy,
     pub graph: SourceGraph,
-    pub visibility_events: Vec<VisibilityEvent>,
+    pub visibility_change_sets: Vec<VisibilityChangeSet>,
     pub live_files: BTreeMap<ScopePath, SourceBlob>,
     pub git_head: Option<GitHead>,
     pub git_pack_spans: Vec<GitPackSpan>,
@@ -498,7 +499,7 @@ impl StoredRepository {
                 repo_id: id.clone(),
                 commits: Vec::new(),
             },
-            visibility_events: Vec::new(),
+            visibility_change_sets: Vec::new(),
             live_files: BTreeMap::new(),
             git_head: None,
             git_pack_spans: Vec::new(),
@@ -557,8 +558,12 @@ impl StoredRepository {
             blobs.extend(change.old_content.clone());
             blobs.extend(change.new_content.clone());
         }
-        for event in &self.visibility_events {
-            blobs.extend(event.current_content.clone());
+        for change in self
+            .visibility_change_sets
+            .iter()
+            .flat_map(|set| &set.changes)
+        {
+            blobs.extend(change.current_content.clone());
         }
         blobs
     }

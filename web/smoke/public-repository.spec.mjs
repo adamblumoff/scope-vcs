@@ -408,7 +408,7 @@ test('public repository history renders its seeded push as an update', async () 
     await assertCurrentRepoSection(page, 'History')
     await assertPageHeading(page, 'History')
     const update = page.getByRole('button', {
-      name: 'Push: Projected public update, update dev-public-1, 2 files',
+      name: 'Push: Projected public update, update dev-public-1, 2 file changes',
     })
     await update.waitFor()
     assert.equal(await update.getAttribute('title'), 'dev-public-1')
@@ -416,7 +416,7 @@ test('public repository history renders its seeded push as an update', async () 
     await update.getByText('dev-public-1', { exact: true }).waitFor()
     await page.waitForFunction(() => {
       const button = document.querySelector(
-        'button[aria-label="Push: Projected public update, update dev-public-1, 2 files"]',
+        'button[aria-label="Push: Projected public update, update dev-public-1, 2 file changes"]',
       )
       return button && Object.keys(button).some((key) => key.startsWith('__reactProps$'))
     })

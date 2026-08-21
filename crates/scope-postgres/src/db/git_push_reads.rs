@@ -80,7 +80,7 @@ impl RepositoryStore {
                     repo_id: id.clone(),
                     commits: Vec::new(),
                 },
-                visibility_events: Vec::new(),
+                visibility_change_sets: Vec::new(),
                 live_files: BTreeMap::new(),
             },
         )?;

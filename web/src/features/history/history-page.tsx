@@ -41,7 +41,6 @@ import {
 } from '@/routes/-repo-history-actions'
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useState } from 'react'
-import { changeCountLabel } from '../review/review-labels'
 
 type HistoryPageProps = {
   initialPage: HistoryPageResponse
@@ -87,7 +86,7 @@ export function HistoryPage(props: HistoryPageProps) {
             onSelect={selectAudience}
           />
         ) : undefined}
-        summary={`${historySummary(entries, showLoadOlder)}${selectedDetail ? ` · ${changeCountLabel(selectedDetail.change_count)}` : ''}`}
+        summary={`${historySummary(entries, showLoadOlder)}${selectedDetail ? ` · ${historyDetailCountLabel(selectedDetail)}` : ''}`}
         title="History"
       />
       <section className="border-t border-border">
@@ -122,6 +121,7 @@ export function HistoryPage(props: HistoryPageProps) {
                 onSelectFile={selectFile}
                 selectedFilePath={selectedFilePath}
                 terminology="update"
+                visibilityChanges={selectedDetail?.visibility_changes}
               />
             </div>
           </div>
@@ -315,7 +315,7 @@ function historyEntryToCommitState(
       commit: {
         audience: page.audience,
         author: resource.value.author,
-        change_count: resource.value.change_count,
+        change_count: resource.value.file_change_count,
         files: resource.value.files,
         logical_commit_id: resource.value.source_id,
         message: resource.value.message,
@@ -332,4 +332,17 @@ function historyEntryToCommitState(
     return { commit: null, error: resource.error, status: 'failed' }
   }
   return { commit: null, error: null, status: resource.status }
+}
+
+function historyDetailCountLabel(detail: HistoryEntryDetail) {
+  const visibilityCount = detail.visibility_summary.made_public_count
+    + detail.visibility_summary.made_private_count
+  const parts = []
+  if (detail.kind !== 'visibility_change' && detail.file_change_count > 0) {
+    parts.push(`${detail.file_change_count} file ${detail.file_change_count === 1 ? 'change' : 'changes'}`)
+  }
+  if (visibilityCount > 0) {
+    parts.push(`${visibilityCount} visibility ${visibilityCount === 1 ? 'change' : 'changes'}`)
+  }
+  return parts.join(' · ')
 }

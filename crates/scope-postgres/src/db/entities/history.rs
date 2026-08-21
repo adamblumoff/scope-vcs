@@ -44,20 +44,39 @@ pub mod file_change {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-pub mod visibility_event {
+pub mod visibility_change_set {
     use super::*;
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "scope_visibility_events")]
+    #[sea_orm(table_name = "scope_visibility_change_sets")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub repo_id: String,
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub ordinal: i64,
-        pub after_commit_id: Option<String>,
-        pub source_commit_id: Option<String>,
+        pub anchor_commit_id: Option<String>,
+        pub source_update_id: Option<String>,
         pub author_id: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod visibility_change {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_visibility_changes")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub change_set_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub ordinal: i64,
         pub path: String,
         pub old_visibility: String,
         pub new_visibility: String,

@@ -526,7 +526,7 @@ fn test_repo(owner_id: &str) -> StoredRepository {
             repo_id: TEST_REPO_ID.to_string(),
             commits: Vec::new(),
         },
-        visibility_events: Vec::new(),
+        visibility_change_sets: Vec::new(),
         live_files: BTreeMap::new(),
         git_head: None,
         git_pack_spans: Vec::new(),

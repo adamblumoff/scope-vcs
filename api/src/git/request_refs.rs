@@ -182,7 +182,7 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
         RepositoryActor::Public => {
             let projection = project_graph(
                 &repo.graph,
-                &repo.visibility_events,
+                &repo.visibility_change_sets,
                 ProjectionViewKey::Public,
             );
             projection_bare_repo_for_state(
@@ -205,7 +205,7 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
                 let principal = principal_for_user_id(&repo, actor_user_id);
                 let projection = project_graph(
                     &repo.graph,
-                    &repo.visibility_events,
+                    &repo.visibility_change_sets,
                     ProjectionViewKey::from_access(repo.access_for_principal(&principal)),
                 );
                 projection_bare_repo_for_state(
@@ -286,7 +286,7 @@ pub(crate) async fn seed_editable_request_refs(
         }) {
         let projection = project_graph(
             &repo.graph,
-            &repo.visibility_events,
+            &repo.visibility_change_sets,
             ProjectionViewKey::Public,
         );
         Some(projection_bare_repo_for_state(

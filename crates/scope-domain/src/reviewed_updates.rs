@@ -1,12 +1,13 @@
 use super::{
     policy::{Policy, PolicyError, ScopePath, Visibility, VisibilityRule},
-    projection::{FileChange, LogicalCommit, VisibilityEvent},
+    projection::{FileChange, LogicalCommit},
     repo_config::{HistoryRewriteAction, HistoryRewriteRequest, RepoConfig},
     repo_control::{REPO_RULES_PATH, is_public_request_protected_path},
     store::{
         GitHead, GitPackSpan, LogicalCommitOrigin, RepoLifecycleState, RequestMergeOrigin,
         SourceBlob, StoredRepository,
     },
+    visibility_changes::{VisibilityChange, VisibilityChangeSet, visibility_change_set_id},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -140,20 +141,16 @@ pub fn apply_reviewed_update_to_repo(
         .collect::<BTreeSet<_>>();
     let logical_id = format!("rv_push_{}", update.git_head.head_oid);
     let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
-    let mut next_visibility_event_id = repo.visibility_events.len() + 1;
     let history_rewrites = update
         .config
         .history_rewrites_added_since(update.previous_config.as_ref());
     let history_rewrite = apply_history_rewrites(
         repo,
-        &mut next_visibility_event_id,
         HistoryRewriteInput {
             config: &update.config,
             rewrites: &history_rewrites,
             live_tree: &old_tree,
             changed_paths: &changed_paths,
-            after_commit_id: after_commit_id.clone(),
-            author_id: &update.author_id,
         },
     );
     for change in &mut file_changes {
@@ -161,11 +158,18 @@ pub fn apply_reviewed_update_to_repo(
             change.visibility = Visibility::Private;
         }
     }
-    let mut visibility_events = history_rewrite.visibility_events;
+    let mut visibility_changes = history_rewrite.visibility_changes;
+    let baseline_paths = visibility_changes
+        .iter()
+        .map(|change| change.path.clone())
+        .collect::<BTreeSet<_>>();
     for (path, current_content) in &new_tree {
         let old_visibility = repo.policy.effective_visibility(path);
         let new_visibility = update.config.visibility_for_path(path);
         if old_visibility == new_visibility {
+            continue;
+        }
+        if baseline_paths.contains(path) {
             continue;
         }
         if history_rewrite.redacted_paths.contains(path)
@@ -181,18 +185,7 @@ pub fn apply_reviewed_update_to_repo(
             continue;
         }
 
-        let id = format!("vis_{next_visibility_event_id}");
-        next_visibility_event_id += 1;
-        let boundary_after_commit_id = match (old_visibility, new_visibility) {
-            (Visibility::Public, Visibility::Private) => after_commit_id.clone(),
-            _ if changed_paths.contains(path) => None,
-            _ => after_commit_id.clone(),
-        };
-        visibility_events.push(VisibilityEvent {
-            id,
-            after_commit_id: boundary_after_commit_id,
-            source_commit_id: changed_paths.contains(path).then(|| logical_id.clone()),
-            author_id: update.author_id.clone(),
+        visibility_changes.push(VisibilityChange {
             path: path.clone(),
             old_visibility,
             new_visibility,
@@ -202,6 +195,19 @@ pub fn apply_reviewed_update_to_repo(
 
     let next_policy = policy_from_config_for_tree(&update.config, new_tree.keys())?;
     let next_config = update.config.clone();
+
+    if !visibility_changes.is_empty() {
+        repo.visibility_change_sets.push(
+            VisibilityChangeSet::new(
+                visibility_change_set_id(repo.record.change_version.saturating_add(1)),
+                after_commit_id,
+                Some(logical_id.clone()),
+                update.author_id.clone(),
+                visibility_changes,
+            )
+            .map_err(ReviewedUpdateError::Conflict)?,
+        );
+    }
 
     repo.graph.commits.push(LogicalCommit {
         id: logical_id,
@@ -215,7 +221,6 @@ pub fn apply_reviewed_update_to_repo(
     repo.live_files = new_tree;
     repo.policy = next_policy;
     repo.repo_config = next_config;
-    repo.visibility_events.extend(visibility_events);
     repo.git_pack_spans.push(update.git_pack_span);
     repo.git_head = Some(update.git_head);
     repo.first_push_token = None;
@@ -555,28 +560,31 @@ pub fn apply_reviewed_config_to_repo(
     }
     let live_tree = repo.live_tree();
     let after_commit_id = repo.graph.commits.last().map(|commit| commit.id.clone());
-    let mut next_visibility_event_id = repo.visibility_events.len() + 1;
     let history_rewrites = update
         .config
         .history_rewrites_added_since(Some(&repo.repo_config));
     let history_rewrite = apply_history_rewrites(
         repo,
-        &mut next_visibility_event_id,
         HistoryRewriteInput {
             config: &update.config,
             rewrites: &history_rewrites,
             live_tree: &live_tree,
             changed_paths: &BTreeSet::new(),
-            after_commit_id: after_commit_id.clone(),
-            author_id: &update.author_id,
         },
     );
 
-    let mut visibility_events = history_rewrite.visibility_events;
+    let mut visibility_changes = history_rewrite.visibility_changes;
+    let baseline_paths = visibility_changes
+        .iter()
+        .map(|change| change.path.clone())
+        .collect::<BTreeSet<_>>();
     for (path, current_content) in &live_tree {
         let old_visibility = repo.policy.effective_visibility(path);
         let new_visibility = update.config.visibility_for_path(path);
         if old_visibility == new_visibility {
+            continue;
+        }
+        if baseline_paths.contains(path) {
             continue;
         }
         if history_rewrite.redacted_paths.contains(path)
@@ -586,13 +594,7 @@ pub fn apply_reviewed_config_to_repo(
             continue;
         }
 
-        let id = format!("vis_{next_visibility_event_id}");
-        next_visibility_event_id += 1;
-        visibility_events.push(VisibilityEvent {
-            id,
-            after_commit_id: after_commit_id.clone(),
-            source_commit_id: None,
-            author_id: update.author_id.clone(),
+        visibility_changes.push(VisibilityChange {
             path: path.clone(),
             old_visibility,
             new_visibility,
@@ -602,13 +604,24 @@ pub fn apply_reviewed_config_to_repo(
 
     repo.policy = policy_from_config_for_tree(&update.config, live_tree.keys())?;
     repo.repo_config = update.config;
-    repo.visibility_events.extend(visibility_events);
+    if !visibility_changes.is_empty() {
+        repo.visibility_change_sets.push(
+            VisibilityChangeSet::new(
+                visibility_change_set_id(repo.record.change_version.saturating_add(1)),
+                after_commit_id,
+                None,
+                update.author_id,
+                visibility_changes,
+            )
+            .map_err(ReviewedUpdateError::Conflict)?,
+        );
+    }
     repo.bump_change_version();
     Ok(true)
 }
 
 struct HistoryRewriteResult {
-    visibility_events: Vec<VisibilityEvent>,
+    visibility_changes: Vec<VisibilityChange>,
     redacted_paths: BTreeSet<ScopePath>,
 }
 
@@ -617,13 +630,10 @@ struct HistoryRewriteInput<'a> {
     rewrites: &'a [HistoryRewriteRequest],
     live_tree: &'a BTreeMap<ScopePath, SourceBlob>,
     changed_paths: &'a BTreeSet<ScopePath>,
-    after_commit_id: Option<String>,
-    author_id: &'a str,
 }
 
 fn apply_history_rewrites(
     repo: &mut StoredRepository,
-    next_visibility_event_id: &mut usize,
     input: HistoryRewriteInput<'_>,
 ) -> HistoryRewriteResult {
     let HistoryRewriteInput {
@@ -631,13 +641,11 @@ fn apply_history_rewrites(
         rewrites,
         live_tree,
         changed_paths,
-        after_commit_id,
-        author_id,
     } = input;
 
     if rewrites.is_empty() {
         return HistoryRewriteResult {
-            visibility_events: Vec::new(),
+            visibility_changes: Vec::new(),
             redacted_paths: BTreeSet::new(),
         };
     }
@@ -675,17 +683,17 @@ fn apply_history_rewrites(
             );
         }
     }
-    for event in &repo.visibility_events {
-        if !should_redact(&event.path) {
-            continue;
+    for set in &repo.visibility_change_sets {
+        if set.changes.iter().any(|change| should_redact(&change.path)) {
+            let index = set
+                .anchor_commit_id
+                .as_deref()
+                .and_then(|commit_id| commit_indexes.get(commit_id).copied())
+                .map_or(0, |commit_index| commit_index + 1);
+            invalidate_preservation_from = Some(
+                invalidate_preservation_from.map_or(index, |current: usize| current.min(index)),
+            );
         }
-        let index = event
-            .after_commit_id
-            .as_deref()
-            .and_then(|commit_id| commit_indexes.get(commit_id).copied())
-            .map_or(0, |commit_index| commit_index + 1);
-        invalidate_preservation_from =
-            Some(invalidate_preservation_from.map_or(index, |current: usize| current.min(index)));
     }
 
     let mut redacted_paths = BTreeSet::new();
@@ -715,13 +723,17 @@ fn apply_history_rewrites(
         }
     }
 
-    repo.visibility_events.retain(|event| {
-        let redact = should_redact(&event.path);
-        if redact {
-            redacted_paths.insert(event.path.clone());
-        }
-        !redact
-    });
+    for set in &mut repo.visibility_change_sets {
+        set.changes.retain(|change| {
+            let redact = should_redact(&change.path);
+            if redact {
+                redacted_paths.insert(change.path.clone());
+            }
+            !redact
+        });
+    }
+    repo.visibility_change_sets
+        .retain(|set| !set.changes.is_empty());
 
     let mut baseline_events = Vec::new();
     for path in redacted_paths.iter() {
@@ -732,13 +744,7 @@ fn apply_history_rewrites(
             continue;
         };
 
-        let id = format!("vis_{}", *next_visibility_event_id);
-        *next_visibility_event_id += 1;
-        baseline_events.push(VisibilityEvent {
-            id,
-            after_commit_id: after_commit_id.clone(),
-            source_commit_id: None,
-            author_id: author_id.to_string(),
+        baseline_events.push(VisibilityChange {
             path: path.clone(),
             old_visibility: Visibility::Private,
             new_visibility: Visibility::Public,
@@ -747,7 +753,7 @@ fn apply_history_rewrites(
     }
 
     HistoryRewriteResult {
-        visibility_events: baseline_events,
+        visibility_changes: baseline_events,
         redacted_paths,
     }
 }
