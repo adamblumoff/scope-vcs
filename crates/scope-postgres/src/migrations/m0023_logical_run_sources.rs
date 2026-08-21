@@ -16,7 +16,59 @@ impl MigrationTrait for Migration {
             .get_connection()
             .execute_unprepared(
                 r#"
-                LOCK TABLE scope_runs, scope_outbox_jobs IN ACCESS EXCLUSIVE MODE;
+                LOCK TABLE scope_runs, scope_outbox_jobs, scope_object_references,
+                    scope_orphan_object_jobs IN ACCESS EXCLUSIVE MODE;
+
+                INSERT INTO scope_orphan_object_jobs (
+                    object_key, generation, sha256, git_oid, size_bytes,
+                    attempts, next_run_at_unix, last_error, completed_at_unix,
+                    created_at_unix, updated_at_unix
+                )
+                SELECT DISTINCT ON (refs.object_key)
+                    refs.object_key,
+                    'm0023_logical_run_sources',
+                    runs.source#>>'{manifest,sha256}',
+                    runs.source#>>'{manifest,git_oid}',
+                    (runs.source#>>'{manifest,size_bytes}')::bigint,
+                    0, 0, NULL, NULL, 0, 0
+                FROM scope_runs runs
+                JOIN scope_object_references refs
+                  ON refs.ref_kind = 'run_source'
+                 AND refs.ref_id = runs.id
+                 AND refs.object_key::jsonb = runs.source#>'{manifest,content_ref}'
+                WHERE runs.source->>'kind' = 'accepted-revision'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM scope_object_references other_refs
+                      WHERE other_refs.object_key = refs.object_key
+                        AND NOT (
+                            other_refs.ref_kind = 'run_source'
+                            AND EXISTS (
+                                SELECT 1
+                                FROM scope_runs other_runs
+                                WHERE other_runs.id = other_refs.ref_id
+                                  AND other_runs.source->>'kind' = 'accepted-revision'
+                                  AND other_refs.object_key::jsonb =
+                                      other_runs.source#>'{manifest,content_ref}'
+                            )
+                        )
+                  )
+                ORDER BY refs.object_key, runs.id
+                ON CONFLICT (object_key) DO NOTHING;
+
+                DELETE FROM scope_object_references refs
+                USING scope_runs runs
+                WHERE refs.ref_kind = 'run_source'
+                  AND refs.ref_id = runs.id
+                  AND runs.source->>'kind' = 'accepted-revision'
+                  AND refs.object_key::jsonb = runs.source#>'{manifest,content_ref}';
+
+                UPDATE scope_runs
+                SET source = jsonb_build_object(
+                    'kind', 'ephemeral-git-bundle',
+                    'object', source->'snapshot'
+                )
+                WHERE source->>'kind' = 'accepted-revision';
 
                 ALTER TABLE scope_runs
                     DROP CONSTRAINT scope_runs_values;

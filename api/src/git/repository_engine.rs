@@ -58,9 +58,10 @@ impl RepositoryEngine {
         repository_id: &str,
         namespace: GitDerivedCacheNamespace,
         key: String,
+        path: &Path,
         is_ready: impl Fn() -> bool,
         build: impl FnOnce() -> Result<(), ApiError>,
-    ) -> Result<(), ApiError> {
+    ) -> Result<GitRepoHandle, ApiError> {
         let started_at = Instant::now();
         let cache_hit = is_ready();
         let built = AtomicBool::new(false);
@@ -69,7 +70,8 @@ impl RepositoryEngine {
             .materialize(namespace, key, is_ready, || {
                 built.store(true, Ordering::Relaxed);
                 build()
-            });
+            })
+            .and_then(|()| self.cache.lease_derived(path.to_path_buf()));
         tracing::info!(
             repository_id,
             namespace = ?namespace,

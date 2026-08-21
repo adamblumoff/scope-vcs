@@ -2,7 +2,7 @@ use crate::{
     config::DEFAULT_GIT_BRANCH,
     error::ApiError,
     git::{
-        cache::GitDerivedCacheNamespace,
+        cache::{GitDerivedCacheNamespace, GitRepoHandle},
         content::source_content_bytes_from_repo,
         upload::{git_command_output, git_process_output_with_timeout, truncated_git_stderr},
     },
@@ -398,7 +398,7 @@ pub(crate) fn projection_bare_repo_for_state(
     projection: &Projection,
     git_head: Option<&scope_domain::store::GitHead>,
     git_pack_spans: &[scope_domain::store::GitPackSpan],
-) -> Result<PathBuf, ApiError> {
+) -> Result<GitRepoHandle, ApiError> {
     let cache_root = state.repository_engine.cache_root().to_path_buf();
     let cache_key = projection_cache_key(projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
@@ -407,6 +407,7 @@ pub(crate) fn projection_bare_repo_for_state(
         repository_id,
         GitDerivedCacheNamespace::Projection,
         cache_key,
+        &repo_path,
         is_ready,
         || {
             let raw_source_repo = if projection_requires_raw_source(projection) {
@@ -433,8 +434,7 @@ pub(crate) fn projection_bare_repo_for_state(
             )
             .map(|_| ())
         },
-    )?;
-    Ok(repo_path)
+    )
 }
 
 pub(crate) fn verify_projection_materialization(
