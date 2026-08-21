@@ -42,7 +42,7 @@ export function historyEntryLabels(entry: HistoryEntrySummary) {
   }
 }
 
-export function historyEntryKindLabel(kind: HistoryEntryKind) {
+function historyEntryKindLabel(kind: HistoryEntryKind) {
   switch (kind) {
     case 'push':
       return 'Push'

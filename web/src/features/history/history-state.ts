@@ -13,21 +13,6 @@ export type CommitFileDiffState =
   | { diff: ReviewFileDiff; error: null; status: 'loaded' }
   | { diff: null; error: string; status: 'failed' }
 
-export function resourceToCommitState(
-  resource: CachedResource<CommitDetail>,
-): CommitDetailState {
-  switch (resource.status) {
-    case 'idle':
-      return { commit: null, error: null, status: 'idle' }
-    case 'loading':
-      return { commit: null, error: null, status: 'loading' }
-    case 'loaded':
-      return { commit: resource.value, error: null, status: 'loaded' }
-    case 'failed':
-      return { commit: null, error: resource.error, status: 'failed' }
-  }
-}
-
 export function resourceToDiffState(
   resource: CachedResource<ReviewFileDiff>,
 ): CommitFileDiffState {
