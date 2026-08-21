@@ -35,6 +35,10 @@ case "${1:-}" in
     echo '{"exact":true,"migration":"applied"}'
     ;;
   fence)
+    if [[ "${FAKE_STALE_STOP_STATUS:-0}" == "1" ]]; then
+      [[ -f "$FAKE_RAILWAY_STATE/stop-requested-scope-api" ]]
+      [[ -f "$FAKE_RAILWAY_STATE/stop-requested-scope-worker" ]]
+    fi
     if [[ "${FAKE_STUCK_FENCE:-0}" == "1" && ! -f "$FAKE_RAILWAY_STATE/writers-drained" ]]; then
       exit 1
     fi
@@ -238,10 +242,15 @@ if [[ "${FAKE_DENY_DEPLOYMENT_ACTION_SERVICE:-}" == "$service" ]]; then
   exit 0
 fi
 if [[ "$action" == "stop" ]]; then
-  touch "$FAKE_RAILWAY_STATE/stopped-${service}"
+  touch "$FAKE_RAILWAY_STATE/stop-requested-${service}"
+  if [[ "${FAKE_STALE_STOP_STATUS:-0}" != "1" ]]; then
+    touch "$FAKE_RAILWAY_STATE/stopped-${service}"
+  fi
   echo '{"data":{"deploymentStop":true}}'
 elif [[ "$action" == "restart" ]]; then
-  rm -f "$FAKE_RAILWAY_STATE/stopped-${service}" "$FAKE_RAILWAY_STATE/crashed-${service}"
+  rm -f "$FAKE_RAILWAY_STATE/stopped-${service}" \
+    "$FAKE_RAILWAY_STATE/stop-requested-${service}" \
+    "$FAKE_RAILWAY_STATE/crashed-${service}"
   echo '{"data":{"deploymentRestart":true}}'
 else
   exit 2
@@ -271,6 +280,7 @@ run_cutover() {
   local deploy_worker="${19:-1}"
   local deploy_api="${20:-1}"
   local stuck_fence="${21:-0}"
+  local stale_stop_status="${22:-0}"
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
   mkdir -p "$state"
@@ -297,6 +307,7 @@ run_cutover() {
     FAKE_FAIL_RECOVERY_PLAN="$fail_recovery_plan" \
     FAKE_FAIL_FIRST_PLAN="$fail_first_plan" \
     FAKE_STUCK_FENCE="$stuck_fence" \
+    FAKE_STALE_STOP_STATUS="$stale_stop_status" \
     FAKE_DENY_DEPLOYMENT_ACTION_SERVICE="$deny_deployment_action_service" \
     RAILWAY_PROJECT_ID="project-test" \
     RAILWAY_API_TOKEN="token-graphql" \
@@ -351,6 +362,15 @@ assert_in_order "$test_dir/success-trace" \
   "up $test_dir/cache" \
   "up $test_dir/worker" \
   "up $test_dir/api"
+
+run_cutover stale-stop-status 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 1 1 1 0 1
+[[ "$(cat "$test_dir/stale-stop-status-result")" == "0" ]]
+assert_in_order "$test_dir/stale-stop-status-trace" \
+  "graphql stop scope-api old-scope-api" \
+  "graphql stop scope-worker old-scope-worker" \
+  "$test_dir/maintenance fence" \
+  "$test_dir/maintenance apply"
 
 run_cutover draining-writer 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
   us-east4-eqdc4a us-east4-eqdc4a 1 1 1 1

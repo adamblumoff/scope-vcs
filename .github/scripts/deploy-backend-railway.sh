@@ -219,27 +219,6 @@ console.log([
 '
 }
 
-wait_for_replica_state() {
-  local service_name="$1"
-  local expected_running="$2"
-  local deadline=$((SECONDS + 600))
-  local line status running crashed configured stopped id
-  while (( SECONDS < deadline )); do
-    line="$(service_state_line "$service_name" || true)"
-    if [[ -n "$line" ]]; then
-      IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
-      if [[ "$running" == "$expected_running" && "${crashed:-0}" == "0" ]]; then
-        if [[ "$expected_running" == "0" || ( "$status" == "SUCCESS" && "$stopped" == "0" ) ]]; then
-          return 0
-        fi
-      fi
-    fi
-    sleep 10
-  done
-  echo "Timed out waiting for $service_name to reach $expected_running healthy replicas." >&2
-  return 1
-}
-
 wait_for_service_health() {
   local service_name="$1"
   local deadline=$((SECONDS + 600))
@@ -347,7 +326,6 @@ quiesce_writers() {
     fi
     deployment_action Stop "$api_service"
     api_closed=1
-    wait_for_replica_state "$api_service" 0
   fi
   if [[ "$worker_closed" == "0" ]]; then
     if [[ "$cutover_committed" == "0" ]] && ! service_is_healthy "$worker_service"; then
@@ -356,8 +334,10 @@ quiesce_writers() {
     fi
     deployment_action Stop "$worker_service"
     worker_closed=1
-    wait_for_replica_state "$worker_service" 0
   fi
+  # Railway's replica counts can remain stale after a successful stop mutation. The database
+  # fence is the authoritative proof that both metadata writers have actually quiesced.
+  wait_for_writer_fence
 }
 
 restore_old_release() {
@@ -468,7 +448,6 @@ if ! service_is_healthy "$api_service" || ! service_is_healthy "$worker_service"
 fi
 
 quiesce_writers
-wait_for_writer_fence
 if ! maintenance apply; then
   # Once apply starts, an error does not prove its transaction rolled back. Fail closed unless a
   # fresh ledger read positively proves that the pre-migration state is unchanged.
