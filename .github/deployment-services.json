@@ -23,42 +23,29 @@
     "cache": {
       "name": "scope-cache-service",
       "id": "668d47df-8f68-4f96-b52f-7c02324829e3",
-      "dependsOn": [],
-      "rootDirectory": "",
-      "healthPath": "/healthz",
-      "uploadRoot": ".railway-upload/cache-service"
+      "dependsOn": []
     },
     "worker": {
       "name": "scope-worker",
       "id": "a474a0d1-3000-4a95-9ca3-cd3a7f3ef669",
-      "dependsOn": ["cache"],
-      "rootDirectory": "",
-      "healthPath": "/healthz",
-      "uploadRoot": ".railway-upload/worker"
+      "bootstrapReplicas": 1,
+      "dependsOn": ["cache"]
     },
     "api": {
       "name": "scope-api",
       "id": "9456cd8d-40bd-489a-a181-72b7f777c4a8",
-      "dependsOn": ["worker"],
-      "rootDirectory": "",
-      "healthPath": "/readyz",
-      "uploadRoot": ".railway-upload/api"
+      "bootstrapReplicas": 1,
+      "dependsOn": ["worker"]
     },
     "web": {
       "name": "scope-web",
       "id": "df831355-3056-4d1a-a4be-37735fb83d00",
-      "dependsOn": ["api"],
-      "rootDirectory": "/web",
-      "healthPath": null,
-      "uploadRoot": ".railway-upload"
+      "dependsOn": ["api"]
     },
     "cli": {
       "name": "scope-cli",
       "id": "a212bccb-ed1a-4574-a031-2b0183e08a2d",
-      "dependsOn": ["api"],
-      "rootDirectory": "/cli",
-      "healthPath": null,
-      "uploadRoot": ".railway-upload"
+      "dependsOn": ["api"]
     }
   },
   "changeScopes": {

@@ -21,6 +21,9 @@ use thiserror::Error;
 
 pub const DEFAULT_GIT_BRANCH: &str = "main";
 pub const GIT_SNAPSHOT_MANIFEST_VERSION: u8 = 2;
+pub const DEFAULT_GIT_COMPACTION_SPANS: usize = 32;
+pub const DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES: usize = 128 * 1024 * 1024;
+pub const DEFAULT_GIT_STORAGE_MAX_PACK_SPANS: usize = 2 * DEFAULT_GIT_COMPACTION_SPANS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GitStorageLimits {
@@ -73,6 +76,15 @@ impl GitStorageLimits {
             });
         }
         Ok(())
+    }
+}
+
+impl Default for GitStorageLimits {
+    fn default() -> Self {
+        Self {
+            max_object_bytes: DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
+            max_pack_spans: DEFAULT_GIT_STORAGE_MAX_PACK_SPANS,
+        }
     }
 }
 
@@ -218,6 +230,17 @@ mod tests {
             GitStorageLimits::new(1, 0).unwrap_err(),
             GitStorageLimitError::ZeroPackSpans
         );
+    }
+
+    #[test]
+    fn default_storage_limits_match_the_shared_policy() {
+        let limits = GitStorageLimits::default();
+
+        assert_eq!(
+            limits.max_object_bytes(),
+            DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES
+        );
+        assert_eq!(limits.max_pack_spans(), DEFAULT_GIT_STORAGE_MAX_PACK_SPANS);
     }
 
     #[test]
