@@ -20,6 +20,8 @@ use scope_domain::{
     visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
 
+#[path = "domain_projection/history_rewrite_baselines.rs"]
+mod history_rewrite_baselines;
 #[path = "domain_projection/rules.rs"]
 mod rules;
 
@@ -773,64 +775,6 @@ fn public_projection_never_contains_tracked_workflow_definitions() {
     let projection = project_public(&policy, &graph, &[]);
 
     assert!(projection.visible_paths().is_empty());
-}
-
-#[test]
-fn destructive_rewrite_rebuilds_each_public_boundary_safely() {
-    for (name, next_content, stays_public, expected_commit) in [
-        (
-            "changed",
-            Some(Some("sanitized")),
-            true,
-            Some("rv_push_2222222222222222222222222222222222222222"),
-        ),
-        (
-            "unchanged",
-            None,
-            true,
-            Some("rv_push_2222222222222222222222222222222222222222"),
-        ),
-        ("private", None, false, None),
-        ("deleted", Some(None), false, None),
-    ] {
-        let path = "/leaked.txt";
-        let mut repo = published_repo_with_public_file("leaked", path, "secret");
-        let mut changes = vec![reviewed_change("/.scope/runs/test.yml", Some("name: Test"))];
-        if let Some(content) = next_content {
-            changes.insert(0, reviewed_change(path, content));
-        }
-        apply_update(
-            &mut repo,
-            name,
-            changes,
-            None,
-            config(
-                Visibility::Private,
-                stays_public.then_some((path, Visibility::Public)),
-                Some(path),
-            ),
-        );
-
-        let projection = project_repo(&repo, ProjectionViewKey::Public);
-        assert_eq!(
-            projection
-                .commits
-                .first()
-                .map(|commit| commit.logical_commit_id.as_str()),
-            expected_commit,
-            "{name}"
-        );
-        assert_eq!(
-            projection.visible_paths(),
-            if stays_public { vec![path] } else { vec![] }
-        );
-        assert!(
-            projection
-                .commits
-                .iter()
-                .all(|commit| commit.logical_commit_id != "rv1")
-        );
-    }
 }
 
 #[test]

@@ -159,10 +159,17 @@ pub fn apply_reviewed_update_to_repo(
         }
     }
     let mut visibility_changes = history_rewrite.visibility_changes;
+    let baseline_paths = visibility_changes
+        .iter()
+        .map(|change| change.path.clone())
+        .collect::<BTreeSet<_>>();
     for (path, current_content) in &new_tree {
         let old_visibility = repo.policy.effective_visibility(path);
         let new_visibility = update.config.visibility_for_path(path);
         if old_visibility == new_visibility {
+            continue;
+        }
+        if baseline_paths.contains(path) {
             continue;
         }
         if history_rewrite.redacted_paths.contains(path)
@@ -567,10 +574,17 @@ pub fn apply_reviewed_config_to_repo(
     );
 
     let mut visibility_changes = history_rewrite.visibility_changes;
+    let baseline_paths = visibility_changes
+        .iter()
+        .map(|change| change.path.clone())
+        .collect::<BTreeSet<_>>();
     for (path, current_content) in &live_tree {
         let old_visibility = repo.policy.effective_visibility(path);
         let new_visibility = update.config.visibility_for_path(path);
         if old_visibility == new_visibility {
+            continue;
+        }
+        if baseline_paths.contains(path) {
             continue;
         }
         if history_rewrite.redacted_paths.contains(path)

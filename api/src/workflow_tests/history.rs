@@ -178,6 +178,60 @@ async fn mixed_visibility_set_is_one_update_with_exact_transitions() {
 }
 
 #[tokio::test]
+async fn unresolved_visibility_source_degrades_to_a_direct_update() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let readme = source_blob(&state, "hello");
+    let mut repo = history_repo(
+        vec![history_commit(
+            "rv1",
+            None,
+            "initial",
+            vec![history_change(
+                "/README.md",
+                Visibility::Private,
+                None,
+                Some(readme.clone()),
+            )],
+        )],
+        Some("/README.md"),
+    );
+    repo.visibility_change_sets.push(
+        scope_domain::visibility_changes::VisibilityChangeSet::new(
+            "vchg_orphan".into(),
+            Some("rv1".into()),
+            Some("missing-source".into()),
+            test_owner_id(),
+            vec![scope_domain::visibility_changes::VisibilityChange {
+                path: ScopePath::parse("/README.md").unwrap(),
+                old_visibility: Visibility::Private,
+                new_visibility: Visibility::Public,
+                current_content: Some(readme),
+            }],
+        )
+        .unwrap(),
+    );
+    replace_test_repo(&state, repo).await;
+
+    let public = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/history?audience=public",
+        false,
+    )
+    .await;
+    assert_eq!(public.status(), StatusCode::OK);
+    let public = response_json(public).await;
+    assert_eq!(public["entries"][0]["source_id"], "vchg_orphan");
+    assert_eq!(public["entries"][0]["kind"], "visibility_change");
+
+    let private = history_get(state, "/v1/repos/owner/repo/history?audience=private", true).await;
+    assert_eq!(private.status(), StatusCode::OK);
+    let private = response_json(private).await;
+    assert_eq!(private["entries"][0]["source_id"], "vchg_orphan");
+    assert_eq!(private["entries"][0]["kind"], "visibility_change");
+}
+
+#[tokio::test]
 async fn push_visibility_changes_attach_to_the_push_for_changed_and_unchanged_paths() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

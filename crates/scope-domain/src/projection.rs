@@ -5,7 +5,7 @@ use super::{
     visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileChange {
@@ -292,17 +292,29 @@ struct ProjectionBoundaryEvent<'a> {
     set: &'a VisibilityChangeSet,
     change: &'a VisibilityChange,
     new_content: Option<&'a SourceBlob>,
+    source_id: &'a str,
+    source_update_resolved: bool,
 }
 
 fn projection_boundary_events_by_anchor<'a>(
     graph: &'a SourceGraph,
     sets: &'a [VisibilityChangeSet],
 ) -> ProjectionBoundaryEventsByAnchor<'a> {
+    let commits_by_id = graph
+        .commits
+        .iter()
+        .map(|commit| (commit.id.as_str(), commit))
+        .collect::<HashMap<_, _>>();
     let mut events_by_anchor = ProjectionBoundaryEventsByAnchor {
         before_graph: Vec::new(),
         after_commits: BTreeMap::new(),
     };
     for set in sets {
+        let source_update = set
+            .source_update_id
+            .as_deref()
+            .and_then(|source_id| commits_by_id.get(source_id).copied());
+        let source_id = source_update.map_or(set.id.as_str(), |commit| commit.id.as_str());
         for change in set
             .changes
             .iter()
@@ -310,7 +322,12 @@ fn projection_boundary_events_by_anchor<'a>(
         {
             let boundary = match (change.old_visibility, change.new_visibility) {
                 (Visibility::Private, Visibility::Public)
-                    if !source_update_changes_path(graph, set, &change.path) =>
+                    if !source_update.is_some_and(|commit| {
+                        commit
+                            .changes
+                            .iter()
+                            .any(|source_change| source_change.path == change.path)
+                    }) =>
                 {
                     let Some(content) = change.current_content.as_ref() else {
                         continue;
@@ -319,16 +336,24 @@ fn projection_boundary_events_by_anchor<'a>(
                         set,
                         change,
                         new_content: Some(content),
+                        source_id,
+                        source_update_resolved: source_update.is_some(),
                     }
                 }
                 (Visibility::Public, Visibility::Private) => ProjectionBoundaryEvent {
                     set,
                     change,
                     new_content: None,
+                    source_id,
+                    source_update_resolved: source_update.is_some(),
                 },
                 _ => continue,
             };
-            match set.anchor_commit_id.as_deref() {
+            match set
+                .anchor_commit_id
+                .as_deref()
+                .filter(|anchor| commits_by_id.contains_key(anchor))
+            {
                 Some(after_commit_id) => events_by_anchor
                     .after_commits
                     .entry(after_commit_id)
@@ -339,21 +364,6 @@ fn projection_boundary_events_by_anchor<'a>(
         }
     }
     events_by_anchor
-}
-
-fn source_update_changes_path(
-    graph: &SourceGraph,
-    set: &VisibilityChangeSet,
-    path: &ScopePath,
-) -> bool {
-    let Some(source_update_id) = set.source_update_id.as_deref() else {
-        return false;
-    };
-    graph
-        .commits
-        .iter()
-        .find(|commit| commit.id == source_update_id)
-        .is_some_and(|commit| commit.changes.iter().any(|change| change.path == *path))
 }
 
 fn process_projection_boundary_events_after(
@@ -373,19 +383,14 @@ fn process_projection_boundary_events_after(
     };
 
     for (set_id, boundaries) in group_boundary_events_by_set(events) {
-        let set = boundaries[0].set;
-        let logical_commit_id = set
-            .source_update_id
-            .as_deref()
-            .unwrap_or(set.id.as_str())
-            .to_string();
+        let logical_commit_id = boundaries[0].source_id.to_string();
         let projected_id = projected_id(view_key, set_id, commits.len() + 1);
         commits.push(ProjectedCommit {
             projected_id: projected_id.clone(),
             logical_commit_id,
             parent_projected_id: last_visible.clone(),
             author: None,
-            message: if set.source_update_id.is_some() {
+            message: if boundaries[0].source_update_resolved {
                 "Projected public update".to_string()
             } else if boundaries
                 .iter()

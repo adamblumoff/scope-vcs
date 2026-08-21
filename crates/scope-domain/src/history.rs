@@ -5,7 +5,7 @@ use super::{
     visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 const HISTORY_GENERATION_VERSION: &str = "v4";
 
@@ -66,7 +66,14 @@ pub fn history_view_from_projection(
     graph: &SourceGraph,
     visibility_change_sets: &[VisibilityChangeSet],
 ) -> HistoryView {
-    let entry_kinds = history_entry_kinds(graph, visibility_change_sets);
+    let logical_source_ids = graph
+        .commits
+        .iter()
+        .map(|commit| commit.id.as_str())
+        .collect::<HashSet<_>>();
+    let entry_kinds = history_entry_kinds(graph, visibility_change_sets, &logical_source_ids);
+    let visibility_sets_by_source =
+        visibility_sets_by_source(visibility_change_sets, &logical_source_ids);
     let repo_id = projection.repo_id.clone();
     let view_key = projection.view_key;
     let mut tree = BTreeMap::new();
@@ -74,13 +81,14 @@ pub fn history_view_from_projection(
         private_history_entries(
             projection.commits,
             visibility_change_sets,
+            &logical_source_ids,
             &entry_kinds,
             &mut tree,
         )
     } else {
         public_history_entries(
             projection.commits,
-            visibility_change_sets,
+            &visibility_sets_by_source,
             &entry_kinds,
             &mut tree,
         )
@@ -98,7 +106,7 @@ pub fn history_view_from_projection(
 
 fn public_history_entries(
     commits: Vec<ProjectedCommit>,
-    visibility_change_sets: &[VisibilityChangeSet],
+    visibility_sets_by_source: &HashMap<&str, Vec<&VisibilityChangeSet>>,
     entry_kinds: &HashMap<String, HistoryEntryKind>,
     tree: &mut BTreeMap<ScopePath, SourceBlob>,
 ) -> Vec<HistoryEntry> {
@@ -108,7 +116,7 @@ fn public_history_entries(
         let kind = entry_kinds
             .get(source_id.as_str())
             .copied()
-            .expect("projected history entry must retain its source kind");
+            .unwrap_or(HistoryEntryKind::VisibilityChange);
         let fragment = history_entry(tree, commit, kind);
         if let Some(previous) = entries
             .last_mut()
@@ -135,9 +143,10 @@ fn public_history_entries(
             .iter()
             .map(|file| &file.path)
             .collect::<BTreeSet<_>>();
-        entry.visibility_changes = visibility_change_sets
-            .iter()
-            .filter(|set| set_source_id(set) == entry.source_id)
+        entry.visibility_changes = visibility_sets_by_source
+            .get(entry.source_id.as_str())
+            .into_iter()
+            .flat_map(|sets| sets.iter())
             .flat_map(|set| &set.changes)
             .filter(|change| visible_paths.contains(&change.path))
             .map(history_visibility_change)
@@ -153,16 +162,24 @@ fn public_history_entries(
 fn private_history_entries(
     commits: Vec<ProjectedCommit>,
     visibility_change_sets: &[VisibilityChangeSet],
+    logical_source_ids: &HashSet<&str>,
     entry_kinds: &HashMap<String, HistoryEntryKind>,
     tree: &mut BTreeMap<ScopePath, SourceBlob>,
 ) -> Vec<HistoryEntry> {
     let mut before_graph = Vec::new();
     let mut sets_by_anchor: HashMap<&str, Vec<&VisibilityChangeSet>> = HashMap::new();
-    for set in visibility_change_sets
-        .iter()
-        .filter(|set| set.source_update_id.is_none())
-    {
-        match set.anchor_commit_id.as_deref() {
+    let mut sets_by_source: HashMap<&str, Vec<&VisibilityChangeSet>> = HashMap::new();
+    for set in visibility_change_sets {
+        let source_id = resolved_set_source_id(set, logical_source_ids);
+        if source_id != set.id {
+            sets_by_source.entry(source_id).or_default().push(set);
+            continue;
+        }
+        match set
+            .anchor_commit_id
+            .as_deref()
+            .filter(|anchor| logical_source_ids.contains(anchor))
+        {
             Some(anchor) => sets_by_anchor.entry(anchor).or_default().push(set),
             None => before_graph.push(set),
         }
@@ -177,9 +194,10 @@ fn private_history_entries(
             .copied()
             .expect("private history entry must retain its source kind");
         let mut entry = history_entry(tree, commit, kind);
-        entry.visibility_changes = visibility_change_sets
-            .iter()
-            .filter(|set| set.source_update_id.as_deref() == Some(source_id.as_str()))
+        entry.visibility_changes = sets_by_source
+            .remove(source_id.as_str())
+            .into_iter()
+            .flatten()
             .flat_map(|set| &set.changes)
             .map(history_visibility_change)
             .collect();
@@ -226,8 +244,28 @@ fn relink_semantic_parents(entries: &mut [HistoryEntry]) {
     }
 }
 
-fn set_source_id(set: &VisibilityChangeSet) -> &str {
-    set.source_update_id.as_deref().unwrap_or(&set.id)
+fn visibility_sets_by_source<'a>(
+    sets: &'a [VisibilityChangeSet],
+    logical_source_ids: &HashSet<&str>,
+) -> HashMap<&'a str, Vec<&'a VisibilityChangeSet>> {
+    let mut sets_by_source = HashMap::<&str, Vec<&VisibilityChangeSet>>::new();
+    for set in sets {
+        sets_by_source
+            .entry(resolved_set_source_id(set, logical_source_ids))
+            .or_default()
+            .push(set);
+    }
+    sets_by_source
+}
+
+fn resolved_set_source_id<'a>(
+    set: &'a VisibilityChangeSet,
+    logical_source_ids: &HashSet<&str>,
+) -> &'a str {
+    set.source_update_id
+        .as_deref()
+        .filter(|source_id| logical_source_ids.contains(source_id))
+        .unwrap_or(&set.id)
 }
 
 fn history_visibility_change(change: &VisibilityChange) -> HistoryEntryVisibilityChange {
@@ -258,6 +296,7 @@ fn file_word(count: usize) -> &'static str {
 fn history_entry_kinds(
     graph: &SourceGraph,
     visibility_change_sets: &[VisibilityChangeSet],
+    logical_source_ids: &HashSet<&str>,
 ) -> HashMap<String, HistoryEntryKind> {
     let mut kinds = graph
         .commits
@@ -271,12 +310,11 @@ fn history_entry_kinds(
             (commit.id.clone(), kind)
         })
         .collect::<HashMap<_, _>>();
-    kinds.extend(
-        visibility_change_sets
-            .iter()
-            .filter(|set| set.source_update_id.is_none())
-            .map(|set| (set.id.clone(), HistoryEntryKind::VisibilityChange)),
-    );
+    for set in visibility_change_sets {
+        if resolved_set_source_id(set, logical_source_ids) == set.id {
+            kinds.insert(set.id.clone(), HistoryEntryKind::VisibilityChange);
+        }
+    }
     kinds
 }
 

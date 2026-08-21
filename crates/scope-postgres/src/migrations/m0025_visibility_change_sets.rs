@@ -53,29 +53,44 @@ impl MigrationTrait for Migration {
                 );
 
                 CREATE TEMP TABLE visibility_event_migration_mapping ON COMMIT DROP AS
-                WITH ordered AS (
+                WITH RECURSIVE ordered AS (
                     SELECT
                         event.*,
-                        lag(author_id) OVER repo_order AS previous_author_id,
-                        lag(source_commit_id) OVER repo_order AS previous_source_commit_id,
-                        lag(after_commit_id) OVER repo_order AS previous_after_commit_id,
                         row_number() OVER repo_order AS repo_row
                     FROM scope_visibility_events event
                     WINDOW repo_order AS (PARTITION BY repo_id ORDER BY ordinal)
-                ), marked AS (
-                    SELECT *,
-                        CASE WHEN repo_row = 1
-                            OR author_id IS DISTINCT FROM previous_author_id
-                            OR source_commit_id IS DISTINCT FROM previous_source_commit_id
-                            OR after_commit_id IS DISTINCT FROM previous_after_commit_id
-                        THEN 1 ELSE 0 END AS starts_group
-                    FROM ordered
                 ), grouped AS (
-                    SELECT *,
-                        sum(starts_group) OVER (
-                            PARTITION BY repo_id ORDER BY ordinal ROWS UNBOUNDED PRECEDING
-                        ) AS group_number
-                    FROM marked
+                    SELECT
+                        ordered.*,
+                        1::bigint AS group_number,
+                        ARRAY[path::text] AS group_paths
+                    FROM ordered
+                    WHERE repo_row = 1
+
+                    UNION ALL
+
+                    SELECT
+                        next_event.*,
+                        CASE WHEN
+                            next_event.author_id IS DISTINCT FROM grouped.author_id
+                            OR next_event.source_commit_id IS DISTINCT FROM grouped.source_commit_id
+                            OR next_event.after_commit_id IS DISTINCT FROM grouped.after_commit_id
+                            OR next_event.path::text = ANY(grouped.group_paths)
+                        THEN grouped.group_number + 1
+                        ELSE grouped.group_number
+                        END,
+                        CASE WHEN
+                            next_event.author_id IS DISTINCT FROM grouped.author_id
+                            OR next_event.source_commit_id IS DISTINCT FROM grouped.source_commit_id
+                            OR next_event.after_commit_id IS DISTINCT FROM grouped.after_commit_id
+                            OR next_event.path::text = ANY(grouped.group_paths)
+                        THEN ARRAY[next_event.path::text]
+                        ELSE array_append(grouped.group_paths, next_event.path::text)
+                        END
+                    FROM grouped
+                    JOIN ordered next_event
+                      ON next_event.repo_id = grouped.repo_id
+                     AND next_event.repo_row = grouped.repo_row + 1
                 )
                 SELECT
                     repo_id,
@@ -84,9 +99,7 @@ impl MigrationTrait for Migration {
                     'vchg_m' || (min(ordinal) OVER (
                         PARTITION BY repo_id, group_number
                     ))::text AS change_set_id,
-                    dense_rank() OVER (
-                        PARTITION BY repo_id ORDER BY group_number
-                    ) - 1 AS change_set_ordinal,
+                    group_number - 1 AS change_set_ordinal,
                     row_number() OVER (
                         PARTITION BY repo_id, group_number ORDER BY ordinal
                     ) - 1 AS child_ordinal,
