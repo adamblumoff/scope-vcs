@@ -234,11 +234,14 @@ pub fn router(state: AppState) -> Router {
             get(http::request_discussions::activity),
         )
         .route(routes::REPO_EVENTS, get(http::repo_events::repo_events))
-        .route(routes::REPO_COMMITS, get(http::history::get_commit_history))
-        .route(routes::REPO_COMMIT, get(http::history::get_commit_detail))
+        .route(routes::REPO_HISTORY, get(http::history::get_history_page))
         .route(
-            routes::REPO_COMMIT_FILE_DIFF,
-            get(http::history::get_commit_file_diff),
+            routes::REPO_HISTORY_ENTRY,
+            get(http::history::get_history_entry),
+        )
+        .route(
+            routes::REPO_HISTORY_ENTRY_FILE_DIFF,
+            get(http::history::get_history_entry_file_diff),
         )
         .route(
             routes::REPO_MEMBERS,

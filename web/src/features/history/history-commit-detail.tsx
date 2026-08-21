@@ -26,6 +26,7 @@ export function CommitDetailPanel({
   onRetryDiff,
   onSelectFile,
   selectedFilePath,
+  terminology = 'commit',
 }: {
   commitContext?: ReactNode
   commitState: CommitDetailState
@@ -38,6 +39,7 @@ export function CommitDetailPanel({
   onRetryDiff?: () => void
   onSelectFile: (file: CommitFile) => void
   selectedFilePath: string | null
+  terminology?: 'commit' | 'update'
 }) {
   const fileNavigatorRef = useRef<HTMLDivElement>(null)
 
@@ -46,7 +48,7 @@ export function CommitDetailPanel({
       <PendingSurface
         className="min-h-[340px]"
         delay
-        label="Loading commit details"
+        label={`Loading ${terminology} details`}
       >
         <CommitDetailSkeleton showDiff={selectedFilePath !== null} />
       </PendingSurface>
@@ -71,7 +73,7 @@ export function CommitDetailPanel({
     return (
       <PanelState>
         <GitCommit className="size-5" />
-        <span>Select a commit</span>
+        <span>Select {terminology === 'update' ? 'an' : 'a'} {terminology}</span>
       </PanelState>
     )
   }
@@ -103,13 +105,17 @@ export function CommitDetailPanel({
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]">
         <div
-          aria-label="Commit file navigator"
+          aria-label={`${capitalize(terminology)} file navigator`}
           className="min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           ref={fileNavigatorRef}
           tabIndex={-1}
         >
           {commit.files.length === 0 ? (
-            <EmptyState inline className="px-5 py-8 sm:px-6" title="No file changes in this commit." />
+            <EmptyState
+              inline
+              className="px-5 py-8 sm:px-6"
+              title={`No file changes in this ${terminology}.`}
+            />
           ) : (
             <FileSystemTree
               compactVisibility
@@ -180,4 +186,8 @@ function CommitDetailSkeleton({ showDiff }: { showDiff: boolean }) {
 
 function commitFileStatus(file: CommitFile) {
   return <Badge variant="neutral">{file.kind}</Badge>
+}
+
+function capitalize(value: string) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`
 }

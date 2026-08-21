@@ -1,5 +1,6 @@
 import type {
   CommitDetail,
+  HistoryEntryDetail,
   ProjectionPreviewAudience,
   ReviewFileDiff,
 } from '@/api/types'
@@ -16,6 +17,11 @@ type DiffCacheEntry = {
 }
 
 const commitEntries = createBoundedCache<string, CommitDetail>({
+  maxEntries: MAX_COMMIT_ENTRIES,
+  maxWeight: MAX_COMMIT_BYTES,
+  weightOf: approximateSerializedBytes,
+})
+const historyEntries = createBoundedCache<string, HistoryEntryDetail>({
   maxEntries: MAX_COMMIT_ENTRIES,
   maxWeight: MAX_COMMIT_BYTES,
   weightOf: approximateSerializedBytes,
@@ -40,6 +46,22 @@ export function historyCommitCacheKey({
   viewKey: string
 }) {
   return [repoId, generation, viewKey, audience, commit].join('\0')
+}
+
+export function historyEntryCacheKey({
+  audience,
+  entry,
+  generation,
+  repoId,
+  viewKey,
+}: {
+  audience: ProjectionPreviewAudience
+  entry: string
+  generation: string
+  repoId: string
+  viewKey: string
+}) {
+  return [repoId, generation, viewKey, audience, entry].join('\0')
 }
 
 export function historyDiffCacheKey({
@@ -73,6 +95,37 @@ export function historyDiffCacheKey({
   ].join('\0')
 }
 
+export function historyEntryDiffCacheKey({
+  audience,
+  entry,
+  generation,
+  newOid,
+  oldOid,
+  path,
+  repoId,
+  viewKey,
+}: {
+  audience: ProjectionPreviewAudience
+  entry: string
+  generation: string
+  newOid: string | null
+  oldOid: string | null
+  path: string
+  repoId: string
+  viewKey: string
+}) {
+  return historyDiffCacheKey({
+    audience,
+    commit: entry,
+    generation,
+    newOid,
+    oldOid,
+    path,
+    repoId,
+    viewKey,
+  })
+}
+
 export function readHistoryCommitCache(key: string) {
   return commitEntries.get(key) ?? null
 }
@@ -83,6 +136,18 @@ export function peekHistoryCommitCache(key: string) {
 
 export function writeHistoryCommitCache(key: string, value: CommitDetail) {
   commitEntries.set(key, value)
+}
+
+export function readHistoryEntryCache(key: string) {
+  return historyEntries.get(key) ?? null
+}
+
+export function peekHistoryEntryCache(key: string) {
+  return historyEntries.peek(key) ?? null
+}
+
+export function writeHistoryEntryCache(key: string, value: HistoryEntryDetail) {
+  historyEntries.set(key, value)
 }
 
 export function readHistoryDiffCache(key: string) {
@@ -111,17 +176,21 @@ export function writeHistoryDiffScroll(key: string | null, scrollTop: number) {
 
 export function resetHistoryResourceCache() {
   commitEntries.clear()
+  historyEntries.clear()
   diffEntries.clear()
 }
 
 export function historyResourceCacheStats() {
   const commits = commitEntries.stats()
   const diffs = diffEntries.stats()
+  const entries = historyEntries.stats()
   return {
     commitBytes: commits.totalWeight,
     commits: commits.entries,
     diffBytes: diffs.totalWeight,
     diffs: diffs.entries,
+    entryBytes: entries.totalWeight,
+    entries: entries.entries,
   }
 }
 

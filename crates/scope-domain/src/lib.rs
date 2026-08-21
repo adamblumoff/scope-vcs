@@ -1,7 +1,7 @@
 pub mod account;
-pub mod commit_history;
 pub mod content_ref;
 pub mod error;
+pub mod history;
 pub mod policy;
 pub mod projection;
 pub mod projection_views;

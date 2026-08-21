@@ -18,7 +18,9 @@ pub(crate) use scope_api_contract::{
 };
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
-use scope_domain::commit_history::{CommitHistoryCommit, CommitHistoryView};
+use scope_domain::history::{
+    HistoryEntry, HistoryEntryFile, HistoryEntryKind as DomainHistoryEntryKind, HistoryView,
+};
 use scope_domain::policy::ScopePath;
 use scope_domain::store::{
     FirstPushToken, GitPushToken, RepoLifecycleState as DomainRepoLifecycleState, RepositoryAccess,
@@ -193,13 +195,20 @@ pub(crate) struct DeleteRepoResponse {
 
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct CommitHistoryRequest {
+pub(crate) struct HistoryPageRequest {
+    pub(crate) audience: Option<ProjectionPreviewAudience>,
+    pub(crate) before: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct HistoryEntryRequest {
     pub(crate) audience: Option<ProjectionPreviewAudience>,
 }
 
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct CommitFileDiffRequest {
+pub(crate) struct HistoryEntryFileDiffRequest {
     pub(crate) audience: Option<ProjectionPreviewAudience>,
     pub(crate) path: String,
 }
@@ -247,38 +256,63 @@ pub(crate) enum ReviewFileContentResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct CommitHistoryResponse {
+pub(crate) struct HistoryPageResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
     pub(crate) view_key: String,
     pub(crate) generation: String,
-    pub(crate) commits: Vec<CommitSummaryResponse>,
+    pub(crate) entries: Vec<HistoryEntrySummaryResponse>,
+    pub(crate) next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct CommitSummaryResponse {
-    pub(crate) projected_id: String,
-    pub(crate) logical_commit_id: String,
-    pub(crate) parent_projected_id: Option<String>,
+pub(crate) struct HistoryEntrySummaryResponse {
+    pub(crate) id: String,
+    pub(crate) source_id: String,
+    pub(crate) parent_id: Option<String>,
+    pub(crate) kind: HistoryEntryKind,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
     pub(crate) change_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", ts(rename_all = "snake_case"))]
+pub(crate) enum HistoryEntryKind {
+    Push,
+    MergedRequest,
+    VisibilityChange,
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct CommitDetailResponse {
+pub(crate) struct HistoryEntryDetailResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
     pub(crate) view_key: String,
-    pub(crate) projected_id: String,
-    pub(crate) logical_commit_id: String,
-    pub(crate) parent_projected_id: Option<String>,
+    pub(crate) id: String,
+    pub(crate) source_id: String,
+    pub(crate) parent_id: Option<String>,
+    pub(crate) kind: HistoryEntryKind,
     pub(crate) author: Option<String>,
     pub(crate) message: String,
     pub(crate) change_count: usize,
-    pub(crate) files: Vec<CommitFileResponse>,
+    pub(crate) files: Vec<HistoryEntryFileResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+pub(crate) struct HistoryEntryFileResponse {
+    pub(crate) path: String,
+    pub(crate) kind: FileChangeKind,
+    pub(crate) old_mode: Option<String>,
+    pub(crate) new_mode: Option<String>,
+    pub(crate) old_oid: Option<String>,
+    pub(crate) new_oid: Option<String>,
+    pub(crate) visibility: Visibility,
 }
 
 #[derive(Debug, Serialize)]
@@ -451,53 +485,70 @@ pub(crate) fn git_push_token_response(
     }
 }
 
-pub(crate) fn commit_history_response(
+pub(crate) fn history_page_response(
     audience: ProjectionPreviewAudience,
-    view: CommitHistoryView,
-) -> CommitHistoryResponse {
-    CommitHistoryResponse {
-        audience,
-        repo_id: view.repo_id,
-        view_key: view.view_key,
-        generation: view.generation,
-        commits: view.commits.iter().map(commit_summary_response).collect(),
-    }
-}
-
-pub(crate) fn commit_detail_response(
-    audience: ProjectionPreviewAudience,
-    view: &CommitHistoryView,
-    commit: &CommitHistoryCommit,
-) -> CommitDetailResponse {
-    CommitDetailResponse {
+    view: &HistoryView,
+    entries: &[HistoryEntry],
+    next_cursor: Option<String>,
+) -> HistoryPageResponse {
+    HistoryPageResponse {
         audience,
         repo_id: view.repo_id.clone(),
         view_key: view.view_key.clone(),
-        projected_id: commit.projected_id.clone(),
-        logical_commit_id: commit.logical_commit_id.clone(),
-        parent_projected_id: commit.parent_projected_id.clone(),
-        author: commit.author.clone(),
-        message: commit.message.clone(),
-        change_count: commit.files.len(),
-        files: commit.files.iter().map(commit_file_response).collect(),
+        generation: view.generation.clone(),
+        entries: entries.iter().map(history_entry_summary_response).collect(),
+        next_cursor,
     }
 }
 
-fn commit_summary_response(commit: &CommitHistoryCommit) -> CommitSummaryResponse {
-    CommitSummaryResponse {
-        projected_id: commit.projected_id.clone(),
-        logical_commit_id: commit.logical_commit_id.clone(),
-        parent_projected_id: commit.parent_projected_id.clone(),
-        author: commit.author.clone(),
-        message: commit.message.clone(),
-        change_count: commit.files.len(),
+pub(crate) fn history_entry_detail_response(
+    audience: ProjectionPreviewAudience,
+    view: &HistoryView,
+    entry: &HistoryEntry,
+) -> HistoryEntryDetailResponse {
+    HistoryEntryDetailResponse {
+        audience,
+        repo_id: view.repo_id.clone(),
+        view_key: view.view_key.clone(),
+        id: entry.id.clone(),
+        source_id: entry.source_id.clone(),
+        parent_id: entry.parent_id.clone(),
+        kind: entry.kind.into(),
+        author: entry.author.clone(),
+        message: entry.message.clone(),
+        change_count: entry.files.len(),
+        files: entry
+            .files
+            .iter()
+            .map(history_entry_file_response)
+            .collect(),
     }
 }
 
-fn commit_file_response(
-    file: &scope_domain::commit_history::CommitHistoryFile,
-) -> CommitFileResponse {
-    CommitFileResponse {
+fn history_entry_summary_response(entry: &HistoryEntry) -> HistoryEntrySummaryResponse {
+    HistoryEntrySummaryResponse {
+        id: entry.id.clone(),
+        source_id: entry.source_id.clone(),
+        parent_id: entry.parent_id.clone(),
+        kind: entry.kind.into(),
+        author: entry.author.clone(),
+        message: entry.message.clone(),
+        change_count: entry.files.len(),
+    }
+}
+
+impl From<DomainHistoryEntryKind> for HistoryEntryKind {
+    fn from(kind: DomainHistoryEntryKind) -> Self {
+        match kind {
+            DomainHistoryEntryKind::Push => Self::Push,
+            DomainHistoryEntryKind::MergedRequest => Self::MergedRequest,
+            DomainHistoryEntryKind::VisibilityChange => Self::VisibilityChange,
+        }
+    }
+}
+
+fn history_entry_file_response(file: &HistoryEntryFile) -> HistoryEntryFileResponse {
+    HistoryEntryFileResponse {
         path: file.path.as_str().to_string(),
         kind: file.kind.into(),
         old_mode: file

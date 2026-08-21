@@ -1,33 +1,43 @@
 use super::{
     policy::{ScopePath, Visibility},
-    projection::{ProjectedCommit, Projection, ProjectionViewKey, VisibilityEvent, project_graph},
-    store::{FileChangeKind, SourceBlob},
+    projection::{
+        ProjectedCommit, Projection, ProjectionViewKey, SourceGraph, VisibilityEvent, project_graph,
+    },
+    store::{FileChangeKind, LogicalCommitOrigin, SourceBlob},
 };
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-const COMMIT_HISTORY_GENERATION_VERSION: &str = "v1";
+const HISTORY_GENERATION_VERSION: &str = "v2";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CommitHistoryView {
+pub struct HistoryView {
     pub repo_id: String,
     pub view_key: String,
     pub generation: String,
-    pub commits: Vec<CommitHistoryCommit>,
+    pub entries: Vec<HistoryEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CommitHistoryCommit {
-    pub projected_id: String,
-    pub logical_commit_id: String,
-    pub parent_projected_id: Option<String>,
+pub struct HistoryEntry {
+    pub id: String,
+    pub source_id: String,
+    pub parent_id: Option<String>,
+    pub kind: HistoryEntryKind,
     pub author: Option<String>,
     pub message: String,
-    pub files: Vec<CommitHistoryFile>,
+    pub files: Vec<HistoryEntryFile>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryEntryKind {
+    Push,
+    MergedRequest,
+    VisibilityChange,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CommitHistoryFile {
+pub struct HistoryEntryFile {
     pub path: ScopePath,
     pub kind: FileChangeKind,
     pub old_content: Option<SourceBlob>,
@@ -35,38 +45,77 @@ pub struct CommitHistoryFile {
     pub visibility: Visibility,
 }
 
-pub fn commit_history_view(
-    graph: &super::projection::SourceGraph,
+pub fn history_view(
+    graph: &SourceGraph,
     visibility_events: &[VisibilityEvent],
     view_key: ProjectionViewKey,
-) -> CommitHistoryView {
+) -> HistoryView {
     let projection = project_graph(graph, visibility_events, view_key);
-    commit_history_view_from_projection(projection)
+    history_view_from_projection(projection, graph, visibility_events)
 }
 
-pub fn commit_history_view_from_projection(projection: Projection) -> CommitHistoryView {
-    let generation = commit_history_generation(&projection);
+pub fn history_view_from_projection(
+    projection: Projection,
+    graph: &SourceGraph,
+    visibility_events: &[VisibilityEvent],
+) -> HistoryView {
+    let entry_kinds = history_entry_kinds(graph, visibility_events);
+    let generation = history_generation(&projection, &entry_kinds);
     let mut tree = BTreeMap::new();
-    let commits = projection
+    let mut entries = projection
         .commits
         .into_iter()
-        .map(|commit| commit_history_commit(&mut tree, commit))
-        .collect();
+        .map(|commit| {
+            let kind = entry_kinds
+                .get(commit.logical_commit_id.as_str())
+                .copied()
+                .expect("projected history entry must retain its source kind");
+            history_entry(&mut tree, commit, kind)
+        })
+        .collect::<Vec<_>>();
+    entries.reverse();
 
-    CommitHistoryView {
+    HistoryView {
         repo_id: projection.repo_id.clone(),
         view_key: projection.view_key.as_str().to_string(),
         generation,
-        commits,
+        entries,
     }
 }
 
-fn commit_history_generation(projection: &Projection) -> String {
+fn history_entry_kinds(
+    graph: &SourceGraph,
+    visibility_events: &[VisibilityEvent],
+) -> HashMap<String, HistoryEntryKind> {
+    let mut kinds = graph
+        .commits
+        .iter()
+        .map(|commit| {
+            let kind = match commit.origin {
+                LogicalCommitOrigin::CanonicalPush { .. } => HistoryEntryKind::Push,
+                LogicalCommitOrigin::PrivateRequestMerge { .. }
+                | LogicalCommitOrigin::PublicRequestMerge { .. } => HistoryEntryKind::MergedRequest,
+            };
+            (commit.id.clone(), kind)
+        })
+        .collect::<HashMap<_, _>>();
+    kinds.extend(
+        visibility_events
+            .iter()
+            .map(|event| (event.id.clone(), HistoryEntryKind::VisibilityChange)),
+    );
+    kinds
+}
+
+fn history_generation(
+    projection: &Projection,
+    entry_kinds: &HashMap<String, HistoryEntryKind>,
+) -> String {
     let mut hasher = Sha256::new();
     hash_field(
         &mut hasher,
         b"semantics",
-        COMMIT_HISTORY_GENERATION_VERSION.as_bytes(),
+        HISTORY_GENERATION_VERSION.as_bytes(),
     );
     hash_field(&mut hasher, b"repo", projection.repo_id.as_bytes());
     hash_field(
@@ -75,8 +124,20 @@ fn commit_history_generation(projection: &Projection) -> String {
         projection.view_key.as_str().as_bytes(),
     );
     for commit in &projection.commits {
-        hash_field(&mut hasher, b"commit", commit.projected_id.as_bytes());
-        hash_field(&mut hasher, b"logical", commit.logical_commit_id.as_bytes());
+        hash_field(&mut hasher, b"entry", commit.projected_id.as_bytes());
+        hash_field(&mut hasher, b"source", commit.logical_commit_id.as_bytes());
+        let kind = entry_kinds
+            .get(commit.logical_commit_id.as_str())
+            .expect("projected history entry must retain its source kind");
+        hash_field(
+            &mut hasher,
+            b"kind",
+            match kind {
+                HistoryEntryKind::Push => b"push",
+                HistoryEntryKind::MergedRequest => b"merged_request",
+                HistoryEntryKind::VisibilityChange => b"visibility_change",
+            },
+        );
         hash_optional_field(
             &mut hasher,
             b"parent",
@@ -125,10 +186,11 @@ fn hash_field(hasher: &mut Sha256, label: &[u8], value: &[u8]) {
     hasher.update(value);
 }
 
-fn commit_history_commit(
+fn history_entry(
     tree: &mut BTreeMap<ScopePath, SourceBlob>,
     commit: ProjectedCommit,
-) -> CommitHistoryCommit {
+    kind: HistoryEntryKind,
+) -> HistoryEntry {
     let files = commit
         .changes
         .into_iter()
@@ -146,7 +208,7 @@ fn commit_history_commit(
                 }
             }
 
-            Some(CommitHistoryFile {
+            Some(HistoryEntryFile {
                 visibility: change.visibility,
                 path: change.path,
                 kind,
@@ -156,10 +218,11 @@ fn commit_history_commit(
         })
         .collect();
 
-    CommitHistoryCommit {
-        projected_id: commit.projected_id,
-        logical_commit_id: commit.logical_commit_id,
-        parent_projected_id: commit.parent_projected_id,
+    HistoryEntry {
+        id: commit.projected_id,
+        source_id: commit.logical_commit_id,
+        parent_id: commit.parent_projected_id,
+        kind,
         author: commit.author,
         message: commit.message,
         files,

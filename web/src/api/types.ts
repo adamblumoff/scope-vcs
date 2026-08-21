@@ -4,12 +4,7 @@ import type {
   CliExchangeGrantResponse,
   CliSessionResponse,
   CliSessionsResponse,
-  CommitDetailResponse,
-  CommitFileDiffRequest,
   CommitFileResponse,
-  CommitHistoryRequest,
-  CommitHistoryResponse,
-  CommitSummaryResponse,
   DeleteRepoResponse as GeneratedDeleteRepoResponse,
   FirstPushTokenResponse,
   FirstPushTokenStatus,
@@ -62,6 +57,13 @@ import type {
   RepositoryRunSummaryResponse,
   SessionIdentity as GeneratedSessionIdentity,
   FileChangeKind as GeneratedFileChangeKind,
+  HistoryEntryDetailResponse,
+  HistoryEntryFileDiffRequest,
+  HistoryEntryRequest,
+  HistoryEntryKind as GeneratedHistoryEntryKind,
+  HistoryEntrySummaryResponse,
+  HistoryPageRequest,
+  HistoryPageResponse,
   UserResponse,
   Visibility as GeneratedVisibility,
 } from './types.generated'
@@ -73,6 +75,7 @@ export type RepoLifecycleState = GeneratedRepoLifecycleState
 export type TokenStatus = FirstPushTokenStatus
 export type FileChangeKind = GeneratedFileChangeKind
 export type ProjectionPreviewAudience = GeneratedProjectionPreviewAudience
+export type HistoryEntryKind = GeneratedHistoryEntryKind
 
 export type SessionIdentity = GeneratedSessionIdentity
 export type User = UserResponse
@@ -109,10 +112,24 @@ export type RepoRunStep = RepositoryRunStepResponse
 export type RepoRunStepLogPage = RepositoryRunStepLogPageResponse
 export type FirstPushToken = FirstPushTokenResponse
 export type DeleteRepoResponse = GeneratedDeleteRepoResponse
-export type CommitHistory = CommitHistoryResponse
-export type CommitSummary = CommitSummaryResponse
-export type CommitDetail = CommitDetailResponse
 export type CommitFile = CommitFileResponse
+export type CommitSummary = {
+  projected_id: string
+  logical_commit_id: string
+  parent_projected_id: string | null
+  author: string | null
+  message: string
+  change_count: number
+}
+export type CommitDetail = CommitSummary & {
+  audience: ProjectionPreviewAudience
+  repo_id: string
+  view_key: string
+  files: CommitFile[]
+}
+export type HistoryPage = HistoryPageResponse
+export type HistoryEntrySummary = HistoryEntrySummaryResponse
+export type HistoryEntryDetail = HistoryEntryDetailResponse
 export type ReviewFileDiff = ReviewFileDiffResponse
 export type RequestList = RequestListResponse
 export type RequestListItem = RequestListItemResponse
@@ -206,12 +223,12 @@ export type RepoInviteTokenInput = {
 
 export type ReviewFile = RepoFile | CommitFile
 
-export type CommitHistoryInput = RepoParams & CommitHistoryRequest
-export type CommitDetailInput = CommitHistoryInput & {
-  commit: string
+export type HistoryPageInput = RepoParams & HistoryPageRequest
+export type HistoryEntryDetailInput = RepoParams & HistoryEntryRequest & {
+  entry: string
 }
-export type CommitFileDiffInput = RepoParams & CommitFileDiffRequest & {
-  commit: string
+export type HistoryEntryFileDiffInput = RepoParams & HistoryEntryFileDiffRequest & {
+  entry: string
 }
 
 export type RequestParams = RepoParams & {
