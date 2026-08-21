@@ -86,10 +86,49 @@ jobs:
       github.ref != 'refs/heads/main' &&
       inputs.scope == 'checksImage' &&
       needs.checks-image.result == 'success'
-    uses: ./.github/workflows/scope-railway-staging.yml
-    with:
-      source_sha: ${{ github.sha }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch trusted staging proof
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          run_title="Scope staging $SOURCE_SHA"
+          seen_run_ids="$(
+            gh run list \
+              --workflow scope-railway-staging.yml \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,displayTitle \
+              | jq -c --arg title "$run_title" \
+                '[.[] | select(.displayTitle == $title) | .databaseId]'
+          )"
+          gh workflow run scope-railway-staging.yml --ref main -f source_sha="$SOURCE_SHA"
+          for _ in {1..60}; do
+            run_id="$(
+              gh run list \
+                --workflow scope-railway-staging.yml \
+                --event workflow_dispatch \
+                --limit 20 \
+                --json databaseId,displayTitle \
+                | jq -r --arg title "$run_title" --argjson seen "$seen_run_ids" \
+                  '.[] | select(.displayTitle == $title) | select(.databaseId as $id | $seen | index($id) | not) | .databaseId' \
+                | head -n 1 \
+                || true
+            )"
+            if [[ -n "$run_id" ]]; then
+              gh run watch "$run_id" --exit-status
+              exit
+            fi
+            sleep 5
+          done
+          echo "Timed out locating the trusted staging proof for $SOURCE_SHA." >&2
+          exit 1
 
   backend:
     name: Backend

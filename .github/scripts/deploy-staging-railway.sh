@@ -87,7 +87,7 @@ record_deployment() {
 
 case "$action" in
   prepare)
-    if [[ "$#" -ne 3 || ! -x "$maintenance_binary" ]]; then
+    if [[ "$#" -ne 3 || ! -x "$maintenance_binary" || ! -x "$seed_binary" ]]; then
       echo "usage: deploy-staging-railway.sh prepare <cache-root> <worker-root> <api-root>" >&2
       exit 2
     fi
@@ -97,16 +97,7 @@ case "$action" in
     railway run "${railway_scope[@]}" --service "$database_service" --no-local -- \
       sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" exec "$@"' \
       scope-maintenance "$maintenance_binary" apply
-    bash .github/scripts/deploy-railway.sh "$cache_service" "$1"
-    bash .github/scripts/deploy-railway.sh "$worker_service" "$2"
-    bash .github/scripts/deploy-railway.sh "$api_service" "$3"
-    ;;
-  finish)
-    if [[ "$#" -ne 1 || ! -x "$seed_binary" ]]; then
-      echo "usage: deploy-staging-railway.sh finish <web-root>" >&2
-      exit 2
-    fi
-    assert_writer_state 1
+
     database_variables="$(railway variable list "${railway_scope[@]}" --service "$database_service" --json)"
     SCOPE_STAGING_DATABASE_PUBLIC_URL="$(
       jq -er '.DATABASE_PUBLIC_URL | strings | select(length > 0)' <<< "$database_variables"
@@ -119,13 +110,23 @@ case "$action" in
     export SCOPE_PRODUCTION_ENVIRONMENT_ID="$production_environment_id"
     export SCOPE_SMOKE_SEED_USER_EMAIL="smoke@example.test"
     export SCOPE_SMOKE_SEED_USER_HANDLE="dev"
-    # The remote shell expands the locally supplied staging URL.
+    # Reset the catalog while every metadata writer is still fenced.
     # shellcheck disable=SC2016
     railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
       sh -c 'DATABASE_URL="$SCOPE_STAGING_DATABASE_PUBLIC_URL" exec "$@"' \
       scope-smoke-seed "$seed_binary"
     unset SCOPE_STAGING_DATABASE_PUBLIC_URL
 
+    bash .github/scripts/deploy-railway.sh "$cache_service" "$1"
+    bash .github/scripts/deploy-railway.sh "$worker_service" "$2"
+    bash .github/scripts/deploy-railway.sh "$api_service" "$3"
+    ;;
+  finish)
+    if [[ "$#" -ne 1 ]]; then
+      echo "usage: deploy-staging-railway.sh finish <web-root>" >&2
+      exit 2
+    fi
+    assert_writer_state 1
     bash .github/scripts/deploy-railway.sh "$web_service" "$1"
     evidence_lines="$(mktemp)"
     trap 'rm -f "$evidence_lines"' EXIT
