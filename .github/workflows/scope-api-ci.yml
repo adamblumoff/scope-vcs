@@ -108,8 +108,6 @@ jobs:
           SCOPE_DEPLOY_CACHE: ${{ inputs.deploy_cache && '1' || '0' }}
           SCOPE_DEPLOY_WORKER: ${{ inputs.deploy_worker && '1' || '0' }}
           SCOPE_DEPLOY_API: ${{ inputs.deploy_api && '1' || '0' }}
-          SCOPE_RAILWAY_API_REPLICAS: 1
-          SCOPE_RAILWAY_WORKER_REPLICAS: 1
         run: |
           manifest=.github/deployment-services.json
           RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
@@ -120,10 +118,13 @@ jobs:
           SCOPE_RAILWAY_DATABASE_SERVICE_ID="$(jq -r '.railway.databaseServiceId' "$manifest")"
           SCOPE_RAILWAY_API_REGION_ID="$(jq -r '.railway.regionId' "$manifest")"
           SCOPE_RAILWAY_WORKER_REGION_ID="$SCOPE_RAILWAY_API_REGION_ID"
+          SCOPE_RAILWAY_API_BOOTSTRAP_REPLICAS="$(jq -r '.services.api.bootstrapReplicas' "$manifest")"
+          SCOPE_RAILWAY_WORKER_BOOTSTRAP_REPLICAS="$(jq -r '.services.worker.bootstrapReplicas' "$manifest")"
           export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
           export SCOPE_RAILWAY_API_SERVICE_ID SCOPE_RAILWAY_WORKER_SERVICE_ID
           export SCOPE_RAILWAY_CACHE_SERVICE_ID SCOPE_RAILWAY_DATABASE_SERVICE_ID
           export SCOPE_RAILWAY_API_REGION_ID SCOPE_RAILWAY_WORKER_REGION_ID
+          export SCOPE_RAILWAY_API_BOOTSTRAP_REPLICAS SCOPE_RAILWAY_WORKER_BOOTSTRAP_REPLICAS
           bash .github/scripts/deploy-backend-railway.sh \
             .railway-upload/api \
             .railway-upload/worker \

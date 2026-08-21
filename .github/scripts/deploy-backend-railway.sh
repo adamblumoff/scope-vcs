@@ -262,7 +262,7 @@ configured_replicas() {
   printf '%s\n' "$configured"
 }
 
-configured_or_declared_replicas() {
+configured_or_bootstrap_replicas() {
   local service_name="$1"
   local variable_name="$2"
   local configured declared
@@ -273,7 +273,7 @@ configured_or_declared_replicas() {
   fi
   declared="${!variable_name:-}"
   if [[ ! "$declared" =~ ^[1-9][0-9]*$ ]]; then
-    echo "$variable_name must declare a positive replica count when Railway has no deployment metadata." >&2
+    echo "$variable_name must declare a positive bootstrap replica count when Railway has no deployment metadata." >&2
     return 1
   fi
   printf '%s\n' "$declared"
@@ -439,10 +439,10 @@ trap 'leave_failure_state $?' EXIT
 validate_production_target
 
 api_rollback_replicas="$(
-  configured_or_declared_replicas "$api_service" SCOPE_RAILWAY_API_REPLICAS
+  configured_or_bootstrap_replicas "$api_service" SCOPE_RAILWAY_API_BOOTSTRAP_REPLICAS
 )"
 worker_rollback_replicas="$(
-  configured_or_declared_replicas "$worker_service" SCOPE_RAILWAY_WORKER_REPLICAS
+  configured_or_bootstrap_replicas "$worker_service" SCOPE_RAILWAY_WORKER_BOOTSTRAP_REPLICAS
 )"
 
 plan_json="$(maintenance_read plan)"

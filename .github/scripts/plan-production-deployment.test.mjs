@@ -6,6 +6,10 @@ import { classifyChanges } from "./plan-production-deployment.mjs";
 
 const manifest = JSON.parse(readFileSync(new URL("../deployment-services.json", import.meta.url), "utf8"));
 
+function repositoryJson(path) {
+  return JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
+}
+
 test("documentation-only changes do not deploy", () => {
   assert.deepEqual(classifyChanges(manifest, ["docs/cache.md"]), {
     checksImage: false,
@@ -84,10 +88,25 @@ test("deployment manifest is a single coherent production graph", () => {
 
   assert.equal(manifest.deploymentAuthority, "github-actions");
   assert.equal(manifest.source.nativeAutodeploy, false);
+  for (const service of ["api", "worker"]) {
+    assert.ok(Number.isInteger(manifest.services[service].bootstrapReplicas));
+    assert.ok(manifest.services[service].bootstrapReplicas > 0);
+  }
   assert.equal(new Set(serviceIds).size, serviceIds.length);
   for (const [service, configuration] of Object.entries(manifest.services)) {
     for (const dependency of configuration.dependsOn) {
       assert.ok(order.indexOf(dependency) < order.indexOf(service));
     }
+  }
+});
+
+test("service config does not override Railway scaling or restart defaults", () => {
+  for (const path of ["api/railway.json", "worker/railway.json", "cache-service/railway.json"]) {
+    const { deploy } = repositoryJson(path);
+
+    assert.equal(deploy.healthcheckTimeout, 60);
+    assert.equal(deploy.multiRegionConfig, undefined);
+    assert.equal(deploy.restartPolicyType, undefined);
+    assert.equal(deploy.restartPolicyMaxRetries, undefined);
   }
 });
