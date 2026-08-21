@@ -3,7 +3,9 @@ use std::{
     process::Command,
 };
 
-use scope_git::GitStorageLimits;
+use scope_git::{
+    DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES, DEFAULT_GIT_STORAGE_MAX_PACK_SPANS, GitStorageLimits,
+};
 
 pub const SCOPE_APP_ORIGIN_ENV: &str = "SCOPE_APP_ORIGIN";
 pub const SCOPE_API_PUBLIC_URL_ENV: &str = "SCOPE_API_PUBLIC_URL";
@@ -36,9 +38,6 @@ pub const EMPTY_GIT_OID: &str = "0000000000000000000000000000000000000000";
 pub const GIT_UPLOAD_PACK: &str = "git-upload-pack";
 pub const GIT_RECEIVE_PACK: &str = "git-receive-pack";
 pub const DEFAULT_GIT_BRANCH: &str = "main";
-pub const DEFAULT_GIT_COMPACTION_SPANS: usize = 32;
-pub const DEFAULT_OBJECT_STORE_MAX_BYTES: usize = 128 * 1024 * 1024;
-pub const DEFAULT_GIT_PACK_SPAN_MAX_COUNT: usize = 2 * DEFAULT_GIT_COMPACTION_SPANS;
 pub const DEFAULT_GIT_CACHE_MAX_BYTES: usize = 10 * 1024 * 1024 * 1024;
 pub const AWAITING_FIRST_PUSH_GIT_ERROR: &str = "repo is awaiting its first push";
 pub const MAX_RECEIVE_PACK_BYTES: usize = 512 * 1024 * 1024;
@@ -56,21 +55,17 @@ pub fn non_empty_env(name: &str) -> Option<String> {
 }
 
 pub fn default_git_storage_limits() -> GitStorageLimits {
-    GitStorageLimits::new(
-        DEFAULT_OBJECT_STORE_MAX_BYTES,
-        DEFAULT_GIT_PACK_SPAN_MAX_COUNT,
-    )
-    .expect("default Git storage limits are valid")
+    GitStorageLimits::default()
 }
 
 pub fn git_storage_limits_from_env() -> anyhow::Result<GitStorageLimits> {
     let max_object_bytes = parse_usize_env(
         SCOPE_OBJECT_STORE_MAX_BYTES_ENV,
-        DEFAULT_OBJECT_STORE_MAX_BYTES,
+        DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
     )?;
     let max_pack_spans = parse_usize_env(
         SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV,
-        DEFAULT_GIT_PACK_SPAN_MAX_COUNT,
+        DEFAULT_GIT_STORAGE_MAX_PACK_SPANS,
     )?;
     GitStorageLimits::new(max_object_bytes, max_pack_spans).map_err(anyhow::Error::from)
 }

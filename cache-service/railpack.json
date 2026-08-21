@@ -7,8 +7,5 @@
         "cargo build --release --locked -p scope-cache-service && mkdir -p bin && cp target/release/scope-cache-service bin/scope-cache-service"
       ]
     }
-  },
-  "deploy": {
-    "startCommand": "./bin/scope-cache-service"
   }
 }

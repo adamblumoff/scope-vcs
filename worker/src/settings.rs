@@ -1,14 +1,13 @@
-use scope_git::GitStorageLimits;
+use scope_git::{
+    DEFAULT_GIT_COMPACTION_SPANS, DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
+    DEFAULT_GIT_STORAGE_MAX_PACK_SPANS, GitStorageLimits,
+};
 use std::{path::PathBuf, time::Duration};
 
 const DATABASE_URL_ENV: &str = "DATABASE_URL";
 const SCOPE_DATA_DIR_ENV: &str = "SCOPE_DATA_DIR";
 const SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV: &str = "SCOPE_GIT_PACK_SPAN_MAX_COUNT";
 const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
-const DEFAULT_GIT_COMPACTION_SPANS: usize = 32;
-const DEFAULT_OBJECT_STORE_MAX_BYTES: usize = 128 * 1024 * 1024;
-const DEFAULT_GIT_PACK_SPAN_MAX_COUNT: usize = 2 * DEFAULT_GIT_COMPACTION_SPANS;
-
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -125,11 +124,7 @@ impl WorkerSettings {
             (
                 DEFAULT_GIT_COMPACTION_SPANS,
                 DEFAULT_GIT_COMPACTION_TIMEOUT_SECS,
-                GitStorageLimits::new(
-                    DEFAULT_OBJECT_STORE_MAX_BYTES,
-                    DEFAULT_GIT_PACK_SPAN_MAX_COUNT,
-                )
-                .expect("default Git storage limits are valid"),
+                GitStorageLimits::default(),
             )
         };
         let data_dir = non_empty_env(SCOPE_DATA_DIR_ENV)
@@ -219,11 +214,11 @@ fn git_storage_limits_from_env() -> anyhow::Result<GitStorageLimits> {
     GitStorageLimits::new(
         parse_usize_env(
             SCOPE_OBJECT_STORE_MAX_BYTES_ENV,
-            DEFAULT_OBJECT_STORE_MAX_BYTES,
+            DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
         )?,
         parse_usize_env(
             SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV,
-            DEFAULT_GIT_PACK_SPAN_MAX_COUNT,
+            DEFAULT_GIT_STORAGE_MAX_PACK_SPANS,
         )?,
     )
     .map_err(anyhow::Error::from)
