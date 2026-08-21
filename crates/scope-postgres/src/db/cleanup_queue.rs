@@ -394,7 +394,12 @@ where
         .collect())
 }
 
-#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
+#[cfg(any(
+    test,
+    feature = "local-dev",
+    feature = "smoke-seed",
+    feature = "test-support"
+))]
 pub async fn save_pending_repo_storage_deletions<C>(
     conn: &C,
     pending_repo_storage_deletions: &[RepoStorageCleanup],
@@ -598,7 +603,12 @@ where
         .collect()
 }
 
-#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
+#[cfg(any(
+    test,
+    feature = "local-dev",
+    feature = "smoke-seed",
+    feature = "test-support"
+))]
 pub async fn save_pending_source_blob_deletions<C>(
     conn: &C,
     pending_source_blob_deletions: &[SourceBlob],

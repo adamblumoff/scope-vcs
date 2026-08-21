@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM --platform=linux/amd64 rust:1.94.0-bookworm@sha256:4673f78db88b71f09d5451bbc404734807918161241215ba0a50bbbe9b448117 AS scope-runtime-builder
+FROM --platform=linux/amd64 rust:1.98.0-bookworm@sha256:585c722e62805d1636fee6c80e744cdddfd81a9d32e08cba21ff15b69845e0fd AS scope-runtime-builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
@@ -11,7 +11,7 @@ COPY worker worker
 COPY runner-runtime runner-runtime
 RUN cargo build --locked --release -p scope-runner-runtime
 
-FROM --platform=linux/amd64 rust:1.94.0-bookworm@sha256:4673f78db88b71f09d5451bbc404734807918161241215ba0a50bbbe9b448117
+FROM --platform=linux/amd64 rust:1.98.0-bookworm@sha256:585c722e62805d1636fee6c80e744cdddfd81a9d32e08cba21ff15b69845e0fd
 
 ARG NODE_VERSION=24.18.0
 ARG NODE_SHA256=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
@@ -22,7 +22,7 @@ ARG DEBIAN_SNAPSHOT=20260518T000000Z
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
-    RUSTUP_TOOLCHAIN=1.94.0-x86_64-unknown-linux-gnu
+    RUSTUP_TOOLCHAIN=1.98.0-x86_64-unknown-linux-gnu
 
 COPY --from=scope-runtime-builder /build/target/release/scope-runner-runtime /scope/bin/scope-runner-runtime
 
@@ -59,7 +59,7 @@ RUN rustup component add \
 ARG PLAYWRIGHT_CHROMIUM_VERSION=149.0.7827.55
 ARG PLAYWRIGHT_CHROMIUM_REVISION=1228
 
-RUN test "$(rustc --version | cut -d' ' -f2)" = "1.94.0" \
+RUN test "$(rustc --version | cut -d' ' -f2)" = "1.98.0" \
     && test -x /scope/bin/scope-runner-runtime \
     && test "$(node --version)" = "v${NODE_VERSION}" \
     && test "$(pnpm --version)" = "${PNPM_VERSION}" \

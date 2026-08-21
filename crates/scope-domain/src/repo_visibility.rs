@@ -183,10 +183,7 @@ pub fn canonicalize_visibility_rules(config: &mut RepoConfig) {
         .map(|(path, visibility)| RepoConfigVisibilityRule { path, visibility })
         .collect();
 
-    loop {
-        let Some(index) = redundant_rule_index(config) else {
-            break;
-        };
+    while let Some(index) = redundant_rule_index(config) {
         config.visibility.rules.remove(index);
     }
     restore_rule_base_visibilities(config, base_visibilities.clone());

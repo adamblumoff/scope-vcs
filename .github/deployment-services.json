@@ -3,6 +3,13 @@
     "cliVersion": "5.41.2",
     "projectId": "45dd67fa-6d69-48ad-9680-1313d41b4490",
     "environmentId": "2f21f6b6-6817-4338-9e08-cf18e78b8f46",
+    "staging": {
+      "environmentId": "8743c2e9-5d9b-4161-a047-9617e6d199b9",
+      "environmentName": "staging",
+      "apiDomain": "scope-api-staging.up.railway.app",
+      "cacheDomain": "scope-cache-service-staging.up.railway.app",
+      "webDomain": "scope-web-staging.up.railway.app"
+    },
     "databaseServiceId": "44c41a90-2d1a-4a1b-85c9-6af85d179be3",
     "regionId": "us-east4-eqdc4a"
   },
@@ -68,7 +75,8 @@
       "files": [
         ".github/workflows/scope-checks-image.yml",
         "Cargo.lock",
-        "Cargo.toml"
+        "Cargo.toml",
+        "rust-toolchain.toml"
       ],
       "prefixes": [
         ".scope/images/checks/",

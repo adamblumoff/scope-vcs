@@ -2,18 +2,13 @@ use crate::config::{
     CLERK_AUTHORIZED_PARTIES_ENV, CLERK_ISSUER_ENV, DATABASE_URL_ENV, LOCAL_API_ORIGIN,
     LOCAL_APP_ORIGIN, SCOPE_API_PUBLIC_URL_ENV, SCOPE_APP_ORIGIN_ENV, non_empty_env,
 };
+use crate::demo_seed::DevSeedUser;
 
 pub(super) const SCOPE_ENV_ENV: &str = "SCOPE_ENV";
 const SCOPE_OBJECT_STORE_ENV: &str = "SCOPE_OBJECT_STORE";
 pub(super) const LOCAL_SCOPE_ENV: &str = "local";
 pub(super) const SCOPE_DEV_USER_EMAIL_ENV: &str = "SCOPE_DEV_USER_EMAIL";
 pub(super) const SCOPE_DEV_USER_HANDLE_ENV: &str = "SCOPE_DEV_USER_HANDLE";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct DevSeedUser {
-    pub(super) email: String,
-    pub(super) handle: String,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LocalDevSettings {

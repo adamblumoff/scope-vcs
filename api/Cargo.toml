@@ -9,6 +9,7 @@ repository = "https://github.com/adamblumoff/scope-vcs"
 [features]
 default = []
 local-dev = ["scope_postgres/local-dev"]
+smoke-seed = ["scope_postgres/smoke-seed"]
 test-support = ["scope_postgres/test-support", "scope_object_store/test-support"]
 type-export = ["dep:ts-rs", "scope_api_contract/ts"]
 
@@ -20,6 +21,11 @@ required-features = ["type-export"]
 [[bin]]
 name = "scope-maintenance"
 path = "src/bin/scope_maintenance.rs"
+
+[[bin]]
+name = "scope-smoke-seed"
+path = "src/bin/scope_smoke_seed.rs"
+required-features = ["smoke-seed"]
 
 [[test]]
 name = "workflows"

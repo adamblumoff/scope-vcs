@@ -62,6 +62,12 @@ jobs:
       - name: Test deployment planner
         run: node --test .github/scripts/plan-production-deployment.test.mjs
 
+      - name: Check Rust toolchain replicas
+        run: node .github/scripts/check-rust-toolchain-sync.mjs
+
+      - name: Test Rust toolchain replica checker
+        run: node --test .github/scripts/check-rust-toolchain-sync.test.mjs
+
   checks-image:
     name: Checks image
     needs: plan
@@ -69,7 +75,60 @@ jobs:
     uses: ./.github/workflows/scope-checks-image.yml
     with:
       publish: ${{ github.event_name != 'pull_request' }}
+      source_sha: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && inputs.scope == 'checksImage' && github.sha || '' }}
     secrets: inherit
+
+  staging-proof:
+    name: Railway staging proof
+    needs: checks-image
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref != 'refs/heads/main' &&
+      inputs.scope == 'checksImage' &&
+      needs.checks-image.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch trusted staging proof
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          run_title="Scope staging $SOURCE_SHA"
+          seen_run_ids="$(
+            gh run list \
+              --workflow scope-railway-staging.yml \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,displayTitle \
+              | jq -c --arg title "$run_title" \
+                '[.[] | select(.displayTitle == $title) | .databaseId]'
+          )"
+          gh workflow run scope-railway-staging.yml --ref main -f source_sha="$SOURCE_SHA"
+          for _ in {1..60}; do
+            run_id="$(
+              gh run list \
+                --workflow scope-railway-staging.yml \
+                --event workflow_dispatch \
+                --limit 20 \
+                --json databaseId,displayTitle \
+                | jq -r --arg title "$run_title" --argjson seen "$seen_run_ids" \
+                  '.[] | select(.displayTitle == $title) | select(.databaseId as $id | $seen | index($id) | not) | .databaseId' \
+                | head -n 1 \
+                || true
+            )"
+            if [[ -n "$run_id" ]]; then
+              gh run watch "$run_id" --exit-status
+              exit
+            fi
+            sleep 5
+          done
+          echo "Timed out locating the trusted staging proof for $SOURCE_SHA." >&2
+          exit 1
 
   backend:
     name: Backend
@@ -124,7 +183,12 @@ jobs:
       needs.plan.outputs.api != 'true'
     uses: ./.github/workflows/scope-cli-build.yml
     with:
-      deploy: ${{ github.event_name != 'pull_request' }}
+      deploy: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      validate_targets: >-
+        ${{ github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]') }}
     secrets: inherit
 
   cli-after-backend:
@@ -138,5 +202,10 @@ jobs:
       needs.backend.result == 'success'
     uses: ./.github/workflows/scope-cli-build.yml
     with:
-      deploy: ${{ github.event_name != 'pull_request' }}
+      deploy: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      validate_targets: >-
+        ${{ github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]') }}
     secrets: inherit

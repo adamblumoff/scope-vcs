@@ -585,14 +585,12 @@ test('requests navigation shows a destination skeleton inside the repository she
       await pendingPage.waitFor()
       await assertCurrentRepoSection(page, 'Requests')
       await assertRepositoryChromePreserved(page, { header, navigation })
-      assert.equal(
-        await page.getByLabel('Repository file navigator').count(),
-        0,
-      )
-      assert.equal(
-        await page.getByRole('heading', { level: 1, name: 'Code' }).count(),
-        0,
-      )
+      await page
+        .getByLabel('Repository file navigator')
+        .waitFor({ state: 'detached' })
+      await page
+        .getByRole('heading', { level: 1, name: 'Code' })
+        .waitFor({ state: 'detached' })
       await assertPassiveSkeleton(page, '#main-content')
       const reducedMotion = await page
         .locator('#main-content [data-slot="skeleton"]')

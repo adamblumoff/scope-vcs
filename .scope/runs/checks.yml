@@ -5,13 +5,13 @@ on:
     branches:
       - main
 container:
-  image: ghcr.io/adamblumoff/scope-vcs/checks@sha256:3bcd2d99cb8b70fc8fc2827d1859386a9ce4d21faa937166faeec3382b15ada0
+  image: ghcr.io/adamblumoff/scope-vcs/checks@sha256:481ac1cc591fed174750006206dcc24e201582d91e8cc827db728292a51b7cb6
 timeout: 60m
 caches: []
 env:
   CARGO_HOME: /scope/cache/cargo
   CARGO_TARGET_DIR: /workspace/target
-  RUSTUP_TOOLCHAIN: 1.94.0-x86_64-unknown-linux-gnu
+  RUSTUP_TOOLCHAIN: 1.98.0-x86_64-unknown-linux-gnu
 jobs:
   backend:
     timeout: 45m

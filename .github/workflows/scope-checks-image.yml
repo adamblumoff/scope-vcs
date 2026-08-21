@@ -6,11 +6,20 @@ on:
       publish:
         type: boolean
         default: false
+      source_sha:
+        type: string
+        default: ""
     outputs:
       published_digest:
         value: ${{ jobs.build.outputs.published_digest }}
       published_image:
         value: ${{ jobs.build.outputs.published_image }}
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit SHA to publish as a candidate
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -29,14 +38,73 @@ jobs:
       published_digest: ${{ steps.published.outputs.digest }}
       published_image: ${{ steps.published.outputs.image }}
     steps:
-      - name: Checkout
+      - name: Resolve image source
+        id: source
+        shell: bash
+        env:
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          GIT_REF: ${{ github.ref }}
+          REQUESTED_PUBLISH: ${{ inputs.publish }}
+        run: |
+          source_sha="$EVENT_SHA"
+          publish=false
+          publish_main=false
+
+          if [[ -n "$REQUESTED_SOURCE_SHA" ]]; then
+            if [[ "$EVENT_NAME" != "workflow_dispatch" ]]; then
+              echo "source_sha is allowed only for a trusted manual run" >&2
+              exit 1
+            fi
+            if [[ ! "$REQUESTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "source_sha must be a full lowercase 40-character commit SHA" >&2
+              exit 1
+            fi
+            source_sha="$REQUESTED_SOURCE_SHA"
+            publish=true
+          elif [[ "$REQUESTED_PUBLISH" == "true" && "$EVENT_NAME" != "pull_request" && "$GIT_REF" == "refs/heads/main" ]]; then
+            publish=true
+            publish_main=true
+          fi
+
+          {
+            echo "sha=$source_sha"
+            echo "publish=$publish"
+            echo "publish_main=$publish_main"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+
+      - name: Verify checked out revision
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Prepare image tags
+        id: tags
+        shell: bash
+        env:
+          PUBLISH_MAIN: ${{ steps.source.outputs.publish_main }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE_NAME}:sha-${SOURCE_SHA}"
+            if [[ "$PUBLISH_MAIN" == "true" ]]; then
+              echo "${IMAGE_NAME}:main"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to the GitHub container registry
-        if: inputs.publish && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: steps.source.outputs.publish == 'true'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -50,29 +118,32 @@ jobs:
           context: .
           file: .scope/images/checks/Dockerfile
           platforms: linux/amd64
-          push: ${{ inputs.publish && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:main
-            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          push: ${{ steps.source.outputs.publish == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Record published digest
         id: published
-        if: inputs.publish && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: steps.source.outputs.publish == 'true'
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           test -n "$IMAGE_DIGEST"
-          echo "Published \`${IMAGE_NAME}@${IMAGE_DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Published \`${IMAGE_NAME}@${IMAGE_DIGEST}\`"
+            echo
+            echo "Source commit: \`${SOURCE_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
           echo "image=${IMAGE_NAME}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
-          printf '%s@%s\n' "$IMAGE_NAME" "$IMAGE_DIGEST" > checks-image.txt
+          printf 'source_sha=%s\nimage=%s@%s\n' "$SOURCE_SHA" "$IMAGE_NAME" "$IMAGE_DIGEST" > checks-image.txt
 
       - name: Upload published image reference
-        if: inputs.publish && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v7
+        if: steps.source.outputs.publish == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: checks-image-${{ github.sha }}
+          name: checks-image-${{ steps.source.outputs.sha }}
           path: checks-image.txt
           if-no-files-found: error

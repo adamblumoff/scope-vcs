@@ -1,6 +1,6 @@
 mod env;
-mod seed;
 
+use crate::demo_seed as seed;
 use crate::{
     AppState,
     auth::{clerk::ClerkVerifier, cli::CliAuthService},
@@ -51,7 +51,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let metadata = MetadataStore::connect(settings.database_url.clone()).await?;
     metadata
         .admin()
-        .replace_catalog_for_local_dev(catalog)
+        .replace_catalog_for_seed(catalog)
         .await
         .map_err(|error| anyhow::anyhow!("seeding local dev database: {}", error.message))?;
     seed::seed_request_discussion_gallery(&metadata)

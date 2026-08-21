@@ -8,6 +8,7 @@ repository = "https://github.com/adamblumoff/scope-vcs"
 [features]
 default = []
 local-dev = []
+smoke-seed = []
 test-support = []
 
 [dependencies]

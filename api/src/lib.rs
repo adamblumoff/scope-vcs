@@ -4,6 +4,9 @@ pub mod state;
 pub(crate) mod auth;
 pub(crate) mod cache_grants;
 pub(crate) mod config;
+#[cfg(any(test, feature = "local-dev", feature = "smoke-seed"))]
+#[path = "dev/seed.rs"]
+pub(crate) mod demo_seed;
 #[cfg(feature = "local-dev")]
 pub mod dev;
 pub(crate) mod error;
@@ -19,6 +22,8 @@ pub(crate) mod repo_events;
 pub(crate) mod run_recovery;
 pub(crate) mod run_retention;
 pub(crate) mod runtime_budgets;
+#[cfg(feature = "smoke-seed")]
+pub mod smoke_seed;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
