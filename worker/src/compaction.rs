@@ -144,23 +144,27 @@ pub(crate) async fn compact_one_git_repository(
         Ok(compaction) => compaction,
         Err(failure) => {
             let failure_now_unix = super::unix_now()?;
-            metadata
-                .jobs()
-                .fail_git_compaction_claim(&claim, &failure.error.to_string(), failure_now_unix)
-                .await
-                .map_err(|error| anyhow::anyhow!(error.message))?;
             if !failure.orphan_objects.is_empty() {
-                queue_or_delete_failed_compaction_objects(
+                queue_failed_compaction_objects(
                     metadata,
-                    object_store.as_ref(),
                     &failure.orphan_objects,
                     failure_now_unix,
                 )
                 .await?;
             }
             if is_bounded_refusal(&failure.error) {
+                metadata
+                    .jobs()
+                    .complete_git_compaction_claim(&claim, failure_now_unix)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
                 return Ok(CompactionOutcome::Refused(failure.error.to_string()));
             }
+            metadata
+                .jobs()
+                .fail_git_compaction_claim(&claim, &failure.error.to_string(), failure_now_unix)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
             return Err(failure.error);
         }
     };
@@ -170,13 +174,7 @@ pub(crate) async fn compact_one_git_repository(
         .renew_git_compaction_claim(&claim, super::unix_now()?, lease_seconds)
         .await;
     if !matches!(final_renewal, Ok(true)) {
-        queue_or_delete_failed_compaction_objects(
-            metadata,
-            object_store.as_ref(),
-            &stored_objects,
-            super::unix_now()?,
-        )
-        .await?;
+        queue_failed_compaction_objects(metadata, &stored_objects, super::unix_now()?).await?;
         if let Err(error) = final_renewal {
             return Err(anyhow::anyhow!(
                 "renewing Git compaction lease before publication: {}",
@@ -291,13 +289,12 @@ fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-async fn queue_or_delete_failed_compaction_objects(
+async fn queue_failed_compaction_objects(
     metadata: &MetadataStore,
-    object_store: &dyn ObjectStore,
     objects: &[SourceBlob],
     now_unix: u64,
 ) -> anyhow::Result<()> {
-    if let Err(queue_error) = metadata
+    metadata
         .cleanup()
         .queue_pending_source_blob_deletions(
             objects.to_vec(),
@@ -305,26 +302,12 @@ async fn queue_or_delete_failed_compaction_objects(
             &crate::generate_persistence_id,
         )
         .await
-    {
-        let mut delete_errors = Vec::new();
-        for object in objects {
-            if let Err(error) = object_store.delete(&scope_object_store::object_key(object)) {
-                delete_errors.push(format!(
-                    "{}: {}",
-                    scope_object_store::object_key(object),
-                    error.message
-                ));
-            }
-        }
-        if !delete_errors.is_empty() {
-            anyhow::bail!(
-                "cleanup queue failed: {}; direct cleanup failed: {}",
-                queue_error.message,
-                delete_errors.join(", ")
-            );
-        }
-    }
-    Ok(())
+        .map_err(|queue_error| {
+            anyhow::anyhow!(
+                "cleanup queue failed; retaining content-addressed compaction objects for reconciliation: {}",
+                queue_error.message
+            )
+        })
 }
 
 struct CompactedSpanBuildFailure {

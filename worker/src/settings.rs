@@ -1,12 +1,10 @@
 use scope_git::{
-    DEFAULT_GIT_COMPACTION_SPANS, DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
-    DEFAULT_GIT_STORAGE_MAX_PACK_SPANS, GitStorageLimits,
+    DEFAULT_GIT_COMPACTION_SPANS, DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES, GitStorageLimits,
 };
 use std::{path::PathBuf, time::Duration};
 
 const DATABASE_URL_ENV: &str = "DATABASE_URL";
 const SCOPE_DATA_DIR_ENV: &str = "SCOPE_DATA_DIR";
-const SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV: &str = "SCOPE_GIT_PACK_SPAN_MAX_COUNT";
 const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
@@ -94,39 +92,29 @@ impl WorkerSettings {
         };
         let poll_interval_ms =
             parse_u64_env("SCOPE_WORKER_POLL_INTERVAL_MS", DEFAULT_POLL_INTERVAL_MS)?;
-        let (git_compaction_spans, git_compaction_timeout_secs, git_storage_limits) = if role
-            .runs_compaction()
-        {
-            let spans =
-                parse_usize_env("SCOPE_GIT_COMPACTION_SPANS", DEFAULT_GIT_COMPACTION_SPANS)?;
-            if spans < 2 {
-                anyhow::bail!("SCOPE_GIT_COMPACTION_SPANS must be at least 2");
-            }
-            let timeout_secs = parse_u64_env(
-                "SCOPE_GIT_COMPACTION_TIMEOUT_SECS",
-                DEFAULT_GIT_COMPACTION_TIMEOUT_SECS,
-            )?;
-            if timeout_secs == 0 {
-                anyhow::bail!("SCOPE_GIT_COMPACTION_TIMEOUT_SECS must be greater than zero");
-            }
-            let limits = git_storage_limits_from_env()?;
-            let minimum_span_capacity = spans
-                .checked_add(2)
-                .ok_or_else(|| anyhow::anyhow!("SCOPE_GIT_COMPACTION_SPANS is too large"))?;
-            if limits.max_pack_spans() < minimum_span_capacity {
-                anyhow::bail!(
-                    "SCOPE_GIT_PACK_SPAN_MAX_COUNT ({}) must be at least two higher than SCOPE_GIT_COMPACTION_SPANS ({spans})",
-                    limits.max_pack_spans()
-                );
-            }
-            (spans, timeout_secs, limits)
-        } else {
-            (
-                DEFAULT_GIT_COMPACTION_SPANS,
-                DEFAULT_GIT_COMPACTION_TIMEOUT_SECS,
-                GitStorageLimits::default(),
-            )
-        };
+        let (git_compaction_spans, git_compaction_timeout_secs, git_storage_limits) =
+            if role.runs_compaction() {
+                let spans =
+                    parse_usize_env("SCOPE_GIT_COMPACTION_SPANS", DEFAULT_GIT_COMPACTION_SPANS)?;
+                if spans < 2 {
+                    anyhow::bail!("SCOPE_GIT_COMPACTION_SPANS must be at least 2");
+                }
+                let timeout_secs = parse_u64_env(
+                    "SCOPE_GIT_COMPACTION_TIMEOUT_SECS",
+                    DEFAULT_GIT_COMPACTION_TIMEOUT_SECS,
+                )?;
+                if timeout_secs == 0 {
+                    anyhow::bail!("SCOPE_GIT_COMPACTION_TIMEOUT_SECS must be greater than zero");
+                }
+                let limits = git_storage_limits_from_env()?;
+                (spans, timeout_secs, limits)
+            } else {
+                (
+                    DEFAULT_GIT_COMPACTION_SPANS,
+                    DEFAULT_GIT_COMPACTION_TIMEOUT_SECS,
+                    GitStorageLimits::default(),
+                )
+            };
         let data_dir = non_empty_env(SCOPE_DATA_DIR_ENV)
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(".scope"));
@@ -211,16 +199,10 @@ fn non_empty_env(name: &str) -> Option<String> {
 }
 
 fn git_storage_limits_from_env() -> anyhow::Result<GitStorageLimits> {
-    GitStorageLimits::new(
-        parse_usize_env(
-            SCOPE_OBJECT_STORE_MAX_BYTES_ENV,
-            DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
-        )?,
-        parse_usize_env(
-            SCOPE_GIT_PACK_SPAN_MAX_COUNT_ENV,
-            DEFAULT_GIT_STORAGE_MAX_PACK_SPANS,
-        )?,
-    )
+    GitStorageLimits::new(parse_usize_env(
+        SCOPE_OBJECT_STORE_MAX_BYTES_ENV,
+        DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES,
+    )?)
     .map_err(anyhow::Error::from)
 }
 

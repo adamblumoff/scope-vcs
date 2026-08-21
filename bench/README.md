@@ -77,7 +77,7 @@ SCOPE_BENCH_RUN_LABEL=current-api1-2026-08-20 \
 node bench/railway-load.mjs
 ```
 
-The report labels the API's per-process permits. Defaults are 4 receive-pack operations, 8 upload-pack operations, 2 projection builds, and 16 object-store operations. If the deployment overrides them, pass the matching `SCOPE_BENCH_RECEIVE_PACK_CONCURRENCY`, `SCOPE_BENCH_UPLOAD_PACK_CONCURRENCY`, `SCOPE_BENCH_PROJECTION_BUILD_CONCURRENCY`, and `SCOPE_BENCH_OBJECT_STORE_CONCURRENCY` values. A 429 at one of these limits is admission control, not a hardware ceiling.
+The report labels the API's per-process permits. Defaults are 4 receive-pack operations, 8 upload-pack operations, 2 Git materializations, and 16 object-store operations. If the deployment overrides them, pass the matching `SCOPE_BENCH_RECEIVE_PACK_CONCURRENCY`, `SCOPE_BENCH_UPLOAD_PACK_CONCURRENCY`, `SCOPE_BENCH_GIT_MATERIALIZATION_CONCURRENCY`, and `SCOPE_BENCH_OBJECT_STORE_CONCURRENCY` values. A 429 at one of these limits is admission control, not a hardware ceiling.
 
 Then run the write-size matrix and longer staircase:
 

@@ -847,7 +847,7 @@ mod tests {
         let coordinator = Arc::new(GitDerivedCacheCoordinator::default());
         let budgets = Arc::new(crate::runtime_budgets::RuntimeBudgets::from_config(
             crate::runtime_budgets::RuntimeBudgetConfig {
-                projection_build_concurrency: 1,
+                git_materialization_concurrency: 1,
                 ..Default::default()
             },
         ));
@@ -864,7 +864,7 @@ mod tests {
                     "shared-value".to_string(),
                     || projection_ready.load(Ordering::SeqCst),
                     || {
-                        let _permit = budgets.try_projection_build()?;
+                        let _permit = budgets.try_git_materialization()?;
                         leader_started_tx.send(()).unwrap();
                         release_leader_rx.recv().unwrap();
                         projection_ready.store(true, Ordering::SeqCst);
@@ -881,7 +881,7 @@ mod tests {
                 "shared-value".to_string(),
                 || false,
                 || {
-                    let _permit = budgets.try_projection_build()?;
+                    let _permit = budgets.try_git_materialization()?;
                     Ok(())
                 },
             )
@@ -890,7 +890,7 @@ mod tests {
         assert_eq!(error.kind, crate::error::ErrorKind::TooManyRequests);
         assert_eq!(
             error.operator_diagnostic(),
-            "Git projection build capacity is exhausted; retry later"
+            "Git materialization capacity is exhausted; retry later"
         );
         release_leader_tx.send(()).unwrap();
         leader.join().unwrap().unwrap();

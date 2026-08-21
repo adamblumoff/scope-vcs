@@ -121,12 +121,12 @@ test('failure breakdown separates service responses from client saturation', () 
 
 test('capacity rejection breakdown names the exhausted permit', () => {
   assert.deepEqual(capacityRejectionBreakdown([
-    { ok: false, error: 'fatal: remote error: Git projection build capacity is exhausted; retry later' },
+    { ok: false, error: 'fatal: remote error: Git materialization capacity is exhausted; retry later' },
     { ok: false, error: 'Git receive-pack capacity is exhausted; retry later' },
     { ok: false, error: 'HTTP 429' },
     { ok: true, error: 'Git receive-pack capacity is exhausted; retry later' },
   ]), {
-    'Git projection build': 1,
+    'Git materialization': 1,
     'Git receive-pack': 1,
   });
 });

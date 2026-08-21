@@ -255,12 +255,6 @@ pub(crate) fn restore_git_pack_spans(
 ) -> Result<(), ApiError> {
     validate_git_pack_layout(pack_spans)
         .map_err(|error| ApiError::internal_message(error.to_string()))?;
-    if pack_spans.len() > state.runtime_budgets.git_storage_limits().max_pack_spans() {
-        return Err(ApiError::internal_message(format!(
-            "Git pack layout exceeds maximum span count of {}",
-            state.runtime_budgets.git_storage_limits().max_pack_spans()
-        )));
-    }
     let final_span = pack_spans
         .last()
         .ok_or_else(|| ApiError::internal_message("Git head has no physical pack spans"))?;

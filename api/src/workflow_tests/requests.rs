@@ -14,7 +14,7 @@ async fn request_reads_do_not_consume_git_projection_capacity() {
     let mut state = test_state_with_readme().await;
     cache_test_jwks(&state);
     state.runtime_budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
-        projection_build_concurrency: 0,
+        git_materialization_concurrency: 0,
         ..Default::default()
     }));
     let app = router(state.clone());
@@ -75,7 +75,7 @@ async fn native_private_request_reads_use_the_persisted_git_head() {
         fs::remove_dir_all(raw_cache).unwrap();
     }
     state.runtime_budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
-        projection_build_concurrency: 0,
+        git_materialization_concurrency: 0,
         ..Default::default()
     }));
 

@@ -122,7 +122,7 @@ function configuration() {
     apiPermitLimits: {
       receivePack: positiveInteger('SCOPE_BENCH_RECEIVE_PACK_CONCURRENCY', 4),
       uploadPack: positiveInteger('SCOPE_BENCH_UPLOAD_PACK_CONCURRENCY', 8),
-      projectionBuild: positiveInteger('SCOPE_BENCH_PROJECTION_BUILD_CONCURRENCY', 2),
+      gitMaterialization: positiveInteger('SCOPE_BENCH_GIT_MATERIALIZATION_CONCURRENCY', 2),
       objectStore: positiveInteger('SCOPE_BENCH_OBJECT_STORE_CONCURRENCY', 16),
     },
     nodeScaleLabel: nonEmpty('SCOPE_LOAD_NODE_SCALE_LABEL', 'unspecified'),
@@ -351,7 +351,7 @@ export function failureBreakdown(samples) {
 export function capacityRejectionBreakdown(samples) {
   const rejections = new Map();
   for (const entry of samples.filter(({ ok }) => !ok)) {
-    const match = (entry.error || '').match(/(Git receive-pack|Git upload-pack|Git projection build|object store (?:read|write|delete)) capacity is exhausted/i);
+    const match = (entry.error || '').match(/(Git receive-pack|Git upload-pack|Git materialization|object store (?:read|write|delete)) capacity is exhausted/i);
     if (!match) continue;
     rejections.set(match[1], (rejections.get(match[1]) || 0) + 1);
   }
@@ -734,7 +734,7 @@ function markdown(report) {
     Object.entries(stage.capacityRejections || {}).map(([operation, count]) =>
       `| ${workload.name} | ${stage.concurrency ?? stage.targetRate} | ${operation} | ${count} |`,
     ))).join('\n') || '| none | n/a | none | 0 |';
-  return `# Scope Railway Git storage load test\n\nGenerated: ${report.generatedAt}\n\nTarget: ${report.apiUrl}\n\nNode scale label: ${report.config.nodeScaleLabel}\n\nProtocol label: ${report.config.protocolLabel}\n\nAPI permit labels per process: receive-pack ${permits.receivePack}, upload-pack ${permits.uploadPack}, projection build ${permits.projectionBuild}, object store ${permits.objectStore}.\n\n| Workload | Status | Operations/s | Logical MiB/s | Completion p95 ms | TTFB p95 ms | Completion p99 ms | Observed MiB/s |\n|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\n## Capacity rejections\n\n| Workload | Concurrency or rate | Operation | Count |\n|---|---:|---|---:|\n${rejectionRows}\n\nLogical MiB/s uses fixture payload sizes for writes and clones, and response or received-object bytes for reads. Observed MiB/s uses response bytes or local Git object deltas. Neither is a wire-level counter. TTFB for JSON reads is time to response headers. Quiet Git commands commonly emit no output, so their completion time is reported as TTFB. Compare node-scale and protocol labels only when repository fixture sizes, stage controls, and Railway deployment shape are identical.\n`;
+  return `# Scope Railway Git storage load test\n\nGenerated: ${report.generatedAt}\n\nTarget: ${report.apiUrl}\n\nNode scale label: ${report.config.nodeScaleLabel}\n\nProtocol label: ${report.config.protocolLabel}\n\nAPI permit labels per process: receive-pack ${permits.receivePack}, upload-pack ${permits.uploadPack}, Git materialization ${permits.gitMaterialization}, object store ${permits.objectStore}.\n\n| Workload | Status | Operations/s | Logical MiB/s | Completion p95 ms | TTFB p95 ms | Completion p99 ms | Observed MiB/s |\n|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\n## Capacity rejections\n\n| Workload | Concurrency or rate | Operation | Count |\n|---|---:|---|---:|\n${rejectionRows}\n\nLogical MiB/s uses fixture payload sizes for writes and clones, and response or received-object bytes for reads. Observed MiB/s uses response bytes or local Git object deltas. Neither is a wire-level counter. TTFB for JSON reads is time to response headers. Quiet Git commands commonly emit no output, so their completion time is reported as TTFB. Compare node-scale and protocol labels only when repository fixture sizes, stage controls, and Railway deployment shape are identical.\n`;
 }
 
 function required(name) { const value = process.env[name]?.trim(); if (!value) throw new Error(`${name} is required`); return value; }

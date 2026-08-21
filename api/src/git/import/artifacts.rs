@@ -120,19 +120,13 @@ async fn reviewed_update_from_staging_repo_mode(
         ));
     }
     let pack_started = Instant::now();
-    let mut created_push = match git_push_from_repo(
-        state,
-        staging_repo,
-        repo.git_head.as_ref(),
-        repo.git_pack_spans.len(),
-    )
-    .await
-    {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            return Err(error);
-        }
-    };
+    let mut created_push =
+        match git_push_from_repo(state, staging_repo, repo.git_head.as_ref()).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return Err(error);
+            }
+        };
     created_push.head.change_version = repo.change_version.saturating_add(1);
     let pack_put_ms = pack_started.elapsed().as_millis();
     let pack_bytes = created_push.pack_span.object.size_bytes;

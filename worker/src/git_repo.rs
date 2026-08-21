@@ -377,7 +377,7 @@ mod tests {
         let compacted = build_compacted_pack(
             &store,
             &candidate,
-            GitStorageLimits::new(1024 * 1024, 64).unwrap(),
+            GitStorageLimits::new(1024 * 1024).unwrap(),
             Duration::from_secs(2),
         )
         .unwrap();

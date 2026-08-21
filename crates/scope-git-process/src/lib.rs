@@ -118,16 +118,41 @@ fn forward_pending_signal(service_pid: i32) {
 
 #[cfg(unix)]
 fn drain_adopted_descendants() {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        reap_exited_descendants();
+        let descendants = child_process_ids().unwrap_or_default();
+        if descendants.is_empty() {
+            return;
+        }
+
+        for process_id in descendants {
+            let Ok(process_id) = i32::try_from(process_id) else {
+                continue;
+            };
+            // Adopted Git commands lead their own process groups, while a
+            // non-leader descendant still needs a direct kill. Both calls are
+            // intentionally best-effort during container shutdown.
+            unsafe {
+                libc::kill(-process_id, libc::SIGKILL);
+                libc::kill(process_id, libc::SIGKILL);
+            }
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(unix)]
+fn reap_exited_descendants() {
     loop {
         let mut status = 0;
-        // SAFETY: see reap_service_process. After the service exits, every
-        // remaining descendant is owned by this dedicated reaper.
-        let reaped = unsafe { libc::waitpid(-1, &mut status, 0) };
-        if reaped >= 0 {
-            continue;
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != ErrorKind::Interrupted {
+        // SAFETY: after the service exits, every remaining descendant is
+        // owned by this dedicated reaper. WNOHANG prevents shutdown hangs.
+        let reaped = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+        if reaped <= 0 {
             return;
         }
     }
@@ -209,11 +234,7 @@ struct ChildProcessCounts {
 }
 
 fn child_process_counts() -> Option<ChildProcessCounts> {
-    let mut children = BTreeSet::new();
-    for task in fs::read_dir("/proc/self/task").ok()?.filter_map(Result::ok) {
-        let contents = fs::read_to_string(task.path().join("children")).unwrap_or_default();
-        children.extend(contents.split_whitespace().filter_map(parse_trimmed_usize));
-    }
+    let children = child_process_ids()?;
     let zombies = children
         .iter()
         .filter(|pid| child_process_state(**pid).as_deref() == Some("Z"))
@@ -222,6 +243,15 @@ fn child_process_counts() -> Option<ChildProcessCounts> {
         total: children.len(),
         zombies,
     })
+}
+
+fn child_process_ids() -> Option<BTreeSet<usize>> {
+    let mut children = BTreeSet::new();
+    for task in fs::read_dir("/proc/self/task").ok()?.filter_map(Result::ok) {
+        let contents = fs::read_to_string(task.path().join("children")).unwrap_or_default();
+        children.extend(contents.split_whitespace().filter_map(parse_trimmed_usize));
+    }
+    Some(children)
 }
 
 fn child_process_state(pid: usize) -> Option<String> {
