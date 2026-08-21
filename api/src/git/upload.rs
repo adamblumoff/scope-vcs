@@ -107,13 +107,13 @@ pub(crate) async fn git_upload_pack_repo_for_request(
                     &repo.visibility_events,
                     ProjectionViewKey::Private,
                 );
-                GitRepoHandle::from_path(projection_bare_repo_for_state(
+                projection_bare_repo_for_state(
                     state,
                     &repo.record.id,
                     &projection,
                     repo.git_head.as_ref(),
                     &repo.git_pack_spans,
-                )?)
+                )?
             }
         }
     } else {
@@ -122,13 +122,13 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             &repo.visibility_events,
             ProjectionViewKey::Public,
         );
-        GitRepoHandle::from_path(projection_bare_repo_for_state(
+        projection_bare_repo_for_state(
             state,
             &repo.record.id,
             &projection,
             repo.git_head.as_ref(),
             &repo.git_pack_spans,
-        )?)
+        )?
     };
     let mut requests = Vec::new();
     let mut hidden_request_refs = Vec::new();
@@ -253,6 +253,7 @@ fn git_read_view_repo(
         repository_id,
         GitDerivedCacheNamespace::RequestReadView,
         cache_key.clone(),
+        &repo_path,
         is_ready,
         || {
             let _permit = state.runtime_budgets.try_projection_build()?;
@@ -307,8 +308,7 @@ fn git_read_view_repo(
             let _ = fs::remove_dir_all(&temp_path);
             result
         },
-    )?;
-    Ok(GitRepoHandle::from_path(repo_path))
+    )
 }
 
 pub(crate) fn git_upload_pack_auth_required() -> ApiError {

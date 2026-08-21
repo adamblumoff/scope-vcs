@@ -56,7 +56,7 @@ pub(crate) struct RepositoryGitCache {
 
 pub(crate) struct GitRepoHandle {
     path: PathBuf,
-    _lease: Option<RepositoryGitCacheLease>,
+    _lease: RepositoryGitCacheLease,
 }
 
 impl GitDerivedCacheCoordinator {
@@ -201,7 +201,27 @@ impl RepositoryGitCache {
     }
 
     pub(crate) fn lease(self: &Arc<Self>, repository_id: &str) -> Result<GitRepoHandle, ApiError> {
-        let path = self.path_for(repository_id);
+        self.lease_path(self.path_for(repository_id))
+    }
+
+    pub(crate) fn lease_derived(
+        self: &Arc<Self>,
+        path: PathBuf,
+    ) -> Result<GitRepoHandle, ApiError> {
+        let is_direct_child = path.parent() == Some(self.root.as_path());
+        let is_git_repository = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".git"));
+        if !is_direct_child || !is_git_repository {
+            return Err(ApiError::internal_message(
+                "derived Git cache path is outside the managed cache root",
+            ));
+        }
+        self.lease_path(path)
+    }
+
+    fn lease_path(self: &Arc<Self>, path: PathBuf) -> Result<GitRepoHandle, ApiError> {
         {
             let mut users = self.users.lock().map_err(|_| {
                 ApiError::internal_message("repository Git cache registry is poisoned")
@@ -211,10 +231,10 @@ impl RepositoryGitCache {
         }
         Ok(GitRepoHandle {
             path: path.clone(),
-            _lease: Some(RepositoryGitCacheLease {
+            _lease: RepositoryGitCacheLease {
                 registry: self.clone(),
                 path,
-            }),
+            },
         })
     }
 
@@ -312,7 +332,7 @@ fn prune_stale_materializations(root: &Path, now: SystemTime) -> Result<(), ApiE
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !name.starts_with("repo-") || !name.ends_with(".tmp") || !path.is_dir() {
+        if !name.ends_with(".tmp") || !path.is_dir() {
             continue;
         }
         let modified = entry
@@ -327,12 +347,6 @@ fn prune_stale_materializations(root: &Path, now: SystemTime) -> Result<(), ApiE
         }
     }
     Ok(())
-}
-
-impl GitRepoHandle {
-    pub(crate) fn from_path(path: PathBuf) -> Self {
-        Self { path, _lease: None }
-    }
 }
 
 impl std::fmt::Debug for GitRepoHandle {
@@ -412,7 +426,7 @@ fn repository_cache_directories(root: &Path) -> Result<Vec<RepositoryCacheEntry>
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !name.starts_with("repo-") || !name.ends_with(".git") || !path.is_dir() {
+        if !name.ends_with(".git") || !path.is_dir() {
             continue;
         }
         let last_used = fs::metadata(path.join(LAST_USED_FILE))
@@ -506,6 +520,26 @@ mod tests {
         registry.prune().unwrap();
 
         assert!(active_path.exists());
+        assert!(!inactive_path.exists());
+        drop(lease);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn derived_repository_counts_toward_the_budget_and_is_leased_while_in_use() {
+        let root = temp_cache_root("git-cache-derived");
+        let registry = RepositoryGitCache::new(root.clone(), 50).unwrap();
+        let derived_path = root.join("read-view-derived.git");
+        fs::create_dir_all(&derived_path).unwrap();
+        fs::write(derived_path.join("pack"), [0_u8; 40]).unwrap();
+        let lease = registry.lease_derived(derived_path.clone()).unwrap();
+        let inactive_path = registry.path_for("owner/inactive");
+        fs::create_dir_all(&inactive_path).unwrap();
+        fs::write(inactive_path.join("pack"), [0_u8; 40]).unwrap();
+
+        registry.prune().unwrap();
+
+        assert!(derived_path.exists());
         assert!(!inactive_path.exists());
         drop(lease);
         let _ = fs::remove_dir_all(root);

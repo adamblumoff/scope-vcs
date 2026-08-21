@@ -10,6 +10,7 @@ use std::sync::Arc;
 mod cache_service_cutover;
 mod git_compaction_scheduler;
 mod git_pack_spans;
+mod logical_run_sources;
 mod maintenance_cutover;
 mod request_revisions;
 

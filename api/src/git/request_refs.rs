@@ -3,7 +3,6 @@ use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID},
     error::ApiError,
     git::{
-        cache::GitRepoHandle,
         import::{git_snapshot_from_ref, run_git, run_git_output, validate_pushed_commit_range},
         projection_repo::projection_bare_repo_for_state,
         request_ref_public_safety::ensure_public_request_ref_is_public_safe,
@@ -186,13 +185,13 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
                 &repo.visibility_events,
                 ProjectionViewKey::Public,
             );
-            GitRepoHandle::from_path(projection_bare_repo_for_state(
+            projection_bare_repo_for_state(
                 state,
                 &repo.record.id,
                 &projection,
                 repo.git_head.as_ref(),
                 &repo.git_pack_spans,
-            )?)
+            )?
         }
         RepositoryActor::Owner | RepositoryActor::Member => {
             if let Some(head) = repo.git_head.as_ref() {
@@ -209,13 +208,13 @@ pub(crate) async fn ensure_request_receive_pack_staging_repo(
                     &repo.visibility_events,
                     ProjectionViewKey::from_access(repo.access_for_principal(&principal)),
                 );
-                GitRepoHandle::from_path(projection_bare_repo_for_state(
+                projection_bare_repo_for_state(
                     state,
                     &repo.record.id,
                     &projection,
                     repo.git_head.as_ref(),
                     &repo.git_pack_spans,
-                )?)
+                )?
             }
         }
     };
