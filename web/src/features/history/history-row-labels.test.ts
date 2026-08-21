@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { historyRowLabels } from './history-row-labels'
+import {
+  historyEntryLabels,
+  historyRowLabels,
+} from './history-row-labels'
 
 test('distinguishes commits with duplicate messages and file counts', () => {
   const firstFullId = `rv_push_${'2f91a73cf8bd'.padEnd(40, '1')}`
@@ -43,6 +46,26 @@ test('uses singular file wording', () => {
     historyRowLabels(commit('dev-public-1', 'Update', 1)).ariaLabel,
     'Update, commit dev-public-1, 1 file',
   )
+})
+
+test('labels repository history entries by their actual update kind', () => {
+  const base = {
+    author: null,
+    change_count: 2,
+    id: 'entry-1',
+    message: 'Ship the history page',
+    parent_id: null,
+    source_id: 'push-1',
+  }
+
+  assert.equal(historyEntryLabels({ ...base, kind: 'push' }).kind, 'Push')
+  assert.equal(historyEntryLabels({ ...base, kind: 'merged_request' }).kind, 'Merged')
+  assert.deepEqual(historyEntryLabels({ ...base, kind: 'visibility_change' }), {
+    ariaLabel: 'Visibility: Ship the history page, update push-1, 2 files',
+    compactId: 'push-1',
+    kind: 'Visibility',
+    title: 'Ship the history page',
+  })
 })
 
 function commit(logicalCommitId: string, message: string, changeCount = 3) {

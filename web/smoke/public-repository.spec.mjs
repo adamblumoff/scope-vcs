@@ -403,28 +403,29 @@ test('public direct Runs access is explicit and exposes no operations', async ()
   })
 })
 
-test('public repository history renders its seeded commit', async () => {
+test('public repository history renders its seeded push as an update', async () => {
   await withPage(`${repoPath}/history`, async (page) => {
     await assertCurrentRepoSection(page, 'History')
     await assertPageHeading(page, 'History')
-    const commit = page.getByRole('button', {
-      name: 'Projected public update, commit dev-public-1, 2 files',
+    const update = page.getByRole('button', {
+      name: 'Push: Projected public update, update dev-public-1, 2 files',
     })
-    await commit.waitFor()
-    assert.equal(await commit.getAttribute('title'), 'dev-public-1')
-    await commit.getByText('dev-public-1', { exact: true }).waitFor()
+    await update.waitFor()
+    assert.equal(await update.getAttribute('title'), 'dev-public-1')
+    await update.getByText('Push', { exact: true }).waitFor()
+    await update.getByText('dev-public-1', { exact: true }).waitFor()
     await page.waitForFunction(() => {
       const button = document.querySelector(
-        'button[aria-label="Projected public update, commit dev-public-1, 2 files"]',
+        'button[aria-label="Push: Projected public update, update dev-public-1, 2 files"]',
       )
       return button && Object.keys(button).some((key) => key.startsWith('__reactProps$'))
     })
-    await commit.click()
+    await update.click()
     await page.waitForURL((url) =>
-      url.searchParams.get('commit') === 'pv_public_dev-public-1_1'
+      url.searchParams.get('entry') === 'pv_public_dev-public-1_1'
     )
     assert.equal(
-      new URL(page.url()).searchParams.get('commit'),
+      new URL(page.url()).searchParams.get('entry'),
       'pv_public_dev-public-1_1',
     )
   })

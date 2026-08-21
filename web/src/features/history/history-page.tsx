@@ -1,49 +1,54 @@
 import type {
+  CommitDetail,
   CommitFile,
-  CommitHistory,
-  CommitSummary,
+  HistoryEntryDetail,
+  HistoryEntrySummary,
+  HistoryPage as HistoryPageResponse,
   ProjectionPreviewAudience,
   RepoParams,
 } from '@/api/types'
 import { WorkbenchBar, WorkbenchPane } from '@/components/page-header'
 import { AudienceToggle } from '@/features/history/history-audience-toggle'
-import { HistoryWorkbench } from '@/features/history/history-workbench'
+import { CommitDetailPanel } from '@/features/history/history-commit-detail'
+import { HistoryEntryList } from '@/features/history/history-entry-list'
 import {
-  historyCommitCacheKey,
-  historyDiffCacheKey,
-  peekHistoryCommitCache,
+  appendHistoryPage,
+  historySummary,
+} from '@/features/history/history-pagination'
+import {
+  historyEntryCacheKey,
+  historyEntryDiffCacheKey,
   peekHistoryDiffCache,
-  readHistoryCommitCache,
+  peekHistoryEntryCache,
   readHistoryDiffCache,
-  writeHistoryCommitCache,
+  readHistoryDiffScroll,
+  readHistoryEntryCache,
   writeHistoryDiffCache,
+  writeHistoryDiffScroll,
+  writeHistoryEntryCache,
 } from '@/features/history/history-resource-cache'
 import {
-  resourceToCommitState,
   resourceToDiffState,
   type CommitDetailState,
   type CommitFileDiffState,
 } from '@/features/history/history-state'
-import { useCachedResource } from '@/lib/use-cached-resource'
+import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
+import { useCachedResource, type CachedResource } from '@/lib/use-cached-resource'
 import {
-  loadCommitDetail,
-  loadCommitFileDiff,
+  loadHistoryEntry,
+  loadHistoryEntryFileDiff,
+  loadHistoryPage,
 } from '@/routes/-repo-history-actions'
 import { useNavigate } from '@tanstack/react-router'
-import { useCallback, useMemo } from 'react'
+import { useCallback, useState } from 'react'
 import { changeCountLabel } from '../review/review-labels'
 
-export type CommitHistories = {
-  private: CommitHistory | null
-  public: CommitHistory | null
-}
-
 type HistoryPageProps = {
-  histories: CommitHistories
+  initialPage: HistoryPageResponse
   params: RepoParams
   search: {
     audience?: ProjectionPreviewAudience
-    commit?: string
+    entry?: string
     path?: string
   }
 }
@@ -53,18 +58,23 @@ export function HistoryPage(props: HistoryPageProps) {
     audience,
     availableAudiences,
     closeDiff,
-    commitState,
-    commits,
-    diffIdentity,
+    detailState,
+    entries,
     fileDiffState,
-    retryCommit,
+    loadOlder,
+    loadOlderError,
+    loadingOlder,
+    retryDetail,
     retryDiff,
     selectAudience,
-    selectCommit,
+    selectEntry,
     selectFile,
-    selectedCommit,
-    selectedCommitId,
+    selectedDetail,
+    selectedEntryId,
     selectedFilePath,
+    showLoadOlder,
+    diffIdentity,
+    saveDiffScroll,
   } = useHistoryPageModel(props)
 
   return (
@@ -77,186 +87,249 @@ export function HistoryPage(props: HistoryPageProps) {
             onSelect={selectAudience}
           />
         ) : undefined}
-        summary={`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}${selectedCommit ? ` · ${changeCountLabel(selectedCommit.change_count)}` : ''}`}
+        summary={`${historySummary(entries, showLoadOlder)}${selectedDetail ? ` · ${changeCountLabel(selectedDetail.change_count)}` : ''}`}
         title="History"
       />
-      <HistoryWorkbench
-        commitState={commitState}
-        commits={commits}
-        diffIdentity={diffIdentity}
-        emptyDescription="History appears here once Scope has applied commits."
-        emptyTitle="No commits yet"
-        fileDiffState={fileDiffState}
-        onCloseDiff={closeDiff}
-        onRetryCommit={retryCommit}
-        onRetryDiff={retryDiff}
-        onSelectCommit={selectCommit}
-        onSelectFile={selectFile}
-        selectedCommitId={selectedCommitId}
-        selectedFilePath={selectedFilePath}
-      />
+      <section className="border-t border-border">
+        {entries.length === 0 && !selectedEntryId ? (
+          <div className="px-5 py-12 text-center sm:px-6">
+            <h2 className="text-sm font-semibold">No updates yet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              History appears here after Scope applies an update.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,0.4fr)_minmax(0,1.6fr)]">
+            <HistoryEntryList
+              entries={entries}
+              loadOlderError={loadOlderError}
+              loadingOlder={loadingOlder}
+              onLoadOlder={loadOlder}
+              onSelectEntry={selectEntry}
+              selectedEntryId={selectedEntryId}
+              showLoadOlder={showLoadOlder}
+            />
+            <div className="min-w-0" id="history-entry-detail">
+              <CommitDetailPanel
+                commitState={detailState}
+                diffIdentity={diffIdentity}
+                diffScrollTop={readHistoryDiffScroll(diffIdentity)}
+                fileDiffState={fileDiffState}
+                onCloseDiff={closeDiff}
+                onDiffScroll={saveDiffScroll}
+                onRetryCommit={retryDetail}
+                onRetryDiff={retryDiff}
+                onSelectFile={selectFile}
+                selectedFilePath={selectedFilePath}
+                terminology="update"
+              />
+            </div>
+          </div>
+        )}
+      </section>
     </WorkbenchPane>
   )
 }
 
-function useHistoryPageModel({ histories, params, search }: HistoryPageProps) {
+function useHistoryPageModel({ initialPage, params, search }: HistoryPageProps) {
   const navigate = useNavigate()
-  const availableAudiences = useMemo(
-    () =>
-      (['private', 'public'] as const).filter(
-        (option) => histories[option] !== null,
-      ),
-    [histories],
-  )
-  const audience = selectedAudience(histories, search.audience)
-  const history = histories[audience] ?? histories.public ?? histories.private
-  const baseCommits = useMemo(
-    () => [...(history?.commits ?? [])].reverse(),
-    [history?.commits],
-  )
-  const requestedCommitUnavailable = Boolean(
-    search.commit && history && !history.commits.some(
-      (commit) => commit.projected_id === search.commit,
-    ),
-  )
-  const selectedCommitId = requestedCommitUnavailable
-    ? null
-    : search.commit ?? latestCommitId(history)
-  const repoId = history?.repo_id ?? `${params.owner}/${params.repo}`
-  const commitIdentity = selectedCommitId && history
-    ? historyCommitCacheKey({
+  const { repo } = useRepoLayout()
+  const [loaded, setLoaded] = useState(() => ({
+    entries: initialPage.entries,
+    next_cursor: initialPage.next_cursor,
+  }))
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [loadOlderError, setLoadOlderError] = useState<string | null>(null)
+  const audience = initialPage.audience
+  const availableAudiences: ProjectionPreviewAudience[] = repo.access.can_read_private_files
+    ? ['private', 'public']
+    : ['public']
+  const selectedEntryId = search.entry ?? loaded.entries[0]?.id ?? null
+  const entryIdentity = selectedEntryId
+    ? historyEntryCacheKey({
         audience,
-        commit: selectedCommitId,
-        generation: history.generation,
-        repoId: history.repo_id,
-        viewKey: history.view_key,
+        entry: selectedEntryId,
+        generation: initialPage.generation,
+        repoId: initialPage.repo_id,
+        viewKey: initialPage.view_key,
       })
     : null
-  const loadSelectedCommit = useCallback(
-    async (signal: AbortSignal) => {
-      return loadCommitDetail({
-        data: {
-          audience,
-          commit: selectedCommitId ?? '',
-          owner: params.owner,
-          repo: params.repo,
-        },
-        signal,
-      })
-    },
-    [audience, params, selectedCommitId],
+  const loadSelectedEntry = useCallback(
+    (signal: AbortSignal) => loadHistoryEntry({
+      data: {
+        audience,
+        entry: selectedEntryId ?? '',
+        owner: params.owner,
+        repo: params.repo,
+      },
+      signal,
+    }),
+    [audience, params.owner, params.repo, selectedEntryId],
   )
-  const commitResource = useCachedResource({
-    fallbackError: 'Resource is unavailable.',
-    identity: commitIdentity,
-    load: loadSelectedCommit,
-    peek: peekHistoryCommitCache,
-    read: readHistoryCommitCache,
-    write: writeHistoryCommitCache,
+  const entryResource = useCachedResource({
+    fallbackError: 'This history update is unavailable.',
+    identity: entryIdentity,
+    load: loadSelectedEntry,
+    peek: peekHistoryEntryCache,
+    read: readHistoryEntryCache,
+    write: writeHistoryEntryCache,
   })
-  const selectedCommit = commitResource.value
-  const commits = baseCommits
+  const selectedEntry = entryResource.value
   const selectedFilePath = search.path ?? null
-  const selectedFile = selectedCommit?.files.find(
+  const selectedFile = selectedEntry?.files.find(
     (file) => file.path === selectedFilePath,
   ) ?? null
-  const diffIdentity = selectedCommitId && selectedFile && history
-    ? historyDiffCacheKey({
+  const diffIdentity = selectedEntryId && selectedFile
+    ? historyEntryDiffCacheKey({
         audience,
-        commit: selectedCommitId,
-        generation: history.generation,
+        entry: selectedEntryId,
+        generation: initialPage.generation,
         newOid: selectedFile.new_oid,
         oldOid: selectedFile.old_oid,
         path: selectedFile.path,
-        repoId,
-        viewKey: history.view_key,
+        repoId: initialPage.repo_id,
+        viewKey: initialPage.view_key,
       })
     : null
   const loadSelectedDiff = useCallback(
-    (signal: AbortSignal) => loadCommitFileDiff({
+    (signal: AbortSignal) => loadHistoryEntryFileDiff({
       data: {
         audience,
-        commit: selectedCommitId ?? '',
+        entry: selectedEntryId ?? '',
         owner: params.owner,
         path: selectedFilePath ?? '',
         repo: params.repo,
       },
       signal,
     }),
-    [audience, params, selectedCommitId, selectedFilePath],
+    [audience, params.owner, params.repo, selectedEntryId, selectedFilePath],
   )
   const diffResource = useCachedResource({
-    fallbackError: 'Resource is unavailable.',
+    fallbackError: 'This file diff is unavailable.',
     identity: diffIdentity,
     load: loadSelectedDiff,
     peek: peekHistoryDiffCache,
     read: readHistoryDiffCache,
     write: writeHistoryDiffCache,
   })
-  const commitState: CommitDetailState = requestedCommitUnavailable
-    ? { commit: null, error: 'The requested commit is not available in this history view.', status: 'failed' }
-    : resourceToCommitState(commitResource)
+  const detailState = historyEntryToCommitState(entryResource, initialPage)
   const fileDiffState: CommitFileDiffState =
-    selectedFilePath && selectedCommit && !selectedFile
-      ? { diff: null, error: 'This file is not part of the selected commit.', status: 'failed' }
+    selectedFilePath && selectedEntry && !selectedFile
+      ? { diff: null, error: 'This file is not part of the selected update.', status: 'failed' }
       : resourceToDiffState(diffResource)
 
-  function replaceHistorySearch(
+  const replaceHistorySearch = useCallback((
     nextAudience: ProjectionPreviewAudience,
-    nextCommitId: string | null,
+    nextEntryId: string | null,
     nextPath: string | null = null,
-  ) {
-    void navigate({
+  ) => {
+    return navigate({
       params,
       replace: true,
       resetScroll: false,
       search: {
         audience: nextAudience,
-        commit: nextCommitId ?? undefined,
+        entry: nextEntryId ?? undefined,
         path: nextPath ?? undefined,
       },
       to: '/$owner/$repo/history',
     })
-  }
+  }, [navigate, params])
+
+  const loadOlder = useCallback(async () => {
+    const before = loaded.next_cursor
+    if (!before || loadingOlder) return
+    setLoadingOlder(true)
+    setLoadOlderError(null)
+    try {
+      const page = await loadHistoryPage({
+        data: { audience, before, owner: params.owner, repo: params.repo },
+      })
+      setLoaded((current) => appendHistoryPage(current, page))
+    } catch (error) {
+      setLoadOlderError(error instanceof Error ? error.message : 'Older history is unavailable.')
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [audience, loaded.next_cursor, loadingOlder, params.owner, params.repo])
+
+  const closeDiff = useCallback(
+    () => replaceHistorySearch(audience, selectedEntryId),
+    [audience, replaceHistorySearch, selectedEntryId],
+  )
+  const selectAudience = useCallback(
+    (nextAudience: ProjectionPreviewAudience) =>
+      replaceHistorySearch(nextAudience, null),
+    [replaceHistorySearch],
+  )
+  const selectEntry = useCallback(
+    (entry: HistoryEntrySummary) => {
+      void replaceHistorySearch(audience, entry.id).then(() => {
+        document.getElementById('history-entry-detail')?.scrollIntoView({ block: 'start' })
+      })
+    },
+    [audience, replaceHistorySearch],
+  )
+  const selectFile = useCallback(
+    (file: CommitFile) =>
+      replaceHistorySearch(audience, selectedEntryId, file.path),
+    [audience, replaceHistorySearch, selectedEntryId],
+  )
+  const saveDiffScroll = useCallback(
+    (scrollTop: number) => writeHistoryDiffScroll(diffIdentity, scrollTop),
+    [diffIdentity],
+  )
 
   return {
     audience,
     availableAudiences,
-    closeDiff: () => replaceHistorySearch(audience, selectedCommitId),
-    commitState,
-    commits,
+    closeDiff,
+    detailState,
     diffIdentity,
+    entries: loaded.entries,
     fileDiffState,
-    retryCommit: requestedCommitUnavailable ? undefined : commitResource.retry,
-    retryDiff: selectedFilePath && selectedCommit && !selectedFile
+    loadOlder,
+    loadOlderError,
+    loadingOlder,
+    retryDetail: entryResource.retry,
+    retryDiff: selectedFilePath && selectedEntry && !selectedFile
       ? undefined
       : diffResource.retry,
-    selectAudience: (nextAudience: ProjectionPreviewAudience) => {
-      const nextHistory = histories[nextAudience]
-      if (nextHistory) {
-        replaceHistorySearch(nextAudience, latestCommitId(nextHistory))
-      }
-    },
-    selectCommit: (commit: CommitSummary) =>
-      replaceHistorySearch(audience, commit.projected_id),
-    selectFile: (file: CommitFile) =>
-      replaceHistorySearch(audience, selectedCommitId, file.path),
-    selectedCommit,
-    selectedCommitId,
+    saveDiffScroll,
+    selectAudience,
+    selectEntry,
+    selectFile,
+    selectedDetail: selectedEntry,
+    selectedEntryId,
     selectedFilePath,
+    showLoadOlder: loaded.next_cursor !== null,
   }
 }
 
-function selectedAudience(
-  histories: CommitHistories,
-  requestedAudience?: ProjectionPreviewAudience,
-): ProjectionPreviewAudience {
-  if (requestedAudience && histories[requestedAudience]) {
-    return requestedAudience
+function historyEntryToCommitState(
+  resource: CachedResource<HistoryEntryDetail>,
+  page: HistoryPageResponse,
+): CommitDetailState {
+  if (resource.status === 'loaded') {
+    return {
+      commit: {
+        audience: page.audience,
+        author: resource.value.author,
+        change_count: resource.value.change_count,
+        files: resource.value.files,
+        logical_commit_id: resource.value.source_id,
+        message: resource.value.message,
+        parent_projected_id: resource.value.parent_id,
+        projected_id: resource.value.id,
+        repo_id: page.repo_id,
+        view_key: page.view_key,
+      } satisfies CommitDetail,
+      error: null,
+      status: 'loaded',
+    }
   }
-  return histories.private ? 'private' : 'public'
-}
-
-function latestCommitId(history: CommitHistory | null) {
-  return history?.commits.at(-1)?.projected_id ?? null
+  if (resource.status === 'failed') {
+    return { commit: null, error: resource.error, status: 'failed' }
+  }
+  return { commit: null, error: null, status: resource.status }
 }

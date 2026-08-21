@@ -138,9 +138,11 @@ export type RepositoryInviteLookupResponse = { repo_id: string, owner_handle: st
 
 export type AcceptRepositoryInviteResponse = { repo: RepoSummaryResponse, member: RepositoryMemberResponse, };
 
-export type CommitHistoryRequest = { audience: ProjectionPreviewAudience | null, };
+export type HistoryPageRequest = { audience: ProjectionPreviewAudience | null, before: string | null, };
 
-export type CommitFileDiffRequest = { audience: ProjectionPreviewAudience | null, path: string, };
+export type HistoryEntryRequest = { audience: ProjectionPreviewAudience | null, };
+
+export type HistoryEntryFileDiffRequest = { audience: ProjectionPreviewAudience | null, path: string, };
 
 export type RequestFileDiffRequest = { path: string, };
 
@@ -150,11 +152,15 @@ export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "k
 
 export type ReviewFileDiffResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
 
-export type CommitHistoryResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, generation: string, commits: Array<CommitSummaryResponse>, };
+export type HistoryPageResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, generation: string, entries: Array<HistoryEntrySummaryResponse>, next_cursor: string | null, };
 
-export type CommitSummaryResponse = { projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, };
+export type HistoryEntrySummaryResponse = { id: string, source_id: string, parent_id: string | null, kind: HistoryEntryKind, author: string | null, message: string, change_count: number, };
 
-export type CommitDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, projected_id: string, logical_commit_id: string, parent_projected_id: string | null, author: string | null, message: string, change_count: number, files: Array<CommitFileResponse>, };
+export type HistoryEntryKind = "push" | "merged_request" | "visibility_change";
+
+export type HistoryEntryDetailResponse = { audience: ProjectionPreviewAudience, repo_id: string, view_key: string, id: string, source_id: string, parent_id: string | null, kind: HistoryEntryKind, author: string | null, message: string, change_count: number, files: Array<HistoryEntryFileResponse>, };
+
+export type HistoryEntryFileResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
 export type CommitFileResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_oid: string | null, new_oid: string | null, visibility: Visibility, };
 
@@ -347,9 +353,9 @@ export const ApiRouteTemplates = {
   repoRequestDiscussionRead: "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/read",
   repoRequestActivity: "/v1/repos/{owner}/{repo}/requests/{request_id}/activity",
   repoEvents: "/v1/repos/{owner}/{repo}/events",
-  repoCommits: "/v1/repos/{owner}/{repo}/commits",
-  repoCommit: "/v1/repos/{owner}/{repo}/commits/{commit_id}",
-  repoCommitFileDiff: "/v1/repos/{owner}/{repo}/commits/{commit_id}/file-diff",
+  repoHistory: "/v1/repos/{owner}/{repo}/history",
+  repoHistoryEntry: "/v1/repos/{owner}/{repo}/history/{entry_id}",
+  repoHistoryEntryFileDiff: "/v1/repos/{owner}/{repo}/history/{entry_id}/file-diff",
   repoMembers: "/v1/repos/{owner}/{repo}/members",
   repoInvites: "/v1/repos/{owner}/{repo}/invites",
   repoInvite: "/v1/repos/{owner}/{repo}/invites/{invite_id}",

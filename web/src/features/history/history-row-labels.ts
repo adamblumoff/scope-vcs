@@ -1,4 +1,8 @@
-import type { CommitSummary } from '@/api/types'
+import type {
+  CommitSummary,
+  HistoryEntryKind,
+  HistoryEntrySummary,
+} from '@/api/types'
 
 type HistoryRowCommit = Pick<
   CommitSummary,
@@ -24,4 +28,32 @@ export function historyRowLabels(commit: HistoryRowCommit) {
 
 export function historyCommitTitle(commit: Pick<CommitSummary, 'message'>) {
   return commit.message.split(/\r?\n/, 1)[0]?.trim() || '(no message)'
+}
+
+export function historyEntryLabels(entry: HistoryEntrySummary) {
+  const title = historyCommitTitle(entry)
+  const kind = historyEntryKindLabel(entry.kind)
+  const fileCount = `${entry.change_count} ${entry.change_count === 1 ? 'file' : 'files'}`
+  return {
+    ariaLabel: `${kind}: ${title}, update ${entry.source_id}, ${fileCount}`,
+    compactId: compactHistorySourceId(entry.source_id),
+    kind,
+    title,
+  }
+}
+
+export function historyEntryKindLabel(kind: HistoryEntryKind) {
+  switch (kind) {
+    case 'push':
+      return 'Push'
+    case 'merged_request':
+      return 'Merged'
+    case 'visibility_change':
+      return 'Visibility'
+  }
+}
+
+function compactHistorySourceId(sourceId: string) {
+  const reviewedPush = REVIEWED_PUSH_ID.exec(sourceId)
+  return reviewedPush ? reviewedPush[1].slice(0, 12) : sourceId
 }

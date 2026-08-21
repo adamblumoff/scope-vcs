@@ -78,9 +78,10 @@ pub const REPO_REQUEST_DISCUSSION_READ: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/threads/{discussion_id}/read";
 pub const REPO_REQUEST_ACTIVITY: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/activity";
 pub const REPO_EVENTS: &str = "/v1/repos/{owner}/{repo}/events";
-pub const REPO_COMMITS: &str = "/v1/repos/{owner}/{repo}/commits";
-pub const REPO_COMMIT: &str = "/v1/repos/{owner}/{repo}/commits/{commit_id}";
-pub const REPO_COMMIT_FILE_DIFF: &str = "/v1/repos/{owner}/{repo}/commits/{commit_id}/file-diff";
+pub const REPO_HISTORY: &str = "/v1/repos/{owner}/{repo}/history";
+pub const REPO_HISTORY_ENTRY: &str = "/v1/repos/{owner}/{repo}/history/{entry_id}";
+pub const REPO_HISTORY_ENTRY_FILE_DIFF: &str =
+    "/v1/repos/{owner}/{repo}/history/{entry_id}/file-diff";
 pub const REPO_MEMBERS: &str = "/v1/repos/{owner}/{repo}/members";
 pub const REPO_INVITES: &str = "/v1/repos/{owner}/{repo}/invites";
 pub const REPO_INVITE: &str = "/v1/repos/{owner}/{repo}/invites/{invite_id}";

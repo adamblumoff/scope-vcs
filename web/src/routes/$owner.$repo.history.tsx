@@ -1,48 +1,29 @@
-import type {
-  CommitHistory,
-  ProjectionPreviewAudience,
-  RepoParams,
-} from '@/api/types'
+import type { ProjectionPreviewAudience } from '@/api/types'
 import { HistoryError } from '@/features/history/history-error'
 import { HistoryPagePending } from '@/features/history/history-page-pending'
-import {
-  HistoryPage,
-  type CommitHistories,
-} from '@/features/history/history-page'
+import { HistoryPage } from '@/features/history/history-page'
 import { parseRouteFileSearch } from '@/lib/route-file'
-import {
-  loadCommitHistory,
-  loadOptionalPrivateCommitHistory,
-} from '@/routes/-repo-history-actions'
+import { loadHistoryPage } from '@/routes/-repo-history-actions'
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/$owner/$repo/history')({
   validateSearch: parseHistorySearch,
+  loaderDeps: ({ search }) => ({ audience: search.audience ?? null }),
   staleTime: Infinity,
-  loader: async ({ params }) => {
-    const [privateHistory, publicHistory] = await Promise.all([
-      loadOptionalPrivateHistory(params),
-      loadPublicHistory(params),
-    ])
-
-    if (!privateHistory && !publicHistory.history) {
-      throw publicHistory.error
-    }
-
-    return {
-      private: privateHistory,
-      public: publicHistory.history,
-    } satisfies CommitHistories
-  },
+  loader: ({ deps, params }) => loadHistoryPage({
+    data: { ...params, audience: deps.audience, before: null },
+  }),
   errorComponent: HistoryError,
   pendingComponent: HistoryPagePending,
   component: HistoryRoute,
 })
 
 function HistoryRoute() {
+  const page = Route.useLoaderData()
   return (
     <HistoryPage
-      histories={Route.useLoaderData()}
+      initialPage={page}
+      key={`${page.audience}:${page.generation}`}
       params={Route.useParams()}
       search={Route.useSearch()}
     />
@@ -51,14 +32,14 @@ function HistoryRoute() {
 
 export type HistorySearch = {
   audience?: ProjectionPreviewAudience
-  commit?: string
+  entry?: string
   path?: string
 }
 
 function parseHistorySearch(search: Record<string, unknown>): HistorySearch {
   return {
     audience: searchHistoryAudience(search.audience),
-    commit: searchCommitId(search.commit),
+    entry: searchHistoryEntryId(search.entry),
     path: searchHistoryPath(search.path),
   }
 }
@@ -78,10 +59,10 @@ function searchHistoryPath(value: unknown) {
   return path ? `/${path}` : undefined
 }
 
-function searchCommitId(value: unknown) {
+function searchHistoryEntryId(value: unknown) {
   if (typeof value === 'string') {
-    const commitId = value.trim()
-    return commitId ? commitId : undefined
+    const entryId = value.trim()
+    return entryId ? entryId : undefined
   }
 
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -89,26 +70,4 @@ function searchCommitId(value: unknown) {
   }
 
   return undefined
-}
-
-async function loadOptionalPrivateHistory(params: RepoParams) {
-  return loadOptionalPrivateCommitHistory({
-    data: { ...params, audience: 'private' },
-  })
-}
-
-async function loadPublicHistory(params: RepoParams): Promise<{
-  error: unknown
-  history: CommitHistory | null
-}> {
-  try {
-    return {
-      error: null,
-      history: await loadCommitHistory({
-        data: { ...params, audience: 'public' },
-      }),
-    }
-  } catch (error) {
-    return { error, history: null }
-  }
 }

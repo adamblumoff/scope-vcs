@@ -1,57 +1,65 @@
 import { parseRepoParams } from './repo-params'
 import type {
-  CommitDetailInput,
-  CommitFileDiffInput,
-  CommitHistoryInput,
+  HistoryEntryDetailInput,
+  HistoryEntryFileDiffInput,
+  HistoryPageInput,
   ProjectionPreviewAudience,
 } from './types'
 
-export function parseCommitHistoryInput(input: unknown): CommitHistoryInput {
+export function parseHistoryPageInput(input: unknown): HistoryPageInput {
   return {
     ...parseRepoParams(input),
     audience: parseOptionalAudience(input),
+    before: parseOptionalBefore(input),
   }
 }
 
-export function parseCommitDetailInput(input: unknown): CommitDetailInput {
-  const data = input as Partial<CommitDetailInput> | null
-  const commit = typeof data?.commit === 'string' ? data.commit.trim() : ''
-  if (!commit) {
-    throw new Error('A commit id is required.')
+export function parseHistoryEntryDetailInput(input: unknown): HistoryEntryDetailInput {
+  const data = input as Partial<HistoryEntryDetailInput> | null
+  const entry = typeof data?.entry === 'string' ? data.entry.trim() : ''
+  if (!entry) {
+    throw new Error('A history entry id is required.')
   }
 
   return {
-    ...parseCommitHistoryInput(input),
-    commit,
+    ...parseRepoParams(input),
+    audience: parseOptionalAudience(input),
+    entry,
   }
 }
 
-export function parseCommitFileDiffInput(input: unknown): CommitFileDiffInput {
-  const data = input as Partial<CommitFileDiffInput> | null
+export function parseHistoryEntryFileDiffInput(input: unknown): HistoryEntryFileDiffInput {
+  const data = input as Partial<HistoryEntryFileDiffInput> | null
   const path = typeof data?.path === 'string' ? data.path.trim() : ''
   if (!path) {
     throw new Error('A file path is required.')
   }
 
   return {
-    ...parseCommitDetailInput(input),
+    ...parseHistoryEntryDetailInput(input),
     path,
   }
 }
 
-export function parseCommitHistoryAudience(
+export function parseHistoryAudience(
   audience: unknown,
 ): ProjectionPreviewAudience {
-  if (audience === undefined || audience === null || audience === '') {
-    return 'public'
-  }
   if (audience === 'private' || audience === 'public') {
     return audience
   }
-  throw new Error(`Unsupported commit history audience: ${String(audience)}`)
+  throw new Error(`Unsupported history audience: ${String(audience)}`)
 }
 
-function parseOptionalAudience(input: unknown): ProjectionPreviewAudience {
-  const data = input as Partial<CommitHistoryInput> | null
-  return parseCommitHistoryAudience(data?.audience)
+function parseOptionalAudience(input: unknown): ProjectionPreviewAudience | null {
+  const audience = (input as { audience?: unknown } | null)?.audience
+  if (audience === undefined || audience === null || audience === '') {
+    return null
+  }
+  return parseHistoryAudience(audience)
+}
+
+function parseOptionalBefore(input: unknown) {
+  const data = input as Partial<HistoryPageInput> | null
+  if (typeof data?.before !== 'string') return null
+  return data.before.trim() || null
 }

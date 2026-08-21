@@ -1,35 +1,21 @@
 import {
-  loadCommitDetailForRequest,
-  loadCommitFileDiffForRequest,
-  loadCommitHistoryForRequest,
-  parseCommitDetailInput,
-  parseCommitFileDiffInput,
-  parseCommitHistoryInput,
+  loadHistoryEntryFileDiffForRequest,
+  loadHistoryEntryForRequest,
+  loadHistoryPageForRequest,
+  parseHistoryEntryDetailInput,
+  parseHistoryEntryFileDiffInput,
+  parseHistoryPageInput,
 } from '@/api/history'
-import { HttpError } from '@/api/client'
 import { createServerFn } from '@tanstack/react-start'
 
-export const loadCommitHistory = createServerFn({ method: 'GET' })
-  .validator(parseCommitHistoryInput)
-  .handler(({ data }) => loadCommitHistoryForRequest(data))
+export const loadHistoryPage = createServerFn({ method: 'GET' })
+  .validator(parseHistoryPageInput)
+  .handler(({ data }) => loadHistoryPageForRequest(data))
 
-export const loadOptionalPrivateCommitHistory = createServerFn({ method: 'GET' })
-  .validator(parseCommitHistoryInput)
-  .handler(async ({ data }) => {
-    try {
-      return await loadCommitHistoryForRequest(data)
-    } catch (error) {
-      if (error instanceof HttpError && [403, 404].includes(error.status)) {
-        return null
-      }
-      throw error
-    }
-  })
+export const loadHistoryEntry = createServerFn({ method: 'GET' })
+  .validator(parseHistoryEntryDetailInput)
+  .handler(({ data }) => loadHistoryEntryForRequest(data))
 
-export const loadCommitDetail = createServerFn({ method: 'GET' })
-  .validator(parseCommitDetailInput)
-  .handler(({ data }) => loadCommitDetailForRequest(data))
-
-export const loadCommitFileDiff = createServerFn({ method: 'GET' })
-  .validator(parseCommitFileDiffInput)
-  .handler(({ data }) => loadCommitFileDiffForRequest(data))
+export const loadHistoryEntryFileDiff = createServerFn({ method: 'GET' })
+  .validator(parseHistoryEntryFileDiffInput)
+  .handler(({ data }) => loadHistoryEntryFileDiffForRequest(data))

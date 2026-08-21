@@ -183,7 +183,7 @@ async fn merge_route_persists_git_content_once() {
         .oneshot(
             axum::http::Request::builder()
                 .uri(format!(
-                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/commits?audience=public"
+                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/history?audience=public"
                 ))
                 .body(Body::empty())
                 .unwrap(),
