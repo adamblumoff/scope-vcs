@@ -450,11 +450,42 @@ async fn history_entries_report_their_update_kind() {
     replace_test_repo(&state, repo).await;
     cache_test_jwks(&state);
 
-    let response = history_get(state, "/v1/repos/owner/repo/history?audience=public", true).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let response = response_json(response).await;
-    let entries = response["entries"].as_array().unwrap();
-    assert_eq!(entries[0]["kind"], "visibility_change");
-    assert_eq!(entries[1]["kind"], "merged_request");
-    assert_eq!(entries[2]["kind"], "push");
+    let public = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/history?audience=public",
+        true,
+    )
+    .await;
+    assert_eq!(public.status(), StatusCode::OK);
+    let public = response_json(public).await;
+    let public_entries = public["entries"].as_array().unwrap();
+    assert_eq!(public_entries[0]["kind"], "visibility_change");
+    assert_eq!(public_entries[1]["kind"], "merged_request");
+    assert_eq!(public_entries[2]["kind"], "push");
+
+    let private = history_get(state.clone(), "/v1/repos/owner/repo/history", true).await;
+    assert_eq!(private.status(), StatusCode::OK);
+    let private = response_json(private).await;
+    assert_eq!(private["audience"], "private");
+    let private_entries = private["entries"].as_array().unwrap();
+    assert_eq!(private_entries[0]["source_id"], "visibility-1");
+    assert_eq!(private_entries[0]["kind"], "visibility_change");
+    assert_eq!(private_entries[0]["change_count"], 1);
+    assert_eq!(private_entries[1]["kind"], "merged_request");
+    assert_eq!(private_entries[2]["kind"], "push");
+
+    let detail = history_get(
+        state,
+        "/v1/repos/owner/repo/history/visibility-1?audience=private",
+        true,
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = response_json(detail).await;
+    assert_eq!(
+        detail["message"],
+        "Changed /README.md visibility to private"
+    );
+    assert_eq!(detail["files"][0]["path"], "/README.md");
+    assert_eq!(detail["files"][0]["visibility"], "Private");
 }
