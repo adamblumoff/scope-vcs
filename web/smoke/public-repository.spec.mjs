@@ -422,11 +422,11 @@ test('public repository history renders its seeded push as an update', async () 
     })
     await update.click()
     await page.waitForURL((url) =>
-      url.searchParams.get('entry') === 'pv_public_dev-public-1_1'
+      url.searchParams.get('entry') === 'dev-public-1'
     )
     assert.equal(
       new URL(page.url()).searchParams.get('entry'),
-      'pv_public_dev-public-1_1',
+      'dev-public-1',
     )
   })
 })

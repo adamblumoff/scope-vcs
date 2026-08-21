@@ -144,7 +144,7 @@ function useHistoryPageModel({ initialPage, params, search }: HistoryPageProps) 
   const availableAudiences: ProjectionPreviewAudience[] = repo.access.can_read_private_files
     ? ['private', 'public']
     : ['public']
-  const selectedEntryId = search.entry ?? loaded.entries[0]?.id ?? null
+  const selectedEntryId = search.entry ?? loaded.entries[0]?.source_id ?? null
   const entryIdentity = selectedEntryId
     ? historyEntryCacheKey({
         audience,
@@ -264,7 +264,7 @@ function useHistoryPageModel({ initialPage, params, search }: HistoryPageProps) 
   )
   const selectEntry = useCallback(
     (entry: HistoryEntrySummary) => {
-      void replaceHistorySearch(audience, entry.id).then(() => {
+      void replaceHistorySearch(audience, entry.source_id).then(() => {
         document.getElementById('history-entry-detail')?.scrollIntoView({ block: 'start' })
       })
     },

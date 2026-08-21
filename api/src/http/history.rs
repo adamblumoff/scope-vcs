@@ -34,7 +34,7 @@ struct HistoryCursor {
     version: u8,
     repo_id: String,
     audience: ProjectionPreviewAudience,
-    boundary_id: String,
+    boundary_source_id: String,
 }
 
 pub(crate) async fn get_history_page(
@@ -46,16 +46,16 @@ pub(crate) async fn get_history_page(
     let (repo, audience) =
         repo_and_audience(&state, &headers, &owner, &repo_name, input.audience).await?;
     let view = history_view_for_repo(&repo, audience)?;
-    let boundary_id = input
+    let boundary_source_id = input
         .before
         .as_deref()
         .map(|cursor| parse_history_cursor(cursor, &repo.record.id, audience))
         .transpose()?;
-    let (entries, has_more) = history_page(&view, boundary_id.as_deref())?;
+    let (entries, has_more) = history_page(&view, boundary_source_id.as_deref())?;
     let next_cursor = if has_more {
         entries
             .last()
-            .map(|entry| encode_history_cursor(&repo.record.id, audience, &entry.id))
+            .map(|entry| encode_history_cursor(&repo.record.id, audience, &entry.source_id))
             .transpose()?
     } else {
         None
@@ -161,13 +161,13 @@ fn history_view_for_repo(
 
 fn history_page<'a>(
     view: &'a HistoryView,
-    boundary_id: Option<&str>,
+    boundary_source_id: Option<&str>,
 ) -> Result<(&'a [HistoryEntry], bool), ApiError> {
-    let start = match boundary_id {
-        Some(boundary_id) => view
+    let start = match boundary_source_id {
+        Some(boundary_source_id) => view
             .entries
             .iter()
-            .position(|entry| entry.id == boundary_id)
+            .position(|entry| entry.source_id == boundary_source_id)
             .map(|index| index + 1)
             .ok_or_else(|| {
                 ApiError::bad_request("history cursor boundary is no longer available")
@@ -183,13 +183,13 @@ fn history_page<'a>(
 fn encode_history_cursor(
     repo_id: &str,
     audience: ProjectionPreviewAudience,
-    boundary_id: &str,
+    boundary_source_id: &str,
 ) -> Result<String, ApiError> {
     let cursor = HistoryCursor {
         version: HISTORY_CURSOR_VERSION,
         repo_id: repo_id.to_string(),
         audience,
-        boundary_id: boundary_id.to_string(),
+        boundary_source_id: boundary_source_id.to_string(),
     };
     let encoded = serde_json::to_vec(&cursor).map_err(ApiError::internal)?;
     Ok(URL_SAFE_NO_PAD.encode(encoded))
@@ -211,17 +211,17 @@ fn parse_history_cursor(
             "history cursor does not match the repository and audience",
         ));
     }
-    Ok(cursor.boundary_id)
+    Ok(cursor.boundary_source_id)
 }
 
 fn history_entry_for_id<'a>(
     entries: &'a [HistoryEntry],
-    entry_id: &str,
+    entry_source_id: &str,
 ) -> Result<&'a HistoryEntry, ApiError> {
     entries
         .iter()
-        .find(|entry| entry.id == entry_id || entry.source_id == entry_id)
-        .ok_or_else(|| ApiError::not_found(format!("history entry {entry_id} not found")))
+        .find(|entry| entry.source_id == entry_source_id)
+        .ok_or_else(|| ApiError::not_found(format!("history entry {entry_source_id} not found")))
 }
 
 fn history_entry_file_diff_response(
