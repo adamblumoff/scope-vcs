@@ -187,7 +187,9 @@ pub(crate) fn run_steps_with_options<S: ExecutionSink>(
                 group_killed = true;
             }
 
-            if let (Some(exit_status), Some(summary)) = (status, output.take()) {
+            if let Some(exit_status) = status
+                && let Some(summary) = output.take()
+            {
                 let final_status = match process.take().expect("step process exists").finish() {
                     Ok(final_status) => final_status,
                     Err(error) => {

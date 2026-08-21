@@ -286,6 +286,33 @@ fn nonzero_exit_drains_logs_before_completing_the_step() {
 }
 
 #[test]
+fn output_can_close_before_the_process_exits() {
+    let sink = FakeSink::new([]);
+    let workspace = tempfile::tempdir().unwrap();
+    let job = job(&[("close-output", "exec 1>&- 2>&-; sleep 0.15")]);
+
+    let outcome = run_steps_with_options(
+        sink.clone(),
+        &job,
+        workspace.path(),
+        SupervisorOptions::for_test(Duration::from_secs(1)),
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome,
+        ExecutionOutcome::Succeeded {
+            logs_truncated: false
+        }
+    );
+    assert!(sink.calls().contains(&Call::CompleteStep {
+        step: 0,
+        exit_code: 0,
+        logs_truncated: false,
+    }));
+}
+
+#[test]
 fn timeout_reaps_the_process_group_before_completing() {
     let sink = FakeSink::new([]);
     let workspace = tempfile::tempdir().unwrap();
