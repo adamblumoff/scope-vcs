@@ -55,7 +55,7 @@ async fn history_get(state: AppState, uri: impl AsRef<str>, private: bool) -> Re
         .unwrap()
 }
 
-async fn first_projected_id(state: AppState, audience: &str) -> String {
+async fn first_history_source_id(state: AppState, audience: &str) -> String {
     let response = history_get(
         state,
         format!("/v1/repos/owner/repo/history?audience={audience}"),
@@ -63,7 +63,7 @@ async fn first_projected_id(state: AppState, audience: &str) -> String {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    response_json(response).await["entries"][0]["id"]
+    response_json(response).await["entries"][0]["source_id"]
         .as_str()
         .unwrap()
         .to_string()
@@ -121,7 +121,7 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
     )
     .await;
 
-    let public_id = first_projected_id(state.clone(), "public").await;
+    let public_id = first_history_source_id(state.clone(), "public").await;
     let detail = history_get(
         state.clone(),
         format!("/v1/repos/owner/repo/history/{public_id}?audience=public"),
@@ -150,7 +150,7 @@ async fn public_commit_diff_does_not_leak_private_old_content() {
         true,
     )
     .await;
-    let private_id = response_json(private_list).await["entries"][0]["id"]
+    let private_id = response_json(private_list).await["entries"][0]["source_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -303,6 +303,61 @@ async fn history_pages_are_newest_first_and_exhaust_cleanly() {
     assert_eq!(second_entries[0]["source_id"], "rv5");
     assert_eq!(second_entries[4]["source_id"], "rv1");
     assert!(second["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn history_cursor_and_entry_urls_survive_projection_id_renumbering() {
+    let state = test_state_with_repo();
+    replace_test_repo(&state, paged_history_repo(&state, 51)).await;
+
+    let first = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/history?audience=public",
+        false,
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = response_json(first).await;
+    assert_eq!(first["entries"][49]["source_id"], "rv2");
+    let original_id = first["entries"][49]["id"].as_str().unwrap().to_string();
+    let cursor = first["next_cursor"].as_str().unwrap();
+
+    let mut repo = paged_history_repo(&state, 51);
+    repo.visibility_events
+        .push(scope_domain::projection::VisibilityEvent {
+            id: "visibility-after-rv1".into(),
+            after_commit_id: Some("rv1".into()),
+            source_commit_id: None,
+            author_id: test_owner_id(),
+            path: ScopePath::parse("/README.md").unwrap(),
+            old_visibility: Visibility::Public,
+            new_visibility: Visibility::Private,
+            current_content: Some(source_blob(&state, "version 1")),
+        });
+    replace_test_repo(&state, repo).await;
+
+    let second = history_get(
+        state.clone(),
+        format!("/v1/repos/owner/repo/history?audience=public&before={cursor}"),
+        false,
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second = response_json(second).await;
+    assert_eq!(second["entries"][0]["source_id"], "visibility-after-rv1");
+    assert_eq!(second["entries"][1]["source_id"], "rv1");
+    assert!(second["next_cursor"].is_null());
+
+    let detail = history_get(
+        state,
+        "/v1/repos/owner/repo/history/rv2?audience=public",
+        false,
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = response_json(detail).await;
+    assert_eq!(detail["source_id"], "rv2");
+    assert_ne!(detail["id"], original_id);
 }
 
 #[tokio::test]

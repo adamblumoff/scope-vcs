@@ -26,7 +26,7 @@ export function HistoryEntryList({
     <div className="border-b border-border py-2 lg:border-b-0 lg:border-r">
       {entries.map((entry) => {
         const labels = historyEntryLabels(entry)
-        const selected = selectedEntryId === entry.id
+        const selected = selectedEntryId === entry.source_id
         return (
           <button
             aria-label={labels.ariaLabel}
