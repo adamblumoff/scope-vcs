@@ -15,6 +15,8 @@ import { ArrowRight, GitCommit, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useRef } from 'react'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 
+const EMPTY_VISIBILITY_CHANGES: HistoryEntryDetail['visibility_changes'] = []
+
 export function CommitDetailPanel({
   commitContext,
   commitState,
@@ -28,7 +30,7 @@ export function CommitDetailPanel({
   onSelectFile,
   selectedFilePath,
   terminology = 'commit',
-  visibilityChanges = [],
+  visibilityChanges = EMPTY_VISIBILITY_CHANGES,
 }: {
   commitContext?: ReactNode
   commitState: CommitDetailState
