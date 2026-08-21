@@ -1,8 +1,5 @@
 use crate::{
-    config::{
-        DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES,
-        MAX_PENDING_IMPORT_TOTAL_BYTES,
-    },
+    config::{DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES},
     error::ApiError,
     git::upload::{git_process_output_with_limits, git_process_output_with_timeout},
     runtime_budgets::RuntimeBudgets,
@@ -102,7 +99,6 @@ fn git_tree_entries_for_path(
     }
     let output = run_git_output(Some(staging_repo), &args, "reading pushed tree")?;
     let mut pending_files = Vec::new();
-    let mut total_bytes = 0usize;
     for raw in output.stdout.split(|byte| *byte == 0) {
         if raw.is_empty() {
             continue;
@@ -147,16 +143,6 @@ fn git_tree_entries_for_path(
             return Err(ApiError::bad_request(format!(
                 "blob {path} is larger than {MAX_PENDING_IMPORT_BLOB_BYTES} bytes"
             )));
-        }
-        if enforce_import_limits {
-            total_bytes = total_bytes
-                .checked_add(blob_size)
-                .ok_or_else(|| ApiError::bad_request("pending import is too large"))?;
-            if total_bytes > MAX_PENDING_IMPORT_TOTAL_BYTES {
-                return Err(ApiError::bad_request(format!(
-                    "pending import exceeds {MAX_PENDING_IMPORT_TOTAL_BYTES} bytes"
-                )));
-            }
         }
         pending_files.push(GitTreeFile {
             path,
@@ -288,16 +274,6 @@ pub(super) fn git_changed_tree_entries(
     if pending.len() > MAX_PENDING_IMPORT_FILES {
         return Err(ApiError::bad_request(format!(
             "pending import exceeds {MAX_PENDING_IMPORT_FILES} files"
-        )));
-    }
-    let total_bytes = pending
-        .iter()
-        .filter_map(|(_, entry)| entry.as_ref())
-        .try_fold(0usize, |total, entry| total.checked_add(entry.size_bytes))
-        .ok_or_else(|| ApiError::bad_request("pending import is too large"))?;
-    if total_bytes > MAX_PENDING_IMPORT_TOTAL_BYTES {
-        return Err(ApiError::bad_request(format!(
-            "pending import exceeds {MAX_PENDING_IMPORT_TOTAL_BYTES} bytes"
         )));
     }
     Ok(pending)

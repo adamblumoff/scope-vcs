@@ -45,7 +45,6 @@ pub const MAX_RECEIVE_PACK_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_UPLOAD_PACK_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_PENDING_IMPORT_FILES: usize = 10_000;
 pub const MAX_PENDING_IMPORT_BLOB_BYTES: usize = 25 * 1024 * 1024;
-pub const MAX_PENDING_IMPORT_TOTAL_BYTES: usize = 100 * 1024 * 1024;
 
 pub fn database_url_from_env() -> anyhow::Result<String> {
     non_empty_env(DATABASE_URL_ENV)
