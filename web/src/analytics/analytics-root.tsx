@@ -9,7 +9,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from 'react'
-import { identityTransition } from './identity'
+import { identityTransition, resolveAnalyticsIdentity } from './identity'
 import { createPrivacyBoundary, pageViewProperties } from './privacy'
 import { analyticsRouteForId } from './routes'
 
@@ -60,14 +60,13 @@ function AnalyticsRuntime({ client }: { client: PostHog }) {
 
     identityKey.current = null
     let active = true
-    void loadAnalyticsIdentity()
+    void resolveAnalyticsIdentity(userId, loadAnalyticsIdentity)
       .then((identity) => {
-        if (!active || !identity) return
+        if (!active) return
         applyIdentityTransition(client, identity.scopeUserId)
-        identityKey.current = identifiedKey(userId)
+        identityKey.current = identity.identityKey
         captureCurrentPage(client, currentPage.current, capturedPage)
       })
-      .catch(() => undefined)
 
     return () => {
       active = false

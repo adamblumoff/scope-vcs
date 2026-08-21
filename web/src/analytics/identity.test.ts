@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { identityTransition } from './identity'
+import {
+  identityTransition,
+  resolveAnalyticsIdentity,
+} from './identity'
 
 test('signed-in anonymous visitors identify with the internal Scope user ID', () => {
   assert.deepEqual(identityTransition({
@@ -42,4 +45,16 @@ test('already identified visitors do not emit a duplicate identify', () => {
     persistedUserId: 'scope_usr_123',
     scopeUserId: 'scope_usr_123',
   }), { kind: 'none' })
+})
+
+test('identity lookup failure keeps signed-in pageviews anonymous', async () => {
+  const identity = await resolveAnalyticsIdentity(
+    'clerk_user_123',
+    () => Promise.reject(new Error('identity unavailable')),
+  )
+
+  assert.deepEqual(identity, {
+    identityKey: 'identified:clerk_user_123',
+    scopeUserId: null,
+  })
 })
