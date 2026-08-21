@@ -313,6 +313,50 @@ fn output_can_close_before_the_process_exits() {
 }
 
 #[test]
+fn escaped_descendant_cannot_hold_output_capture_open() {
+    let sink = FakeSink::new([]);
+    let workspace = tempfile::tempdir().unwrap();
+    let job = job(&[("escape", "setsid sh -c 'echo $$ > escaped.pid; sleep 30' &")]);
+    let started = Instant::now();
+
+    let outcome = run_steps_with_options(
+        sink.clone(),
+        &job,
+        workspace.path(),
+        SupervisorOptions::for_test(Duration::from_secs(2)),
+    )
+    .unwrap();
+    let escaped_pid_path = workspace.path().join("escaped.pid");
+    for _ in 0..100 {
+        if escaped_pid_path.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let escaped_pid = std::fs::read_to_string(escaped_pid_path)
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    unsafe {
+        libc::kill(escaped_pid, libc::SIGKILL);
+    }
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(
+        outcome,
+        ExecutionOutcome::Succeeded {
+            logs_truncated: false
+        }
+    );
+    assert!(sink.calls().contains(&Call::CompleteStep {
+        step: 0,
+        exit_code: 0,
+        logs_truncated: false,
+    }));
+}
+
+#[test]
 fn timeout_reaps_the_process_group_before_completing() {
     let sink = FakeSink::new([]);
     let workspace = tempfile::tempdir().unwrap();
@@ -390,7 +434,7 @@ fn heartbeat_can_cancel_while_an_append_is_blocked() {
     }])
     .cancel_on_heartbeat(heartbeat_sender);
     let workspace = tempfile::tempdir().unwrap();
-    let job = job(&[("slow", "printf log; sleep 30")]);
+    let job = job(&[("slow", "head -c 50000 /dev/zero | tr '\\0' x; sleep 30")]);
     let run_sink = sink.clone();
     let started = Instant::now();
     let run = thread::spawn(move || {
@@ -408,11 +452,12 @@ fn heartbeat_can_cancel_while_an_append_is_blocked() {
     heartbeat_receiver
         .recv_timeout(Duration::from_secs(1))
         .unwrap();
+    thread::sleep(Duration::from_millis(75));
     release_sender.send(()).unwrap();
 
     assert_eq!(run.join().unwrap().unwrap(), ExecutionOutcome::Terminal);
     assert!(started.elapsed() < Duration::from_secs(2));
-    assert!(sink.calls().contains(&Call::CompleteCanceled(false)));
+    assert!(sink.calls().contains(&Call::CompleteCanceled(true)));
 }
 
 #[test]

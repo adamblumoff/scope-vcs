@@ -104,7 +104,7 @@ pub(crate) fn run_steps_with_options<S: ExecutionSink>(
                 );
             }
         };
-        let capture = OutputCapture::start(
+        let capture = match OutputCapture::start(
             stdout,
             stderr,
             Arc::clone(&sink),
@@ -112,7 +112,18 @@ pub(crate) fn run_steps_with_options<S: ExecutionSink>(
             next_sequence,
             logs_truncated,
             options.upload_policy,
-        );
+        ) {
+            Ok(capture) => capture,
+            Err(error) => {
+                return cleanup_after_error(
+                    sink.as_ref(),
+                    process,
+                    None,
+                    options.termination_grace,
+                    error,
+                );
+            }
+        };
 
         let mut capture = Some(capture);
         let mut process = Some(process);
@@ -185,6 +196,9 @@ pub(crate) fn run_steps_with_options<S: ExecutionSink>(
                     );
                 }
                 group_killed = true;
+                if output.is_none() {
+                    capture.as_ref().expect("output capture exists").stop();
+                }
             }
 
             if let Some(exit_status) = status
@@ -267,10 +281,10 @@ fn terminate_step(
     grace: Duration,
     mut logs_truncated: bool,
 ) -> bool {
-    capture.stop_uploading();
     if let Err(error) = process.terminate_and_wait(grace) {
         eprintln!("runtime failed to clean up step process: {error:#}");
     }
+    capture.stop();
     match capture.wait() {
         Ok(summary) => logs_truncated |= summary.logs_truncated,
         Err(error) => eprintln!("runtime failed to finish output capture: {error:#}"),
@@ -285,11 +299,11 @@ fn cleanup_after_error<S: ExecutionSink, T>(
     grace: Duration,
     error: anyhow::Error,
 ) -> anyhow::Result<T> {
-    if let Some(capture) = capture.as_ref() {
-        capture.stop_uploading();
-    }
     if let Err(cleanup_error) = process.terminate_and_wait(grace) {
         eprintln!("runtime failed to clean up step process: {cleanup_error:#}");
+    }
+    if let Some(capture) = capture.as_ref() {
+        capture.stop();
     }
     if let Some(capture) = capture
         && let Err(capture_error) = capture.wait()
@@ -306,10 +320,10 @@ fn cleanup_after_output_error<S: ExecutionSink, T>(
     grace: Duration,
     error: anyhow::Error,
 ) -> anyhow::Result<T> {
-    capture.stop_uploading();
     if let Err(cleanup_error) = process.terminate_and_wait(grace) {
         eprintln!("runtime failed to clean up step process: {cleanup_error:#}");
     }
+    capture.stop();
     if let Err(capture_error) = capture.join() {
         eprintln!("runtime failed to join output capture: {capture_error:#}");
     }
