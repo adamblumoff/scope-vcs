@@ -28,13 +28,11 @@
     "worker": {
       "name": "scope-worker",
       "id": "a474a0d1-3000-4a95-9ca3-cd3a7f3ef669",
-      "bootstrapReplicas": 1,
       "dependsOn": ["cache"]
     },
     "api": {
       "name": "scope-api",
       "id": "9456cd8d-40bd-489a-a181-72b7f777c4a8",
-      "bootstrapReplicas": 1,
       "dependsOn": ["worker"]
     },
     "web": {

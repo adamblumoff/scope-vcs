@@ -99,10 +99,6 @@ test("deployment manifest is a single coherent production graph", () => {
 
   assert.equal(manifest.deploymentAuthority, "github-actions");
   assert.equal(manifest.source.nativeAutodeploy, false);
-  for (const service of ["api", "worker"]) {
-    assert.ok(Number.isInteger(manifest.services[service].bootstrapReplicas));
-    assert.ok(manifest.services[service].bootstrapReplicas > 0);
-  }
   assert.equal(new Set(serviceIds).size, serviceIds.length);
   for (const [service, configuration] of Object.entries(manifest.services)) {
     for (const dependency of configuration.dependsOn) {

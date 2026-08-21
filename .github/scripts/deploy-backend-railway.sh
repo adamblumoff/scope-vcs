@@ -39,7 +39,7 @@ if [[ ! -x "$maintenance_binary" ]]; then
 fi
 
 # The Railway CLI accepts project tokens but currently rejects workspace tokens. Keep the
-# workspace token out of its environment and use it only for the scaling API mutation below.
+# workspace token out of its environment and use it only for deployment control below.
 railway_api_token="$RAILWAY_API_TOKEN"
 unset RAILWAY_API_TOKEN
 
@@ -47,8 +47,6 @@ railway_scope=(--project "$RAILWAY_PROJECT_ID" --environment "$environment")
 cutover_committed=0
 api_closed=0
 worker_closed=0
-api_rollback_replicas=0
-worker_rollback_replicas=0
 
 validate_production_target() {
   local status_json services_json environment_config_json
@@ -196,6 +194,7 @@ console.log([
   replicas.crashed || 0,
   replicas.configured || 0,
   service.deploymentStopped === true ? "1" : "0",
+  service.deploymentId || "",
 ].join("\t"));
 '
 }
@@ -204,11 +203,11 @@ wait_for_replica_state() {
   local service_name="$1"
   local expected_running="$2"
   local deadline=$((SECONDS + 600))
-  local line status running crashed configured stopped
+  local line status running crashed configured stopped id
   while (( SECONDS < deadline )); do
     line="$(service_state_line "$service_name" || true)"
     if [[ -n "$line" ]]; then
-      IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
+      IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
       if [[ "$running" == "$expected_running" && "${crashed:-0}" == "0" ]]; then
         if [[ "$expected_running" == "0" || ( "$status" == "SUCCESS" && "$stopped" == "0" ) ]]; then
           return 0
@@ -224,11 +223,11 @@ wait_for_replica_state() {
 wait_for_service_health() {
   local service_name="$1"
   local deadline=$((SECONDS + 600))
-  local line status running crashed configured stopped
+  local line status running crashed configured stopped id
   while (( SECONDS < deadline )); do
     line="$(service_state_line "$service_name" || true)"
     if [[ -n "$line" ]]; then
-      IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
+      IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
       if [[ "$status" == "SUCCESS" && "$stopped" == "0" && "$configured" -gt 0 \
         && "$running" == "$configured" && "${crashed:-0}" == "0" ]]; then
         return 0
@@ -241,42 +240,18 @@ wait_for_service_health() {
 }
 
 service_is_healthy() {
-  local line status running crashed configured stopped
+  local line status running crashed configured stopped id
   line="$(service_state_line "$1")"
-  IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
+  IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
   [[ "$status" == "SUCCESS" && "$stopped" == "0" && "$configured" -gt 0 \
     && "$running" == "$configured" && "${crashed:-0}" == "0" ]]
 }
 
 running_replicas() {
-  local line status running crashed configured stopped
+  local line status running crashed configured stopped id
   line="$(service_state_line "$1")"
-  IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
+  IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
   printf '%s\n' "$running"
-}
-
-configured_replicas() {
-  local line status running crashed configured stopped
-  line="$(service_state_line "$1")"
-  IFS=$'\t' read -r status running crashed configured stopped <<< "$line"
-  printf '%s\n' "$configured"
-}
-
-configured_or_bootstrap_replicas() {
-  local service_name="$1"
-  local variable_name="$2"
-  local configured declared
-  configured="$(configured_replicas "$service_name")"
-  if [[ "$configured" -gt 0 ]]; then
-    printf '%s\n' "$configured"
-    return 0
-  fi
-  declared="${!variable_name:-}"
-  if [[ ! "$declared" =~ ^[1-9][0-9]*$ ]]; then
-    echo "$variable_name must declare a positive bootstrap replica count when Railway has no deployment metadata." >&2
-    return 1
-  fi
-  printf '%s\n' "$declared"
 }
 
 service_has_deployment_history() {
@@ -288,46 +263,33 @@ process.exit(Array.isArray(deployments) && deployments.length > 0 ? 0 : 1);
 '
 }
 
-scale_service() {
-  local service_name="$1"
-  local replicas="$2"
-  local region request response
-  case "$service_name" in
-    "$api_service") region="$api_region" ;;
-    "$worker_service") region="$worker_region" ;;
-    *)
-      echo "No reviewed Railway region is configured for service $service_name." >&2
-      return 1
-      ;;
-  esac
+deployment_id() {
+  local line status running crashed configured stopped id
+  line="$(service_state_line "$1")"
+  IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
+  if [[ -z "$id" ]]; then
+    echo "Railway service $1 has no active deployment to control." >&2
+    return 1
+  fi
+  printf '%s\n' "$id"
+}
+
+deployment_action() {
+  local action="$1"
+  local service_name="$2"
+  local id request response
+  id="$(deployment_id "$service_name")"
   request="$(
-    SERVICE_ID="$service_name" \
-      ENVIRONMENT_ID="$environment" \
-      RAILWAY_REGION="$region" \
-      REPLICA_COUNT="$replicas" \
+    DEPLOYMENT_ACTION="$action" \
+      DEPLOYMENT_ID="$id" \
       node -e '
-const replicas = Number(process.env.REPLICA_COUNT);
-if (!Number.isInteger(replicas) || replicas < 0) process.exit(2);
+const action = process.env.DEPLOYMENT_ACTION;
+if (action !== "Stop" && action !== "Restart") process.exit(2);
 console.log(JSON.stringify({
-  query: `mutation ScaleService($environmentId: String!, $patch: EnvironmentConfig!, $commitMessage: String) {
-    environmentPatchCommit(environmentId: $environmentId, patch: $patch, commitMessage: $commitMessage)
+  query: `mutation deployment${action}($id: String!) {
+    deployment${action}(id: $id)
   }`,
-  variables: {
-    environmentId: process.env.ENVIRONMENT_ID,
-    patch: {
-      services: {
-        [process.env.SERVICE_ID]: {
-          deploy: {
-            // Railway represents zero replicas by removing the region from the environment config.
-            multiRegionConfig: {
-              [process.env.RAILWAY_REGION]: replicas === 0 ? null : {numReplicas: replicas},
-            },
-          },
-        },
-      },
-    },
-    commitMessage: `Scale service ${process.env.SERVICE_ID}`,
-  },
+  variables: {id: process.env.DEPLOYMENT_ID},
 }));
 '
   )"
@@ -339,16 +301,22 @@ console.log(JSON.stringify({
         --header @- \
         --data-binary "$request"
   )"
-  RAILWAY_GRAPHQL_RESPONSE="$response" node -e '
+  RAILWAY_GRAPHQL_RESPONSE="$response" DEPLOYMENT_ACTION="$action" node -e '
 const response = JSON.parse(process.env.RAILWAY_GRAPHQL_RESPONSE || "{}");
-if (typeof response.data?.environmentPatchCommit !== "string" || response.data.environmentPatchCommit.length === 0) {
+const field = `deployment${process.env.DEPLOYMENT_ACTION}`;
+if (response.data?.[field] !== true) {
   const messages = Array.isArray(response.errors)
     ? response.errors.map(({message}) => message).filter(Boolean).join("; ")
     : "";
-  console.error(`Railway scaling mutation failed${messages ? `: ${messages}` : "."}`);
+  console.error(`Railway ${field} mutation failed${messages ? `: ${messages}` : "."}`);
   process.exit(1);
 }
 '
+}
+
+restart_service() {
+  deployment_action Restart "$1"
+  wait_for_service_health "$1"
 }
 
 quiesce_writers() {
@@ -357,7 +325,7 @@ quiesce_writers() {
       echo "Refusing maintenance because $api_service is not healthy before shutdown." >&2
       return 1
     fi
-    scale_service "$api_service" 0
+    deployment_action Stop "$api_service"
     api_closed=1
     wait_for_replica_state "$api_service" 0
   fi
@@ -366,27 +334,20 @@ quiesce_writers() {
       echo "Refusing maintenance because $worker_service is not healthy before shutdown." >&2
       return 1
     fi
-    scale_service "$worker_service" 0
+    deployment_action Stop "$worker_service"
     worker_closed=1
     wait_for_replica_state "$worker_service" 0
   fi
 }
 
-restore_service() {
-  local service_name="$1"
-  local expected_replicas="$2"
-  scale_service "$service_name" "$expected_replicas"
-  wait_for_replica_state "$service_name" "$expected_replicas"
-}
-
 restore_old_release() {
   echo "Migration did not commit; restoring the previous worker and API deployments." >&2
   if [[ "$worker_closed" == "1" ]]; then
-    restore_service "$worker_service" "$worker_rollback_replicas"
+    restart_service "$worker_service"
     worker_closed=0
   fi
   if [[ "$api_closed" == "1" ]]; then
-    restore_service "$api_service" "$api_rollback_replicas"
+    restart_service "$api_service"
     api_closed=0
   fi
 }
@@ -411,12 +372,10 @@ deploy_selected_releases() {
 deploy_and_reopen() {
   maintenance_read verify
   deploy_cache_release
-  bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root" stopped
-  scale_service "$worker_service" "$worker_rollback_replicas"
+  bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
   wait_for_service_health "$worker_service"
   worker_closed=0
-  bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root" stopped
-  scale_service "$api_service" "$api_rollback_replicas"
+  bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
   wait_for_service_health "$api_service"
   api_closed=0
 }
@@ -437,13 +396,6 @@ leave_failure_state() {
 trap 'leave_failure_state $?' EXIT
 
 validate_production_target
-
-api_rollback_replicas="$(
-  configured_or_bootstrap_replicas "$api_service" SCOPE_RAILWAY_API_BOOTSTRAP_REPLICAS
-)"
-worker_rollback_replicas="$(
-  configured_or_bootstrap_replicas "$worker_service" SCOPE_RAILWAY_WORKER_BOOTSTRAP_REPLICAS
-)"
 
 plan_json="$(maintenance_read plan)"
 set +e

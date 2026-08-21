@@ -118,13 +118,10 @@ jobs:
           SCOPE_RAILWAY_DATABASE_SERVICE_ID="$(jq -r '.railway.databaseServiceId' "$manifest")"
           SCOPE_RAILWAY_API_REGION_ID="$(jq -r '.railway.regionId' "$manifest")"
           SCOPE_RAILWAY_WORKER_REGION_ID="$SCOPE_RAILWAY_API_REGION_ID"
-          SCOPE_RAILWAY_API_BOOTSTRAP_REPLICAS="$(jq -r '.services.api.bootstrapReplicas' "$manifest")"
-          SCOPE_RAILWAY_WORKER_BOOTSTRAP_REPLICAS="$(jq -r '.services.worker.bootstrapReplicas' "$manifest")"
           export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
           export SCOPE_RAILWAY_API_SERVICE_ID SCOPE_RAILWAY_WORKER_SERVICE_ID
           export SCOPE_RAILWAY_CACHE_SERVICE_ID SCOPE_RAILWAY_DATABASE_SERVICE_ID
           export SCOPE_RAILWAY_API_REGION_ID SCOPE_RAILWAY_WORKER_REGION_ID
-          export SCOPE_RAILWAY_API_BOOTSTRAP_REPLICAS SCOPE_RAILWAY_WORKER_BOOTSTRAP_REPLICAS
           bash .github/scripts/deploy-backend-railway.sh \
             .railway-upload/api \
             .railway-upload/worker \
