@@ -24,6 +24,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 async function main() {
   const environment = required('SCOPE_RAILWAY_ENVIRONMENT');
   const since = process.env.SCOPE_RAILWAY_SINCE || '1h';
+  const until = process.env.SCOPE_RAILWAY_UNTIL?.trim() || null;
   const services = (process.env.SCOPE_RAILWAY_SERVICES || 'scope-api,scope-worker')
     .split(',')
     .map((service) => service.trim())
@@ -34,22 +35,22 @@ async function main() {
   await mkdir(outputRoot, { recursive: true });
 
   const report = {
-    version: 2,
+    version: 3,
     generatedAt: new Date().toISOString(),
     runLabel: process.env.SCOPE_BENCH_RUN_LABEL?.trim() || 'unlabeled',
     environment,
     since,
+    until,
     services: {},
   };
   for (const service of services) {
-    const logs = parseJsonLines(await railway([
-      'logs',
-      '--service', service,
-      '--environment', environment,
-      '--since', since,
-      '--lines', String(logLines),
-      '--json',
-    ]));
+    const [logs, ...gitLogGroups] = await Promise.all([
+      railwayLogs(service, environment, since, until, logLines),
+      railwayLogs(service, environment, since, until, logLines, '"Git restore operation completed"'),
+      railwayLogs(service, environment, since, until, logLines, '"Git content read completed"'),
+      railwayLogs(service, environment, since, until, logLines, '"repository Git replica materialization completed"'),
+    ]);
+    const gitLogs = gitLogGroups.flat();
     const snapshots = logs.flatMap((entry) => {
       const message = stripAnsi(entry.message || '');
       if (!message.includes('runtime process snapshot')) return [];
@@ -69,6 +70,13 @@ async function main() {
       const message = stripAnsi(entry.message || '');
       if (!message.includes('object store operation timing')) return [];
       return [{ timestamp: entry.timestamp, ...objectStoreFields(message) }];
+    });
+    const gitOperations = gitLogs.flatMap((entry) => {
+      const message = stripAnsi(entry.message || '');
+      if (!message.includes('Git restore operation completed')
+        && !message.includes('Git content read completed')
+        && !message.includes('repository Git replica materialization completed')) return [];
+      return [{ timestamp: entry.timestamp, ...gitOperationFields(message) }];
     });
     const errors = logs.flatMap((entry) => {
       const message = stripAnsi(entry.message || '');
@@ -100,6 +108,9 @@ async function main() {
       pushPersistenceSummary: summarizePushPersistence(pushPersistence),
       objectStoreOperations,
       objectStoreSummary: summarizeObjectStore(objectStoreOperations),
+      gitOperations,
+      gitOperationSummary: summarizeGitOperations(gitOperations),
+      materializationSummary: summarizeMaterializations(gitOperations),
       errors,
       capacityRejections,
       capacityRejectionSummary: summarizeCapacityRejections(capacityRejections),
@@ -111,6 +122,20 @@ async function main() {
   await writeFile(output, `${JSON.stringify(report, null, 2)}\n`);
   await writeFile(summary, telemetryMarkdown(report));
   console.log(`results: ${output}\nsummary: ${summary}`);
+}
+
+async function railwayLogs(service, environment, since, until, lines, filter = null) {
+  const args = [
+    'logs',
+    '--service', service,
+    '--environment', environment,
+    '--since', since,
+    '--lines', String(lines),
+    '--json',
+  ];
+  if (until) args.push('--until', until);
+  if (filter) args.push('--filter', filter);
+  return parseJsonLines(await railway(args));
 }
 
 function railway(args) {
@@ -216,6 +241,40 @@ export function objectStoreFields(message) {
   };
 }
 
+export function gitOperationFields(message) {
+  const numeric = numericFields(message, [
+    'duration_ms',
+    'elapsed_us',
+    'requested_sequence',
+    'applied_sequence_before',
+    'applied_sequence_after',
+    'pack_span_count',
+    'span_index',
+    'span_count',
+    'first_sequence',
+    'last_sequence',
+    'geometric_tier',
+    'size_bytes',
+    'total_pack_bytes',
+  ]);
+  const operation = message.includes('repository Git replica materialization completed')
+    ? 'materialize_repository'
+    : textField(message, 'operation') || 'unknown';
+  return {
+    requestId: textField(message, 'request_id'),
+    replicaId: textField(message, 'replica_id'),
+    repositoryId: textField(message, 'repository_id'),
+    operation,
+    cacheOutcome: textField(message, 'cache_outcome'),
+    materializationPath: textField(message, 'materialization_path'),
+    success: booleanField(message, 'success'),
+    durationMs: Number.isFinite(numeric.duration_ms)
+      ? numeric.duration_ms
+      : Number.isFinite(numeric.elapsed_us) ? round(numeric.elapsed_us / 1_000) : null,
+    ...numeric,
+  };
+}
+
 export function summarizePushPersistence(events) {
   return Object.fromEntries(groupBy(events, ({ protocol }) => protocol).map(([protocol, values]) => [protocol, {
     count: values.length,
@@ -240,6 +299,27 @@ export function summarizeObjectStore(events) {
       serviceTimeMiBPerSecond: totalElapsedUs > 0 ? round(totalBytes / 1024 / 1024 / (totalElapsedUs / 1_000_000)) : null,
     }];
   }));
+}
+
+export function summarizeGitOperations(events) {
+  return Object.fromEntries(groupBy(events, ({ operation }) => operation).map(([operation, values]) => [operation, {
+    count: values.length,
+    failures: values.filter(({ success }) => success === false).length,
+    durationMs: timingSummary(values, 'durationMs'),
+    totalDurationMs: round(values.reduce((total, event) => total + (event.durationMs || 0), 0)),
+    totalBytes: values.reduce((total, event) => total + (event.size_bytes || 0), 0),
+  }]));
+}
+
+export function summarizeMaterializations(events) {
+  const materializations = events.filter(({ operation }) => operation === 'materialize_repository');
+  return Object.fromEntries(groupBy(
+    materializations,
+    ({ cacheOutcome, materializationPath }) => `${cacheOutcome || 'unknown'}/${materializationPath || 'unknown'}`,
+  ).map(([outcome, values]) => [outcome, {
+    count: values.length,
+    durationMs: timingSummary(values, 'durationMs'),
+  }]));
 }
 
 export function summarizeSnapshots(snapshots) {
@@ -281,7 +361,7 @@ function groupBy(values, keyFor) {
 }
 
 function textField(message, name) {
-  return message.match(new RegExp(`\\b${name}=(?:"([^"]*)"|([^\\s]+))`))?.slice(1).find(Boolean) || null;
+  return message.match(new RegExp(`\\b${name}=(?:"([^"]*)"|([^\\s},:]+))`))?.slice(1).find(Boolean) || null;
 }
 
 function booleanField(message, name) {
@@ -307,6 +387,14 @@ function telemetryMarkdown(report) {
     Object.entries(data.objectStoreSummary).map(([operation, summary]) =>
       `| ${service} | ${operation} | ${summary.count} | ${summary.failures} | ${summary.elapsedUs?.p95 ?? 'n/a'} | ${summary.totalBytes} | ${summary.serviceTimeMiBPerSecond ?? 'n/a'} |`,
     )).join('\n');
+  const gitOperationRows = Object.entries(report.services).flatMap(([service, data]) =>
+    Object.entries(data.gitOperationSummary).map(([operation, summary]) =>
+      `| ${service} | ${operation} | ${summary.count} | ${summary.failures} | ${summary.durationMs?.p95 ?? 'n/a'} | ${summary.totalDurationMs} | ${summary.totalBytes} |`,
+    )).join('\n');
+  const materializationRows = Object.entries(report.services).flatMap(([service, data]) =>
+    Object.entries(data.materializationSummary).map(([outcome, summary]) =>
+      `| ${service} | ${outcome} | ${summary.count} | ${summary.durationMs?.p95 ?? 'n/a'} |`,
+    )).join('\n');
   const pressureRows = Object.entries(report.services).map(([service, data]) => {
     const process = data.processSummary;
     const resources = data.resourceSummary;
@@ -320,7 +408,7 @@ function telemetryMarkdown(report) {
     Object.entries(data.capacityRejectionSummary).map(([operation, count]) =>
       `| ${service} | ${operation} | ${count} |`,
     )).join('\n') || '| none | none | 0 |';
-  return `# Railway Git storage telemetry\n\nGenerated: ${report.generatedAt}\n\nRun label: ${report.runLabel}\n\nEnvironment: ${report.environment}\n\n## Compaction scheduler\n\n| Service | Count | Outcomes | Queue delay p95 ms | Max attempts | Total p95 ms |\n|---|---:|---|---:|---:|---:|\n${compactionRows}\n\n## Capacity rejections\n\n| Service | Operation | Count |\n|---|---|---:|\n${rejectionRows}\n\n## Runtime pressure\n\n| Service | Peak CPU cores | Peak RSS MiB | Peak cgroup PIDs | Peak open FDs | Peak zombies |\n|---|---:|---:|---:|---:|---:|\n${pressureRows}\n\n## Push persistence\n\n| Service | Protocol | Count | Lock wait p95 us | Body p95 us | Commit p95 us | Total p95 us |\n|---|---|---:|---:|---:|---:|---:|\n${persistenceRows}\n\n## Object storage\n\n| Service | Operation | Count | Failures | Latency p95 us | Bytes | Service-time MiB/s |\n|---|---|---:|---:|---:|---:|---:|\n${objectRows}\n`;
+  return `# Railway Git storage telemetry\n\nGenerated: ${report.generatedAt}\n\nRun label: ${report.runLabel}\n\nEnvironment: ${report.environment}\n\n## Git materialization outcomes\n\n| Service | Cache/path | Count | Duration p95 ms |\n|---|---|---:|---:|\n${materializationRows}\n\n## Git materialization phases\n\n| Service | Operation | Count | Failures | Duration p95 ms | Summed service ms | Bytes |\n|---|---|---:|---:|---:|---:|---:|\n${gitOperationRows}\n\n## Compaction scheduler\n\n| Service | Count | Outcomes | Queue delay p95 ms | Max attempts | Total p95 ms |\n|---|---:|---|---:|---:|---:|\n${compactionRows}\n\n## Capacity rejections\n\n| Service | Operation | Count |\n|---|---|---:|\n${rejectionRows}\n\n## Runtime pressure\n\n| Service | Peak CPU cores | Peak RSS MiB | Peak cgroup PIDs | Peak open FDs | Peak zombies |\n|---|---:|---:|---:|---:|---:|\n${pressureRows}\n\n## Push persistence\n\n| Service | Protocol | Count | Lock wait p95 us | Body p95 us | Commit p95 us | Total p95 us |\n|---|---|---:|---:|---:|---:|---:|\n${persistenceRows}\n\n## Object storage\n\n| Service | Operation | Count | Failures | Latency p95 us | Bytes | Service-time MiB/s |\n|---|---|---:|---:|---:|---:|---:|\n${objectRows}\n`;
 }
 
 function required(name) {

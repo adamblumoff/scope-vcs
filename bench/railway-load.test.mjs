@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
+
 import {
   abortTimeoutMs, apiHeaders, assertSafeTarget, capacityRejectionBreakdown, chooseWrite,
   consistencyStats, evaluateStage, failureBreakdown,
@@ -27,6 +29,29 @@ test('numeric workload controls are unique and sorted', () => {
   assert.throws(() => parseRates('0,1'), /positive numbers/);
   assert.deepEqual(parseByteSizes('8388608,4096,262144,4096'), [4096, 262144, 8388608]);
   assert.throws(() => parseByteSizes('-1,1'), /non-negative byte counts/);
+});
+
+test('endpoint pools are normalized without duplicate primaries', () => {
+  assert.deepEqual(
+    parseApiUrls('https://api-1-loadtest.example.com/', 'https://api-1-loadtest.example.com, https://api-2-loadtest.example.com/'),
+    ['https://api-1-loadtest.example.com', 'https://api-2-loadtest.example.com'],
+  );
+});
+
+test('endpoint routing is reproducible and repository affinity is stable', () => {
+  const urls = ['https://api-1-loadtest.example.com', 'https://api-2-loadtest.example.com', 'https://api-3-loadtest.example.com'];
+  const randomA = createEndpointRouter(urls, 'random', 42);
+  const randomB = createEndpointRouter(urls, 'random', 42);
+  const sequenceA = Array.from({ length: 12 }, () => randomA.choose('owner/repo'));
+  const sequenceB = Array.from({ length: 12 }, () => randomB.choose('owner/repo'));
+  assert.deepEqual(sequenceA, sequenceB);
+  assert.ok(new Set(sequenceA).size > 1);
+
+  const affine = createEndpointRouter(urls, 'repository-affine');
+  const first = affine.choose('owner/repo');
+  assert.equal(affine.choose('owner/repo'), first);
+  assert.equal(affine.choose('owner/repo'), first);
+  assert.equal(createEndpointRouter(urls, 'single').choose('another/repo'), urls[0]);
 });
 
 test('statistics report completion and TTFB p50 p95 p99 with bytes', () => {

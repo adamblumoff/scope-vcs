@@ -1,6 +1,6 @@
 use crate::{
     error::ApiError,
-    git::{storage::restore_git_pack_spans, upload::git_process_output_with_limits},
+    git::{restore::restore_git_pack_spans, upload::git_process_output_with_limits},
     persistence::ensure_private_dir,
     state::AppState,
 };
@@ -43,11 +43,11 @@ fn materialize_accepted_git_head_bundle(
     source: &RunSource,
     max_bytes: usize,
 ) -> Result<Vec<u8>, ApiError> {
-    let (_, head, pack_spans) = source.logical_git_head().ok_or_else(|| {
+    let (repository_id, head, pack_spans) = source.logical_git_head().ok_or_else(|| {
         ApiError::internal_message("run source does not contain a materializable Git head")
     })?;
     let repo = TemporaryRunSourceRepository::new(state)?;
-    restore_git_pack_spans(state, head, pack_spans, repo.path())?;
+    restore_git_pack_spans(state, repository_id, head, pack_spans, repo.path())?;
     let main_ref = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
     let output = git_process_output_with_limits(
         Command::new("git")
