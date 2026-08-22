@@ -270,7 +270,9 @@ export type ReopenAndReplyRequest = { body_markdown: string, client_reply_id: st
 
 export type MarkRequestDiscussionReadRequest = { through_position: number, };
 
-export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestTimelineChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } };
+export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { reason: string, } } | { "RequestTimelineChanged": { request_id: string, discussion_id: string, through_position: number, audience: RequestAudience, } } | { "RunChanged": { run_id: string, change: RunChangeKind, } };
+
+export type RunChangeKind = "Created" | "StatusChanged" | "LogsAppended";
 
 export type RepositoryExecutionProvider = "northflank";
 

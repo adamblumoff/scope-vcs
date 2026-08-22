@@ -106,7 +106,8 @@ pub use run_details::{RunAttemptDetail, RunDetail};
 pub use run_dispatch::CloudAttemptAbort;
 pub use run_history::{RepositoryRun, RunHistoryCursor, RunHistoryPageQuery};
 pub use run_log_reads::{RecentRunLogs, StoredAttemptStepLogs, StoredRunLog};
-pub use runs::DispatchClaim;
+pub use run_log_writes::AppendRunLogResult;
+pub use runs::{DispatchClaim, EnqueueRunResult};
 #[cfg(any(
     test,
     feature = "local-dev",
@@ -125,7 +126,7 @@ pub use git_compaction::{GitCompactionCandidate, GitCompactionClaim};
 pub use git_push_reads::GitPushContext;
 use history_rows::load_repository_histories;
 use locks::acquire_aggregate_lock;
-pub use outbox::{OutboxJobCounts, OutboxRunSummary};
+pub use outbox::{OutboxCreatedRun, OutboxJobCounts, OutboxRunSummary};
 pub use repo_collaboration::{
     CreateRepositoryInviteMutation, UpdateRepositoryMemberPermissionsCommand,
 };

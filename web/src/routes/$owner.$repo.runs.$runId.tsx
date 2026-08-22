@@ -45,11 +45,12 @@ function RepositoryRunDetailRoute() {
     [owner, repo, runId],
   )
   const loadDetail = useCallback(
-    () => loadRepoRunDetail({ data: input }),
+    (signal?: AbortSignal) => loadRepoRunDetail({ data: input, signal }),
     [input],
   )
   const loadLogs = useCallback(
-    (data: RunStepLogsInput) => loadRepoRunStepLogs({ data }),
+    (data: RunStepLogsInput, signal?: AbortSignal) =>
+      loadRepoRunStepLogs({ data, signal }),
     [],
   )
   const cancelRun = useCallback(

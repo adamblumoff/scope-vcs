@@ -248,6 +248,20 @@ pub struct RepoChangeEvent {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RepoChangeNotification {
+    pub event: RepoChangeEvent,
+    pub origin_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum RunChangeKind {
+    Created,
+    StatusChanged,
+    LogsAppended,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum RepoChangeKind {
     Connected,
@@ -261,4 +275,39 @@ pub enum RepoChangeKind {
         through_position: u64,
         audience: RequestAudience,
     },
+    RunChanged {
+        run_id: String,
+        change: RunChangeKind,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_change_uses_the_repo_event_envelope() {
+        let event = RepoChangeEvent {
+            repo_id: "owner/repo".to_string(),
+            version: 0,
+            kind: RepoChangeKind::RunChanged {
+                run_id: "run_1".to_string(),
+                change: RunChangeKind::Created,
+            },
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "repo_id": "owner/repo",
+                "version": 0,
+                "kind": {
+                    "RunChanged": {
+                        "run_id": "run_1",
+                        "change": "Created"
+                    }
+                }
+            })
+        );
+    }
 }

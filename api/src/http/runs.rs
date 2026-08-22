@@ -10,6 +10,7 @@ use crate::{
     persistence::unix_now,
     repo_access::find_repo,
     repo_cleanup::best_effort_cleanup_rollback_source_blobs,
+    repo_events::{RepoChangeEvent, RepoChangeKind},
     state::AppState,
 };
 use axum::{
@@ -23,8 +24,8 @@ use axum::{
     },
 };
 use scope_api_contract::{
-    CreateManualRunQuery, PushTriggerCheckResponse, PushTriggerEvaluationResponse, RunEventsQuery,
-    RunLogResponse, RunResponse,
+    CreateManualRunQuery, PushTriggerCheckResponse, PushTriggerEvaluationResponse, RunChangeKind,
+    RunEventsQuery, RunLogResponse, RunResponse,
 };
 use scope_domain::{
     runs::{
@@ -52,6 +53,7 @@ const MAX_MANUAL_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
 const RUN_LOG_STREAM_PAGE_SIZE: usize = 64;
 const RUN_LOG_STREAM_BUFFER: usize = 32;
 const RUN_LOG_STREAM_AUTH_RECHECK: Duration = Duration::from_secs(30);
+const RUN_LOG_STREAM_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
 const REPOSITORY_STEP_LOG_LIMIT: u64 = 128;
 
@@ -107,13 +109,23 @@ pub(crate) async fn create_manual_run(
         RunSource::ephemeral_git_bundle(stored)?,
         now,
     )?;
-    let run = match state.metadata.runs().enqueue_run(run, revision).await {
-        Ok(run) => run,
+    let enqueued = match state.metadata.runs().enqueue_run(run, revision).await {
+        Ok(enqueued) => enqueued,
         Err(error) => {
             best_effort_cleanup_rollback_source_blobs(&state, &[source_cleanup]).await;
             return Err(error.into());
         }
     };
+    let run = enqueued.run;
+    if enqueued.inserted {
+        state
+            .publish_run_change(
+                run.workflow.repository_id(),
+                run.id.clone(),
+                RunChangeKind::Created,
+            )
+            .await;
+    }
     let jobs = state.metadata.runs().run_jobs(&run.id).await?;
     Ok(Json(run_response(&run, &jobs, false)?))
 }
@@ -279,6 +291,13 @@ pub(crate) async fn cancel_run(
         .runs()
         .request_run_cancellation(&run_id, unix_now()?)
         .await?;
+    state
+        .publish_run_change(
+            run.workflow.repository_id(),
+            run.id.clone(),
+            RunChangeKind::StatusChanged,
+        )
+        .await;
     let logs_truncated = state
         .metadata
         .runs()
@@ -299,6 +318,13 @@ pub(crate) async fn retry_run(
         .runs()
         .retry_run(&run_id, unix_now()?)
         .await?;
+    state
+        .publish_run_change(
+            run.workflow.repository_id(),
+            run.id.clone(),
+            RunChangeKind::StatusChanged,
+        )
+        .await;
     let logs_truncated = state
         .metadata
         .runs()
@@ -314,7 +340,8 @@ pub(crate) async fn run_events(
     Path((owner, repo_name, run_id)): Path<(String, String, String)>,
     Query(query): Query<RunEventsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let (_, user_id) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
+    let (run, user_id) = require_run_access(&state, &headers, &owner, &repo_name, &run_id).await?;
+    let run_changes = state.repo_events.subscribe(run.workflow.repository_id());
     let after = match headers.get("last-event-id") {
         Some(value) => value
             .to_str()
@@ -333,6 +360,7 @@ pub(crate) async fn run_events(
             repo_name,
             user_id,
             run_id,
+            run_changes,
         },
         after,
         sender,
@@ -351,10 +379,11 @@ struct RunEventStreamContext {
     repo_name: String,
     user_id: String,
     run_id: String,
+    run_changes: tokio::sync::broadcast::Receiver<RepoChangeEvent>,
 }
 
 async fn stream_run_events(
-    context: RunEventStreamContext,
+    mut context: RunEventStreamContext,
     mut cursor: u64,
     sender: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) {
@@ -485,7 +514,30 @@ async fn stream_run_events(
         }
         tokio::select! {
             () = sender.closed() => return,
-            () = tokio::time::sleep(Duration::from_secs(1)) => {}
+            () = wait_for_run_change(&mut context.run_changes, &context.run_id) => {}
+            () = tokio::time::sleep(RUN_LOG_STREAM_RECONCILE_INTERVAL) => {}
+        }
+    }
+}
+
+async fn wait_for_run_change(
+    receiver: &mut tokio::sync::broadcast::Receiver<RepoChangeEvent>,
+    run_id: &str,
+) {
+    loop {
+        match receiver.recv().await {
+            Ok(event) => match event.kind {
+                RepoChangeKind::RunChanged {
+                    run_id: changed_run_id,
+                    ..
+                } if changed_run_id == run_id => return,
+                RepoChangeKind::RepositoryChanged { .. } => return,
+                _ => {}
+            },
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => return,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                std::future::pending::<()>().await
+            }
         }
     }
 }
@@ -772,6 +824,55 @@ mod tests {
 
         assert!(message.starts_with("Scope hit an internal error. (reference: err_"));
         assert!(!message.contains(diagnostic));
+    }
+
+    #[tokio::test]
+    async fn run_stream_wakes_only_for_its_run_or_repository_changes() {
+        let (sender, mut receiver) = tokio::sync::broadcast::channel(4);
+        sender
+            .send(RepoChangeEvent {
+                repo_id: "owner/repo".to_string(),
+                version: 0,
+                kind: RepoChangeKind::RunChanged {
+                    run_id: "another-run".to_string(),
+                    change: RunChangeKind::LogsAppended,
+                },
+            })
+            .unwrap();
+        sender
+            .send(RepoChangeEvent {
+                repo_id: "owner/repo".to_string(),
+                version: 0,
+                kind: RepoChangeKind::RunChanged {
+                    run_id: "target-run".to_string(),
+                    change: RunChangeKind::StatusChanged,
+                },
+            })
+            .unwrap();
+
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            wait_for_run_change(&mut receiver, "target-run"),
+        )
+        .await
+        .unwrap();
+
+        let (sender, mut receiver) = tokio::sync::broadcast::channel(1);
+        sender
+            .send(RepoChangeEvent {
+                repo_id: "owner/repo".to_string(),
+                version: 4,
+                kind: RepoChangeKind::RepositoryChanged {
+                    reason: "member-removed".to_string(),
+                },
+            })
+            .unwrap();
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            wait_for_run_change(&mut receiver, "target-run"),
+        )
+        .await
+        .unwrap();
     }
 
     #[test]

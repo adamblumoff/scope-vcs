@@ -1,6 +1,6 @@
-pub(crate) use scope_api_contract::{RepoChangeEvent, RepoChangeKind};
+use scope_api_contract::RepoChangeNotification;
+pub(crate) use scope_api_contract::{RepoChangeEvent, RepoChangeKind, RunChangeKind};
 use scope_domain::requests::RequestAudience as DomainRequestAudience;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -68,12 +68,6 @@ impl RepoChangeReason {
             Self::VisibilityChanged => "visibility-changed",
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct RepoChangeNotification {
-    event: RepoChangeEvent,
-    origin_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +189,18 @@ pub(crate) fn request_timeline_change_event(
     }
 }
 
+pub(crate) fn run_change_event(
+    repo_id: &str,
+    run_id: String,
+    change: RunChangeKind,
+) -> RepoChangeEvent {
+    RepoChangeEvent {
+        repo_id: repo_id.to_string(),
+        version: 0,
+        kind: RepoChangeKind::RunChanged { run_id, change },
+    }
+}
+
 impl crate::state::AppState {
     pub(crate) async fn publish_repo_change(
         &self,
@@ -203,28 +209,7 @@ impl crate::state::AppState {
         reason: RepoChangeReason,
     ) {
         let event = repository_change_event(repo_id, version, reason);
-        self.repo_events.publish_event(event.clone());
-        let payload = match self.repo_events.notification_payload(&event) {
-            Ok(payload) => payload,
-            Err(error) => {
-                tracing::warn!(repo_id, error = %error, "failed to serialize repo change notification");
-                return;
-            }
-        };
-        if let Err(error) = self
-            .metadata
-            .repositories()
-            .notify_repo_change(&payload)
-            .await
-        {
-            tracing::warn!(
-                repo_id,
-                version,
-                reason = reason.as_str(),
-                error = %error.message,
-                "failed to publish repo change notification"
-            );
-        }
+        self.publish_repo_event(event, "repo change").await;
     }
 
     pub(crate) async fn publish_request_summary_refresh(
@@ -251,11 +236,25 @@ impl crate::state::AppState {
             through_position,
             audience,
         );
+        self.publish_repo_event(event, "request discussion").await;
+    }
+
+    pub(crate) async fn publish_run_change(
+        &self,
+        repo_id: &str,
+        run_id: String,
+        change: RunChangeKind,
+    ) {
+        let event = run_change_event(repo_id, run_id, change);
+        self.publish_repo_event(event, "run change").await;
+    }
+
+    async fn publish_repo_event(&self, event: RepoChangeEvent, description: &'static str) {
         self.repo_events.publish_event(event.clone());
         let payload = match self.repo_events.notification_payload(&event) {
             Ok(payload) => payload,
             Err(error) => {
-                tracing::warn!(repo_id, error = %error, "failed to serialize repo change notification");
+                tracing::warn!(repo_id = %event.repo_id, %error, "failed to serialize {description} notification");
                 return;
             }
         };
@@ -266,10 +265,9 @@ impl crate::state::AppState {
             .await
         {
             tracing::warn!(
-                repo_id,
-                through_position,
+                repo_id = %event.repo_id,
                 error = %error.message,
-                "failed to publish request discussion notification"
+                "failed to publish {description} notification"
             );
         }
     }
@@ -305,6 +303,21 @@ mod tests {
             repository_change_event("repo", 1, RepoChangeReason::ConfigApplied).kind,
             RepoChangeKind::RepositoryChanged {
                 reason: "config-applied".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn run_changes_preserve_the_run_and_change_kind() {
+        assert_eq!(
+            run_change_event("repo", "run_1".to_string(), RunChangeKind::LogsAppended),
+            RepoChangeEvent {
+                repo_id: "repo".to_string(),
+                version: 0,
+                kind: RepoChangeKind::RunChanged {
+                    run_id: "run_1".to_string(),
+                    change: RunChangeKind::LogsAppended,
+                },
             }
         );
     }

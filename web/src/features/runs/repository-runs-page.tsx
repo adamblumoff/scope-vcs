@@ -11,12 +11,13 @@ import { PageErrorAlert } from '@/components/page-error-alert'
 import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RunHistoryList } from './run-history-list'
-import { mergeRunHistory, refreshRunHistoryPages } from './run-history-model'
+import { mergeRunHistory, reloadRunHistoryPages } from './run-history-model'
+import { useRunLiveRefresh } from './run-live-refresh'
 import { RunsHeader } from './runs-header'
 import { WorkflowLatestRun } from './workflow-latest-run'
 import { WorkflowNavigation } from './workflow-navigation'
 
-const RUNS_REFRESH_INTERVAL_MS = 2_000
+const HISTORY_CHANGES = ['Created', 'StatusChanged'] as const
 
 type RunPageResources = {
   history: RepoRunHistoryPage
@@ -32,8 +33,14 @@ export function RepositoryRunsPage({
   workflow,
 }: {
   initialResources: RunPageResources | null
-  loadDetail: (input: RunActionInput) => Promise<RepoRunDetail>
-  loadHistory: (input: RepoRunHistoryInput) => Promise<RepoRunHistoryPage | null>
+  loadDetail: (
+    input: RunActionInput,
+    signal?: AbortSignal,
+  ) => Promise<RepoRunDetail>
+  loadHistory: (
+    input: RepoRunHistoryInput,
+    signal?: AbortSignal,
+  ) => Promise<RepoRunHistoryPage | null>
   params: RepoParams
   workflow?: string
 }) {
@@ -43,6 +50,7 @@ export function RepositoryRunsPage({
   const historyRef = useRef(history)
   const loadedPageCountRef = useRef(1)
   const loadingMoreRef = useRef(false)
+  const loadMoreInFlightRef = useRef<Promise<void> | null>(null)
   const mountedRef = useRef(false)
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const { owner, repo } = params
@@ -52,12 +60,15 @@ export function RepositoryRunsPage({
   )
   const canRefresh = history !== null
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((signal?: AbortSignal): Promise<void> | undefined => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current
-    if (!historyRef.current || loadingMoreRef.current) return
-    const request = refreshRunHistoryPages(
+    if (loadMoreInFlightRef.current) {
+      return loadMoreInFlightRef.current.then(() => refresh(signal))
+    }
+    if (!historyRef.current) return
+    const request = reloadRunHistoryPages(
       loadedPageCountRef.current,
-      (after) => loadHistory({ ...input, after }),
+      (after) => loadHistory({ ...input, after }, signal),
     )
       .then((next) => {
         if (!mountedRef.current) return
@@ -71,6 +82,7 @@ export function RepositoryRunsPage({
       })
       .catch((error: unknown) => {
         if (mountedRef.current) setRefreshError(errorMessage(error))
+        throw error
       })
       .finally(() => {
         if (refreshInFlightRef.current === request) {
@@ -81,11 +93,19 @@ export function RepositoryRunsPage({
     return request
   }, [input, loadHistory])
 
+  const refreshRuns = useRunLiveRefresh({
+    acceptedChanges: HISTORY_CHANGES,
+    mutable: canRefresh,
+    refresh: async (_reasons, signal) => {
+      await refresh(signal)
+    },
+  })
+
   const loadMore = useCallback(() => {
     if (!history?.next_cursor || loadingMoreRef.current || refreshInFlightRef.current) return
     loadingMoreRef.current = true
     setLoadingMore(true)
-    return loadHistory({
+    const request = loadHistory({
         ...input,
         after: history.next_cursor,
       })
@@ -110,8 +130,13 @@ export function RepositoryRunsPage({
       })
       .finally(() => {
         loadingMoreRef.current = false
+        if (loadMoreInFlightRef.current === request) {
+          loadMoreInFlightRef.current = null
+        }
         if (mountedRef.current) setLoadingMore(false)
       })
+    loadMoreInFlightRef.current = request
+    return request
   }, [history?.next_cursor, input, loadHistory])
 
   useEffect(() => {
@@ -120,20 +145,10 @@ export function RepositoryRunsPage({
 
   useEffect(() => {
     mountedRef.current = true
-    if (!canRefresh) {
-      return () => {
-        mountedRef.current = false
-      }
-    }
-    const timer = window.setInterval(
-      () => void refresh(),
-      RUNS_REFRESH_INTERVAL_MS,
-    )
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [canRefresh, refresh])
+  }, [])
 
   if (!initialResources || !history) {
     return (
@@ -175,7 +190,7 @@ export function RepositoryRunsPage({
               <PageErrorAlert title="Runs could not refresh">
                 <div className="flex flex-wrap items-center gap-3">
                   <span>{refreshError}</span>
-                  <Button onClick={() => void refresh()} size="sm" variant="secondary">
+                  <Button onClick={refreshRuns} size="sm" variant="secondary">
                     Retry now
                   </Button>
                 </div>

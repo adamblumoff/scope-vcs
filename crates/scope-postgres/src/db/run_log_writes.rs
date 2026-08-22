@@ -6,13 +6,20 @@ use sea_orm::{
     TransactionTrait,
 };
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppendRunLogResult {
+    pub log: StoredRunLog,
+    pub repo_id: String,
+    pub appended: bool,
+}
+
 impl RunStore {
     pub async fn append_attempt_log(
         &self,
         chunk: RunLogChunk,
         token_hash: &str,
         now_unix: u64,
-    ) -> Result<StoredRunLog, PostgresError> {
+    ) -> Result<AppendRunLogResult, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let (run, job, mut attempt, steps) =
             super::run_attempt_persistence::locked_attempt_context(&tx, &chunk.attempt_id).await?;
@@ -49,11 +56,15 @@ impl RunStore {
                 ));
             }
             tx.commit().await.map_err(PostgresError::internal)?;
-            return Ok(StoredRunLog {
-                position,
-                run_id: existing_run_id,
-                job_key: job.key.as_str().to_string(),
-                chunk: existing_chunk,
+            return Ok(AppendRunLogResult {
+                log: StoredRunLog {
+                    position,
+                    run_id: existing_run_id,
+                    job_key: job.key.as_str().to_string(),
+                    chunk: existing_chunk,
+                },
+                repo_id: run.workflow.repository_id().to_string(),
+                appended: false,
             });
         }
 
@@ -91,11 +102,15 @@ impl RunStore {
         let position = entities::i64_to_u64(inserted.last_insert_id, "run log position")?;
         super::run_attempt_persistence::save_attempt(&tx, &attempt).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(StoredRunLog {
-            position,
-            run_id: run.id,
-            job_key: job.key.as_str().to_string(),
-            chunk,
+        Ok(AppendRunLogResult {
+            log: StoredRunLog {
+                position,
+                run_id: run.id,
+                job_key: job.key.as_str().to_string(),
+                chunk,
+            },
+            repo_id: run.workflow.repository_id().to_string(),
+            appended: true,
         })
     }
 }

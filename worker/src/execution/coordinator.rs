@@ -10,6 +10,7 @@ const DISPATCH_LEASE: Duration = Duration::from_secs(15 * 60);
 pub(crate) struct CloudExecutionCoordinator {
     metadata: MetadataStore,
     northflank: NorthflankClient,
+    origin_id: String,
     settings: CloudExecutionSettings,
 }
 
@@ -17,10 +18,12 @@ impl CloudExecutionCoordinator {
     pub(crate) fn new(
         metadata: MetadataStore,
         settings: CloudExecutionSettings,
+        origin_id: String,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             metadata,
             northflank: NorthflankClient::new(settings.clone())?,
+            origin_id,
             settings,
         })
     }
@@ -67,6 +70,7 @@ impl CloudExecutionCoordinator {
                 }
                 Err(error) => return Err(db_error(error)),
             };
+            self.publish_status_change(&claim).await;
             let definition = claim
                 .workflow_revision
                 .definition()
@@ -87,11 +91,13 @@ impl CloudExecutionCoordinator {
                         .record_external_run_id(&attempt_id, &external_run_id)
                         .await
                         .map_err(db_error)?;
+                    self.publish_status_change(&claim).await;
                     tracing::info!(attempt_id, external_run_id, run_id = %claim.run.id, job = %claim.job.key.as_str(), "dispatched cloud run");
                 }
                 Err(StartError::Rejected(error)) => {
                     tracing::error!(attempt_id, error = %error, "Northflank rejected cloud run");
-                    self.metadata
+                    let claim = self
+                        .metadata
                         .runs()
                         .complete_attempt(
                             &attempt_id,
@@ -108,6 +114,7 @@ impl CloudExecutionCoordinator {
                         )
                         .await
                         .map_err(db_error)?;
+                    self.publish_status_change(&claim).await;
                 }
                 Err(StartError::Ambiguous(error)) => {
                     tracing::warn!(attempt_id, error = %error, "Northflank dispatch outcome is ambiguous; lease recovery owns resolution");
@@ -129,11 +136,13 @@ impl CloudExecutionCoordinator {
         for attempt in attempts {
             match self.northflank.abort(&attempt.external_run_id).await {
                 Ok(()) => {
-                    self.metadata
+                    let claim = self
+                        .metadata
                         .runs()
                         .confirm_provider_cancellation(&attempt.attempt_id, now_unix)
                         .await
                         .map_err(db_error)?;
+                    self.publish_status_change(&claim).await;
                     aborted += 1;
                     tracing::info!(attempt_id = %attempt.attempt_id, external_run_id = %attempt.external_run_id, "aborted canceled cloud run");
                 }
@@ -148,6 +157,17 @@ impl CloudExecutionCoordinator {
             }
         }
         Ok(aborted)
+    }
+
+    async fn publish_status_change(&self, claim: &scope_postgres::db::DispatchClaim) {
+        crate::run_events::publish_run_change(
+            &self.metadata,
+            &self.origin_id,
+            claim.run.workflow.repository_id(),
+            &claim.run.id,
+            scope_api_contract::RunChangeKind::StatusChanged,
+        )
+        .await;
     }
 }
 

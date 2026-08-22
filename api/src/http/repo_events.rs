@@ -168,6 +168,10 @@ fn event_for_principal(
         return Some(event);
     }
 
+    if matches!(&event.kind, RepoChangeKind::RunChanged { .. }) {
+        return None;
+    }
+
     if let RepoChangeKind::RequestTimelineChanged { audience, .. } = &event.kind {
         if matches!(audience, scope_api_contract::RequestAudience::Public) {
             return Some(RepoChangeEvent {
