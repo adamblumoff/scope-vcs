@@ -42,8 +42,9 @@ test('endpoint routing is reproducible and repository affinity is stable', () =>
   const urls = ['https://api-1-loadtest.example.com', 'https://api-2-loadtest.example.com', 'https://api-3-loadtest.example.com'];
   const randomA = createEndpointRouter(urls, 'random', 42);
   const randomB = createEndpointRouter(urls, 'random', 42);
-  const sequenceA = Array.from({ length: 12 }, () => randomA.choose('owner/repo'));
-  const sequenceB = Array.from({ length: 12 }, () => randomB.choose('owner/repo'));
+  const keys = Array.from({ length: 12 }, (_, index) => `blob-read:4:${index}`);
+  const sequenceA = keys.map((key) => randomA.choose('owner/repo', key));
+  const sequenceB = [...keys].reverse().map((key) => randomB.choose('owner/repo', key)).reverse();
   assert.deepEqual(sequenceA, sequenceB);
   assert.ok(new Set(sequenceA).size > 1);
 

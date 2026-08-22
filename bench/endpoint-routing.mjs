@@ -10,13 +10,11 @@ export function parseApiUrls(primary, value) {
 export function createEndpointRouter(apiUrls, mode, seed = 1) {
   if (!Array.isArray(apiUrls) || apiUrls.length === 0) throw new Error('at least one API URL is required');
   if (!ROUTING_MODES.has(mode)) throw new Error(`unsupported routing mode: ${mode}`);
-  let randomState = seed >>> 0;
   return {
-    choose(repositoryKey = '') {
+    choose(repositoryKey = '', operationKey = repositoryKey) {
       if (mode === 'single' || apiUrls.length === 1) return apiUrls[0];
       if (mode === 'repository-affine') return apiUrls[stableHash(repositoryKey) % apiUrls.length];
-      randomState = (Math.imul(1_664_525, randomState) + 1_013_904_223) >>> 0;
-      return apiUrls[randomState % apiUrls.length];
+      return apiUrls[stableHash(`${seed}:${operationKey}`) % apiUrls.length];
     },
   };
 }
