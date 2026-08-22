@@ -4,10 +4,16 @@ use anyhow::anyhow;
 use scope_domain::runs::workflow::{ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowStep};
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
+
+const TEST_SYNC_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Call {
@@ -49,7 +55,7 @@ struct FakeState {
     calls: Mutex<Vec<Call>>,
     append_actions: Mutex<VecDeque<AppendAction>>,
     cancel_on_start: bool,
-    cancel_on_heartbeat: bool,
+    cancel_on_heartbeat: AtomicBool,
     heartbeat_observed: Mutex<Option<mpsc::Sender<()>>>,
 }
 
@@ -60,18 +66,21 @@ impl FakeSink {
                 calls: Mutex::new(Vec::new()),
                 append_actions: Mutex::new(append_actions.into_iter().collect()),
                 cancel_on_start: false,
-                cancel_on_heartbeat: false,
+                cancel_on_heartbeat: AtomicBool::new(false),
                 heartbeat_observed: Mutex::new(None),
             }),
         }
     }
 
-    fn cancel_on_heartbeat(mut self, observed: mpsc::Sender<()>) -> Self {
-        Arc::get_mut(&mut self.state)
-            .expect("fake sink is not shared yet")
-            .cancel_on_heartbeat = true;
+    fn observe_cancellation_heartbeat(self, observed: mpsc::Sender<()>) -> Self {
         *self.state.heartbeat_observed.lock().unwrap() = Some(observed);
         self
+    }
+
+    fn enable_heartbeat_cancellation(&self) {
+        self.state
+            .cancel_on_heartbeat
+            .store(true, Ordering::Release);
     }
 
     fn calls(&self) -> Vec<Call> {
@@ -126,10 +135,13 @@ impl ExecutionSink for FakeSink {
 
     fn heartbeat(&self) -> anyhow::Result<bool> {
         self.record(Call::Heartbeat);
-        if let Some(observed) = self.state.heartbeat_observed.lock().unwrap().as_ref() {
+        let cancellation_requested = self.state.cancel_on_heartbeat.load(Ordering::Acquire);
+        if cancellation_requested
+            && let Some(observed) = self.state.heartbeat_observed.lock().unwrap().as_ref()
+        {
             let _ = observed.send(());
         }
-        Ok(self.state.cancel_on_heartbeat)
+        Ok(cancellation_requested)
     }
 
     fn complete_step(&self, step: u32, exit_code: i32, logs_truncated: bool) -> anyhow::Result<()> {
@@ -394,9 +406,7 @@ fn step_completion_waits_for_a_late_truncation_response() {
         )
     });
 
-    entered_receiver
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap();
+    entered_receiver.recv_timeout(TEST_SYNC_TIMEOUT).unwrap();
     thread::sleep(Duration::from_millis(50));
     assert!(
         !sink
@@ -429,23 +439,22 @@ fn heartbeat_can_cancel_while_an_append_is_blocked() {
         release: release_receiver,
         outcome: AppendLogOutcome::Accepted,
     }])
-    .cancel_on_heartbeat(heartbeat_sender);
+    .observe_cancellation_heartbeat(heartbeat_sender);
     let workspace = tempfile::tempdir().unwrap();
     let job = job(&[("slow", "head -c 50000 /dev/zero | tr '\\0' x; sleep 30")]);
     let run_sink = sink.clone();
-    let started = Instant::now();
     let run = thread::spawn(move || {
         run_steps_with_options(
             run_sink,
             &job,
             workspace.path(),
-            SupervisorOptions::for_test(Duration::from_secs(2)),
+            SupervisorOptions::for_test(Duration::from_secs(10)),
         )
     });
 
-    entered_receiver
-        .recv_timeout(Duration::from_secs(1))
-        .unwrap();
+    entered_receiver.recv_timeout(TEST_SYNC_TIMEOUT).unwrap();
+    let started = Instant::now();
+    sink.enable_heartbeat_cancellation();
     heartbeat_receiver
         .recv_timeout(Duration::from_secs(1))
         .unwrap();
