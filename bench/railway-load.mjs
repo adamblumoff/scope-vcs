@@ -245,17 +245,24 @@ function operationFor(name, context) {
   const churn = rotating(context.churnFixtures);
   const pairs = pooled(context.fetchClients);
   const writes = pooled(context.mixedFixtures);
-  if (name === 'warm-fetch') return (_worker, _iteration, scheduledAt) => withResource(pairs, (pair) => gitFetch(context.config, pair, scheduledAt));
-  if (name === 'incremental-fetch') return (_worker, iteration, scheduledAt) => withResource(writes, async (fixture) => {
+  const routeKey = (worker, iteration) => `${name}:${worker}:${iteration}`;
+  if (name === 'warm-fetch') return (worker, iteration, scheduledAt) => withResource(
+    pairs,
+    (pair) => gitFetch(context.config, pair, scheduledAt, routeKey(worker, iteration)),
+  );
+  if (name === 'incremental-fetch') return (worker, iteration, scheduledAt) => withResource(writes, async (fixture) => {
+    const operationKey = routeKey(worker, iteration);
     const pair = context.fetchClients.find((client) => client.fixture === fixture);
     if (!pair) throw new Error(`missing fetch client for ${fixture.owner}/${fixture.repo}`);
-    const update = await updateAndPush(context.config, fixture, iteration, scheduledAt);
-    return update.ok ? gitFetch(context.config, pair, scheduledAt) : update;
+    const update = await updateAndPush(context.config, fixture, iteration, scheduledAt, `${operationKey}:push`);
+    return update.ok ? gitFetch(context.config, pair, scheduledAt, `${operationKey}:fetch`) : update;
   });
-  if (name === 'full-clone') return (_worker, _iteration, scheduledAt) => clone(context.config, context.runRoot, read(), scheduledAt);
-  if (name === 'code-read') return async (_worker, _iteration, scheduledAt) => {
+  if (name === 'full-clone') return (worker, iteration, scheduledAt) => clone(
+    context.config, context.runRoot, read(), scheduledAt, routeKey(worker, iteration),
+  );
+  if (name === 'code-read') return async (worker, iteration, scheduledAt) => {
     const fixture = read();
-    const endpoint = endpointFor(context.config, fixture);
+    const endpoint = endpointFor(context.config, fixture, routeKey(worker, iteration));
     const result = await command(
       context.config,
       ['git', 'ls-remote', '--refs', publicRemoteUrl(endpoint, fixture)],
@@ -270,22 +277,28 @@ function operationFor(name, context) {
       byteSource: 'git-command-output',
     };
   };
-  if (name === 'repo-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, repoPath(fixture), scheduledAt, fixture); };
-  if (name === 'projection-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/projection-preview?audience=public&source=live`, scheduledAt, fixture); };
-  if (name === 'tree-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/files`, scheduledAt, fixture); };
-  if (name === 'blob-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture); };
-  if (name === 'history-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/commits?audience=public`, scheduledAt, fixture); };
-  if (name === 'cold-churn') return (_worker, _iteration, scheduledAt) => clone(context.config, context.runRoot, churn(), scheduledAt);
+  if (name === 'repo-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, repoPath(fixture), scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'projection-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/projection-preview?audience=public&source=live`, scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'tree-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/files`, scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'blob-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'history-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/commits?audience=public`, scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'cold-churn') return (worker, iteration, scheduledAt) => clone(
+    context.config, context.runRoot, churn(), scheduledAt, routeKey(worker, iteration),
+  );
   if (name === 'mixed') {
     let index = 0;
-    return (_worker, iteration, scheduledAt) => {
+    return (worker, iteration, scheduledAt) => {
+      const operationKey = routeKey(worker, iteration);
       const write = chooseWrite(index++, context.config.mixedWritePercent);
-      if (write) return withResource(writes, (fixture) => updateAndPush(context.config, fixture, iteration, scheduledAt));
+      if (write) return withResource(writes, (fixture) => updateAndPush(context.config, fixture, iteration, scheduledAt, operationKey));
       const fixture = read();
-      return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture);
+      return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture, operationKey);
     };
   }
-  if (name === 'consistency') return (_worker, iteration, scheduledAt) => withResource(writes, (fixture) => writeThenVerify(context.config, fixture, iteration, scheduledAt));
+  if (name === 'consistency') return (worker, iteration, scheduledAt) => withResource(
+    writes,
+    (fixture) => writeThenVerify(context.config, fixture, iteration, scheduledAt, routeKey(worker, iteration)),
+  );
   throw new Error(`unsupported workload: ${name}`);
 }
 
@@ -294,8 +307,9 @@ function rotating(items) {
   return () => items[index++ % items.length];
 }
 
-function endpointFor(config, fixture) {
-  return config.endpointRouter.choose(fixture ? repositoryKey(fixture) : 'benchmark-control');
+function endpointFor(config, fixture, operationKey) {
+  const repository = fixture ? repositoryKey(fixture) : 'benchmark-control';
+  return config.endpointRouter.choose(repository, operationKey || repository);
 }
 
 function repositoryKey(fixture) {
@@ -520,7 +534,7 @@ async function writeLandingFile(directory, bytes, update) {
   await writeFile(join(directory, 'README.html'), content);
 }
 
-async function updateAndPush(config, fixture, iteration, scheduledAt = performance.now()) {
+async function updateAndPush(config, fixture, iteration, scheduledAt = performance.now(), routeKey = null) {
   try {
     fixture.update += 1;
     const marker = `${fixture.update}:${iteration}:${Date.now()}`;
@@ -533,7 +547,7 @@ async function updateAndPush(config, fixture, iteration, scheduledAt = performan
       ...(fixture.landingFileBytes > 0 ? ['README.html'] : []),
     ], fixture.dir);
     await checkedGit(config, ['commit', '-m', `Load update ${fixture.update}`], fixture.dir);
-    const pushed = await pushCurrentHead(config, fixture, scheduledAt);
+    const pushed = await pushCurrentHead(config, fixture, scheduledAt, routeKey);
     return {
       ...pushed,
       historyDepth: fixture.historyDepth,
@@ -547,8 +561,8 @@ async function updateAndPush(config, fixture, iteration, scheduledAt = performan
   }
 }
 
-async function pushCurrentHead(config, fixture, started = performance.now()) {
-  const endpoint = endpointFor(config, fixture);
+async function pushCurrentHead(config, fixture, started = performance.now(), routeKey = null) {
+  const endpoint = endpointFor(config, fixture, routeKey);
   const repoConfig = await apiJson(config, `${repoPath(fixture)}/config`, { endpoint });
   const head = await gitOutput(config, ['rev-parse', 'HEAD'], fixture.dir);
   const intent = await apiJson(config, `${repoPath(fixture)}/push-intents`, {
@@ -566,9 +580,9 @@ async function pushCurrentHead(config, fixture, started = performance.now()) {
   );
 }
 
-async function gitFetch(config, pair, scheduledAt = performance.now()) {
+async function gitFetch(config, pair, scheduledAt = performance.now(), routeKey = null) {
   const before = await gitObjectBytes(config, pair.dir);
-  const endpoint = endpointFor(config, pair.fixture);
+  const endpoint = endpointFor(config, pair.fixture, routeKey);
   const result = await command(
     config,
     ['git', 'fetch', '--quiet', publicRemoteUrl(endpoint, pair.fixture)],
@@ -587,11 +601,11 @@ async function gitObjectBytes(config, directory) {
   return ((Number(fields.size) || 0) + (Number(fields['size-pack']) || 0)) * 1024;
 }
 
-async function clone(config, runRoot, fixture, scheduledAt = performance.now()) {
+async function clone(config, runRoot, fixture, scheduledAt = performance.now(), routeKey = null) {
   const parent = await mkdtemp(join(runRoot, 'clone-'));
   const destination = join(parent, 'repo.git');
   try {
-    const endpoint = endpointFor(config, fixture);
+    const endpoint = endpointFor(config, fixture, routeKey);
     const result = await command(
       config,
       ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(endpoint, fixture), destination],
@@ -621,8 +635,8 @@ async function directoryBytes(path) {
   return total;
 }
 
-async function writeThenVerify(config, fixture, iteration, scheduledAt = performance.now()) {
-  const pushed = await updateAndPush(config, fixture, iteration, scheduledAt);
+async function writeThenVerify(config, fixture, iteration, scheduledAt = performance.now(), routeKey = null) {
+  const pushed = await updateAndPush(config, fixture, iteration, scheduledAt, `${routeKey}:push`);
   if (!pushed.ok) return pushed;
   const visibilityStarted = performance.now();
   const deadline = visibilityStarted + config.consistencyTimeoutMs;
@@ -630,7 +644,7 @@ async function writeThenVerify(config, fixture, iteration, scheduledAt = perform
   let read;
   while (performance.now() < deadline) {
     const remainingMs = Math.max(1, deadline - performance.now());
-    read = await apiRead(config, `${repoPath(fixture)}/files/content?path=load-update.txt`, performance.now(), fixture, true, Math.min(config.timeoutMs, remainingMs));
+    read = await apiRead(config, `${repoPath(fixture)}/files/content?path=load-update.txt`, performance.now(), fixture, `${routeKey}:read:${reads.length}`, true, Math.min(config.timeoutMs, remainingMs));
     reads.push(read);
     if (read.ok && read.json?.content?.text === `${pushed.marker}\n`) break;
     if (!read.ok && read.status !== 503) break;
@@ -661,9 +675,9 @@ async function writeThenVerify(config, fixture, iteration, scheduledAt = perform
   };
 }
 
-async function apiRead(config, path, started = performance.now(), fixture = null, parseJson = false, timeoutMs = config.timeoutMs) {
+async function apiRead(config, path, started = performance.now(), fixture = null, routeKey = null, parseJson = false, timeoutMs = config.timeoutMs) {
   try {
-    const endpoint = endpointFor(config, fixture);
+    const endpoint = endpointFor(config, fixture, routeKey);
     const response = await fetch(`${endpoint}${path}`, {
       headers: { accept: 'application/json' },
       signal: AbortSignal.timeout(abortTimeoutMs(timeoutMs)),
