@@ -189,6 +189,7 @@ pub(crate) async fn merge_request(
     let prepared =
         prepare_request_merge(&state, &owner, &repo_name, &user.id, &repo, &request).await?;
     let durable_objects = prepared.durable_objects().to_vec();
+    let fence = prepared.fence;
     let mutation = match state
         .metadata
         .requests()
@@ -221,9 +222,11 @@ pub(crate) async fn merge_request(
                 &durable_objects,
             )
             .await;
+            fence.release().await;
             return Err(error.into());
         }
     };
+    fence.release().await;
     state.product_analytics.capture(analytics_event);
     state
         .publish_repo_change(

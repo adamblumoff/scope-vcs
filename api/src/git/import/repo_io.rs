@@ -10,8 +10,9 @@ use scope_domain::{
     policy::ScopePath,
     repo_control::{RepoControlPath, classify_repo_control_path},
 };
-use scope_git::{GitTreePath, StoredGitPush, materialize_git_push};
-use scope_object_store::{ContentObjectKind, object_key, put_content_object};
+use scope_git::{GitTreePath, StoredGitPush, prepare_git_push};
+use scope_object_store::{ContentObjectKind, content_object_for_bytes, object_key};
+use scope_postgres::db::ContentRefFence;
 use sha2::{Digest, Sha256};
 use std::{path::Path as FsPath, process::Command, time::Instant};
 
@@ -311,11 +312,16 @@ pub(crate) fn validate_pushed_commit_range(
     Ok(())
 }
 
+pub(crate) struct FencedGitPush {
+    pub(crate) stored: StoredGitPush,
+    pub(crate) fence: ContentRefFence,
+}
+
 pub(crate) async fn git_push_from_repo(
     state: &AppState,
     repo: &FsPath,
     previous: Option<&GitHead>,
-) -> Result<StoredGitPush, ApiError> {
+) -> Result<FencedGitPush, ApiError> {
     let storage_limits = state.runtime_budgets.git_storage_limits();
     let refname = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
     let head_oid = git_stdout_text(repo, &["rev-parse", &refname], "reading pushed Git head")?
@@ -352,13 +358,14 @@ pub(crate) async fn git_push_from_repo(
     }
     let pack_bytes = output.stdout.len();
     let store_started = Instant::now();
-    let stored = materialize_git_push(
-        state.object_store.as_ref(),
-        &output.stdout,
-        head_oid,
-        previous,
-        storage_limits,
-    );
+    let prepared = prepare_git_push(&output.stdout, head_oid, previous, storage_limits)
+        .map_err(|failure| ApiError::from(failure.into_parts().0))?;
+    let content_refs = prepared.objects().map(|object| object.content_ref.clone());
+    let fence = state
+        .metadata
+        .acquire_content_ref_fence(&content_refs)
+        .await?;
+    let stored = prepared.store(state.object_store.as_ref());
     tracing::info!(
         incremental = previous.is_some(),
         pack_us = pack_elapsed.as_micros(),
@@ -368,7 +375,7 @@ pub(crate) async fn git_push_from_repo(
         "Git push pack timing"
     );
     match stored {
-        Ok(stored) => Ok(stored),
+        Ok(stored) => Ok(FencedGitPush { stored, fence }),
         Err(failure) => {
             let (error, orphan_objects) = failure.into_parts();
             queue_failed_git_objects(state, orphan_objects).await?;
@@ -410,18 +417,16 @@ pub(super) async fn queue_failed_git_objects(
 }
 
 pub(crate) fn git_snapshot_from_ref(
-    state: &AppState,
     repo: &FsPath,
     refname: &str,
-) -> Result<SourceBlob, ApiError> {
-    git_snapshot_from_refs(state, repo, &[refname.to_string()])
+) -> Result<(SourceBlob, Vec<u8>), ApiError> {
+    git_snapshot_from_refs(repo, &[refname.to_string()])
 }
 
 fn git_snapshot_from_refs(
-    state: &AppState,
     repo: &FsPath,
     refs: &[String],
-) -> Result<SourceBlob, ApiError> {
+) -> Result<(SourceBlob, Vec<u8>), ApiError> {
     let [refname] = refs else {
         return Err(ApiError::internal_message(
             "Git snapshots must contain exactly one ref",
@@ -435,13 +440,9 @@ fn git_snapshot_from_refs(
     run_git(Some(repo), &args, "creating Git snapshot bundle")?;
     let bytes = std::fs::read(&bundle_path).map_err(ApiError::internal)?;
     let _ = std::fs::remove_file(&bundle_path);
-    let mut snapshot = put_content_object(
-        state.object_store.as_ref(),
-        ContentObjectKind::GitBundle,
-        &bytes,
-    )?;
+    let mut snapshot = content_object_for_bytes(ContentObjectKind::GitBundle, &bytes);
     snapshot.git_oid = head_oid.trim().to_string();
-    Ok(snapshot)
+    Ok((snapshot, bytes))
 }
 
 fn random_bundle_id() -> Result<String, ApiError> {

@@ -1,7 +1,6 @@
 use crate::{error::ApiError, persistence::unix_now, state::AppState};
 use scope_domain::store::{SourceBlob, repo_id};
 use serde::Serialize;
-use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct CleanupDrainReport {
@@ -70,59 +69,6 @@ impl SourceBlobCleanupFailure {
             error: error.into_operator_diagnostic(),
         }
     }
-}
-
-#[derive(Debug, Default)]
-struct SourceBlobStorageDeleteReport {
-    deleted_keys: BTreeSet<String>,
-    failed: Vec<SourceBlobCleanupFailure>,
-}
-
-fn unreferenced_source_blobs_by_key(
-    referenced: &BTreeSet<scope_domain::content_ref::ContentRef>,
-    blobs: &[SourceBlob],
-) -> Vec<SourceBlob> {
-    let mut unreferenced = std::collections::BTreeMap::new();
-    for blob in blobs {
-        let object_key = scope_object_store::object_key(blob);
-        if !referenced.contains(&blob.content_ref) {
-            unreferenced.entry(object_key).or_insert(blob);
-        }
-    }
-    unreferenced.values().cloned().cloned().collect()
-}
-
-fn delete_source_blob_storage(
-    state: &AppState,
-    blobs: &[SourceBlob],
-) -> SourceBlobStorageDeleteReport {
-    let mut report = SourceBlobStorageDeleteReport::default();
-    for blob in blobs {
-        match delete_source_blob_storage_entry(state, blob) {
-            Ok(()) => {
-                report
-                    .deleted_keys
-                    .insert(scope_object_store::object_key(blob));
-            }
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    object_key = %scope_object_store::object_key(blob),
-                    "failed to clean source blob storage"
-                );
-                report
-                    .failed
-                    .push(SourceBlobCleanupFailure::from_blob(blob, error));
-            }
-        }
-    }
-    report
-}
-
-fn delete_source_blob_storage_entry(state: &AppState, blob: &SourceBlob) -> Result<(), ApiError> {
-    Ok(state
-        .object_store
-        .delete(&scope_object_store::object_key(blob))?)
 }
 
 pub(crate) async fn drain_pending_cleanup(
@@ -247,41 +193,27 @@ pub(crate) async fn best_effort_cleanup_rollback_source_blobs(
 pub(crate) async fn drain_pending_source_blob_deletions_report(
     state: &AppState,
 ) -> Result<SourceBlobCleanupDrainReport, ApiError> {
-    let metadata = state.metadata.clone();
-    let cleanup_store = metadata.cleanup();
     let now_unix = unix_now()?;
-    let state = state.clone();
-    let batch = cleanup_store
-        .source_blob_cleanup_batch(now_unix, &crate::persistence_ids::generate_persistence_id)
-        .await?;
-    let unreferenced =
-        unreferenced_source_blobs_by_key(&batch.referenced_content_refs, &batch.pending);
-    let mut report = SourceBlobCleanupDrainReport {
-        skipped_referenced: batch.pending.len().saturating_sub(unreferenced.len()),
-        attempted: unreferenced.len(),
-        ..Default::default()
-    };
-    let delete_report = delete_source_blob_storage(&state, &unreferenced);
-    report.deleted = delete_report.deleted_keys.len();
-    report.failed_object_deletes = delete_report.failed;
-    let retained = unreferenced
-        .into_iter()
-        .filter(|blob| {
-            !delete_report
-                .deleted_keys
-                .contains(&scope_object_store::object_key(blob))
-        })
-        .collect::<Vec<_>>();
-    report.retained = retained.len();
-    cleanup_store
-        .finish_source_blob_cleanup(
-            batch,
-            &retained,
-            now_unix,
-            &crate::persistence_ids::generate_persistence_id,
-        )
-        .await?;
-    Ok(report)
+    let shared = scope_content_lifecycle::drain_source_blob_cleanup(
+        &state.metadata,
+        state.object_store.as_ref(),
+        now_unix,
+        &crate::persistence_ids::generate_persistence_id,
+    )
+    .await?;
+    Ok(SourceBlobCleanupDrainReport {
+        attempted: shared.attempted,
+        deleted: shared.deleted,
+        retained: shared.retained,
+        skipped_referenced: shared.skipped_referenced,
+        failed_object_deletes: shared
+            .failed_object_deletes
+            .into_iter()
+            .map(|failure| {
+                SourceBlobCleanupFailure::from_blob(&failure.blob, ApiError::from(failure.error))
+            })
+            .collect(),
+    })
 }
 
 #[cfg(test)]

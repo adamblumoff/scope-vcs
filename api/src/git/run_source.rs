@@ -145,12 +145,12 @@ mod tests {
         let source = RunSource::accepted_git_head(
             "owner/repo",
             GitHead {
-                head_oid: pushed.head.head_oid.clone(),
-                push_sequence: pushed.head.push_sequence,
+                head_oid: pushed.stored.head.head_oid.clone(),
+                push_sequence: pushed.stored.head.push_sequence,
                 change_version: 1,
-                manifest: pushed.head.manifest.clone(),
+                manifest: pushed.stored.head.manifest.clone(),
             },
-            vec![pushed.pack_span],
+            vec![pushed.stored.pack_span.clone()],
             ProjectionViewKey::Private,
         )
         .unwrap();
@@ -169,6 +169,6 @@ mod tests {
             .output()
             .unwrap();
         assert!(output.status.success());
-        assert!(String::from_utf8_lossy(&output.stdout).contains(&pushed.head.head_oid));
+        assert!(String::from_utf8_lossy(&output.stdout).contains(&pushed.stored.head.head_oid));
     }
 }

@@ -5,6 +5,7 @@ members = [
     "crates/scope-api-contract",
     "crates/scope-cache-contract",
     "crates/scope-cache-domain",
+    "crates/scope-content-lifecycle",
     "crates/scope-domain",
     "crates/scope-postgres",
     "crates/scope-git",

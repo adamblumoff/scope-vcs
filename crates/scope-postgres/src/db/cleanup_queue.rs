@@ -1,6 +1,5 @@
 use super::{
-    CleanupStore, GeneratedIdKind, GeneratedIdSource, RepositoryStore, entities,
-    generated_ids::generate_id,
+    CleanupStore, GeneratedIdKind, GeneratedIdSource, entities, generated_ids::generate_id,
 };
 use crate::error::PostgresError;
 use scope_domain::{
@@ -12,7 +11,6 @@ use sea_orm::{
     IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
     sea_query::{Expr, LockType, OnConflict},
 };
-use std::future::Future;
 use std::{collections::BTreeSet, sync::Arc};
 
 const RETAINED_REPO_STORAGE_ERROR: &str = "repo storage cleanup retained after drain attempt";
@@ -45,60 +43,19 @@ pub struct RepoStorageCleanupBatch {
 
 pub struct SourceBlobCleanupBatch {
     pub pending: Vec<SourceBlob>,
-    pub referenced_content_refs: BTreeSet<ContentRef>,
     loaded: Vec<LoadedSourceBlobCleanup>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceBlobCleanupDecision {
+    Delete,
+    Referenced,
+    StaleClaim,
 }
 
 pub struct RepoStorageCleanupClaim {
     generation: String,
     claim_until: i64,
-}
-
-impl RepositoryStore {
-    /// Serializes filesystem deletion and repository creation for one stable owner/name path.
-    /// The session lock spans external I/O without holding a metadata transaction open.
-    pub async fn with_repo_storage_lock<R, F, Fut, E>(&self, repo_id: &str, op: F) -> Result<R, E>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<R, E>>,
-        E: From<PostgresError>,
-    {
-        let schema = self
-            .db
-            .query_one(Statement::from_string(
-                DatabaseBackend::Postgres,
-                "SELECT current_schema() AS schema".to_string(),
-            ))
-            .await
-            .map_err(PostgresError::internal)?
-            .ok_or_else(|| PostgresError::internal_message("Postgres did not return its schema"))?
-            .try_get::<String>("", "schema")
-            .map_err(PostgresError::internal)?;
-        let connection = self
-            .db
-            .get_postgres_connection_pool()
-            .acquire()
-            .await
-            .map_err(PostgresError::internal)?;
-        let lock = sea_orm::sqlx::postgres::PgAdvisoryLock::new(format!(
-            "scope:repo-storage:{schema}:{repo_id}"
-        ));
-        let guard = lock
-            .acquire(connection)
-            .await
-            .map_err(PostgresError::internal)?;
-        let result = op().await;
-        guard.release_now().await.map_err(PostgresError::internal)?;
-        result
-    }
-
-    pub async fn repository_exists(&self, repo_id: &str) -> Result<bool, PostgresError> {
-        entities::repository::Entity::find_by_id(repo_id.to_string())
-            .one(self.db.as_ref())
-            .await
-            .map(|row| row.is_some())
-            .map_err(PostgresError::internal)
-    }
 }
 
 impl CleanupStore {
@@ -181,12 +138,48 @@ impl CleanupStore {
             .iter()
             .map(|row| row.blob.clone())
             .collect::<Vec<_>>();
-        let referenced_content_refs = referenced_content_refs(&tx).await?;
         tx.commit().await.map_err(PostgresError::internal)?;
-        Ok(SourceBlobCleanupBatch {
-            pending,
-            referenced_content_refs,
-            loaded,
+        Ok(SourceBlobCleanupBatch { pending, loaded })
+    }
+
+    /// Revalidates one claimed object immediately before physical deletion.
+    /// Callers must hold that object's content-ref fence through this check and deletion.
+    pub async fn source_blob_cleanup_decision(
+        &self,
+        batch: &SourceBlobCleanupBatch,
+        blob: &SourceBlob,
+    ) -> Result<SourceBlobCleanupDecision, PostgresError> {
+        let Some(loaded) = batch
+            .loaded
+            .iter()
+            .find(|loaded| loaded.blob.content_ref == blob.content_ref)
+        else {
+            return Ok(SourceBlobCleanupDecision::StaleClaim);
+        };
+        let encoded = encode_content_ref(&blob.content_ref)?;
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        let job = entities::source_blob_cleanup_job::Entity::find_by_id(encoded.clone())
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        let claim_is_live = job.is_some_and(|job| {
+            job.generation == loaded.generation && job.completed_at_unix.is_none()
+        });
+        if !claim_is_live {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(SourceBlobCleanupDecision::StaleClaim);
+        }
+        let is_referenced = entities::object_reference::Entity::find()
+            .filter(entities::object_reference::Column::ObjectKey.eq(encoded))
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+            .is_some();
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(if is_referenced {
+            SourceBlobCleanupDecision::Referenced
+        } else {
+            SourceBlobCleanupDecision::Delete
         })
     }
 
@@ -948,13 +941,6 @@ where
         .await
         .map_err(PostgresError::internal)?;
     Ok(repositories.into_iter().map(|repo| repo.id).collect())
-}
-
-async fn referenced_content_refs<C>(conn: &C) -> Result<BTreeSet<ContentRef>, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    super::object_references::referenced_content_refs(conn).await
 }
 
 fn encode_content_ref(content_ref: &ContentRef) -> Result<String, PostgresError> {

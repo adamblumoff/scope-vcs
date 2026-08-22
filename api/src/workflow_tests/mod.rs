@@ -482,17 +482,49 @@ async fn live_file_content(state: &AppState, path: &str) -> Option<String> {
 
 async fn persist_test_update(
     state: &AppState,
-    update: ReceivePackUpdate,
+    update: impl Into<TestReceivePackUpdate>,
 ) -> Result<PersistedReceivePackUpdate, crate::error::ApiError> {
     persist_and_promote_test_update(state, update, &test_owner_id()).await
 }
 
+enum TestReceivePackUpdate {
+    Prepared(PreparedReceivePackUpdate),
+    Raw(ReceivePackUpdate),
+}
+
+impl From<PreparedReceivePackUpdate> for TestReceivePackUpdate {
+    fn from(update: PreparedReceivePackUpdate) -> Self {
+        Self::Prepared(update)
+    }
+}
+
+impl From<ReceivePackUpdate> for TestReceivePackUpdate {
+    fn from(update: ReceivePackUpdate) -> Self {
+        Self::Raw(update)
+    }
+}
+
 async fn persist_and_promote_test_update(
     state: &AppState,
-    update: ReceivePackUpdate,
+    update: impl Into<TestReceivePackUpdate>,
     actor_id: &str,
 ) -> Result<PersistedReceivePackUpdate, crate::error::ApiError> {
-    persist_main_push_update_and_promote(state, TEST_REPO_OWNER, TEST_REPO_NAME, update, actor_id)
+    let prepared = match update.into() {
+        TestReceivePackUpdate::Prepared(prepared) => prepared,
+        TestReceivePackUpdate::Raw(update) => {
+            let content_refs = update
+                .durable_objects
+                .iter()
+                .map(|object| object.content_ref.clone())
+                .collect::<Vec<_>>();
+            let fence = state
+                .metadata
+                .acquire_content_ref_fence(&content_refs)
+                .await?;
+            PreparedReceivePackUpdate { update, fence }
+        }
+    };
+    persist_main_push_update_and_promote(state, TEST_REPO_OWNER, TEST_REPO_NAME, prepared, actor_id)
         .await
 }
 

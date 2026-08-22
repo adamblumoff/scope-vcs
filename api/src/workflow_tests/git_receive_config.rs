@@ -36,14 +36,7 @@ async fn push_as_push_only_member(
             .repo_config,
     )?;
     update.config = config;
-    persist_main_push_update_and_promote(
-        state,
-        TEST_REPO_OWNER,
-        TEST_REPO_NAME,
-        update,
-        PUSH_ONLY_MEMBER_ID,
-    )
-    .await
+    persist_and_promote_test_update(state, update, PUSH_ONLY_MEMBER_ID).await
 }
 
 async fn rejected_config_push(

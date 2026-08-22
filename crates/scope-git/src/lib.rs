@@ -8,7 +8,8 @@ pub use projection_identity::{
 };
 #[cfg(feature = "storage")]
 pub use snapshot::{
-    GitSnapshotMaterializationError, StoredGitPush, materialize_git_push, store_compacted_git_pack,
+    GitSnapshotMaterializationError, PreparedGitPush, StoredGitPush, materialize_git_push,
+    prepare_compacted_git_pack, prepare_git_push, store_compacted_git_pack,
 };
 pub use tree_path::{GitTreePath, GitTreePathError};
 

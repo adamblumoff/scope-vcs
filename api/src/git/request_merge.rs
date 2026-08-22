@@ -3,7 +3,8 @@ use crate::{
     error::ApiError,
     git::{
         import::{
-            ReceivePackUpdate, request_merge_update_from_staging_repo, run_git, run_git_output,
+            PreparedReceivePackUpdate, ReceivePackUpdate, request_merge_update_from_staging_repo,
+            run_git, run_git_output,
         },
         projection_repo::verify_projection_materialization,
         request_ref_public_safety::validate_public_request_merge_range,
@@ -22,6 +23,7 @@ use scope_domain::{
     reviewed_updates::apply_request_merge_to_repo,
     store::{RequestMergeOrigin, SourceBlob, StoredRepository},
 };
+use scope_postgres::db::ContentRefFence;
 
 pub(crate) struct PreparedRequestMerge {
     pub(crate) expected_manifest_ref: scope_domain::content_ref::ContentRef,
@@ -30,6 +32,7 @@ pub(crate) struct PreparedRequestMerge {
     pub(crate) origin: RequestMergeOrigin,
     pub(crate) landing_file_mutation: RepositoryLandingFileMutation,
     pub(crate) update: ReceivePackUpdate,
+    pub(crate) fence: ContentRefFence,
 }
 
 impl PreparedRequestMerge {
@@ -120,7 +123,7 @@ pub(crate) async fn prepare_request_merge(
             &["update-ref", "-d", &request_ref],
             "removing prepared request branch",
         )?;
-        let update = request_merge_update_from_staging_repo(
+        let PreparedReceivePackUpdate { update, fence } = request_merge_update_from_staging_repo(
             state,
             owner,
             repo_name,
@@ -161,6 +164,7 @@ pub(crate) async fn prepare_request_merge(
             origin,
             landing_file_mutation: update.landing_file_mutation.clone(),
             update,
+            fence,
         })
     }
     .await;

@@ -1,7 +1,70 @@
 use crate::db::entities;
-use crate::db::{MetadataStore, TestDatabaseTarget};
+use crate::db::{MetadataStore, SourceBlobCleanupDecision, TestDatabaseTarget};
 use scope_domain::store::{DEFAULT_GIT_FILE_MODE, SourceBlob};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
+use std::time::Duration;
+
+#[tokio::test]
+async fn content_fence_serializes_publication_with_delete_revalidation() {
+    let target = TestDatabaseTarget::required().unwrap();
+    let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+    let blob = blob("fenced-publication");
+    store
+        .cleanup()
+        .queue_pending_source_blob_deletions(
+            vec![blob.clone()],
+            now(),
+            &super::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+    make_source_blob_cleanup_due(&store, &blob.content_ref).await;
+    let batch = store
+        .cleanup()
+        .source_blob_cleanup_batch(now(), &super::generated_ids::test_generated_id)
+        .await
+        .unwrap();
+
+    let publication_fence = store
+        .acquire_content_ref_fence(std::slice::from_ref(&blob.content_ref))
+        .await
+        .unwrap();
+    let cleanup_store = store.clone();
+    let cleanup_ref = blob.content_ref.clone();
+    let waiting_cleanup = tokio::spawn(async move {
+        cleanup_store
+            .acquire_content_ref_fence(std::slice::from_ref(&cleanup_ref))
+            .await
+            .unwrap()
+    });
+    let mut waiting_cleanup = Box::pin(waiting_cleanup);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), waiting_cleanup.as_mut())
+            .await
+            .is_err(),
+        "cleanup must wait while publication owns the content fence"
+    );
+
+    super::object_references::insert_object_reference(
+        store.db.as_ref(),
+        "test-publication",
+        "fenced-publication",
+        &blob,
+    )
+    .await
+    .unwrap();
+    publication_fence.release().await;
+    let cleanup_fence = waiting_cleanup.await.unwrap();
+    assert_eq!(
+        store
+            .cleanup()
+            .source_blob_cleanup_decision(&batch, &blob)
+            .await
+            .unwrap(),
+        SourceBlobCleanupDecision::Referenced
+    );
+    cleanup_fence.release().await;
+}
 
 #[tokio::test]
 async fn cleanup_claims_are_bounded_and_failed_work_is_backed_off() {
