@@ -60,6 +60,7 @@ pub(crate) async fn persist_main_push_update_and_promote(
                     expected_manifest_ref: expected_manifest_ref.clone(),
                     update: update.clone().into_reviewed_update(),
                     push_trigger_input: push_trigger_input.clone(),
+                    landing_file_mutation: update.landing_file_mutation.clone(),
                     now_unix,
                 },
                 &crate::persistence_ids::generate_persistence_id,
@@ -108,6 +109,7 @@ pub(crate) async fn persist_main_push_update_and_promote(
                 }
                 update.previous_config = previous_config;
                 ensure_receive_pack_base_matches(repo, &update)?;
+                let landing_file_mutation = update.landing_file_mutation.clone();
                 apply_receive_pack_update(repo, update)?;
                 tracing::info!(
                     domain_apply_ms = domain_started.elapsed().as_millis(),
@@ -119,6 +121,7 @@ pub(crate) async fn persist_main_push_update_and_promote(
                 Ok(RepositoryMutation::with_push_trigger_input(
                     persisted,
                     push_trigger_input,
+                    landing_file_mutation,
                 ))
             },
         )

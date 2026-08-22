@@ -26,6 +26,145 @@ async fn next_event(stream: &mut axum::body::BodyDataStream) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+async fn next_repo_change_event(
+    stream: &mut axum::body::BodyDataStream,
+    expected_version: u64,
+) -> String {
+    let expected_version = format!(r#""version":{expected_version}"#);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let bytes = stream.next().await.unwrap().unwrap();
+            let event = String::from_utf8(bytes.to_vec()).unwrap();
+            if event.contains("event: repo-change") && event.contains(&expected_version) {
+                return event;
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_git_push_emits_one_post_commit_event_and_failed_push_emits_none() {
+    let secret = "scope_git_sse_test";
+    let state = test_state_with_git_push_token(secret).await;
+    cache_test_jwks(&state);
+    let (origin, _server) = spawn_test_server(&state).await;
+    let response = events(state.clone(), Some(bearer_header())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    assert!(
+        next_event(&mut stream)
+            .await
+            .contains(r#""kind":"Connected""#)
+    );
+
+    let permissioned_remote = format!("{origin}/git/permissioned/{TEST_REPO_ID}").replacen(
+        "http://",
+        &format!("http://scope:{secret}@"),
+        1,
+    );
+    let public_remote = format!("{origin}/git/public/{TEST_REPO_ID}");
+    let source = TempGitRepo(unique_test_path("sse-real-push"));
+    run_git(
+        None,
+        &["clone", &public_remote, source.to_str().unwrap()],
+        "clone repository for SSE push",
+    )
+    .unwrap();
+    run_git(
+        Some(&source),
+        &["remote", "set-url", "origin", &permissioned_remote],
+        "point SSE fixture at permissioned remote",
+    )
+    .unwrap();
+    fs::write(source.join("README.html"), "<h1>SSE push</h1>\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "README.html"],
+        "stage SSE landing file",
+    )
+    .unwrap();
+    commit_all(&source, "add landing file through real push");
+    configure_push_intent_header(&state, &source, &permissioned_remote, &test_owner_id()).await;
+    run_git(
+        Some(&source),
+        &["push", "origin", "HEAD:main"],
+        "push landing file for SSE event",
+    )
+    .unwrap();
+
+    let version = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap()
+        .record
+        .change_version;
+    let event = next_repo_change_event(&mut stream, version).await;
+    assert!(event.contains(r#""reason":"push-received""#), "{event}");
+    assert!(event.contains(&format!(r#""version":{version}"#)));
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            next_repo_change_event(&mut stream, version)
+        )
+        .await
+        .is_err()
+    );
+
+    fs::write(source.join("README.html"), "<h1>stale intent</h1>\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "README.html"],
+        "stage stale-intent landing file",
+    )
+    .unwrap();
+    commit_all(&source, "prepare stale push intent");
+    let header_key = format!("http.{permissioned_remote}.extraHeader");
+    run_git(
+        Some(&source),
+        &["config", "--unset-all", &header_key],
+        "clear previous push intent",
+    )
+    .unwrap();
+    configure_push_intent_header(&state, &source, &permissioned_remote, &test_owner_id()).await;
+    fs::write(source.join("README.html"), "<h1>different head</h1>\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "README.html"],
+        "change head after minting push intent",
+    )
+    .unwrap();
+    run_git(
+        Some(&source),
+        &[
+            "-c",
+            "user.name=Scope Test",
+            "-c",
+            "user.email=scope-test@example.test",
+            "commit",
+            "--amend",
+            "--no-edit",
+        ],
+        "invalidate push intent head",
+    )
+    .unwrap();
+    let failed = run_git_output(
+        Some(&source),
+        &["push", "origin", "HEAD:main"],
+        "reject stale-intent push",
+    )
+    .unwrap();
+    assert!(!failed.status.success());
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            next_repo_change_event(&mut stream, version + 1)
+        )
+        .await
+        .is_err()
+    );
+}
+
 #[tokio::test]
 async fn repo_events_stay_private_when_only_canonical_rules_are_public() {
     let state = test_state_with_repo();

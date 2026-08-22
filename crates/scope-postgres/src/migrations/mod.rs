@@ -23,6 +23,7 @@ mod m0022_git_pack_spans;
 mod m0023_logical_run_sources;
 mod m0024_git_compaction_scheduler;
 mod m0025_visibility_change_sets;
+mod m0026_repository_landing_files;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -116,6 +117,10 @@ fn inventory() -> Vec<MigrationSpec> {
         spec(m0023_logical_run_sources::Migration, MaintenanceRequired),
         spec(m0024_git_compaction_scheduler::Migration, Online),
         spec(m0025_visibility_change_sets::Migration, MaintenanceRequired),
+        spec(
+            m0026_repository_landing_files::Migration,
+            MaintenanceRequired,
+        ),
     ]
 }
 

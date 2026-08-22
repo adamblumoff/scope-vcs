@@ -52,6 +52,11 @@ case "${1:-}" in
     [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
     echo '{"exact":true}'
     ;;
+  backfill-landing-files)
+    [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
+    touch "$FAKE_RAILWAY_STATE/landing-files-backfilled"
+    echo '{"landingFilesBackfilled":1}'
+    ;;
   *)
     exit 2
     ;;
@@ -87,10 +92,22 @@ if [[ "$1" == "run" ]]; then
       shift
     fi
   done
-  [[ "$service" == "scope-postgres" ]]
   shift
-  DATABASE_PUBLIC_URL="postgres://public-database.test/scope" "$@"
+  if [[ "$service" == "scope-postgres" ]]; then
+    DATABASE_PUBLIC_URL="postgres://public-database.test/scope" "$@"
+  elif [[ "$service" == "scope-api" ]]; then
+    [[ "${SCOPE_MAINTENANCE_DATABASE_URL:-}" == "postgres://public-database.test/scope" ]]
+    [[ -n "${SCOPE_MAINTENANCE_DATA_DIR:-}" ]]
+    "$@"
+  else
+    exit 2
+  fi
   exit $?
+fi
+
+if [[ "$1 $2" == "variable list" ]]; then
+  echo '{"DATABASE_PUBLIC_URL":"postgres://public-database.test/scope"}'
+  exit 0
 fi
 
 if [[ "$1 $2" == "deployment list" ]]; then
@@ -359,6 +376,7 @@ assert_in_order "$test_dir/success-trace" \
   "$test_dir/maintenance fence" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance verify" \
+  "$test_dir/maintenance backfill-landing-files" \
   "up $test_dir/cache" \
   "up $test_dir/worker" \
   "up $test_dir/api"

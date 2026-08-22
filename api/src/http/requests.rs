@@ -199,6 +199,7 @@ pub(crate) async fn merge_request(
             prepared.expected_repo_change_version,
             &prepared.prepared_request_head_oid,
             prepared.update.into_reviewed_update(),
+            prepared.landing_file_mutation,
             prepared.origin,
             MergeRequestInput {
                 request_id: request.id,

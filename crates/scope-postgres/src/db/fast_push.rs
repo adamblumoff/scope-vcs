@@ -7,6 +7,7 @@ use std::time::Instant;
 use {
     crate::error::PostgresError,
     scope_domain::{
+        landing_file::RepositoryLandingFileMutation,
         reviewed_updates::ReviewedUpdateInput,
         store::{
             MainPushMode, RepoLifecycleState, RepositoryActor, repository_push_policy_for_user_id,
@@ -20,6 +21,7 @@ pub struct ApplyContentOnlyPushCommand {
     pub author_id: String,
     pub expected_manifest_ref: scope_domain::content_ref::ContentRef,
     pub update: ReviewedUpdateInput,
+    pub landing_file_mutation: RepositoryLandingFileMutation,
     pub push_trigger_input: scope_domain::runs::trigger::PushTriggerInput,
     pub now_unix: u64,
 }
@@ -36,6 +38,7 @@ impl RepositoryStore {
             author_id,
             expected_manifest_ref,
             update,
+            landing_file_mutation,
             push_trigger_input,
             now_unix,
         } = command;
@@ -94,9 +97,9 @@ impl RepositoryStore {
         }
         let git_head = accept_and_persist_content_push(
             &tx,
-            &repo_id,
             repo_row,
             update,
+            landing_file_mutation,
             push_trigger_input,
             now_unix,
             generated_ids,

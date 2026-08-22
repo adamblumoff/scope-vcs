@@ -12,6 +12,7 @@ pub mod dev;
 pub(crate) mod error;
 pub(crate) mod git;
 pub(crate) mod http;
+mod landing_file_backfill;
 pub(crate) mod object_store_config;
 pub(crate) mod persistence;
 pub(crate) mod persistence_ids;

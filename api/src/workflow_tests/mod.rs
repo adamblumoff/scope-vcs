@@ -58,6 +58,7 @@ mod git_receive;
 mod git_receive_config;
 mod git_request_refs;
 mod history;
+mod landing_file;
 mod push_intent_completion;
 mod repo_cleanup;
 mod repo_events;
@@ -690,6 +691,7 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
         push_trigger_input: Some(
             scope_domain::runs::trigger::PushTriggerInput::new(head_oid, Vec::new(), None).unwrap(),
         ),
+        landing_file_mutation: scope_domain::landing_file::RepositoryLandingFileMutation::Unchanged,
         previous_config: None,
         base_config_hash: repo_config_fingerprint(&config).unwrap(),
         config,

@@ -12,6 +12,7 @@ mod git_compaction_scheduler;
 mod git_pack_spans;
 mod logical_run_sources;
 mod maintenance_cutover;
+mod repository_landing_files;
 mod request_revisions;
 mod visibility_change_sets;
 
@@ -48,6 +49,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0023_logical_run_sources",
     "m0024_git_compaction_scheduler",
     "m0025_visibility_change_sets",
+    "m0026_repository_landing_files",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -248,7 +250,7 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 46);
+    assert_eq!(scope_table_count, 47);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
     assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
     let review_columns = db

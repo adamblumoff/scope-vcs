@@ -143,6 +143,23 @@ maintenance_read() {
   return 1
 }
 
+backfill_landing_files() {
+  local database_public_url maintenance_data_dir result
+  database_public_url="$(
+    railway variable list "${railway_scope[@]}" --service "$database_service" --json |
+      jq -er '.DATABASE_PUBLIC_URL | strings | select(length > 0)'
+  )"
+  maintenance_data_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/scope-landing-file-backfill.XXXXXX")"
+  result=0
+  SCOPE_MAINTENANCE_DATABASE_URL="$database_public_url" \
+    SCOPE_MAINTENANCE_DATA_DIR="$maintenance_data_dir" \
+    railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
+      sh -c 'DATABASE_URL="$SCOPE_MAINTENANCE_DATABASE_URL" SCOPE_DATA_DIR="$SCOPE_MAINTENANCE_DATA_DIR" exec "$@"' \
+      scope-maintenance "$maintenance_binary" backfill-landing-files || result=$?
+  rm -rf -- "$maintenance_data_dir"
+  return "$result"
+}
+
 wait_for_writer_fence() {
   local grace_seconds="${SCOPE_WRITER_FENCE_GRACE_SECONDS:-10}"
   local grace_deadline=$((SECONDS + grace_seconds))
@@ -371,6 +388,7 @@ deploy_selected_releases() {
 
 deploy_and_reopen() {
   maintenance_read verify
+  backfill_landing_files
   deploy_cache_release
   bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
   wait_for_service_health "$worker_service"

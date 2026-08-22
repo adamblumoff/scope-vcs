@@ -30,7 +30,7 @@ async function main() {
   const fixtures = [];
   const clients = [];
   const report = {
-    version: 3, generatedAt: new Date().toISOString(), apiUrl: config.api, config: publicConfig(config),
+    version: 4, generatedAt: new Date().toISOString(), apiUrl: config.api, config: publicConfig(config),
     workloads: [], faultHook: null,
     cleanup: { attemptedRepositories: 0, attemptedClients: 0, failed: [] },
   };
@@ -67,6 +67,7 @@ async function main() {
         config.readBytes,
         config.historyDepths[0],
         config.writeDeltaBytes[index % config.writeDeltaBytes.length],
+        config.landingFileBytes[index % config.landingFileBytes.length],
       );
       fixtures.push(fixture);
       mixedFixtures.push(fixture);
@@ -104,6 +105,7 @@ function configuration() {
   const token = required('SCOPE_BENCH_AUTH_TOKEN');
   const stages = parseStages(process.env.SCOPE_LOAD_STAGES || DEFAULT_STAGES.join(','));
   const writeDeltaBytes = parseByteSizes(process.env.SCOPE_LOAD_WRITE_DELTA_BYTES || String(64 * 1024));
+  const landingFileBytes = parseByteSizes(process.env.SCOPE_LOAD_LANDING_FILE_BYTES || '0');
   return {
     api, token, stages,
     rates: process.env.SCOPE_LOAD_RATES ? parseRates(process.env.SCOPE_LOAD_RATES) : null,
@@ -114,9 +116,13 @@ function configuration() {
     cleanupTimeoutMs: positiveNumber('SCOPE_LOAD_CLEANUP_TIMEOUT_MS', 10_000),
     maxInFlight: positiveInteger('SCOPE_LOAD_MAX_IN_FLIGHT', 128),
     churnRepos: positiveInteger('SCOPE_LOAD_CHURN_REPOS', 16),
-    mixedRepos: Math.max(writeDeltaBytes.length, positiveInteger('SCOPE_LOAD_MIXED_REPOS', Math.max(8, ...stages))),
+    mixedRepos: Math.max(writeDeltaBytes.length, landingFileBytes.length, positiveInteger('SCOPE_LOAD_MIXED_REPOS', Math.max(8, ...stages))),
     readBytes: positiveInteger('SCOPE_LOAD_READ_BYTES', 384 * 1024),
     writeDeltaBytes,
+    landingFileBytes,
+    pushBaselineP95Ms: process.env.SCOPE_LOAD_PUSH_BASELINE_P95_MS
+      ? positiveNumber('SCOPE_LOAD_PUSH_BASELINE_P95_MS', 1)
+      : null,
     historyDepths: parseStages(process.env.SCOPE_LOAD_HISTORY_DEPTHS || '1,16,64'),
     mixedWritePercent: boundedNumber('SCOPE_LOAD_MIXED_WRITE_PERCENT', 20, 0, 100),
     apiPermitLimits: {
@@ -171,7 +177,7 @@ async function runStaircase(name, context) {
       ? await timedRateStage(name, target, context.config.stageSeconds, operation, context)
       : await timedConcurrencyStage(name, target, context.config.stageSeconds, operation, context);
     baselineP95 ??= stage.stats.p95Ms;
-    stage.gate = evaluateStage(stage, baselineP95);
+    stage.gate = evaluateStage(stage, baselineP95, context.config.pushBaselineP95Ms);
     stages.push(stage);
     printStage(stage);
     if (!stage.gate.healthy) { firstUnhealthy = stage; break; }
@@ -186,7 +192,7 @@ async function runStaircase(name, context) {
       const stage = context.config.rates
         ? await timedRateStage(name, target, context.config.confirmSeconds, operation, context)
         : await timedConcurrencyStage(name, target, context.config.confirmSeconds, operation, context);
-      stage.gate = evaluateStage(stage, baselineP95);
+      stage.gate = evaluateStage(stage, baselineP95, context.config.pushBaselineP95Ms);
       confirmations.push(stage);
       printStage(stage);
       if (stage.gate.healthy) { confirmedHealthy = stage; break; }
@@ -323,6 +329,7 @@ export function stageResult(name, concurrency, samples, elapsedSeconds, startedA
     stats: result,
     historySizeSlope: historySizeSlope(samples),
     writeSizeSlope: writeSizeSlope(samples),
+    landingFileSizeSlope: landingFileSizeSlope(samples),
     consistency: consistencyStats(samples),
     failureBreakdown: failureBreakdown(samples),
     capacityRejections: capacityRejectionBreakdown(samples),
@@ -330,10 +337,15 @@ export function stageResult(name, concurrency, samples, elapsedSeconds, startedA
   };
 }
 
-export function evaluateStage(stage, baselineP95Ms) {
+export function evaluateStage(stage, baselineP95Ms, pushBaselineP95Ms = null) {
   const reasons = [];
   if (stage.errorRate > 0.01) reasons.push(`error rate ${(stage.errorRate * 100).toFixed(2)}% > 1%`);
   if (baselineP95Ms > 0 && stage.stats.p95Ms > baselineP95Ms * 2) reasons.push(`p95 ${stage.stats.p95Ms}ms > 2x baseline ${baselineP95Ms}ms`);
+  if (pushBaselineP95Ms && ['mixed', 'consistency'].includes(stage.name)) {
+    const pushP95Ms = Math.max(0, ...stage.landingFileSizeSlope.points.map(({ p95Ms }) => p95Ms));
+    const maximumPushP95Ms = round(pushBaselineP95Ms * 1.15);
+    if (pushP95Ms > maximumPushP95Ms) reasons.push(`push p95 ${pushP95Ms}ms > 1.15x baseline ${pushBaselineP95Ms}ms`);
+  }
   if (stage.targetRate && stage.stats.scheduleDelayP95Ms > 1000 / stage.targetRate) reasons.push(`load generator p95 schedule delay ${stage.stats.scheduleDelayP95Ms}ms exceeded one arrival interval`);
   return { healthy: reasons.length === 0, reasons };
 }
@@ -364,7 +376,7 @@ function printStage(stage) {
   console.log(`  ${target} · ${stage.throughputPerSecond}/s · completion p95 ${stage.stats.p95Ms}ms · TTFB p95 ${stage.stats.ttfbP95Ms}ms · ${(stage.errorRate * 100).toFixed(2)}% errors · ${gate}`);
 }
 
-async function seedRepository(config, runRoot, label, bytes, historyDepth, writeDeltaBytes = 0, attempt = 1) {
+async function seedRepository(config, runRoot, label, bytes, historyDepth, writeDeltaBytes = 0, landingFileBytes = 0, attempt = 1) {
   const created = await apiJson(config, '/v1/repos', { method: 'POST', body: { name: `loadtest-${label}-${Date.now()}-${randomBytes(3).toString('hex')}`, file_default_visibility: 'Public' } });
   const issuedPushToken = created.init.token ?? created.init.push_token;
   const fixture = {
@@ -372,7 +384,8 @@ async function seedRepository(config, runRoot, label, bytes, historyDepth, write
     remote: new URL(new URL(created.init.git_remote_url).pathname, `${config.api}/`).toString(),
     publicRemote: `${config.api}/git/public/${encodeURIComponent(created.repo.owner_handle)}/${encodeURIComponent(created.repo.name)}`,
     branch: created.init.push_branch || 'main', pushToken: issuedPushToken?.secret,
-    dir: await mkdtemp(join(runRoot, `${label}-`)), historyDepth, logicalBytes: bytes, writeDeltaBytes, update: 0,
+    dir: await mkdtemp(join(runRoot, `${label}-`)), historyDepth, logicalBytes: bytes,
+    writeDeltaBytes, landingFileBytes, update: 0,
   };
   try {
     for (const args of [['init'], ['symbolic-ref', 'HEAD', 'refs/heads/main'], ['config', 'user.email', 'loadtest@scope.local'], ['config', 'user.name', 'Scope Load Test']]) await checkedGit(config, args, fixture.dir);
@@ -380,6 +393,7 @@ async function seedRepository(config, runRoot, label, bytes, historyDepth, write
     await writeFile(join(fixture.dir, '.scope', 'RULES.md'), '');
     await writePayload(fixture.dir, bytes);
     await writeFile(join(fixture.dir, 'load-update.txt'), 'seed\n');
+    if (fixture.landingFileBytes > 0) await writeLandingFile(fixture.dir, fixture.landingFileBytes, 0);
     await checkedGit(config, ['add', '--all'], fixture.dir);
     await checkedGit(config, ['commit', '-m', `Seed ${label}`], fixture.dir);
     if (historyDepth > 1) await addFixtureHistory(config, fixture.dir, historyDepth - 1);
@@ -393,7 +407,7 @@ async function seedRepository(config, runRoot, label, bytes, historyDepth, write
     if (attempt < 3 && /(?:HTTP |error: )5\d\d/i.test(message(error))) {
       console.warn(`  retrying ${label} fixture after transient service failure (${attempt}/3)`);
       await sleep(250 * attempt);
-      return seedRepository(config, runRoot, label, bytes, historyDepth, writeDeltaBytes, attempt + 1);
+      return seedRepository(config, runRoot, label, bytes, historyDepth, writeDeltaBytes, landingFileBytes, attempt + 1);
     }
     throw error;
   }
@@ -439,20 +453,33 @@ async function writePayload(directory, bytes) {
   }
 }
 
+async function writeLandingFile(directory, bytes, update) {
+  const marker = Buffer.from(`<p>Scope load-test README update ${update}</p>\n`);
+  const content = Buffer.alloc(bytes, 'x');
+  marker.copy(content, 0, 0, Math.min(marker.length, content.length));
+  await writeFile(join(directory, 'README.html'), content);
+}
+
 async function updateAndPush(config, fixture, iteration, scheduledAt = performance.now()) {
   try {
     fixture.update += 1;
     const marker = `${fixture.update}:${iteration}:${Date.now()}`;
     await writeFile(join(fixture.dir, 'load-update.txt'), `${marker}\n`);
     if (fixture.writeDeltaBytes > 0) await writeFile(join(fixture.dir, 'load-delta.bin'), randomBytes(fixture.writeDeltaBytes));
-    await checkedGit(config, ['add', 'load-update.txt', ...(fixture.writeDeltaBytes > 0 ? ['load-delta.bin'] : [])], fixture.dir);
+    if (fixture.landingFileBytes > 0) await writeLandingFile(fixture.dir, fixture.landingFileBytes, fixture.update);
+    await checkedGit(config, [
+      'add', 'load-update.txt',
+      ...(fixture.writeDeltaBytes > 0 ? ['load-delta.bin'] : []),
+      ...(fixture.landingFileBytes > 0 ? ['README.html'] : []),
+    ], fixture.dir);
     await checkedGit(config, ['commit', '-m', `Load update ${fixture.update}`], fixture.dir);
     const pushed = await pushCurrentHead(config, fixture, scheduledAt);
     return {
       ...pushed,
       historyDepth: fixture.historyDepth,
-      logicalBytes: fixture.writeDeltaBytes + Buffer.byteLength(`${marker}\n`),
+      logicalBytes: fixture.writeDeltaBytes + fixture.landingFileBytes + Buffer.byteLength(`${marker}\n`),
       writeDeltaBytes: fixture.writeDeltaBytes,
+      landingFileBytes: fixture.landingFileBytes,
       marker,
     };
   } catch (error) {
@@ -543,6 +570,8 @@ async function writeThenVerify(config, fixture, iteration, scheduledAt = perform
     visibilityAttempts: reads.length,
     transientReadErrors: reads.filter(({ ok: readOk }) => !readOk).length,
     staleReads: reads.filter((sample) => sample.ok && sample.json?.content?.text !== `${pushed.marker}\n`).length,
+    writeDeltaBytes: pushed.writeDeltaBytes,
+    landingFileBytes: pushed.landingFileBytes,
   };
 }
 
@@ -698,6 +727,24 @@ export function writeSizeSlope(samples) {
   const first = points[0];
   const last = points.at(-1);
   const deltaMiB = (last.writeDeltaBytes - first.writeDeltaBytes) / 1024 / 1024;
+  return { points, p95MsPerMiB: deltaMiB > 0 ? round((last.p95Ms - first.p95Ms) / deltaMiB) : null };
+}
+
+export function landingFileSizeSlope(samples) {
+  const groups = new Map();
+  for (const entry of samples) {
+    if (!Number.isSafeInteger(entry.landingFileBytes)) continue;
+    const values = groups.get(entry.landingFileBytes) || [];
+    values.push(entry);
+    groups.set(entry.landingFileBytes, values);
+  }
+  const points = [...groups.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([landingFileBytes, values]) => ({ landingFileBytes, ...stats(values) }));
+  if (points.length < 2) return { points, p95MsPerMiB: null };
+  const first = points[0];
+  const last = points.at(-1);
+  const deltaMiB = (last.landingFileBytes - first.landingFileBytes) / 1024 / 1024;
   return { points, p95MsPerMiB: deltaMiB > 0 ? round((last.p95Ms - first.p95Ms) / deltaMiB) : null };
 }
 

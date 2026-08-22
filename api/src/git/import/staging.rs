@@ -1,4 +1,5 @@
 use crate::config::DEFAULT_GIT_BRANCH;
+use scope_domain::landing_file::RepositoryLandingFileMutation;
 use scope_domain::reviewed_updates::{
     ReviewedContentChange, ReviewedUpdateInput, apply_reviewed_update_to_repo,
 };
@@ -41,6 +42,7 @@ pub(crate) struct ReceivePackUpdate {
     pub(crate) git_pack_span: GitPackSpan,
     pub(crate) durable_objects: Vec<SourceBlob>,
     pub(crate) push_trigger_input: Option<PushTriggerInput>,
+    pub(crate) landing_file_mutation: RepositoryLandingFileMutation,
     pub(crate) changes: Vec<ReceivePackFileChange>,
     pub(crate) previous_config: Option<RepoConfig>,
     pub(crate) base_config_hash: String,
