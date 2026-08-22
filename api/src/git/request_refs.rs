@@ -326,6 +326,7 @@ pub(crate) async fn persist_request_ref_revision(
         .old_head_oid
         .clone()
         .or_else(|| Some(request.head_oid.clone()));
+    let event_id = request_revision_event_id()?;
     let persisted =
         persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)
             .await?;
@@ -340,38 +341,42 @@ pub(crate) async fn persist_request_ref_revision(
                 expected_old_head_oid,
                 new_head_oid: update.new_head_oid.clone(),
                 git_snapshot: persisted.git_snapshot.clone(),
-                event_id: request_revision_event_id()?,
+                event_id,
                 body: None,
                 now_unix,
             },
             &crate::persistence_ids::generate_persistence_id,
         )
         .await;
-    if mutation.is_ok() {
-        state
-            .product_analytics
-            .capture(crate::product_analytics::ProductEvent::request_revised(
-                actor_user_id,
-                request_audience,
-            ));
-        state
-            .publish_request_summary_refresh(&request_repo_id, RepoChangeReason::RequestRevised)
+    match mutation {
+        Ok(_) => {
+            state.product_analytics.capture(
+                crate::product_analytics::ProductEvent::request_revised(
+                    actor_user_id,
+                    request_audience,
+                ),
+            );
+            state
+                .publish_request_summary_refresh(&request_repo_id, RepoChangeReason::RequestRevised)
+                .await;
+            persisted.fence.release().await;
+        }
+        Err(error) => {
+            rollback_request_ref(
+                state,
+                owner,
+                repo_name,
+                &update.request_ref,
+                persisted.previous_head,
+            );
+            crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
+                state,
+                std::slice::from_ref(&persisted.git_snapshot),
+            )
             .await;
-    }
-    if let Err(error) = mutation {
-        rollback_request_ref(
-            state,
-            owner,
-            repo_name,
-            &update.request_ref,
-            persisted.previous_head,
-        );
-        crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
-            state,
-            std::slice::from_ref(&persisted.git_snapshot),
-        )
-        .await;
-        return Err(error.into());
+            persisted.fence.release().await;
+            return Err(error.into());
+        }
     }
     Ok(())
 }
@@ -567,6 +572,7 @@ fn install_request_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> 
 struct PersistedRequestRef {
     previous_head: Option<String>,
     git_snapshot: SourceBlob,
+    fence: scope_postgres::db::ContentRefFence,
 }
 
 async fn persist_request_ref_to_store(
@@ -610,16 +616,37 @@ async fn persist_request_ref_to_store(
         &["fetch", staging_repo.to_string_lossy().as_ref(), &refspec],
         "persisting request ref",
     )?;
-    let git_snapshot = match git_snapshot_from_ref(state, &store_repo, &update.request_ref) {
-        Ok(snapshot) => snapshot,
+    let (git_snapshot, snapshot_bytes) =
+        match git_snapshot_from_ref(&store_repo, &update.request_ref) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                rollback_request_ref(state, owner, repo_name, &update.request_ref, previous_head);
+                return Err(error);
+            }
+        };
+    let fence = match state
+        .metadata
+        .acquire_content_ref_fence(std::slice::from_ref(&git_snapshot.content_ref))
+        .await
+    {
+        Ok(fence) => fence,
         Err(error) => {
             rollback_request_ref(state, owner, repo_name, &update.request_ref, previous_head);
-            return Err(error);
+            return Err(error.into());
         }
     };
+    if let Err(error) = state.object_store.put(
+        &scope_object_store::object_key(&git_snapshot),
+        &snapshot_bytes,
+    ) {
+        rollback_request_ref(state, owner, repo_name, &update.request_ref, previous_head);
+        fence.release().await;
+        return Err(error.into());
+    }
     Ok(PersistedRequestRef {
         previous_head,
         git_snapshot,
+        fence,
     })
 }
 

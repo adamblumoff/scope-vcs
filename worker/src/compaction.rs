@@ -1,8 +1,8 @@
 use crate::git_repo::{CompactionPackMetrics, build_compacted_pack};
 use scope_domain::store::{GitPackSpan, SourceBlob};
-use scope_git::{GitStorageLimits, store_compacted_git_pack};
+use scope_git::{GitStorageLimits, prepare_compacted_git_pack};
 use scope_git_process::ProcessError;
-use scope_object_store::ObjectStore;
+use scope_object_store::{ObjectStore, object_key};
 use scope_postgres::db::MetadataStore;
 use std::{
     sync::Arc,
@@ -140,7 +140,7 @@ pub(crate) async fn compact_one_git_repository(
             }
         }
     };
-    let built = match built {
+    let mut built = match built {
         Ok(compaction) => compaction,
         Err(failure) => {
             let failure_now_unix = super::unix_now()?;
@@ -168,13 +168,11 @@ pub(crate) async fn compact_one_git_repository(
             return Err(failure.error);
         }
     };
-    let stored_objects = [built.replacement.object.clone()];
     let final_renewal = metadata
         .jobs()
         .renew_git_compaction_claim(&claim, super::unix_now()?, lease_seconds)
         .await;
     if !matches!(final_renewal, Ok(true)) {
-        queue_failed_compaction_objects(metadata, &stored_objects, super::unix_now()?).await?;
         if let Err(error) = final_renewal {
             return Err(anyhow::anyhow!(
                 "renewing Git compaction lease before publication: {}",
@@ -183,6 +181,26 @@ pub(crate) async fn compact_one_git_repository(
         }
         return Ok(CompactionOutcome::Stale);
     }
+    let fence = metadata
+        .acquire_content_ref_fence(std::slice::from_ref(&built.replacement.object.content_ref))
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    let store_started = Instant::now();
+    if let Err(error) = object_store.put(&object_key(&built.replacement.object), &built.pack_bytes)
+    {
+        metadata
+            .jobs()
+            .fail_git_compaction_claim(&claim, &error.message, super::unix_now()?)
+            .await
+            .map_err(|claim_error| anyhow::anyhow!(claim_error.message))?;
+        fence.release().await;
+        return Err(anyhow::anyhow!(
+            "storing Git compaction failed: {}",
+            error.message
+        ));
+    }
+    built.metrics.store_ms = elapsed_ms(store_started);
+    let stored_objects = [built.replacement.object.clone()];
     let persist_now_unix = super::unix_now()?;
     let persist_started = Instant::now();
     let persisted = metadata
@@ -196,6 +214,7 @@ pub(crate) async fn compact_one_git_repository(
         )
         .await;
     let persist_ms = elapsed_ms(persist_started);
+    fence.release().await;
     match persisted {
         Ok(applied) => {
             metadata
@@ -317,6 +336,7 @@ struct CompactedSpanBuildFailure {
 
 struct BuiltCompaction {
     replacement: GitPackSpan,
+    pack_bytes: Vec<u8>,
     metrics: CompactionMetrics,
 }
 
@@ -341,8 +361,7 @@ fn build_compacted_span(
     timeout: Duration,
 ) -> Result<BuiltCompaction, CompactedSpanBuildFailure> {
     let pack = build_compacted_pack(object_store, candidate, storage_limits, timeout)?;
-    let store_started = Instant::now();
-    match store_compacted_git_pack(object_store, &pack.bytes, storage_limits) {
+    match prepare_compacted_git_pack(&pack.bytes, storage_limits) {
         Ok(object) => {
             let first = candidate
                 .spans
@@ -365,9 +384,10 @@ fn build_compacted_span(
                 .map_err(|error| CompactedSpanBuildFailure::from(anyhow::Error::new(error)))?;
             Ok(BuiltCompaction {
                 replacement,
+                pack_bytes: pack.bytes,
                 metrics: CompactionMetrics {
                     pack: pack.metrics,
-                    store_ms: elapsed_ms(store_started),
+                    store_ms: 0,
                 },
             })
         }

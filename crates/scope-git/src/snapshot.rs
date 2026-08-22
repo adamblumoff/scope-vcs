@@ -1,6 +1,8 @@
 use crate::{GitSnapshotManifest, GitStorageError, GitStorageLimits};
 use scope_domain::store::{GitHead, GitPackSpan, SourceBlob};
-use scope_object_store::{ContentObjectKind, ObjectStore, ensure_object_size, put_content_object};
+use scope_object_store::{
+    ContentObjectKind, ObjectStore, content_object_for_bytes, ensure_object_size, object_key,
+};
 
 #[derive(Debug)]
 pub struct GitSnapshotMaterializationError {
@@ -50,6 +52,35 @@ pub struct StoredGitPush {
     pub pack_span: GitPackSpan,
 }
 
+pub struct PreparedGitPush {
+    stored: StoredGitPush,
+    pack_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+impl PreparedGitPush {
+    pub fn objects(&self) -> [&SourceBlob; 2] {
+        [&self.stored.pack_span.object, &self.stored.head.manifest]
+    }
+
+    pub fn store(
+        self,
+        store: &dyn ObjectStore,
+    ) -> Result<StoredGitPush, GitSnapshotMaterializationError> {
+        let pack = self.stored.pack_span.object.clone();
+        store
+            .put(&object_key(&pack), &self.pack_bytes)
+            .map_err(GitStorageError::from)
+            .map_err(GitSnapshotMaterializationError::without_orphans)?;
+        let manifest = self.stored.head.manifest.clone();
+        store
+            .put(&object_key(&manifest), &self.manifest_bytes)
+            .map_err(GitStorageError::from)
+            .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, pack))?;
+        Ok(self.stored)
+    }
+}
+
 pub fn materialize_git_push(
     store: &dyn ObjectStore,
     pack_bytes: &[u8],
@@ -57,12 +88,20 @@ pub fn materialize_git_push(
     previous: Option<&GitHead>,
     storage_limits: GitStorageLimits,
 ) -> Result<StoredGitPush, GitSnapshotMaterializationError> {
+    prepare_git_push(pack_bytes, head_oid, previous, storage_limits)?.store(store)
+}
+
+pub fn prepare_git_push(
+    pack_bytes: &[u8],
+    head_oid: String,
+    previous: Option<&GitHead>,
+    storage_limits: GitStorageLimits,
+) -> Result<PreparedGitPush, GitSnapshotMaterializationError> {
     let sequence = storage_limits
         .next_push_sequence(previous.map(|head| head.push_sequence))
         .map_err(GitStorageError::from)
         .map_err(GitSnapshotMaterializationError::without_orphans)?;
-    materialize_git_push_objects(
-        store,
+    prepare_git_push_objects(
         pack_bytes,
         head_oid,
         sequence,
@@ -77,6 +116,18 @@ pub fn store_compacted_git_pack(
     pack_bytes: &[u8],
     storage_limits: GitStorageLimits,
 ) -> Result<SourceBlob, GitSnapshotMaterializationError> {
+    let object = prepare_compacted_git_pack(pack_bytes, storage_limits)?;
+    store
+        .put(&object_key(&object), pack_bytes)
+        .map_err(GitStorageError::from)
+        .map_err(GitSnapshotMaterializationError::without_orphans)?;
+    Ok(object)
+}
+
+pub fn prepare_compacted_git_pack(
+    pack_bytes: &[u8],
+    storage_limits: GitStorageLimits,
+) -> Result<SourceBlob, GitSnapshotMaterializationError> {
     ensure_object_size(
         "write",
         "compacted Git pack",
@@ -85,31 +136,29 @@ pub fn store_compacted_git_pack(
     )
     .map_err(GitStorageError::from)
     .map_err(GitSnapshotMaterializationError::without_orphans)?;
-    put_content_object(store, ContentObjectKind::GitSegment, pack_bytes)
-        .map_err(GitStorageError::from)
-        .map_err(GitSnapshotMaterializationError::without_orphans)
+    Ok(content_object_for_bytes(
+        ContentObjectKind::GitSegment,
+        pack_bytes,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn materialize_git_push_objects(
-    store: &dyn ObjectStore,
+fn prepare_git_push_objects(
     pack_bytes: &[u8],
     head_oid: String,
     sequence: u64,
     base_oid: Option<String>,
     change_version: u64,
     max_object_bytes: usize,
-) -> Result<StoredGitPush, GitSnapshotMaterializationError> {
+) -> Result<PreparedGitPush, GitSnapshotMaterializationError> {
     ensure_object_size("write", "Git pack", pack_bytes.len(), max_object_bytes)
         .map_err(GitStorageError::from)
         .map_err(GitSnapshotMaterializationError::without_orphans)?;
-    let pack = put_content_object(store, ContentObjectKind::GitSegment, pack_bytes)
-        .map_err(GitStorageError::from)
-        .map_err(GitSnapshotMaterializationError::without_orphans)?;
+    let pack = content_object_for_bytes(ContentObjectKind::GitSegment, pack_bytes);
     let manifest = GitSnapshotManifest::new(head_oid.clone(), sequence);
     let manifest_bytes = manifest
         .encode()
-        .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, pack.clone()))?;
+        .map_err(GitSnapshotMaterializationError::without_orphans)?;
     ensure_object_size(
         "write",
         "Git snapshot manifest",
@@ -117,27 +166,29 @@ fn materialize_git_push_objects(
         max_object_bytes,
     )
     .map_err(GitStorageError::from)
-    .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, pack.clone()))?;
-    let mut manifest = put_content_object(store, ContentObjectKind::GitManifest, &manifest_bytes)
-        .map_err(GitStorageError::from)
-        .map_err(|error| GitSnapshotMaterializationError::with_orphan(error, pack.clone()))?;
+    .map_err(GitSnapshotMaterializationError::without_orphans)?;
+    let mut manifest = content_object_for_bytes(ContentObjectKind::GitManifest, &manifest_bytes);
     manifest.git_oid = head_oid.clone();
 
-    Ok(StoredGitPush {
-        head: GitHead {
-            head_oid: head_oid.clone(),
-            push_sequence: sequence,
-            change_version,
-            manifest,
+    Ok(PreparedGitPush {
+        stored: StoredGitPush {
+            head: GitHead {
+                head_oid: head_oid.clone(),
+                push_sequence: sequence,
+                change_version,
+                manifest,
+            },
+            pack_span: GitPackSpan {
+                first_sequence: sequence,
+                last_sequence: sequence,
+                geometric_tier: 0,
+                base_oid,
+                head_oid,
+                object: pack,
+            },
         },
-        pack_span: GitPackSpan {
-            first_sequence: sequence,
-            last_sequence: sequence,
-            geometric_tier: 0,
-            base_oid,
-            head_oid,
-            object: pack,
-        },
+        pack_bytes: pack_bytes.to_vec(),
+        manifest_bytes,
     })
 }
 
@@ -208,8 +259,9 @@ mod tests {
     }
 
     #[test]
-    fn manifest_failure_reports_the_stored_pack_for_cleanup() {
+    fn preparation_failure_writes_no_orphan_pack() {
         let store = MemoryObjectStore::new();
+        let pack = content_object_for_bytes(ContentObjectKind::GitSegment, b"x");
         let failure = materialize_git_push(
             &store,
             b"x",
@@ -220,10 +272,7 @@ mod tests {
         .unwrap_err();
         let (_, orphans) = failure.into_parts();
 
-        assert_eq!(orphans.len(), 1);
-        assert!(matches!(
-            orphans[0].content_ref,
-            scope_domain::content_ref::ContentRef::GitSegmentSha256(_)
-        ));
+        assert!(orphans.is_empty());
+        assert!(store.get(&object_key(&pack)).is_err());
     }
 }

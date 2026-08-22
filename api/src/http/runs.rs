@@ -34,7 +34,7 @@ use scope_domain::{
     },
     store::RepositoryActor,
 };
-use scope_object_store::{ContentObjectKind, put_content_object};
+use scope_object_store::{ContentObjectKind, content_object_for_bytes, object_key};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -91,11 +91,7 @@ pub(crate) async fn create_manual_run(
             "workflow does not enable the manual trigger",
         ));
     }
-    let mut stored = put_content_object(
-        state.object_store.as_ref(),
-        ContentObjectKind::GitBundle,
-        &bytes,
-    )?;
+    let mut stored = content_object_for_bytes(ContentObjectKind::GitBundle, &bytes);
     stored.git_oid = git_oid;
     let now = unix_now()?;
     let source_cleanup = stored.clone();
@@ -109,13 +105,22 @@ pub(crate) async fn create_manual_run(
         RunSource::ephemeral_git_bundle(stored)?,
         now,
     )?;
+    let fence = state
+        .metadata
+        .acquire_content_ref_fence(std::slice::from_ref(&source_cleanup.content_ref))
+        .await?;
+    state
+        .object_store
+        .put(&object_key(&source_cleanup), &bytes)?;
     let enqueued = match state.metadata.runs().enqueue_run(run, revision).await {
         Ok(enqueued) => enqueued,
         Err(error) => {
             best_effort_cleanup_rollback_source_blobs(&state, &[source_cleanup]).await;
+            fence.release().await;
             return Err(error.into());
         }
     };
+    fence.release().await;
     let run = enqueued.run;
     if enqueued.inserted {
         state

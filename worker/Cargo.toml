@@ -18,6 +18,7 @@ sha2 = "0.10.9"
 scope_postgres = { package = "scope-postgres", path = "../crates/scope-postgres" }
 scope_api_contract = { package = "scope-api-contract", path = "../crates/scope-api-contract" }
 scope_domain = { package = "scope-domain", path = "../crates/scope-domain" }
+scope_content_lifecycle = { package = "scope-content-lifecycle", path = "../crates/scope-content-lifecycle" }
 scope_git = { package = "scope-git", path = "../crates/scope-git" }
 scope_object_store = { package = "scope-object-store", path = "../crates/scope-object-store" }
 scope_git_process = { package = "scope-git-process", path = "../crates/scope-git-process" }

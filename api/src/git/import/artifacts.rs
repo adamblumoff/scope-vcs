@@ -1,7 +1,7 @@
 use super::repo_io::{
-    GitTreeFile, describe_refs, git_changed_tree_entries, git_push_from_repo, git_refs,
-    git_tree_entries_under, pushed_commit_message, queue_failed_git_objects, run_git_output,
-    run_git_output_bounded, validate_pushed_commit_range,
+    FencedGitPush, GitTreeFile, describe_refs, git_changed_tree_entries, git_push_from_repo,
+    git_refs, git_tree_entries_under, pushed_commit_message, queue_failed_git_objects,
+    run_git_output, run_git_output_bounded, validate_pushed_commit_range,
 };
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
@@ -16,6 +16,7 @@ use scope_domain::runs::{
     workflow::WorkflowPath,
 };
 use scope_domain::store::RepoLifecycleState;
+use scope_postgres::db::ContentRefFence;
 use std::{path::Path as FsPath, time::Instant};
 
 const MAX_PUSH_WORKFLOW_FILES: usize = 64;
@@ -27,6 +28,34 @@ enum ReviewedUpdateMode {
     RequestMerge,
 }
 
+pub(crate) struct PreparedReceivePackUpdate {
+    pub(crate) update: ReceivePackUpdate,
+    pub(crate) fence: ContentRefFence,
+}
+
+impl std::fmt::Debug for PreparedReceivePackUpdate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedReceivePackUpdate")
+            .field("update", &self.update)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::ops::Deref for PreparedReceivePackUpdate {
+    type Target = ReceivePackUpdate;
+
+    fn deref(&self) -> &Self::Target {
+        &self.update
+    }
+}
+
+impl std::ops::DerefMut for PreparedReceivePackUpdate {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.update
+    }
+}
+
 pub(crate) async fn receive_pack_update_from_staging_repo(
     state: &AppState,
     owner: &str,
@@ -34,7 +63,7 @@ pub(crate) async fn receive_pack_update_from_staging_repo(
     staging_repo: &FsPath,
     author_id: &str,
     config: RepoConfig,
-) -> Result<ReceivePackUpdate, ApiError> {
+) -> Result<PreparedReceivePackUpdate, ApiError> {
     reviewed_update_from_staging_repo_mode(
         state,
         owner,
@@ -54,7 +83,7 @@ pub(crate) async fn request_merge_update_from_staging_repo(
     staging_repo: &FsPath,
     author_id: &str,
     config: RepoConfig,
-) -> Result<ReceivePackUpdate, ApiError> {
+) -> Result<PreparedReceivePackUpdate, ApiError> {
     reviewed_update_from_staging_repo_mode(
         state,
         owner,
@@ -74,7 +103,7 @@ pub(crate) async fn reviewed_update_from_staging_repo(
     staging_repo: &FsPath,
     author_id: &str,
     config: RepoConfig,
-) -> Result<ReceivePackUpdate, ApiError> {
+) -> Result<PreparedReceivePackUpdate, ApiError> {
     reviewed_update_from_staging_repo_mode(
         state,
         owner,
@@ -95,7 +124,7 @@ async fn reviewed_update_from_staging_repo_mode(
     author_id: &str,
     config: RepoConfig,
     mode: ReviewedUpdateMode,
-) -> Result<ReceivePackUpdate, ApiError> {
+) -> Result<PreparedReceivePackUpdate, ApiError> {
     let refs = git_refs(staging_repo)?;
     if refs.len() != 1 {
         return Err(ApiError::bad_request(format!(
@@ -114,6 +143,7 @@ async fn reviewed_update_from_staging_repo_mode(
     if mode != ReviewedUpdateMode::FirstPush && repo.lifecycle_state != RepoLifecycleState::Ready {
         return Err(ApiError::conflict("repo must be ready before push"));
     }
+    let base_config_hash = crate::push_intents::repo_config_fingerprint(&repo.repo_config)?;
     let message = pushed_commit_message(staging_repo, &head_oid)?;
     let base_head_oid = repo.git_head.as_ref().map(|head| head.head_oid.as_str());
     validate_pushed_commit_range(staging_repo, base_head_oid, &head_oid)?;
@@ -126,13 +156,15 @@ async fn reviewed_update_from_staging_repo_mode(
         ));
     }
     let pack_started = Instant::now();
-    let mut created_push =
-        match git_push_from_repo(state, staging_repo, repo.git_head.as_ref()).await {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                return Err(error);
-            }
-        };
+    let FencedGitPush {
+        stored: mut created_push,
+        fence,
+    } = match git_push_from_repo(state, staging_repo, repo.git_head.as_ref()).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return Err(error);
+        }
+    };
     created_push.head.change_version = repo.change_version.saturating_add(1);
     let pack_put_ms = pack_started.elapsed().as_millis();
     let pack_bytes = created_push.pack_span.object.size_bytes;
@@ -198,21 +230,24 @@ async fn reviewed_update_from_staging_repo_mode(
             return Err(error);
         }
     };
-    Ok(ReceivePackUpdate {
-        branch,
-        head_oid,
-        base_git_manifest_ref: None,
-        author_id: author_id.to_string(),
-        message,
-        git_head: created_push.head,
-        git_pack_span: created_push.pack_span,
-        durable_objects,
-        push_trigger_input,
-        landing_file_mutation,
-        changes,
-        previous_config: Some(repo.repo_config.clone()),
-        base_config_hash: crate::push_intents::repo_config_fingerprint(&repo.repo_config)?,
-        config,
+    Ok(PreparedReceivePackUpdate {
+        update: ReceivePackUpdate {
+            branch,
+            head_oid,
+            base_git_manifest_ref: None,
+            author_id: author_id.to_string(),
+            message,
+            git_head: created_push.head,
+            git_pack_span: created_push.pack_span,
+            durable_objects,
+            push_trigger_input,
+            landing_file_mutation,
+            changes,
+            previous_config: Some(repo.repo_config.clone()),
+            base_config_hash,
+            config,
+        },
+        fence,
     })
 }
 

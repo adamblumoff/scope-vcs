@@ -3,8 +3,8 @@ mod repo_io;
 mod staging;
 
 pub(crate) use self::artifacts::{
-    receive_pack_update_from_staging_repo, request_merge_update_from_staging_repo,
-    reviewed_update_from_staging_repo,
+    PreparedReceivePackUpdate, receive_pack_update_from_staging_repo,
+    request_merge_update_from_staging_repo, reviewed_update_from_staging_repo,
 };
 #[cfg(test)]
 pub(crate) use self::repo_io::{
@@ -31,9 +31,10 @@ pub(crate) async fn persist_main_push_update_and_promote(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-    mut update: ReceivePackUpdate,
+    prepared: PreparedReceivePackUpdate,
     author_id: &str,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
+    let PreparedReceivePackUpdate { mut update, fence } = prepared;
     let now_unix = crate::persistence::unix_now()?;
     let author_id = author_id.to_string();
     let push_trigger_input = update.push_trigger_input.take().ok_or_else(|| {
@@ -68,6 +69,7 @@ pub(crate) async fn persist_main_push_update_and_promote(
             .await?
     {
         tracing::info!("committed focused content-only push transaction");
+        fence.release().await;
         return Ok(PersistedReceivePackUpdate { git_head });
     }
 
@@ -130,6 +132,7 @@ pub(crate) async fn persist_main_push_update_and_promote(
         database_commit_ms = transaction_started.elapsed().as_millis(),
         "committed reviewed push transaction"
     );
+    fence.release().await;
     Ok(persisted)
 }
 

@@ -161,6 +161,77 @@ async fn draft_request_ref_push_replaces_snapshot_without_touching_main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_request_snapshot_put_rolls_back_the_request_ref_cache() {
+    let mut state = test_state_with_request().await;
+    let (source, _permissioned_remote, server, accepted_head) =
+        request_checkout(&state, "request-ref-put-failure").await;
+    drop(server);
+    state.object_store = Arc::new(PutFailsObjectStore {
+        readable: state.test_object_store.clone(),
+    });
+    let (origin, _server) = spawn_test_server(&state).await;
+    let permissioned_remote = format!("{origin}/git/permissioned/{TEST_REPO_ID}");
+    configure_bearer_header(
+        &source,
+        &permissioned_remote,
+        &bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
+    );
+    fs::write(source.join("request.txt"), "rejected request content\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "request.txt"],
+        "stage rejected request edit",
+    )
+    .unwrap();
+    commit_all(&source, "rejected request edit");
+
+    let output = run_git_output(
+        Some(&source),
+        &["push", &permissioned_remote, &format!("HEAD:{REQUEST_REF}")],
+        "reject request snapshot storage failure",
+    )
+    .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        stored_request(&state, REQUEST_ID).await.head_oid,
+        accepted_head
+    );
+    let store_repo =
+        crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+    assert_eq!(
+        git_stdout_text(
+            &store_repo,
+            &["rev-parse", REQUEST_REF],
+            "read rolled-back request ref"
+        )
+        .unwrap()
+        .trim(),
+        accepted_head
+    );
+}
+
+struct PutFailsObjectStore {
+    readable: Arc<MemoryObjectStore>,
+}
+
+impl scope_object_store::ObjectStore for PutFailsObjectStore {
+    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), scope_object_store::ObjectStoreError> {
+        Err(scope_object_store::ObjectStoreError::service_unavailable(
+            "object PUT failed for test",
+        ))
+    }
+
+    fn get(&self, key: &str) -> Result<Vec<u8>, scope_object_store::ObjectStoreError> {
+        scope_object_store::ObjectStore::get(self.readable.as_ref(), key)
+    }
+
+    fn delete(&self, key: &str) -> Result<(), scope_object_store::ObjectStoreError> {
+        scope_object_store::ObjectStore::delete(self.readable.as_ref(), key)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn draft_push_records_revision_activity_without_touching_main() {
     let state = test_state_with_request().await;
     let (source, permissioned_remote, _server, _) =

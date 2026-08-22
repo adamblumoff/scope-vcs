@@ -26,12 +26,15 @@ pub use cli_auth_results::{
 };
 mod cache_service;
 mod cleanup_queue;
+pub use cleanup_queue::SourceBlobCleanupDecision;
 #[cfg(test)]
 mod cleanup_queue_tests;
 mod clerk_users;
 mod cli_auth;
 mod cli_sessions;
+mod content_fences;
 mod content_push_transactions;
+pub use content_fences::ContentRefFence;
 mod entities;
 mod fast_push;
 #[cfg(test)]
@@ -134,6 +137,7 @@ pub use repo_lifecycle::{CreateRepositoryCommand, RepositoryCreationError};
 pub use repo_mutation::{RepositoryMutation, RepositoryMutationError};
 pub use repo_reads::{RepoLiveFileWithLandingContent, RepoSummaryRead};
 use repository_rows::load_repository_facts;
+use scope_domain::content_ref::ContentRef;
 use scope_domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, repo_id};
 use sea_orm::{
     AccessMode, ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection,
@@ -197,6 +201,18 @@ pub struct RunStore {
 }
 
 impl MetadataStore {
+    pub async fn acquire_content_ref_fence(
+        &self,
+        content_refs: &[ContentRef],
+    ) -> Result<ContentRefFence, PostgresError> {
+        content_fences::acquire_content_ref_fence(
+            self.db.as_ref(),
+            self.postgres_database_url.as_deref(),
+            content_refs,
+        )
+        .await
+    }
+
     pub fn admin(&self) -> AdminStore {
         AdminStore {
             db: Arc::clone(&self.db),
