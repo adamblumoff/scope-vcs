@@ -28,13 +28,11 @@ export type RunRefreshCoordinator = {
 
 export function useRunLiveRefresh({
   acceptedChanges,
-  refreshOnMount = false,
   mutable,
   refresh,
   runId,
 }: {
   acceptedChanges: readonly RunChangeKind[]
-  refreshOnMount?: boolean
   mutable: boolean
   refresh: RunRefresh
   runId?: string
@@ -65,7 +63,7 @@ export function useRunLiveRefresh({
   useEffect(() => {
     if (!mutable) return
     const reconcile = () => coordinator.requestRefresh('Recovery')
-    if (refreshOnMount) reconcile()
+    reconcile()
     const onFocus = () => {
       if (document.visibilityState === 'visible') reconcile()
     }
@@ -82,7 +80,7 @@ export function useRunLiveRefresh({
       document.removeEventListener('visibilitychange', onFocus)
       window.clearInterval(interval)
     }
-  }, [coordinator, mutable, refreshOnMount])
+  }, [coordinator, mutable])
 
   return useCallback(
     () => coordinator.requestRefresh('Recovery'),
@@ -122,9 +120,19 @@ export function createRunRefreshCoordinator({
     const controller = new AbortController()
     activeController = controller
     const cancelTimeout = schedule(() => controller.abort(), timeoutMs)
+    const aborted = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener(
+        'abort',
+        () => reject(new Error('Run refresh timed out.')),
+        { once: true },
+      )
+    })
     let failed = false
     try {
-      await refresh(reasons, controller.signal)
+      await Promise.race([
+        refresh(reasons, controller.signal),
+        aborted,
+      ])
     } catch {
       failed = true
       if (!stopped) {

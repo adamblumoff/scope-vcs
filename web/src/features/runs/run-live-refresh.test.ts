@@ -92,6 +92,39 @@ test('times out a hung refresh and retries without overlapping requests', async 
   coordinator.stop()
 })
 
+test('timeout releases the coordinator when refresh ignores abort', async () => {
+  const scheduled: Array<{ callback: () => void; delay: number }> = []
+  const signals: AbortSignal[] = []
+  let calls = 0
+  const coordinator = createRunRefreshCoordinator({
+    acceptedChanges: ['StatusChanged'],
+    refresh: (_reasons, signal) => {
+      calls += 1
+      signals.push(signal)
+      return new Promise<void>(() => {})
+    },
+    repoId: 'repo-1',
+    runId: 'run-1',
+    schedule: (callback, delay) => {
+      const task = { callback, delay }
+      scheduled.push(task)
+      return () => {
+        const index = scheduled.indexOf(task)
+        if (index >= 0) scheduled.splice(index, 1)
+      }
+    },
+    timeoutMs: 10,
+  })
+  coordinator.requestRefresh()
+  scheduled.find(({ delay }) => delay === 10)?.callback()
+  await tick()
+  assert.equal(signals[0]?.aborted, true)
+  scheduled.find(({ delay }) => delay === 2_000)?.callback()
+  await tick()
+  assert.equal(calls, 2)
+  coordinator.stop()
+})
+
 function createCoordinator(
   refresh: Parameters<typeof createRunRefreshCoordinator>[0]['refresh'],
   acceptedChanges: Parameters<typeof createRunRefreshCoordinator>[0]['acceptedChanges'] = [

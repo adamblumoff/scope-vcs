@@ -70,7 +70,6 @@ export function WorkflowLatestRun({
   const refreshLatestRun = useRunLiveRefresh({
     acceptedChanges: LATEST_RUN_CHANGES,
     mutable: Boolean(input && (!detailState || runCanChange(detailState))),
-    refreshOnMount: true,
     refresh: async (_reasons, signal) => {
       await refresh(signal)
     },
