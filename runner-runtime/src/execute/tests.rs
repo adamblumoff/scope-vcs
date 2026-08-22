@@ -316,7 +316,11 @@ fn output_can_close_before_the_process_exits() {
 fn escaped_descendant_cannot_hold_output_capture_open() {
     let sink = FakeSink::new([]);
     let workspace = tempfile::tempdir().unwrap();
-    let job = job(&[("escape", "setsid sh -c 'echo $$ > escaped.pid; sleep 30' &")]);
+    let job = job(&[(
+        "escape",
+        "setsid sh -c 'echo $$ > escaped.pid; sleep 30' & \
+         while [ ! -s escaped.pid ]; do sleep 0.01; done",
+    )]);
     let started = Instant::now();
 
     let outcome = run_steps_with_options(
@@ -326,14 +330,7 @@ fn escaped_descendant_cannot_hold_output_capture_open() {
         SupervisorOptions::for_test(Duration::from_secs(2)),
     )
     .unwrap();
-    let escaped_pid_path = workspace.path().join("escaped.pid");
-    for _ in 0..100 {
-        if escaped_pid_path.exists() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    let escaped_pid = std::fs::read_to_string(escaped_pid_path)
+    let escaped_pid = std::fs::read_to_string(workspace.path().join("escaped.pid"))
         .unwrap()
         .trim()
         .parse::<i32>()
