@@ -13,10 +13,7 @@ use axum::{body::Body, http::StatusCode, response::Response};
 use futures_util::StreamExt;
 use scope_domain::policy::Principal;
 use scope_domain::projection::{ProjectionViewKey, project_graph};
-use scope_domain::store::{
-    GitHead, GitPackSpan, RepoLifecycleState, SourceBlob, validate_git_pack_layout,
-};
-use scope_object_store::source_blob_bytes;
+use scope_domain::store::RepoLifecycleState;
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 use std::{
@@ -245,118 +242,6 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
     )?;
     install_ready_pre_receive_hook(&repo_root)?;
     Ok(repo_root)
-}
-
-pub(crate) fn restore_git_pack_spans(
-    state: &AppState,
-    head: &GitHead,
-    pack_spans: &[GitPackSpan],
-    repo_root: &FsPath,
-) -> Result<(), ApiError> {
-    validate_git_pack_layout(pack_spans)
-        .map_err(|error| ApiError::internal_message(error.to_string()))?;
-    let final_span = pack_spans
-        .last()
-        .ok_or_else(|| ApiError::internal_message("Git head has no physical pack spans"))?;
-    if final_span.last_sequence != head.push_sequence || final_span.head_oid != head.head_oid {
-        return Err(ApiError::internal_message(
-            "Git pack layout frontier does not match the logical head",
-        ));
-    }
-    if repo_root.exists() {
-        fs::remove_dir_all(repo_root).map_err(ApiError::internal)?;
-    }
-    run_git(
-        None,
-        &["init", "--bare", repo_root.to_string_lossy().as_ref()],
-        "initializing Git snapshot repo",
-    )?;
-    for span in pack_spans {
-        index_git_pack(state, repo_root, &span.object)?;
-    }
-    run_git(
-        Some(repo_root),
-        &[
-            "update-ref",
-            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
-            &head.head_oid,
-        ],
-        "restoring Git pack-layout head",
-    )?;
-    run_git(
-        Some(repo_root),
-        &["fsck", "--connectivity-only", &head.head_oid],
-        "verifying restored Git pack layout",
-    )?;
-    run_git(
-        Some(repo_root),
-        &[
-            "symbolic-ref",
-            "HEAD",
-            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
-        ],
-        "setting restored Git snapshot head",
-    )?;
-    Ok(())
-}
-
-pub(crate) fn index_git_pack(
-    state: &AppState,
-    repo_root: &FsPath,
-    pack: &SourceBlob,
-) -> Result<(), ApiError> {
-    let bytes = restore_object_bytes(state, pack, "pack")?;
-    let size_bytes = bytes.len();
-    let started_at = Instant::now();
-    let output = crate::git::upload::git_process_output_with_timeout(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(repo_root)
-            .args(["index-pack", "--stdin"]),
-        Some(bytes),
-        state.runtime_budgets.git_command_timeout(),
-    );
-    let success = output.as_ref().is_ok_and(|output| output.status.success());
-    let duration_ms = started_at.elapsed().as_millis();
-    tracing::info!(
-        operation = "index_pack",
-        duration_ms,
-        repo_git_index_pack_ms = duration_ms,
-        size_bytes,
-        success,
-        "Git restore operation completed"
-    );
-    let output = output?;
-    if !output.status.success() {
-        return Err(ApiError::infrastructure_unavailable(format!(
-            "restoring Git pack: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
-}
-
-fn restore_object_bytes(
-    state: &AppState,
-    blob: &SourceBlob,
-    object_kind: &'static str,
-) -> Result<Vec<u8>, ApiError> {
-    let started_at = Instant::now();
-    let bytes = source_blob_bytes(state.object_store.as_ref(), blob).map_err(ApiError::from);
-    let size_bytes = bytes.as_ref().map_or(blob.size_bytes, |bytes| {
-        u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-    });
-    let duration_ms = started_at.elapsed().as_millis();
-    tracing::info!(
-        operation = "object_retrieval",
-        object_kind,
-        duration_ms,
-        repo_git_object_retrieval_ms = duration_ms,
-        size_bytes,
-        success = bytes.is_ok(),
-        "Git restore operation completed"
-    );
-    bytes
 }
 
 pub(crate) fn install_first_push_pre_receive_hook(repo_root: &FsPath) -> Result<(), ApiError> {

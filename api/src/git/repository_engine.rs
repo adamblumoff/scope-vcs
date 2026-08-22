@@ -9,7 +9,7 @@ use crate::{
             RepositoryGitCache, sanitize_repository_git_cache_repo,
         },
         import::run_git,
-        storage::{index_git_pack, restore_git_pack_spans},
+        restore::{index_git_pack, restore_git_pack_spans, run_timed_git_restore_phase},
     },
     state::AppState,
 };
@@ -19,12 +19,16 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 static REPOSITORY_MATERIALIZATION_ATTEMPT: AtomicU64 = AtomicU64::new(1);
+const MATERIALIZATION_PATH_HIT: u8 = 0;
+const MATERIALIZATION_PATH_CATCH_UP: u8 = 1;
+const MATERIALIZATION_PATH_REPAIR: u8 = 2;
+const MATERIALIZATION_PATH_RESTORE: u8 = 3;
 
 /// Owns this API process's disposable Git replicas and coordinates mutations of
 /// each replica through one repository-scoped stream. Durable publication is
@@ -106,12 +110,21 @@ impl RepositoryEngine {
         let applied_before = self.cache.applied_sequence(&repo_path);
         let cache_hit = is_ready();
         let built = AtomicBool::new(false);
+        let materialization_path = AtomicU8::new(MATERIALIZATION_PATH_HIT);
         let result = self.coordinate_repository(repository_id, is_ready, || {
             built.store(true, Ordering::Relaxed);
             let _permit = state.runtime_budgets.try_git_materialization()?;
             match self.cache.applied_sequence(&repo_path) {
                 Some(applied) if applied < head.push_sequence && repo_path.is_dir() => {
-                    self.catch_up(state, head, pack_spans, applied, &repo_path)?;
+                    materialization_path.store(MATERIALIZATION_PATH_CATCH_UP, Ordering::Relaxed);
+                    self.catch_up(
+                        state,
+                        repository_id,
+                        head,
+                        pack_spans,
+                        applied,
+                        &repo_path,
+                    )?;
                     self.cache.note_applied(&repo_path, head.push_sequence)
                 }
                 Some(applied)
@@ -120,10 +133,20 @@ impl RepositoryEngine {
                     Ok(())
                 }
                 None if repo_path.is_dir() => {
-                    for span in pack_spans {
-                        index_git_pack(state, &repo_path, &span.object)?;
+                    materialization_path.store(MATERIALIZATION_PATH_REPAIR, Ordering::Relaxed);
+                    for (index, span) in pack_spans.iter().enumerate() {
+                        index_git_pack(
+                            state,
+                            &repo_path,
+                            repository_id,
+                            span,
+                            index + 1,
+                            pack_spans.len(),
+                        )?;
                     }
-                    run_git(
+                    run_timed_git_restore_phase(
+                        repository_id,
+                        "update_ref",
                         Some(&repo_path),
                         &[
                             "update-ref",
@@ -132,7 +155,9 @@ impl RepositoryEngine {
                         ],
                         "repairing repository Git cache head",
                     )?;
-                    run_git(
+                    run_timed_git_restore_phase(
+                        repository_id,
+                        "fsck",
                         Some(&repo_path),
                         &["fsck", "--connectivity-only", &head.head_oid],
                         "verifying repaired repository Git cache",
@@ -147,6 +172,7 @@ impl RepositoryEngine {
                     Ok(())
                 }
                 _ => {
+                    materialization_path.store(MATERIALIZATION_PATH_RESTORE, Ordering::Relaxed);
                     let attempt =
                         REPOSITORY_MATERIALIZATION_ATTEMPT.fetch_add(1, Ordering::Relaxed);
                     let temp_path = cache_root.join(format!(
@@ -154,7 +180,13 @@ impl RepositoryEngine {
                         std::process::id(),
                         attempt
                     ));
-                    if let Err(error) = restore_git_pack_spans(state, head, pack_spans, &temp_path) {
+                    if let Err(error) = restore_git_pack_spans(
+                        state,
+                        repository_id,
+                        head,
+                        pack_spans,
+                        &temp_path,
+                    ) {
                         let _ = fs::remove_dir_all(&temp_path);
                         return Err(error);
                     }
@@ -177,10 +209,20 @@ impl RepositoryEngine {
         tracing::info!(
             repository_id,
             cache_outcome = materialization_outcome(cache_hit, built.load(Ordering::Relaxed)),
+            materialization_path = materialization_path_name(
+                materialization_path.load(Ordering::Relaxed),
+                cache_hit,
+                built.load(Ordering::Relaxed),
+            ),
             elapsed_us = started_at.elapsed().as_micros(),
             requested_sequence = head.push_sequence,
             applied_sequence_before = applied_before,
             applied_sequence_after = self.cache.applied_sequence(&repo_path),
+            pack_span_count = pack_spans.len(),
+            total_pack_bytes = pack_spans
+                .iter()
+                .map(|span| span.object.size_bytes)
+                .sum::<u64>(),
             success = result.is_ok(),
             "repository Git replica materialization completed"
         );
@@ -283,6 +325,7 @@ impl RepositoryEngine {
     fn catch_up(
         &self,
         state: &AppState,
+        repository_id: &str,
         head: &GitHead,
         pack_spans: &[GitPackSpan],
         applied_sequence: u64,
@@ -308,10 +351,20 @@ impl RepositoryEngine {
                 "repository Git cache missing tail starts after the required sequence",
             ));
         }
-        for span in missing {
-            index_git_pack(state, repo_root, &span.object)?;
+        let missing_count = missing.len();
+        for (index, span) in missing.into_iter().enumerate() {
+            index_git_pack(
+                state,
+                repo_root,
+                repository_id,
+                span,
+                index + 1,
+                missing_count,
+            )?;
         }
-        run_git(
+        run_timed_git_restore_phase(
+            repository_id,
+            "update_ref",
             Some(repo_root),
             &[
                 "update-ref",
@@ -320,7 +373,9 @@ impl RepositoryEngine {
             ],
             "advancing repository Git cache head",
         )?;
-        run_git(
+        run_timed_git_restore_phase(
+            repository_id,
+            "fsck",
             Some(repo_root),
             &["fsck", "--connectivity-only", &head.head_oid],
             "verifying caught-up repository Git cache",
@@ -339,6 +394,21 @@ fn materialization_outcome(cache_hit: bool, built: bool) -> &'static str {
         "build"
     } else {
         "wait"
+    }
+}
+
+fn materialization_path_name(path: u8, cache_hit: bool, built: bool) -> &'static str {
+    if cache_hit {
+        return "hit";
+    }
+    if !built {
+        return "wait";
+    }
+    match path {
+        MATERIALIZATION_PATH_CATCH_UP => "catch_up",
+        MATERIALIZATION_PATH_REPAIR => "repair",
+        MATERIALIZATION_PATH_RESTORE => "restore",
+        _ => "hit",
     }
 }
 
@@ -364,6 +434,30 @@ mod tests {
                 .as_nanos()
         ));
         RepositoryEngine::new(root, 1024 * 1024 * 1024).unwrap()
+    }
+
+    #[test]
+    fn materialization_path_distinguishes_hits_waits_and_builds() {
+        assert_eq!(
+            materialization_path_name(MATERIALIZATION_PATH_HIT, true, false),
+            "hit"
+        );
+        assert_eq!(
+            materialization_path_name(MATERIALIZATION_PATH_HIT, false, false),
+            "wait"
+        );
+        assert_eq!(
+            materialization_path_name(MATERIALIZATION_PATH_CATCH_UP, false, true),
+            "catch_up"
+        );
+        assert_eq!(
+            materialization_path_name(MATERIALIZATION_PATH_REPAIR, false, true),
+            "repair"
+        );
+        assert_eq!(
+            materialization_path_name(MATERIALIZATION_PATH_RESTORE, false, true),
+            "restore"
+        );
     }
 
     #[test]

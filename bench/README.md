@@ -79,6 +79,23 @@ node bench/railway-load.mjs
 
 The report labels the API's per-process permits. Defaults are 4 receive-pack operations, 8 upload-pack operations, 2 Git materializations, and 16 object-store operations. If the deployment overrides them, pass the matching `SCOPE_BENCH_RECEIVE_PACK_CONCURRENCY`, `SCOPE_BENCH_UPLOAD_PACK_CONCURRENCY`, `SCOPE_BENCH_GIT_MATERIALIZATION_CONCURRENCY`, and `SCOPE_BENCH_OBJECT_STORE_CONCURRENCY` values. A 429 at one of these limits is admission control, not a hardware ceiling.
 
+To isolate replica-local Git cache effects, pass every load-test API endpoint and choose one routing policy. A push's config read, push intent, and Git transfer stay on the same selected endpoint.
+
+```bash
+SCOPE_BENCH_API_URL=https://scope-api-loadtest-a.up.railway.app \
+SCOPE_BENCH_API_URLS=https://scope-api-loadtest-a.up.railway.app,https://scope-api-loadtest-b.up.railway.app,https://scope-api-loadtest-c.up.railway.app \
+SCOPE_LOAD_ROUTING_MODE=repository-affine \
+SCOPE_LOAD_TOPOLOGY_LABEL=three-node-affine \
+SCOPE_LOAD_REPEAT_INDEX=1 \
+SCOPE_LOAD_ROUTING_SEED=20260822 \
+SCOPE_LOAD_WARMUP_SECONDS=30 \
+SCOPE_LOAD_WARMUP_CONCURRENCY=4 \
+SCOPE_LOAD_STAGES=1,4,8,16 \
+node bench/railway-load.mjs
+```
+
+`single` always uses the first endpoint, `random` chooses a seeded endpoint for each logical operation, and `repository-affine` hashes `owner/repository` to one endpoint. Run three repeats of single-node, three-node random, and three-node affine in a shuffled order. Keep build SHA, service resources, region, Postgres, object storage, fixtures, warmup, and stage controls identical.
+
 Then run the write-size matrix and longer staircase:
 
 ```bash

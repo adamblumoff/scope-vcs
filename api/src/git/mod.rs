@@ -7,6 +7,7 @@ pub(crate) mod repository_engine;
 pub(crate) mod request_merge;
 mod request_ref_public_safety;
 pub(crate) mod request_refs;
+pub(crate) mod restore;
 pub(crate) mod run_source;
 pub(crate) mod storage;
 pub(crate) mod upload;

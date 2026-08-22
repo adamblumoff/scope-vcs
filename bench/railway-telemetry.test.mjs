@@ -3,8 +3,9 @@ import test from 'node:test';
 
 import {
   capacityRejectionFields, compactionFields, numericFields, objectStoreFields,
-  pushPersistenceFields, stripAnsi, summarizeCapacityRejections, summarizeCompactions,
-  summarizeObjectStore, summarizePushPersistence, summarizeSnapshots,
+  gitOperationFields, pushPersistenceFields, stripAnsi, summarizeCapacityRejections,
+  summarizeCompactions, summarizeGitOperations, summarizeMaterializations, summarizeObjectStore,
+  summarizePushPersistence, summarizeSnapshots,
 } from './railway-telemetry.mjs';
 
 test('runtime snapshot parsing strips tracing colors and reads numeric fields', () => {
@@ -96,6 +97,35 @@ test('object-store timings report failures and successful service-time byte rate
       elapsedUs: { minimum: 1000, p50: 1000, p95: 500000, p99: 500000, maximum: 500000 },
       totalBytes: 1048576,
       serviceTimeMiBPerSecond: 2,
+    },
+  });
+});
+
+test('Git restore telemetry stays joined to request, replica, cache, and frontier', () => {
+  const materialization = gitOperationFields('http_request{request_id=abc replica_id=replica-a}: repository Git replica materialization completed repository_id=owner/repo cache_outcome=build materialization_path=restore elapsed_us=42000 requested_sequence=8 pack_span_count=3 total_pack_bytes=1048576 success=true');
+  const download = gitOperationFields('http_request{request_id=abc replica_id=replica-a}: Git restore operation completed repository_id=owner/repo operation=object_retrieval duration_ms=12 size_bytes=1048576 span_index=1 span_count=3 first_sequence=1 last_sequence=4 geometric_tier=2 success=true');
+  assert.deepEqual(materialization, {
+    requestId: 'abc', replicaId: 'replica-a', repositoryId: 'owner/repo',
+    operation: 'materialize_repository', cacheOutcome: 'build', materializationPath: 'restore',
+    success: true, durationMs: 42, elapsed_us: 42000, requested_sequence: 8,
+    pack_span_count: 3, total_pack_bytes: 1048576,
+  });
+  assert.equal(download.operation, 'object_retrieval');
+  assert.equal(download.durationMs, 12);
+  assert.equal(download.first_sequence, 1);
+  assert.deepEqual(summarizeMaterializations([materialization, download]), {
+    'build/restore': {
+      count: 1,
+      durationMs: { minimum: 42, p50: 42, p95: 42, p99: 42, maximum: 42 },
+    },
+  });
+  assert.deepEqual(summarizeGitOperations([download]), {
+    object_retrieval: {
+      count: 1,
+      failures: 0,
+      durationMs: { minimum: 12, p50: 12, p95: 12, p99: 12, maximum: 12 },
+      totalDurationMs: 12,
+      totalBytes: 1048576,
     },
   });
 });
