@@ -69,16 +69,26 @@ pub(crate) fn source_content_bytes_from_repo(
         &["cat-file", "blob", &blob.git_oid],
         "reading Git blob content",
     );
+    let actual_size_bytes = output.as_ref().map_or(0, |output| output.stdout.len());
+    let success = output
+        .as_ref()
+        .is_ok_and(|output| output.status.success() && actual_size_bytes as u64 == blob.size_bytes);
     tracing::info!(
         operation = "cat_file",
         duration_ms = started_at.elapsed().as_millis(),
         git_oid = blob.git_oid,
         expected_size_bytes = blob.size_bytes,
-        actual_size_bytes = output.as_ref().map_or(0, |output| output.stdout.len()),
-        success = output.is_ok(),
+        actual_size_bytes,
+        success,
         "Git content read completed"
     );
     let output = output?;
+    if !output.status.success() {
+        return Err(ApiError::infrastructure_unavailable(format!(
+            "reading Git blob content: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
     if output.stdout.len() as u64 != blob.size_bytes {
         return Err(ApiError::internal_message(format!(
             "Git blob {} size did not match persisted metadata",

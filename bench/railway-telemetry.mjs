@@ -88,16 +88,7 @@ async function main() {
       const rejection = capacityRejectionFields(stripAnsi(entry.message || ''));
       return rejection ? [{ timestamp: entry.timestamp, ...rejection }] : [];
     });
-    const metrics = JSON.parse(await railway([
-      'metrics',
-      '--service', service,
-      '--environment', environment,
-      '--since', since,
-      '--raw',
-      '--cpu',
-      '--memory',
-      '--json',
-    ]));
+    const metrics = JSON.parse(await railway(railwayMetricArgs(service, environment, since, until)));
     report.services[service] = {
       processSummary: summarizeSnapshots(snapshots),
       resourceSummary: summarizeMetrics(metrics),
@@ -136,6 +127,21 @@ async function railwayLogs(service, environment, since, until, lines, filter = n
   if (until) args.push('--until', until);
   if (filter) args.push('--filter', filter);
   return parseJsonLines(await railway(args));
+}
+
+export function railwayMetricArgs(service, environment, since, until = null) {
+  const args = [
+    'metrics',
+    '--service', service,
+    '--environment', environment,
+    '--since', since,
+    '--raw',
+    '--cpu',
+    '--memory',
+    '--json',
+  ];
+  if (until) args.push('--until', until);
+  return args;
 }
 
 function railway(args) {
@@ -255,11 +261,16 @@ export function gitOperationFields(message) {
     'last_sequence',
     'geometric_tier',
     'size_bytes',
+    'expected_size_bytes',
+    'actual_size_bytes',
     'total_pack_bytes',
   ]);
   const operation = message.includes('repository Git replica materialization completed')
     ? 'materialize_repository'
     : textField(message, 'operation') || 'unknown';
+  const sizeBytes = Number.isFinite(numeric.size_bytes)
+    ? numeric.size_bytes
+    : operation === 'cat_file' ? numeric.actual_size_bytes : null;
   return {
     requestId: textField(message, 'request_id'),
     replicaId: textField(message, 'replica_id'),
@@ -272,6 +283,7 @@ export function gitOperationFields(message) {
       ? numeric.duration_ms
       : Number.isFinite(numeric.elapsed_us) ? round(numeric.elapsed_us / 1_000) : null,
     ...numeric,
+    ...(Number.isFinite(sizeBytes) ? { size_bytes: sizeBytes } : {}),
   };
 }
 
