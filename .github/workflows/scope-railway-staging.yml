@@ -93,17 +93,13 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      - name: Cache Rust build outputs
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            candidate/target
-          key: ${{ runner.os }}-staging-cargo-${{ hashFiles('candidate/Cargo.lock') }}-${{ inputs.source_sha }}
-          restore-keys: |
-            ${{ runner.os }}-staging-cargo-${{ hashFiles('candidate/Cargo.lock') }}
-            ${{ runner.os }}-staging-cargo-
+          cache-bin: false
+          shared-key: staging-proof
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: candidate -> target
 
       - name: Build staging commands
         working-directory: candidate
@@ -125,10 +121,12 @@ jobs:
             cp "candidate/$service/railway.json" "$root/railway.json"
             cp -a candidate/api candidate/cache-service candidate/worker candidate/crates candidate/runner-runtime "$root/"
             printf '%s\n' "$SOURCE_SHA" > "$root/$service/.scope-deployment-sha"
+            printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$root/$service/.scope-deployment-attempt"
           done
           mkdir -p .railway-staging-upload/web-root/web
           cp -a candidate/web/. .railway-staging-upload/web-root/web/
           printf '%s\n' "$SOURCE_SHA" > .railway-staging-upload/web-root/web/.scope-deployment-sha
+          printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-staging-upload/web-root/web/.scope-deployment-attempt
           test -s .railway-staging-upload/api/api/.scope-deployment-sha
           test -s .railway-staging-upload/worker/worker/.scope-deployment-sha
           test -s .railway-staging-upload/cache-service/cache-service/.scope-deployment-sha

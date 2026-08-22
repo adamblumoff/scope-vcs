@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const COMPONENTS = ["checksImage", "cache", "worker", "api", "web", "cli"];
+export const COMPONENTS = ["checksImage", "cache", "worker", "api", "web", "cli"];
 
 function matchesScope(path, scope) {
   return scope.files.includes(path) || scope.prefixes.some((prefix) => path.startsWith(prefix));
@@ -36,15 +36,42 @@ export function classifyChanges(manifest, paths, requestedScope = "changed") {
   return selection;
 }
 
-function changedPaths(base, head) {
+export function planFromDeploymentProgress(manifest, pathsByComponent, requestedScope = "changed") {
+  if (requestedScope !== "changed") return classifyChanges(manifest, [], requestedScope);
+
+  return Object.fromEntries(COMPONENTS.map((component) => {
+    const paths = pathsByComponent[component];
+    if (!Array.isArray(paths)) return [component, true];
+    return [component, classifyChanges(manifest, paths)[component]];
+  }));
+}
+
+function changedPaths(base, head, useMergeBase = true) {
   if (!base || /^0+$/.test(base)) {
     return execFileSync("git", ["ls-tree", "-r", "--name-only", head], { encoding: "utf8" })
       .split("\n")
       .filter(Boolean);
   }
-  return execFileSync("git", ["diff", "--name-only", `${base}...${head}`], { encoding: "utf8" })
+  const range = useMergeBase ? `${base}...${head}` : `${base}..${head}`;
+  return execFileSync("git", ["diff", "--name-only", range], { encoding: "utf8" })
     .split("\n")
     .filter(Boolean);
+}
+
+function pathsSinceSuccessfulDeployments(revisions, head) {
+  return Object.fromEntries(COMPONENTS.map((component) => {
+    const revision = revisions[component];
+    if (typeof revision !== "string" || revision.length === 0) return [component, null];
+
+    try {
+      return [component, changedPaths(revision, head, false)];
+    } catch (error) {
+      process.stderr.write(
+        `Could not compare ${component} deployment ${revision} with ${head}; selecting it conservatively.\n`,
+      );
+      return [component, null];
+    }
+  }));
 }
 
 function argument(name, fallback = "") {
@@ -56,10 +83,18 @@ function main() {
   const manifestPath = argument("--manifest", ".github/deployment-services.json");
   const requestedScope = argument("--scope", "changed");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const paths = requestedScope === "changed"
-    ? changedPaths(argument("--base"), argument("--head", "HEAD"))
+  const head = argument("--head", "HEAD");
+  const deployedRevisionsJson = argument("--deployed-revisions");
+  const usesDeploymentProgress = requestedScope === "changed" && deployedRevisionsJson.length > 0;
+  const paths = requestedScope === "changed" && !usesDeploymentProgress
+    ? changedPaths(argument("--base"), head)
     : [];
-  const selection = classifyChanges(manifest, paths, requestedScope);
+  const pathsByComponent = usesDeploymentProgress
+    ? pathsSinceSuccessfulDeployments(JSON.parse(deployedRevisionsJson), head)
+    : null;
+  const selection = pathsByComponent
+    ? planFromDeploymentProgress(manifest, pathsByComponent)
+    : classifyChanges(manifest, paths, requestedScope);
   const outputPath = process.env.GITHUB_OUTPUT;
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
 
@@ -79,7 +114,11 @@ function main() {
       "",
       `Selected: ${selected.length > 0 ? selected.join(", ") : "none"}`,
       "",
-      paths.length > 0 ? `Changed files considered: ${paths.length}` : `Requested scope: ${requestedScope}`,
+      usesDeploymentProgress
+        ? "Compared each component with its last successful production deployment"
+        : paths.length > 0
+          ? `Changed files considered: ${paths.length}`
+          : `Requested scope: ${requestedScope}`,
       "",
     ].join("\n"));
   }

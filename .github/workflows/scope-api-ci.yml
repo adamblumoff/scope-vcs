@@ -12,9 +12,13 @@ on:
       deploy_api:
         type: boolean
         default: false
+      successful_deployment_revisions:
+        type: string
+        default: "{}"
 
 permissions:
   contents: read
+  deployments: write
 
 jobs:
   checks:
@@ -61,23 +65,20 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      - name: Cache Rust build outputs
-        uses: actions/cache@v6
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: ${{ runner.os }}-backend-deploy-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-backend-deploy-cargo-${{ hashFiles('Cargo.lock') }}
-            ${{ runner.os }}-backend-deploy-cargo-
+          cache-bin: false
+          shared-key: backend-deploy
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Build maintenance command
         run: cargo build --release --locked -p api --bin scope-maintenance
 
       - name: Stage Railway upload roots
         shell: bash
+        env:
+          SUCCESSFUL_REVISIONS: ${{ inputs.successful_deployment_revisions }}
         run: |
           rm -rf .railway-upload
           for service in api worker cache-service; do
@@ -92,6 +93,12 @@ jobs:
             cp -a crates "$root/crates"
             cp -a runner-runtime "$root/runner-runtime"
             printf '%s\n' "$GITHUB_SHA" > "$root/$service/.scope-deployment-sha"
+            component="$service"
+            [[ "$component" == "cache-service" ]] && component=cache
+            successful_sha="$(jq -r --arg component "$component" '.[$component] // ""' <<< "$SUCCESSFUL_REVISIONS")"
+            if [[ "$successful_sha" != "$GITHUB_SHA" ]]; then
+              printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$root/$service/.scope-deployment-attempt"
+            fi
           done
 
       - name: Install Railway CLI
@@ -105,6 +112,9 @@ jobs:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          SCOPE_DEPLOYMENT_EVIDENCE_PATH: production-deployments.ndjson
+          SCOPE_DEPLOYMENT_SOURCE_SHA: ${{ github.sha }}
+          SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS: ${{ inputs.successful_deployment_revisions }}
           SCOPE_DEPLOY_CACHE: ${{ inputs.deploy_cache && '1' || '0' }}
           SCOPE_DEPLOY_WORKER: ${{ inputs.deploy_worker && '1' || '0' }}
           SCOPE_DEPLOY_API: ${{ inputs.deploy_api && '1' || '0' }}
@@ -126,3 +136,14 @@ jobs:
             .railway-upload/api \
             .railway-upload/worker \
             .railway-upload/cache-service
+
+      - name: Record successful Railway deployments
+        if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node .github/scripts/production-deployment-progress.mjs record-file \
+            --file production-deployments.ndjson \
+            --log-url "$LOG_URL"

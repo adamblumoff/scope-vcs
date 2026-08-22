@@ -5,6 +5,9 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
 mkdir -p "$test_dir/bin" "$test_dir/api" "$test_dir/worker" "$test_dir/cache"
+printf '%s\n' test-source-sha > "$test_dir/api/.scope-deployment-sha"
+printf '%s\n' test-source-sha > "$test_dir/worker/.scope-deployment-sha"
+printf '%s\n' test-source-sha > "$test_dir/cache/.scope-deployment-sha"
 
 cat > "$test_dir/maintenance" <<'FAKE'
 #!/usr/bin/env bash
@@ -298,6 +301,8 @@ run_cutover() {
   local deploy_api="${20:-1}"
   local stuck_fence="${21:-0}"
   local stale_stop_status="${22:-0}"
+  local successful_revisions="${23:-}"
+  [[ -n "$successful_revisions" ]] || successful_revisions='{}'
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
   mkdir -p "$state"
@@ -339,6 +344,8 @@ run_cutover() {
     SCOPE_DEPLOY_CACHE="$deploy_cache" \
     SCOPE_DEPLOY_WORKER="$deploy_worker" \
     SCOPE_DEPLOY_API="$deploy_api" \
+    SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS="$successful_revisions" \
+    GITHUB_SHA="test-source-sha" \
     SCOPE_WRITER_FENCE_GRACE_SECONDS="0" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
     SCOPE_RECOVER_CLOSED_CUTOVER="$recover_closed_cutover" \
@@ -537,7 +544,8 @@ run_cutover transient-plan 0 1 "" 0 0 0 0 "" 1
 
 run_cutover interrupted 0 0 scope-worker
 [[ "$(cat "$test_dir/interrupted-result")" != "0" ]]
-run_cutover interrupted 0 0 "" 0 1
+run_cutover interrupted 0 0 "" 0 1 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 1 1 0 0 '{"cache":"test-source-sha"}'
 [[ "$(cat "$test_dir/interrupted-result")" == "0" ]]
 assert_in_order "$test_dir/interrupted-trace" \
   "$test_dir/maintenance plan" \
@@ -595,5 +603,42 @@ if grep -F "graphql restart scope-worker" "$test_dir/denied-worker-trace"; then
   echo "a worker shutdown denial must not restore a worker that was never closed" >&2
   exit 1
 fi
+
+direct_state="$test_dir/direct-state"
+direct_trace="$test_dir/direct-trace"
+direct_evidence="$test_dir/direct-evidence.jsonl"
+mkdir -p "$direct_state"
+: > "$direct_trace"
+PATH="$test_dir/bin:$PATH" \
+  FAKE_RAILWAY_STATE="$direct_state" \
+  FAKE_RAILWAY_TRACE="$direct_trace" \
+  RAILWAY_PROJECT_ID="project-test" \
+  RAILWAY_TOKEN="token-project" \
+  SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
+  SCOPE_DEPLOYMENT_COMPONENT="api" \
+  SCOPE_DEPLOYMENT_SOURCE_SHA="test-source-sha" \
+  SCOPE_DEPLOYMENT_EVIDENCE_PATH="$direct_evidence" \
+  bash "$root/.github/scripts/deploy-railway.sh" scope-api "$test_dir/api"
+EVIDENCE_PATH="$direct_evidence" node -e '
+const { readFileSync } = require("node:fs");
+const evidence = JSON.parse(readFileSync(process.env.EVIDENCE_PATH, "utf8"));
+if (evidence.component !== "api" || evidence.sourceSha !== "test-source-sha" ||
+    evidence.provider !== "railway" || evidence.evidenceId !== "new-scope-api") process.exit(1);
+'
+
+# A healthy old service is not proof that Railway deployed the requested source revision.
+set +e
+PATH="$test_dir/bin:$PATH" \
+  FAKE_RAILWAY_STATE="$direct_state" \
+  FAKE_RAILWAY_TRACE="$direct_trace" \
+  RAILWAY_PROJECT_ID="project-test" \
+  RAILWAY_TOKEN="token-project" \
+  SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
+  SCOPE_DEPLOYMENT_COMPONENT="api" \
+  SCOPE_DEPLOYMENT_SOURCE_SHA="test-source-sha" \
+  bash "$root/.github/scripts/deploy-railway.sh" scope-api "$test_dir/api"
+skipped_result=$?
+set -e
+[[ "$skipped_result" != "0" ]]
 
 echo "backend deployment cutover tests passed"

@@ -16,6 +16,8 @@ recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
 deploy_cache_requested="${SCOPE_DEPLOY_CACHE:-1}"
 deploy_worker_requested="${SCOPE_DEPLOY_WORKER:-1}"
 deploy_api_requested="${SCOPE_DEPLOY_API:-1}"
+successful_deployment_revisions="${SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS:-}"
+[[ -n "$successful_deployment_revisions" ]] || successful_deployment_revisions='{}'
 
 for deployment_flag in deploy_cache_requested deploy_worker_requested deploy_api_requested; do
   if [[ "${!deployment_flag}" != "0" && "${!deployment_flag}" != "1" ]]; then
@@ -369,31 +371,56 @@ restore_old_release() {
   fi
 }
 
+successful_revision() {
+  COMPONENT="$1" REVISIONS="$successful_deployment_revisions" node -e '
+const revisions = JSON.parse(process.env.REVISIONS || "{}");
+process.stdout.write(revisions[process.env.COMPONENT] || "");
+'
+}
+
 deploy_cache_release() {
-  bash .github/scripts/deploy-railway.sh "$cache_service" "$cache_upload_root"
+  local verified_sha
+  verified_sha="$(successful_revision cache)"
+  SCOPE_DEPLOYMENT_COMPONENT=cache \
+    SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
+    bash .github/scripts/deploy-railway.sh "$cache_service" "$cache_upload_root"
   wait_for_service_health "$cache_service"
 }
 
 deploy_selected_releases() {
+  local verified_sha
   if [[ "$deploy_cache_requested" == "1" ]]; then
     deploy_cache_release
   fi
   if [[ "$deploy_worker_requested" == "1" ]]; then
-    bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
+    verified_sha="$(successful_revision worker)"
+    SCOPE_DEPLOYMENT_COMPONENT=worker \
+      SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
+      bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
   fi
   if [[ "$deploy_api_requested" == "1" ]]; then
-    bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
+    verified_sha="$(successful_revision api)"
+    SCOPE_DEPLOYMENT_COMPONENT=api \
+      SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
+      bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
   fi
 }
 
 deploy_and_reopen() {
+  local verified_sha
   maintenance_read verify
   backfill_landing_files
   deploy_cache_release
-  bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
+  verified_sha="$(successful_revision worker)"
+  SCOPE_DEPLOYMENT_COMPONENT=worker \
+    SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
+    bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
   wait_for_service_health "$worker_service"
   worker_closed=0
-  bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
+  verified_sha="$(successful_revision api)"
+  SCOPE_DEPLOYMENT_COMPONENT=api \
+    SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
+    bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
   wait_for_service_health "$api_service"
   api_closed=0
 }

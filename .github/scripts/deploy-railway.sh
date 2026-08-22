@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-service_name="${1:?usage: deploy-railway.sh <service-name> <upload-root> [healthy|stopped]}"
-upload_root="${2:?usage: deploy-railway.sh <service-name> <upload-root> [healthy|stopped]}"
-expected_service_state="${3:-healthy}"
-if [[ "$expected_service_state" != "healthy" && "$expected_service_state" != "stopped" ]]; then
-  echo "Expected service state must be healthy or stopped." >&2
-  exit 2
-fi
+service_name="${1:?usage: deploy-railway.sh <service-name> <upload-root>}"
+upload_root="${2:?usage: deploy-railway.sh <service-name> <upload-root>}"
 
 if [[ -z "${RAILWAY_API_TOKEN:-}" && -z "${RAILWAY_TOKEN:-}" ]]; then
   echo "Set RAILWAY_API_TOKEN or RAILWAY_TOKEN before deploying ${service_name}."
@@ -25,6 +20,11 @@ if [ -z "${RAILWAY_PROJECT_ID:-}" ]; then
 fi
 
 railway_environment="${SCOPE_RAILWAY_ENVIRONMENT_ID:-production}"
+deployment_component="${SCOPE_DEPLOYMENT_COMPONENT:-}"
+deployment_source_sha="${SCOPE_DEPLOYMENT_SOURCE_SHA:-${GITHUB_SHA:-}}"
+deployment_evidence_path="${SCOPE_DEPLOYMENT_EVIDENCE_PATH:-}"
+verified_successful_sha="${SCOPE_VERIFIED_SUCCESSFUL_SHA:-}"
+deployment_was_skipped=0
 
 deploy_message_from_event() {
   local raw_message="${RAILWAY_DEPLOY_MESSAGE:-}"
@@ -84,24 +84,44 @@ print_deployment_logs() {
   echo "::endgroup::"
 }
 
-service_health_line() {
-  local service_name="$1"
-  local services_json
+upload_contains_source_revision() {
+  local marker
+  [[ -n "$deployment_source_sha" ]] || return 1
 
-  services_json="$(
-    railway service list \
-      --project "$RAILWAY_PROJECT_ID" \
-      --environment "$railway_environment" \
-      --json
-  )"
+  while IFS= read -r marker; do
+    if [[ "$(tr -d '[:space:]' < "$marker")" == "$deployment_source_sha" ]]; then
+      return 0
+    fi
+  done < <(find "$upload_root" -type f -name .scope-deployment-sha -print)
+  return 1
+}
 
-  SERVICES_JSON="$services_json" SERVICE_NAME="$service_name" node -e '
-const services = JSON.parse(process.env.SERVICES_JSON || "[]");
-const name = process.env.SERVICE_NAME || "";
-const service = services.find((candidate) => candidate.name === name || candidate.id === name);
-if (!service) process.exit(1);
-const replicas = service.replicas || {};
-console.log([service.status || "", replicas.running || 0, replicas.crashed || 0, replicas.exited || 0, replicas.total || 0].join("\t"));
+record_deployment_evidence() {
+  local deployment_id="$1"
+  [[ -n "$deployment_evidence_path" ]] || return 0
+  if [[ -z "$deployment_component" || -z "$deployment_source_sha" ]]; then
+    echo "SCOPE_DEPLOYMENT_COMPONENT and SCOPE_DEPLOYMENT_SOURCE_SHA are required when recording evidence." >&2
+    return 1
+  fi
+  if ! upload_contains_source_revision; then
+    echo "Railway upload for ${deployment_component} does not contain source revision ${deployment_source_sha}." >&2
+    return 1
+  fi
+
+  # The JavaScript template literal is evaluated by Node.
+  # shellcheck disable=SC2016
+  EVIDENCE_PATH="$deployment_evidence_path" \
+    COMPONENT="$deployment_component" \
+    SOURCE_SHA="$deployment_source_sha" \
+    DEPLOYMENT_ID="$deployment_id" \
+    node -e '
+const { appendFileSync } = require("node:fs");
+appendFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify({
+  component: process.env.COMPONENT,
+  sourceSha: process.env.SOURCE_SHA,
+  provider: "railway",
+  evidenceId: process.env.DEPLOYMENT_ID,
+})}\n`);
 '
 }
 
@@ -113,12 +133,6 @@ wait_for_deployment() {
   local deployment_line
   local deployment_status
   local skipped_reason
-  local health_line
-  local service_status
-  local running_replicas
-  local crashed_replicas
-  local exited_replicas
-  local total_replicas
 
   while true; do
     if deployment_json="$(
@@ -145,18 +159,13 @@ wait_for_deployment() {
             ;;
           SKIPPED)
             echo "Railway skipped deployment: ${skipped_reason:-no reason provided}."
-            health_line="$(service_health_line "$service_name" || true)"
-            if [ -n "$health_line" ]; then
-              IFS=$'\t' read -r service_status running_replicas crashed_replicas exited_replicas total_replicas <<< "$health_line"
-              if [[ "$expected_service_state" == "stopped" && "${running_replicas:-0}" == "0" && "${crashed_replicas:-0}" == "0" ]]; then
-                return 0
-              fi
-              if [ "$service_status" = "SUCCESS" ] && [ "${running_replicas:-0}" -gt 0 ]; then
-                return 0
-              fi
+            if [[ -n "$deployment_component" && -n "$deployment_source_sha" \
+              && "$verified_successful_sha" == "$deployment_source_sha" ]]; then
+              echo "The durable deployment ledger already records this exact source revision as successful."
+              deployment_was_skipped=1
+              return 0
             fi
-            echo "Railway skipped deployment, but ${service_name} did not reach ${expected_service_state} state."
-            echo "Service status: ${service_status:-unknown}; replicas running=${running_replicas:-0}, crashed=${crashed_replicas:-0}, exited=${exited_replicas:-0}, total=${total_replicas:-0}."
+            echo "Refusing to infer source revision from current service health." >&2
             return 1
             ;;
           FAILED|CRASHED|REMOVED)
@@ -216,3 +225,6 @@ process.exit(1);
 )"
 
 wait_for_deployment "$service_name" "$deployment_id"
+if [[ "$deployment_was_skipped" == "0" ]]; then
+  record_deployment_evidence "$deployment_id"
+fi
