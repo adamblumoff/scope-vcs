@@ -1,6 +1,12 @@
-use crate::settings::RuntimeSettings;
+use crate::{
+    execute::{AppendLogError, AppendLogOutcome, ExecutionSink},
+    settings::RuntimeSettings,
+};
 use anyhow::{Context as _, bail};
-use reqwest::blocking::{Client, Response};
+use reqwest::{
+    StatusCode,
+    blocking::{Client, Response},
+};
 use scope_api_contract::{
     AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
     AttemptHeartbeatResponse, AttemptStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
@@ -29,6 +35,7 @@ use std::{
 };
 
 const MAX_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
+const LOG_APPEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub(crate) enum CacheDownloadError {
@@ -161,17 +168,36 @@ impl RuntimeClient {
         )
     }
 
-    pub fn append_log(&self, step: u32, sequence: u64, text: String) -> anyhow::Result<()> {
-        let _: scope_api_contract::RunLogResponse = self.post_json(
-            "logs",
-            &AppendAttemptLogRequest {
+    pub fn append_log(
+        &self,
+        step: u32,
+        sequence: u64,
+        text: &str,
+    ) -> Result<AppendLogOutcome, AppendLogError> {
+        let response = self
+            .auth(self.client.post(self.url("logs")))
+            .timeout(LOG_APPEND_TIMEOUT)
+            .json(&AppendAttemptLogRequest {
                 step_index: step,
                 sequence,
-                text,
-            },
-            "append step log",
-        )?;
-        Ok(())
+                text: text.to_owned(),
+            })
+            .send()
+            .context("append step log")
+            .map_err(AppendLogError::retryable)?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(AppendLogOutcome::Accepted);
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Ok(AppendLogOutcome::Truncated);
+        }
+        let error = anyhow::anyhow!("append step log: Scope API returned {status}");
+        if status == StatusCode::REQUEST_TIMEOUT || status.is_server_error() {
+            Err(AppendLogError::retryable(error))
+        } else {
+            Err(AppendLogError::fatal(error))
+        }
     }
 
     pub fn heartbeat(&self) -> anyhow::Result<AttemptStatusResponse> {
@@ -312,6 +338,7 @@ impl RuntimeClient {
         &self,
         step: u32,
         exit_code: i32,
+        logs_truncated: bool,
     ) -> anyhow::Result<AttemptStatusResponse> {
         let conclusion = if exit_code == 0 {
             StepConclusionRequest::Succeeded
@@ -322,22 +349,22 @@ impl RuntimeClient {
             &format!("steps/{step}/complete"),
             &CompleteAttemptStepRequest {
                 conclusion,
-                logs_truncated: false,
+                logs_truncated,
             },
             "complete step",
         )
     }
 
-    pub fn complete_timeout(&self) -> anyhow::Result<()> {
-        self.complete(AttemptConclusionRequest::TimedOut)
+    pub fn complete_timeout(&self, logs_truncated: bool) -> anyhow::Result<()> {
+        self.complete(AttemptConclusionRequest::TimedOut, logs_truncated)
     }
 
-    pub fn complete_succeeded(&self) -> anyhow::Result<()> {
-        self.complete(AttemptConclusionRequest::Succeeded)
+    pub fn complete_succeeded(&self, logs_truncated: bool) -> anyhow::Result<()> {
+        self.complete(AttemptConclusionRequest::Succeeded, logs_truncated)
     }
 
-    pub fn complete_canceled(&self) -> anyhow::Result<()> {
-        self.complete(AttemptConclusionRequest::Canceled)
+    pub fn complete_canceled(&self, logs_truncated: bool) -> anyhow::Result<()> {
+        self.complete(AttemptConclusionRequest::Canceled, logs_truncated)
     }
 
     pub fn complete_setup_failure(&self, message: &str) -> anyhow::Result<()> {
@@ -349,22 +376,37 @@ impl RuntimeClient {
         {
             return Ok(());
         }
-        self.complete(AttemptConclusionRequest::SetupFailed {
-            exit_code: 70,
-            message: message.chars().take(2048).collect(),
-        })
+        self.complete(
+            AttemptConclusionRequest::SetupFailed {
+                exit_code: 70,
+                message: message.chars().take(2048).collect(),
+            },
+            false,
+        )
     }
 
-    fn complete(&self, conclusion: AttemptConclusionRequest) -> anyhow::Result<()> {
+    fn complete(
+        &self,
+        conclusion: AttemptConclusionRequest,
+        logs_truncated: bool,
+    ) -> anyhow::Result<()> {
         let _: AttemptStatusResponse = self.post_json(
             "complete",
             &CompleteAttemptRequest {
                 conclusion,
-                logs_truncated: false,
+                logs_truncated,
             },
             "complete attempt",
         )?;
         Ok(())
+    }
+
+    pub fn abandon(&self) -> anyhow::Result<()> {
+        let response = self
+            .auth(self.client.post(self.url("abandon")))
+            .send()
+            .context("abandon attempt")?;
+        ensure_success(&response, "abandon attempt")
     }
 
     fn post_json<T: serde::de::DeserializeOwned>(
@@ -414,6 +456,42 @@ impl RuntimeClient {
             "{}/v1/runtime-protocol/attempts/{}/{}",
             self.api_url, self.attempt_id, action
         )
+    }
+}
+
+impl ExecutionSink for RuntimeClient {
+    fn start_step(&self, step: u32) -> anyhow::Result<bool> {
+        Ok(RuntimeClient::start_step(self, step)?.cancellation_requested)
+    }
+
+    fn append_log(
+        &self,
+        step: u32,
+        sequence: u64,
+        text: &str,
+    ) -> Result<AppendLogOutcome, AppendLogError> {
+        RuntimeClient::append_log(self, step, sequence, text)
+    }
+
+    fn heartbeat(&self) -> anyhow::Result<bool> {
+        Ok(RuntimeClient::heartbeat(self)?.cancellation_requested)
+    }
+
+    fn complete_step(&self, step: u32, exit_code: i32, logs_truncated: bool) -> anyhow::Result<()> {
+        RuntimeClient::complete_step(self, step, exit_code, logs_truncated)?;
+        Ok(())
+    }
+
+    fn complete_timeout(&self, logs_truncated: bool) -> anyhow::Result<()> {
+        RuntimeClient::complete_timeout(self, logs_truncated)
+    }
+
+    fn complete_canceled(&self, logs_truncated: bool) -> anyhow::Result<()> {
+        RuntimeClient::complete_canceled(self, logs_truncated)
+    }
+
+    fn abandon(&self) -> anyhow::Result<()> {
+        RuntimeClient::abandon(self)
     }
 }
 
@@ -545,6 +623,7 @@ fn ensure_success(response: &Response, label: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{net::TcpListener, sync::mpsc};
 
     #[test]
     fn cache_download_limit_is_one_gibibyte() {
@@ -562,5 +641,127 @@ mod tests {
         let mut destination = Vec::new();
         let error = copy_hashed(&mut source, &mut destination, 9, "wrong").unwrap_err();
         assert!(matches!(error, CacheDownloadError::Invalid(_)));
+    }
+
+    #[test]
+    fn append_log_treats_only_rate_limiting_as_truncation() {
+        let (client, requests, server) = test_client(&[
+            ("429 Too Many Requests", ""),
+            ("408 Request Timeout", ""),
+            ("500 Internal Server Error", ""),
+            ("409 Conflict", ""),
+        ]);
+
+        assert_eq!(
+            client.append_log(2, 7, "first").unwrap(),
+            AppendLogOutcome::Truncated
+        );
+        assert!(matches!(
+            client.append_log(2, 7, "first"),
+            Err(AppendLogError::Retryable(_))
+        ));
+        assert!(matches!(
+            client.append_log(2, 7, "first"),
+            Err(AppendLogError::Retryable(_))
+        ));
+        assert!(matches!(
+            client.append_log(2, 7, "first"),
+            Err(AppendLogError::Fatal(_))
+        ));
+        for _ in 0..4 {
+            requests.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn completion_requests_report_the_accumulated_truncation() {
+        let status =
+            r#"{"state":"succeeded","cancellation_requested":false,"lease_expires_at_unix":0}"#;
+        let (client, requests, server) = test_client(&[("200 OK", status), ("200 OK", status)]);
+
+        client.complete_step(3, 0, true).unwrap();
+        client.complete_succeeded(true).unwrap();
+
+        let step_request = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+        let attempt_request = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            step_request.starts_with("POST /v1/runtime-protocol/attempts/test/steps/3/complete")
+        );
+        assert!(attempt_request.starts_with("POST /v1/runtime-protocol/attempts/test/complete"));
+        assert_eq!(request_json(&step_request)["logs_truncated"], true);
+        assert_eq!(request_json(&attempt_request)["logs_truncated"], true);
+        server.join().unwrap();
+    }
+
+    fn test_client(
+        responses: &[(&'static str, &'static str)],
+    ) -> (
+        RuntimeClient,
+        mpsc::Receiver<String>,
+        thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let responses = responses.to_vec();
+        let (request_sender, requests) = mpsc::channel();
+        let server = thread::spawn(move || {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_request(&mut stream);
+                request_sender.send(request).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let client = RuntimeClient {
+            client: Client::builder()
+                .timeout(Duration::from_secs(1))
+                .build()
+                .unwrap(),
+            api_url: format!("http://{address}"),
+            attempt_id: "test".to_string(),
+            attempt_token: Arc::new(Mutex::new(Some("token".to_string()))),
+            cache_access: Arc::new(Mutex::new(None)),
+        };
+        (client, requests, server)
+    }
+
+    fn read_request(stream: &mut std::net::TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).unwrap();
+            request.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+                continue;
+            };
+            let header_end = header_end + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::to_owned)
+                })
+                .and_then(|length| length.parse::<usize>().ok())
+                .unwrap_or(0);
+            if request.len() >= header_end + content_length {
+                return String::from_utf8(request).unwrap();
+            }
+        }
+    }
+
+    fn request_json(request: &str) -> serde_json::Value {
+        let (_, body) = request.split_once("\r\n\r\n").unwrap();
+        serde_json::from_str(body).unwrap()
     }
 }

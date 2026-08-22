@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
     let setup_heartbeat_result = setup_heartbeat.finish();
     match setup_heartbeat_result {
         Ok(true) => {
-            client.complete_canceled()?;
+            client.complete_canceled(false)?;
             return Ok(());
         }
         Ok(false) => {}
@@ -31,13 +31,14 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let execution =
-        execute::run_steps(&client, &claim.job.definition, &workspace).map_err(|error| {
+        execute::run_steps(client.clone(), &claim.job.definition, &workspace).map_err(|error| {
             eprintln!("runtime execution transport failed: {error:#}");
             error
         })?;
-    if matches!(execution, execute::ExecutionOutcome::Terminal) {
-        return Ok(());
-    }
+    let logs_truncated = match execution {
+        execute::ExecutionOutcome::Succeeded { logs_truncated } => logs_truncated,
+        execute::ExecutionOutcome::Terminal => return Ok(()),
+    };
     let finalization_heartbeat = api::RuntimeHeartbeat::start(client.clone());
     for finalization in cache::save_caches(&client, &caches) {
         if let cache::CacheFinalizationOutcome::Skipped { reason, message } = finalization.outcome {
@@ -50,9 +51,9 @@ fn main() -> anyhow::Result<()> {
     let cancellation_requested =
         finalization_heartbeat.finish()? || client.heartbeat()?.cancellation_requested;
     if cancellation_requested {
-        client.complete_canceled()
+        client.complete_canceled(logs_truncated)
     } else {
-        client.complete_succeeded()
+        client.complete_succeeded(logs_truncated)
     }
 }
 
