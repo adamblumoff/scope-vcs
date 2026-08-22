@@ -3,9 +3,21 @@ import test from 'node:test';
 
 import {
   capacityRejectionFields, compactionFields, numericFields, objectStoreFields,
-  pushPersistenceFields, stripAnsi, summarizeCapacityRejections, summarizeCompactions,
-  summarizeObjectStore, summarizePushPersistence, summarizeSnapshots,
+  gitOperationFields, pushPersistenceFields, railwayMetricArgs, stripAnsi, summarizeCapacityRejections,
+  summarizeCompactions, summarizeGitOperations, summarizeMaterializations, summarizeObjectStore,
+  summarizePushPersistence, summarizeSnapshots,
 } from './railway-telemetry.mjs';
+
+test('resource metrics use the exact requested run window', () => {
+  assert.deepEqual(
+    railwayMetricArgs('scope-api', 'staging', '2026-08-22T20:00:00Z', '2026-08-22T20:05:00Z'),
+    [
+      'metrics', '--service', 'scope-api', '--environment', 'staging',
+      '--since', '2026-08-22T20:00:00Z', '--raw', '--cpu', '--memory', '--json',
+      '--until', '2026-08-22T20:05:00Z',
+    ],
+  );
+});
 
 test('runtime snapshot parsing strips tracing colors and reads numeric fields', () => {
   const message = '\u001b[32mINFO\u001b[0m runtime process snapshot threads=31 cgroup_pids_current=48';
@@ -98,4 +110,41 @@ test('object-store timings report failures and successful service-time byte rate
       serviceTimeMiBPerSecond: 2,
     },
   });
+});
+
+test('Git restore telemetry stays joined to request, replica, cache, and frontier', () => {
+  const materialization = gitOperationFields('http_request{request_id=abc replica_id=replica-a}: repository Git replica materialization completed repository_id=owner/repo cache_outcome=build materialization_path=restore elapsed_us=42000 requested_sequence=8 pack_span_count=3 total_pack_bytes=1048576 success=true');
+  const download = gitOperationFields('http_request{request_id=abc replica_id=replica-a}: Git restore operation completed repository_id=owner/repo operation=object_retrieval duration_ms=12 size_bytes=1048576 span_index=1 span_count=3 first_sequence=1 last_sequence=4 geometric_tier=2 success=true');
+  assert.deepEqual(materialization, {
+    requestId: 'abc', replicaId: 'replica-a', repositoryId: 'owner/repo',
+    operation: 'materialize_repository', cacheOutcome: 'build', materializationPath: 'restore',
+    success: true, durationMs: 42, elapsed_us: 42000, requested_sequence: 8,
+    pack_span_count: 3, total_pack_bytes: 1048576,
+  });
+  assert.equal(download.operation, 'object_retrieval');
+  assert.equal(download.durationMs, 12);
+  assert.equal(download.first_sequence, 1);
+  assert.deepEqual(summarizeMaterializations([materialization, download]), {
+    'build/restore': {
+      count: 1,
+      durationMs: { minimum: 42, p50: 42, p95: 42, p99: 42, maximum: 42 },
+    },
+  });
+  assert.deepEqual(summarizeGitOperations([download]), {
+    object_retrieval: {
+      count: 1,
+      failures: 0,
+      durationMs: { minimum: 12, p50: 12, p95: 12, p99: 12, maximum: 12 },
+      totalDurationMs: 12,
+      totalBytes: 1048576,
+    },
+  });
+});
+
+test('Git content telemetry counts validated cat-file output bytes', () => {
+  const read = gitOperationFields('http_request{request_id=abc replica_id=replica-a}: Git content read completed operation=cat_file duration_ms=3 git_oid=deadbeef expected_size_bytes=1024 actual_size_bytes=1024 success=true');
+  assert.equal(read.expected_size_bytes, 1024);
+  assert.equal(read.actual_size_bytes, 1024);
+  assert.equal(read.size_bytes, 1024);
+  assert.equal(summarizeGitOperations([read]).cat_file.totalBytes, 1024);
 });

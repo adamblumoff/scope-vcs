@@ -5,7 +5,7 @@ use super::request_discussions::{
 use super::*;
 use crate::AppState;
 use crate::git::import::git_stdout_text;
-use crate::git::storage::restore_git_pack_spans;
+use crate::git::restore::restore_git_pack_spans;
 use scope_domain::requests::RequestState;
 use scope_object_store::{EncryptedObjectStore, MemoryObjectStore, source_blob_bytes};
 use std::sync::Arc;
@@ -240,6 +240,7 @@ fn assert_repository_file(
     let repo_root = state.data_dir.join(format!("{label}.git"));
     restore_git_pack_spans(
         state,
+        &repo.record.id,
         repo.git_head.as_ref().unwrap(),
         &repo.git_pack_spans,
         &repo_root,

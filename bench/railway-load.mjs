@@ -8,6 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 
 import { writeLinearHistoryStream } from './git-history.mjs';
+import { ROUTING_MODES, createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
 import { normalizedRates, percentile, round, sampleStats } from './metrics.mjs';
 
 // Black-box benchmark: no production-only hooks and never a production target.
@@ -23,14 +24,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 async function main() {
   const config = configuration();
-  assertSafeTarget(config.api);
+  for (const api of config.apiUrls) assertSafeTarget(api);
   await ready(config);
   const runRoot = join(config.outputRoot, new Date().toISOString().replaceAll(':', '-'));
   await mkdir(runRoot, { recursive: true });
   const fixtures = [];
   const clients = [];
   const report = {
-    version: 4, generatedAt: new Date().toISOString(), apiUrl: config.api, config: publicConfig(config),
+    version: 5, generatedAt: new Date().toISOString(), apiUrls: config.apiUrls,
+    config: publicConfig(config),
     workloads: [], faultHook: null,
     cleanup: { attemptedRepositories: 0, attemptedClients: 0, failed: [] },
   };
@@ -42,7 +44,7 @@ async function main() {
   process.once('SIGINT', interrupt);
   process.once('SIGTERM', interrupt);
   try {
-    console.log(`target: ${config.api} · node scale: ${config.nodeScaleLabel} · protocol: ${config.protocolLabel}`);
+    console.log(`targets: ${config.apiUrls.join(', ')} · routing: ${config.routingMode} · topology: ${config.topologyLabel} · repeat: ${config.repeatIndex}`);
     console.log(config.rates ? `rates: ${config.rates.join(', ')}/s` : `concurrency: ${config.stages.join(', ')}`);
     console.log('seeding public repositories for read and mixed workloads...');
     const readFixtures = [];
@@ -102,15 +104,22 @@ async function main() {
 
 function configuration() {
   const api = required('SCOPE_BENCH_API_URL').replace(/\/$/, '');
+  const apiUrls = parseApiUrls(api, process.env.SCOPE_BENCH_API_URLS);
+  const routingMode = nonEmpty('SCOPE_LOAD_ROUTING_MODE', 'single');
+  if (!ROUTING_MODES.has(routingMode)) throw new Error(`SCOPE_LOAD_ROUTING_MODE must be one of ${[...ROUTING_MODES].join(', ')}`);
+  const routingSeed = positiveInteger('SCOPE_LOAD_ROUTING_SEED', 1);
   const token = required('SCOPE_BENCH_AUTH_TOKEN');
   const stages = parseStages(process.env.SCOPE_LOAD_STAGES || DEFAULT_STAGES.join(','));
   const writeDeltaBytes = parseByteSizes(process.env.SCOPE_LOAD_WRITE_DELTA_BYTES || String(64 * 1024));
   const landingFileBytes = parseByteSizes(process.env.SCOPE_LOAD_LANDING_FILE_BYTES || '0');
   return {
-    api, token, stages,
+    apiUrls, token, stages, routingMode, routingSeed,
+    endpointRouter: createEndpointRouter(apiUrls, routingMode, routingSeed),
     rates: process.env.SCOPE_LOAD_RATES ? parseRates(process.env.SCOPE_LOAD_RATES) : null,
     workloads: list('SCOPE_LOAD_WORKLOADS', DEFAULT_WORKLOADS),
     stageSeconds: positiveNumber('SCOPE_LOAD_STAGE_SECONDS', 120),
+    warmupSeconds: nonNegativeNumber('SCOPE_LOAD_WARMUP_SECONDS', 0),
+    warmupConcurrency: positiveInteger('SCOPE_LOAD_WARMUP_CONCURRENCY', 4),
     confirmSeconds: nonNegativeNumber('SCOPE_LOAD_CONFIRM_SECONDS', 300),
     timeoutMs: positiveNumber('SCOPE_LOAD_TIMEOUT_MS', 90_000),
     cleanupTimeoutMs: positiveNumber('SCOPE_LOAD_CLEANUP_TIMEOUT_MS', 10_000),
@@ -134,6 +143,8 @@ function configuration() {
     nodeScaleLabel: nonEmpty('SCOPE_LOAD_NODE_SCALE_LABEL', 'unspecified'),
     protocolLabel: nonEmpty('SCOPE_LOAD_PROTOCOL_LABEL', 'current'),
     runLabel: nonEmpty('SCOPE_BENCH_RUN_LABEL', 'unlabeled'),
+    topologyLabel: nonEmpty('SCOPE_LOAD_TOPOLOGY_LABEL', routingMode),
+    repeatIndex: positiveInteger('SCOPE_LOAD_REPEAT_INDEX', 1),
     faultHookUrl: process.env.SCOPE_LOAD_FAULT_HOOK_URL?.trim() || null,
     consistencyTimeoutMs: positiveNumber('SCOPE_LOAD_CONSISTENCY_TIMEOUT_MS', 30_000),
     consistencyPollMs: positiveNumber('SCOPE_LOAD_CONSISTENCY_POLL_MS', 50),
@@ -142,7 +153,7 @@ function configuration() {
 }
 
 function publicConfig(config) {
-  const { token: _token, ...safe } = config;
+  const { token: _token, endpointRouter: _endpointRouter, ...safe } = config;
   return safe;
 }
 
@@ -171,6 +182,23 @@ async function runStaircase(name, context) {
   let lastHealthy = null;
   let firstUnhealthy = null;
   const operation = operationFor(name, context);
+  let warmup = null;
+  if (context.config.warmupSeconds > 0 && !context.interrupted()) {
+    console.log(`  warming at c=${context.config.warmupConcurrency} for ${context.config.warmupSeconds}s (samples discarded)...`);
+    const result = await timedConcurrencyStage(
+      name,
+      context.config.warmupConcurrency,
+      context.config.warmupSeconds,
+      operation,
+      context,
+    );
+    warmup = {
+      seconds: context.config.warmupSeconds,
+      concurrency: context.config.warmupConcurrency,
+      operations: result.stats.count,
+      failures: result.stats.count - result.stats.ok,
+    };
+  }
   for (const target of context.config.rates || context.config.stages) {
     if (context.interrupted()) break;
     const stage = context.config.rates
@@ -201,7 +229,8 @@ async function runStaircase(name, context) {
   const healthy = context.config.confirmSeconds > 0 ? confirmedHealthy : lastHealthy;
   return {
     name, status: healthy ? 'measured' : 'failed', nodeScaleLabel: context.config.nodeScaleLabel,
-    protocolLabel: context.config.protocolLabel,
+    protocolLabel: context.config.protocolLabel, topologyLabel: context.config.topologyLabel,
+    routingMode: context.config.routingMode, repeatIndex: context.config.repeatIndex, warmup,
     baselineP95Ms: baselineP95, stages, confirmations,
     firstUnhealthy: firstUnhealthy ? firstUnhealthy.targetRate ?? firstUnhealthy.concurrency : null,
     lastHealthyConcurrency: healthy?.concurrency ?? null,
@@ -216,17 +245,31 @@ function operationFor(name, context) {
   const churn = rotating(context.churnFixtures);
   const pairs = pooled(context.fetchClients);
   const writes = pooled(context.mixedFixtures);
-  if (name === 'warm-fetch') return (_worker, _iteration, scheduledAt) => withResource(pairs, (pair) => gitFetch(context.config, pair, scheduledAt));
-  if (name === 'incremental-fetch') return (_worker, iteration, scheduledAt) => withResource(writes, async (fixture) => {
+  const routeKey = (worker, iteration) => `${name}:${worker}:${iteration}`;
+  if (name === 'warm-fetch') return (worker, iteration, scheduledAt) => withResource(
+    pairs,
+    (pair) => gitFetch(context.config, pair, scheduledAt, routeKey(worker, iteration)),
+  );
+  if (name === 'incremental-fetch') return (worker, iteration, scheduledAt) => withResource(writes, async (fixture) => {
+    const operationKey = routeKey(worker, iteration);
     const pair = context.fetchClients.find((client) => client.fixture === fixture);
     if (!pair) throw new Error(`missing fetch client for ${fixture.owner}/${fixture.repo}`);
-    const update = await updateAndPush(context.config, fixture, iteration, scheduledAt);
-    return update.ok ? gitFetch(context.config, pair, scheduledAt) : update;
+    const update = await updateAndPush(context.config, fixture, iteration, scheduledAt, `${operationKey}:push`);
+    return update.ok ? gitFetch(context.config, pair, scheduledAt, `${operationKey}:fetch`) : update;
   });
-  if (name === 'full-clone') return (_worker, _iteration, scheduledAt) => clone(context.config, context.runRoot, read(), scheduledAt);
-  if (name === 'code-read') return async (_worker, _iteration, scheduledAt) => {
+  if (name === 'full-clone') return (worker, iteration, scheduledAt) => clone(
+    context.config, context.runRoot, read(), scheduledAt, routeKey(worker, iteration),
+  );
+  if (name === 'code-read') return async (worker, iteration, scheduledAt) => {
     const fixture = read();
-    const result = await command(context.config, ['git', 'ls-remote', '--refs', fixture.publicRemote], undefined, undefined, scheduledAt);
+    const endpoint = endpointFor(context.config, fixture, routeKey(worker, iteration));
+    const result = await command(
+      context.config,
+      ['git', 'ls-remote', '--refs', publicRemoteUrl(endpoint, fixture)],
+      undefined,
+      undefined,
+      scheduledAt,
+    );
     return {
       ...result,
       logicalBytes: result.bytes,
@@ -234,28 +277,55 @@ function operationFor(name, context) {
       byteSource: 'git-command-output',
     };
   };
-  if (name === 'repo-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, repoPath(fixture), scheduledAt, fixture); };
-  if (name === 'projection-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/projection-preview?audience=public&source=live`, scheduledAt, fixture); };
-  if (name === 'tree-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/files`, scheduledAt, fixture); };
-  if (name === 'blob-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture); };
-  if (name === 'history-read') return (_worker, _iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/commits?audience=public`, scheduledAt, fixture); };
-  if (name === 'cold-churn') return (_worker, _iteration, scheduledAt) => clone(context.config, context.runRoot, churn(), scheduledAt);
+  if (name === 'repo-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, repoPath(fixture), scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'projection-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/projection-preview?audience=public&source=live`, scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'tree-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/files`, scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'blob-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'history-read') return (worker, iteration, scheduledAt) => { const fixture = read(); return apiRead(context.config, `${repoPath(fixture)}/commits?audience=public`, scheduledAt, fixture, routeKey(worker, iteration)); };
+  if (name === 'cold-churn') return (worker, iteration, scheduledAt) => clone(
+    context.config, context.runRoot, churn(), scheduledAt, routeKey(worker, iteration),
+  );
   if (name === 'mixed') {
     let index = 0;
-    return (_worker, iteration, scheduledAt) => {
+    return (worker, iteration, scheduledAt) => {
+      const operationKey = routeKey(worker, iteration);
       const write = chooseWrite(index++, context.config.mixedWritePercent);
-      if (write) return withResource(writes, (fixture) => updateAndPush(context.config, fixture, iteration, scheduledAt));
+      if (write) return withResource(writes, (fixture) => updateAndPush(context.config, fixture, iteration, scheduledAt, operationKey));
       const fixture = read();
-      return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture);
+      return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture, operationKey);
     };
   }
-  if (name === 'consistency') return (_worker, iteration, scheduledAt) => withResource(writes, (fixture) => writeThenVerify(context.config, fixture, iteration, scheduledAt));
+  if (name === 'consistency') return (worker, iteration, scheduledAt) => withResource(
+    writes,
+    (fixture) => writeThenVerify(context.config, fixture, iteration, scheduledAt, routeKey(worker, iteration)),
+  );
   throw new Error(`unsupported workload: ${name}`);
 }
 
 function rotating(items) {
   let index = 0;
   return () => items[index++ % items.length];
+}
+
+function endpointFor(config, fixture, operationKey) {
+  const repository = fixture ? repositoryKey(fixture) : 'benchmark-control';
+  return config.endpointRouter.choose(repository, operationKey || repository);
+}
+
+function repositoryKey(fixture) {
+  return `${fixture.owner}/${fixture.repo}`;
+}
+
+function remoteUrl(endpoint, path) {
+  return new URL(path, `${endpoint}/`).toString();
+}
+
+function publicRemoteUrl(endpoint, fixture) {
+  return remoteUrl(endpoint, fixture.publicRemotePath);
+}
+
+function pushRemoteUrl(endpoint, fixture) {
+  return remoteUrl(endpoint, fixture.pushRemotePath);
 }
 
 function pooled(items) {
@@ -381,8 +451,8 @@ async function seedRepository(config, runRoot, label, bytes, historyDepth, write
   const issuedPushToken = created.init.token ?? created.init.push_token;
   const fixture = {
     owner: created.repo.owner_handle, repo: created.repo.name,
-    remote: new URL(new URL(created.init.git_remote_url).pathname, `${config.api}/`).toString(),
-    publicRemote: `${config.api}/git/public/${encodeURIComponent(created.repo.owner_handle)}/${encodeURIComponent(created.repo.name)}`,
+    pushRemotePath: new URL(created.init.git_remote_url).pathname,
+    publicRemotePath: `/git/public/${encodeURIComponent(created.repo.owner_handle)}/${encodeURIComponent(created.repo.name)}`,
     branch: created.init.push_branch || 'main', pushToken: issuedPushToken?.secret,
     dir: await mkdtemp(join(runRoot, `${label}-`)), historyDepth, logicalBytes: bytes,
     writeDeltaBytes, landingFileBytes, update: 0,
@@ -431,7 +501,11 @@ async function createFetchClients(config, runRoot, fixtures) {
     const fixture = fixtures[index % fixtures.length];
     const parent = await mkdtemp(join(runRoot, 'fetch-client-'));
     const dir = join(parent, 'repo.git');
-    const initial = await command(config, ['git', 'clone', '--quiet', '--bare', fixture.publicRemote, dir]);
+    const endpoint = endpointFor(config, fixture);
+    const initial = await command(
+      config,
+      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(endpoint, fixture), dir],
+    );
     if (!initial.ok) {
       await rm(parent, { recursive: true, force: true });
       throw new Error(initial.error || 'initial fetch client clone failed');
@@ -460,7 +534,7 @@ async function writeLandingFile(directory, bytes, update) {
   await writeFile(join(directory, 'README.html'), content);
 }
 
-async function updateAndPush(config, fixture, iteration, scheduledAt = performance.now()) {
+async function updateAndPush(config, fixture, iteration, scheduledAt = performance.now(), routeKey = null) {
   try {
     fixture.update += 1;
     const marker = `${fixture.update}:${iteration}:${Date.now()}`;
@@ -473,7 +547,7 @@ async function updateAndPush(config, fixture, iteration, scheduledAt = performan
       ...(fixture.landingFileBytes > 0 ? ['README.html'] : []),
     ], fixture.dir);
     await checkedGit(config, ['commit', '-m', `Load update ${fixture.update}`], fixture.dir);
-    const pushed = await pushCurrentHead(config, fixture, scheduledAt);
+    const pushed = await pushCurrentHead(config, fixture, scheduledAt, routeKey);
     return {
       ...pushed,
       historyDepth: fixture.historyDepth,
@@ -487,16 +561,35 @@ async function updateAndPush(config, fixture, iteration, scheduledAt = performan
   }
 }
 
-async function pushCurrentHead(config, fixture, started = performance.now()) {
-  const repoConfig = await apiJson(config, `${repoPath(fixture)}/config`);
+async function pushCurrentHead(config, fixture, started = performance.now(), routeKey = null) {
+  const endpoint = endpointFor(config, fixture, routeKey);
+  const repoConfig = await apiJson(config, `${repoPath(fixture)}/config`, { endpoint });
   const head = await gitOutput(config, ['rev-parse', 'HEAD'], fixture.dir);
-  const intent = await apiJson(config, `${repoPath(fixture)}/push-intents`, { method: 'POST', body: { head_oid: head, base_config_hash: repoConfig.config_hash, config: repoConfig.config } });
-  return command(config, ['git', '-c', 'push.recurseSubmodules=no', 'push', fixture.remote, `HEAD:${fixture.branch}`], fixture.dir, authEnvironment(fixture.remote, fixture.pushToken, intent.token), started);
+  const intent = await apiJson(config, `${repoPath(fixture)}/push-intents`, {
+    endpoint,
+    method: 'POST',
+    body: { head_oid: head, base_config_hash: repoConfig.config_hash, config: repoConfig.config },
+  });
+  const destination = pushRemoteUrl(endpoint, fixture);
+  return command(
+    config,
+    ['git', '-c', 'push.recurseSubmodules=no', 'push', destination, `HEAD:${fixture.branch}`],
+    fixture.dir,
+    authEnvironment(destination, fixture.pushToken, intent.token),
+    started,
+  );
 }
 
-async function gitFetch(config, pair, scheduledAt = performance.now()) {
+async function gitFetch(config, pair, scheduledAt = performance.now(), routeKey = null) {
   const before = await gitObjectBytes(config, pair.dir);
-  const result = await command(config, ['git', 'fetch', '--quiet', 'origin'], pair.dir, undefined, scheduledAt);
+  const endpoint = endpointFor(config, pair.fixture, routeKey);
+  const result = await command(
+    config,
+    ['git', 'fetch', '--quiet', publicRemoteUrl(endpoint, pair.fixture)],
+    pair.dir,
+    undefined,
+    scheduledAt,
+  );
   const after = result.ok ? await gitObjectBytes(config, pair.dir) : before;
   const bytes = Math.max(0, after - before);
   return { ...result, bytes, logicalBytes: bytes, historyDepth: pair.fixture.historyDepth, byteSource: 'local-git-object-delta' };
@@ -508,11 +601,18 @@ async function gitObjectBytes(config, directory) {
   return ((Number(fields.size) || 0) + (Number(fields['size-pack']) || 0)) * 1024;
 }
 
-async function clone(config, runRoot, fixture, scheduledAt = performance.now()) {
+async function clone(config, runRoot, fixture, scheduledAt = performance.now(), routeKey = null) {
   const parent = await mkdtemp(join(runRoot, 'clone-'));
   const destination = join(parent, 'repo.git');
   try {
-    const result = await command(config, ['git', 'clone', '--quiet', '--bare', fixture.publicRemote, destination], undefined, undefined, scheduledAt);
+    const endpoint = endpointFor(config, fixture, routeKey);
+    const result = await command(
+      config,
+      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(endpoint, fixture), destination],
+      undefined,
+      undefined,
+      scheduledAt,
+    );
     return {
       ...result,
       bytes: result.ok ? await directoryBytes(destination) : 0,
@@ -535,8 +635,8 @@ async function directoryBytes(path) {
   return total;
 }
 
-async function writeThenVerify(config, fixture, iteration, scheduledAt = performance.now()) {
-  const pushed = await updateAndPush(config, fixture, iteration, scheduledAt);
+async function writeThenVerify(config, fixture, iteration, scheduledAt = performance.now(), routeKey = null) {
+  const pushed = await updateAndPush(config, fixture, iteration, scheduledAt, `${routeKey}:push`);
   if (!pushed.ok) return pushed;
   const visibilityStarted = performance.now();
   const deadline = visibilityStarted + config.consistencyTimeoutMs;
@@ -544,7 +644,7 @@ async function writeThenVerify(config, fixture, iteration, scheduledAt = perform
   let read;
   while (performance.now() < deadline) {
     const remainingMs = Math.max(1, deadline - performance.now());
-    read = await apiRead(config, `${repoPath(fixture)}/files/content?path=load-update.txt`, performance.now(), fixture, true, Math.min(config.timeoutMs, remainingMs));
+    read = await apiRead(config, `${repoPath(fixture)}/files/content?path=load-update.txt`, performance.now(), fixture, `${routeKey}:read:${reads.length}`, true, Math.min(config.timeoutMs, remainingMs));
     reads.push(read);
     if (read.ok && read.json?.content?.text === `${pushed.marker}\n`) break;
     if (!read.ok && read.status !== 503) break;
@@ -575,9 +675,13 @@ async function writeThenVerify(config, fixture, iteration, scheduledAt = perform
   };
 }
 
-async function apiRead(config, path, started = performance.now(), fixture = null, parseJson = false, timeoutMs = config.timeoutMs) {
+async function apiRead(config, path, started = performance.now(), fixture = null, routeKey = null, parseJson = false, timeoutMs = config.timeoutMs) {
   try {
-    const response = await fetch(`${config.api}${path}`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(abortTimeoutMs(timeoutMs)) });
+    const endpoint = endpointFor(config, fixture, routeKey);
+    const response = await fetch(`${endpoint}${path}`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(abortTimeoutMs(timeoutMs)),
+    });
     const ttfbMs = performance.now() - started;
     const body = await response.text();
     const detail = body.trim().replace(/\s+/g, ' ').slice(0, 500);
@@ -596,7 +700,11 @@ export function abortTimeoutMs(value) {
 }
 
 async function deleteRepository(config, fixture) {
-  await apiJson(config, repoPath(fixture), { method: 'DELETE', timeoutMs: config.cleanupTimeoutMs });
+  await apiJson(config, repoPath(fixture), {
+    endpoint: endpointFor(config, fixture),
+    method: 'DELETE',
+    timeoutMs: config.cleanupTimeoutMs,
+  });
 }
 
 function repoPath(fixture) { return `/v1/repos/${encodeURIComponent(fixture.owner)}/${encodeURIComponent(fixture.repo)}`; }
@@ -655,7 +763,13 @@ function killCommandTree(child) {
 async function apiJson(config, path, options = {}) {
   const headers = apiHeaders(config.token);
   if (options.body) headers['content-type'] = 'application/json';
-  const response = await fetch(`${config.api}${path}`, { method: options.method || 'GET', headers, body: options.body ? JSON.stringify(options.body) : undefined, signal: AbortSignal.timeout(options.timeoutMs || config.timeoutMs) });
+  const endpoint = options.endpoint || endpointFor(config);
+  const response = await fetch(`${endpoint}${path}`, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: AbortSignal.timeout(options.timeoutMs || config.timeoutMs),
+  });
   const body = await response.text();
   if (!response.ok) throw new Error(`${options.method || 'GET'} ${path}: HTTP ${response.status} ${body.slice(0, 500)}`);
   return body ? JSON.parse(body) : null;
@@ -676,8 +790,10 @@ function authEnvironment(destination, secret, pushIntent) {
 }
 
 async function ready(config) {
-  const response = await fetch(`${config.api}/readyz`, { signal: AbortSignal.timeout(config.timeoutMs) });
-  if (!response.ok) throw new Error(`API is not ready at ${config.api}: HTTP ${response.status}`);
+  for (const endpoint of config.apiUrls) {
+    const response = await fetch(`${endpoint}/readyz`, { signal: AbortSignal.timeout(config.timeoutMs) });
+    if (!response.ok) throw new Error(`API is not ready at ${endpoint}: HTTP ${response.status}`);
+  }
 }
 
 async function invokeFaultHook(config) {
@@ -781,7 +897,7 @@ function markdown(report) {
     Object.entries(stage.capacityRejections || {}).map(([operation, count]) =>
       `| ${workload.name} | ${stage.concurrency ?? stage.targetRate} | ${operation} | ${count} |`,
     ))).join('\n') || '| none | n/a | none | 0 |';
-  return `# Scope Railway Git storage load test\n\nGenerated: ${report.generatedAt}\n\nTarget: ${report.apiUrl}\n\nNode scale label: ${report.config.nodeScaleLabel}\n\nProtocol label: ${report.config.protocolLabel}\n\nAPI permit labels per process: receive-pack ${permits.receivePack}, upload-pack ${permits.uploadPack}, Git materialization ${permits.gitMaterialization}, object store ${permits.objectStore}.\n\n| Workload | Status | Operations/s | Logical MiB/s | Completion p95 ms | TTFB p95 ms | Completion p99 ms | Observed MiB/s |\n|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\n## Capacity rejections\n\n| Workload | Concurrency or rate | Operation | Count |\n|---|---:|---|---:|\n${rejectionRows}\n\nLogical MiB/s uses fixture payload sizes for writes and clones, and response or received-object bytes for reads. Observed MiB/s uses response bytes or local Git object deltas. Neither is a wire-level counter. TTFB for JSON reads is time to response headers. Quiet Git commands commonly emit no output, so their completion time is reported as TTFB. Compare node-scale and protocol labels only when repository fixture sizes, stage controls, and Railway deployment shape are identical.\n`;
+  return `# Scope Railway Git storage load test\n\nGenerated: ${report.generatedAt}\n\nTargets: ${report.apiUrls.join(', ')}\n\nTopology: ${report.config.topologyLabel} (${report.config.routingMode}), repeat ${report.config.repeatIndex}\n\nNode scale label: ${report.config.nodeScaleLabel}\n\nProtocol label: ${report.config.protocolLabel}\n\nAPI permit labels per process: receive-pack ${permits.receivePack}, upload-pack ${permits.uploadPack}, Git materialization ${permits.gitMaterialization}, object store ${permits.objectStore}.\n\n| Workload | Status | Operations/s | Logical MiB/s | Completion p95 ms | TTFB p95 ms | Completion p99 ms | Observed MiB/s |\n|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\n## Capacity rejections\n\n| Workload | Concurrency or rate | Operation | Count |\n|---|---:|---|---:|\n${rejectionRows}\n\nLogical MiB/s uses fixture payload sizes for writes and clones, and response or received-object bytes for reads. Observed MiB/s uses response bytes or local Git object deltas. Neither is a wire-level counter. TTFB for JSON reads is time to response headers. Quiet Git commands commonly emit no output, so their completion time is reported as TTFB. Compare topology repeats only when repository fixture sizes, stage controls, and Railway deployment shape are identical.\n`;
 }
 
 function required(name) { const value = process.env[name]?.trim(); if (!value) throw new Error(`${name} is required`); return value; }

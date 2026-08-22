@@ -262,8 +262,9 @@ async fn incremental_git_pack_layout_restores_after_cache_loss() {
         std::process::id(),
         unix_now()
     )));
-    crate::git::storage::restore_git_pack_spans(
+    crate::git::restore::restore_git_pack_spans(
         &state,
+        &stored.record.id,
         stored.git_head.as_ref().unwrap(),
         &stored.git_pack_spans,
         &restored,
