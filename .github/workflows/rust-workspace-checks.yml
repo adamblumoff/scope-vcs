@@ -44,17 +44,12 @@ jobs:
           toolchain: 1.98.0
           components: rustfmt, clippy
 
-      - name: Cache Rust build outputs
-        uses: actions/cache@v6
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-          key: ${{ runner.os }}-rust-cargo-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-rust-cargo-${{ hashFiles('Cargo.lock') }}
-            ${{ runner.os }}-rust-cargo-
+          cache-bin: false
+          shared-key: workspace-${{ inputs.include_api && 'with-api' || 'without-api' }}
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Check Rust workspace
         shell: bash

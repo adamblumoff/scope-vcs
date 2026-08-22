@@ -9,9 +9,13 @@ on:
       validate_targets:
         type: boolean
         default: false
+      verified_successful_sha:
+        type: string
+        default: ""
 
 permissions:
   contents: read
+  deployments: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -50,17 +54,13 @@ jobs:
           toolchain: 1.98.0
           components: rustfmt, clippy
 
-      - name: Cache Rust build outputs
-        uses: actions/cache@v6
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            cli/target
-          key: ${{ runner.os }}-cli-cargo-${{ hashFiles('cli/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-cli-cargo-${{ hashFiles('cli/Cargo.lock') }}
-            ${{ runner.os }}-cli-cargo-
+          cache-bin: false
+          shared-key: cli-checks
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          workspaces: cli -> target
 
       - name: Check formatting
         run: cargo fmt --manifest-path cli/Cargo.toml -- --check
@@ -102,17 +102,13 @@ jobs:
           toolchain: 1.98.0
           targets: ${{ matrix.target }}
 
-      - name: Cache Rust build outputs
-        uses: actions/cache@v6
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            cli/target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('cli/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('cli/Cargo.lock') }}
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
+          cache-bin: ${{ matrix.builder == 'cross' }}
+          shared-key: cli-build-${{ matrix.target }}
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          workspaces: cli -> target
 
       - name: Install cross
         if: matrix.builder == 'cross'
@@ -184,18 +180,16 @@ jobs:
         with:
           toolchain: 1.98.0
 
-      - name: Cache Rust build outputs
-        uses: actions/cache@v6
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/git
-            ~/.cargo/registry
-            target
-            cli/target
-          key: ${{ runner.os }}-cli-e2e-cargo-${{ hashFiles('Cargo.lock', 'cli/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-cli-e2e-cargo-${{ hashFiles('Cargo.lock', 'cli/Cargo.lock') }}
-            ${{ runner.os }}-cli-e2e-cargo-
+          cache-bin: false
+          cache-on-failure: true
+          shared-key: cli-e2e
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          workspaces: |
+            . -> target
+            cli -> target
 
       - name: Install Node
         uses: actions/setup-node@v6
@@ -297,6 +291,8 @@ jobs:
 
       - name: Stage Railway upload root
         shell: bash
+        env:
+          VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
         run: |
           rm -rf .railway-upload
           mkdir -p .railway-upload/cli/crates
@@ -304,6 +300,10 @@ jobs:
           cp rust-toolchain.toml .railway-upload/cli/rust-toolchain.toml
           cp -a crates/scope-api-contract .railway-upload/cli/crates/scope-api-contract
           cp -a crates/scope-domain .railway-upload/cli/crates/scope-domain
+          printf '%s\n' "$GITHUB_SHA" > .railway-upload/cli/.scope-deployment-sha
+          if [[ "$VERIFIED_SUCCESSFUL_SHA" != "$GITHUB_SHA" ]]; then
+            printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-upload/cli/.scope-deployment-attempt
+          fi
           perl -0pi -e 's#path = "\.\./crates/scope-api-contract"#path = "crates/scope-api-contract"#' .railway-upload/cli/Cargo.toml
           perl -0pi -e 's#path = "\.\./crates/scope-domain"#path = "crates/scope-domain"#' .railway-upload/cli/Cargo.toml
           grep -F 'path = "crates/scope-api-contract"' .railway-upload/cli/Cargo.toml
@@ -323,6 +323,10 @@ jobs:
         env:
           RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SCOPE_DEPLOYMENT_COMPONENT: cli
+          SCOPE_DEPLOYMENT_EVIDENCE_PATH: production-deployments.ndjson
+          SCOPE_DEPLOYMENT_SOURCE_SHA: ${{ github.sha }}
+          SCOPE_VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
         run: |
           manifest=.github/deployment-services.json
           RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
@@ -330,3 +334,14 @@ jobs:
           export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
           service_id="$(jq -r '.services.cli.id' "$manifest")"
           bash .github/scripts/deploy-railway.sh "$service_id" .railway-upload
+
+      - name: Record successful Railway deployment
+        if: always()
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node .github/scripts/production-deployment-progress.mjs record-file \
+            --file production-deployments.ndjson \
+            --log-url "$LOG_URL"

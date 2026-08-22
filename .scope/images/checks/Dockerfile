@@ -24,8 +24,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
     RUSTUP_TOOLCHAIN=1.98.0-x86_64-unknown-linux-gnu
 
-COPY --from=scope-runtime-builder /build/target/release/scope-runner-runtime /scope/bin/scope-runner-runtime
-
 RUN sed -i \
         -e "s|http://deb.debian.org/debian-security|https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
         -e "s|http://deb.debian.org/debian|https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|" \
@@ -60,7 +58,6 @@ ARG PLAYWRIGHT_CHROMIUM_VERSION=149.0.7827.55
 ARG PLAYWRIGHT_CHROMIUM_REVISION=1228
 
 RUN test "$(rustc --version | cut -d' ' -f2)" = "1.98.0" \
-    && test -x /scope/bin/scope-runner-runtime \
     && test "$(node --version)" = "v${NODE_VERSION}" \
     && test "$(pnpm --version)" = "${PNPM_VERSION}" \
     && test "$(psql --version | cut -d' ' -f3)" = "15.18" \
@@ -68,5 +65,9 @@ RUN test "$(rustc --version | cut -d' ' -f2)" = "1.98.0" \
     && test -x "${PLAYWRIGHT_BROWSERS_PATH}/chromium-${PLAYWRIGHT_CHROMIUM_REVISION}/chrome-linux64/chrome" \
     && "${PLAYWRIGHT_BROWSERS_PATH}/chromium-${PLAYWRIGHT_CHROMIUM_REVISION}/chrome-linux64/chrome" --version \
         | grep --quiet "^Google Chrome for Testing ${PLAYWRIGHT_CHROMIUM_VERSION} *$"
+
+COPY --from=scope-runtime-builder /build/target/release/scope-runner-runtime /scope/bin/scope-runner-runtime
+
+RUN test -x /scope/bin/scope-runner-runtime
 
 WORKDIR /workspace

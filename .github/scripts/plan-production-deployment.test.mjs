@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { classifyChanges } from "./plan-production-deployment.mjs";
+import {
+  classifyChanges,
+  planFromDeploymentProgress,
+} from "./plan-production-deployment.mjs";
 
 const manifest = JSON.parse(readFileSync(new URL("../deployment-services.json", import.meta.url), "utf8"));
 
@@ -91,6 +94,43 @@ test("manual component and all scopes are explicit", () => {
   assert.equal(classifyChanges(manifest, [], "web").web, true);
   assert.ok(Object.values(classifyChanges(manifest, [], "all")).every(Boolean));
   assert.throws(() => classifyChanges(manifest, [], "database"), /Unknown deployment scope/);
+});
+
+test("an unseeded production ledger deploys every component", () => {
+  assert.ok(Object.values(planFromDeploymentProgress(manifest, {})).every(Boolean));
+});
+
+test("skipped components remain selected across a later backend-only change", () => {
+  const selection = planFromDeploymentProgress(manifest, {
+    checksImage: [],
+    cache: ["cache-service/src/main.rs"],
+    worker: [],
+    api: [],
+    // Web last succeeded before commit A. Its component-specific range still includes A's
+    // web change when commit B changes only the cache service after A's web job was skipped.
+    web: ["web/src/routes/+page.svelte", "cache-service/src/main.rs"],
+    cli: [],
+  });
+
+  assert.deepEqual(selection, {
+    checksImage: false,
+    cache: true,
+    worker: false,
+    api: false,
+    web: true,
+    cli: false,
+  });
+});
+
+test("manual scopes ignore pending production components", () => {
+  assert.deepEqual(planFromDeploymentProgress(manifest, {}, "web"), {
+    checksImage: false,
+    cache: false,
+    worker: false,
+    api: false,
+    web: true,
+    cli: false,
+  });
 });
 
 test("deployment manifest is a single coherent production graph", () => {
