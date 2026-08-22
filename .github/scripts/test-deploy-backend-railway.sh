@@ -345,6 +345,7 @@ run_cutover() {
     SCOPE_DEPLOY_WORKER="$deploy_worker" \
     SCOPE_DEPLOY_API="$deploy_api" \
     SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS="$successful_revisions" \
+    SCOPE_DEPLOYMENT_EVIDENCE_PATH="$test_dir/$name-evidence.jsonl" \
     GITHUB_SHA="test-source-sha" \
     SCOPE_WRITER_FENCE_GRACE_SECONDS="0" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
@@ -354,6 +355,23 @@ run_cutover() {
   result=$?
   set -e
   printf '%s\n' "$result" > "$test_dir/$name-result"
+}
+
+assert_evidence_components() {
+  local name="$1"
+  local expected="$2"
+  EVIDENCE_PATH="$test_dir/$name-evidence.jsonl" EXPECTED_COMPONENTS="$expected" node -e '
+const { existsSync, readFileSync } = require("node:fs");
+const actual = existsSync(process.env.EVIDENCE_PATH)
+  ? readFileSync(process.env.EVIDENCE_PATH, "utf8").trim().split("\n").filter(Boolean)
+      .map((line) => JSON.parse(line).component)
+  : [];
+const expected = (process.env.EXPECTED_COMPONENTS || "").split(",").filter(Boolean);
+if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+  console.error(`expected evidence ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  process.exit(1);
+}
+'
 }
 
 assert_in_order() {
@@ -376,6 +394,7 @@ assert_in_order() {
 
 run_cutover success 0
 [[ "$(cat "$test_dir/success-result")" == "0" ]]
+assert_evidence_components success cache,worker,api
 assert_in_order "$test_dir/success-trace" \
   "$test_dir/maintenance plan" \
   "graphql stop scope-api old-scope-api" \
@@ -444,12 +463,14 @@ fi
 
 run_cutover crashed-worker 0 0 "" 0 0 0 0 "" 0 "" scope-worker
 [[ "$(cat "$test_dir/crashed-worker-result")" != "0" ]]
+assert_evidence_components crashed-worker cache
 assert_in_order "$test_dir/crashed-worker-trace" \
   "$test_dir/maintenance apply" \
   "up $test_dir/worker"
 
 run_cutover crashed-cache 0 0 "" 0 0 0 0 "" 0 "" scope-cache-service
 [[ "$(cat "$test_dir/crashed-cache-result")" != "0" ]]
+assert_evidence_components crashed-cache ""
 assert_in_order "$test_dir/crashed-cache-trace" \
   "$test_dir/maintenance apply" \
   "up $test_dir/cache"
@@ -510,6 +531,7 @@ fi
 run_cutover rolling-worker 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
   us-east4-eqdc4a us-east4-eqdc4a 0 1 0
 [[ "$(cat "$test_dir/rolling-worker-result")" == "0" ]]
+assert_evidence_components rolling-worker worker
 assert_in_order "$test_dir/rolling-worker-trace" \
   "$test_dir/maintenance verify" \
   "up $test_dir/worker"
@@ -547,6 +569,7 @@ run_cutover interrupted 0 0 scope-worker
 run_cutover interrupted 0 0 "" 0 1 0 0 "" 0 "" "" 1 "" 0 \
   us-east4-eqdc4a us-east4-eqdc4a 0 1 1 0 0 '{"cache":"test-source-sha"}'
 [[ "$(cat "$test_dir/interrupted-result")" == "0" ]]
+assert_evidence_components interrupted cache,worker,api
 assert_in_order "$test_dir/interrupted-trace" \
   "$test_dir/maintenance plan" \
   "$test_dir/maintenance verify" \
@@ -576,6 +599,7 @@ assert_in_order "$test_dir/bootstrap-trace" \
 
 run_cutover partial-reopen 0 0 scope-api
 [[ "$(cat "$test_dir/partial-reopen-result")" != "0" ]]
+assert_evidence_components partial-reopen cache
 assert_in_order "$test_dir/partial-reopen-trace" \
   "graphql stop scope-api old-scope-api" \
   "graphql stop scope-worker old-scope-worker" \

@@ -18,6 +18,12 @@ deploy_worker_requested="${SCOPE_DEPLOY_WORKER:-1}"
 deploy_api_requested="${SCOPE_DEPLOY_API:-1}"
 successful_deployment_revisions="${SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS:-}"
 [[ -n "$successful_deployment_revisions" ]] || successful_deployment_revisions='{}'
+deployment_evidence_path="${SCOPE_DEPLOYMENT_EVIDENCE_PATH:-}"
+pending_evidence_path=""
+if [[ -n "$deployment_evidence_path" ]]; then
+  pending_evidence_path="${deployment_evidence_path}.pending.$$"
+  rm -f -- "$pending_evidence_path"
+fi
 
 for deployment_flag in deploy_cache_requested deploy_worker_requested deploy_api_requested; do
   if [[ "${!deployment_flag}" != "0" && "${!deployment_flag}" != "1" ]]; then
@@ -378,51 +384,66 @@ process.stdout.write(revisions[process.env.COMPONENT] || "");
 '
 }
 
-deploy_cache_release() {
+deploy_release() {
+  local component="$1"
+  local service_name="$2"
+  local upload_root="$3"
   local verified_sha
-  verified_sha="$(successful_revision cache)"
-  SCOPE_DEPLOYMENT_COMPONENT=cache \
+  verified_sha="$(successful_revision "$component")"
+  SCOPE_DEPLOYMENT_COMPONENT="$component" \
+    SCOPE_DEPLOYMENT_EVIDENCE_PATH="$pending_evidence_path" \
     SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
-    bash .github/scripts/deploy-railway.sh "$cache_service" "$cache_upload_root"
+    bash .github/scripts/deploy-railway.sh "$service_name" "$upload_root"
+}
+
+promote_pending_evidence() {
+  [[ -n "$deployment_evidence_path" && -s "$pending_evidence_path" ]] || return 0
+  FINAL_EVIDENCE_PATH="$deployment_evidence_path" \
+    PENDING_EVIDENCE_PATH="$pending_evidence_path" \
+    node -e '
+const { appendFileSync, readFileSync, unlinkSync } = require("node:fs");
+appendFileSync(process.env.FINAL_EVIDENCE_PATH, readFileSync(process.env.PENDING_EVIDENCE_PATH));
+unlinkSync(process.env.PENDING_EVIDENCE_PATH);
+'
+}
+
+discard_pending_evidence() {
+  [[ -z "$pending_evidence_path" ]] || rm -f -- "$pending_evidence_path"
+}
+
+deploy_cache_release() {
+  deploy_release cache "$cache_service" "$cache_upload_root"
   wait_for_service_health "$cache_service"
+  promote_pending_evidence
 }
 
 deploy_selected_releases() {
-  local verified_sha
   if [[ "$deploy_cache_requested" == "1" ]]; then
     deploy_cache_release
   fi
   if [[ "$deploy_worker_requested" == "1" ]]; then
-    verified_sha="$(successful_revision worker)"
-    SCOPE_DEPLOYMENT_COMPONENT=worker \
-      SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
-      bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
+    deploy_release worker "$worker_service" "$worker_upload_root"
+    promote_pending_evidence
   fi
   if [[ "$deploy_api_requested" == "1" ]]; then
-    verified_sha="$(successful_revision api)"
-    SCOPE_DEPLOYMENT_COMPONENT=api \
-      SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
-      bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
+    deploy_release api "$api_service" "$api_upload_root"
+    promote_pending_evidence
   fi
 }
 
 deploy_and_reopen() {
-  local verified_sha
   maintenance_read verify
   backfill_landing_files
   deploy_cache_release
-  verified_sha="$(successful_revision worker)"
-  SCOPE_DEPLOYMENT_COMPONENT=worker \
-    SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
-    bash .github/scripts/deploy-railway.sh "$worker_service" "$worker_upload_root"
+  deploy_release worker "$worker_service" "$worker_upload_root"
   wait_for_service_health "$worker_service"
   worker_closed=0
-  verified_sha="$(successful_revision api)"
-  SCOPE_DEPLOYMENT_COMPONENT=api \
-    SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
-    bash .github/scripts/deploy-railway.sh "$api_service" "$api_upload_root"
+  deploy_release api "$api_service" "$api_upload_root"
   wait_for_service_health "$api_service"
   api_closed=0
+  # Worker and API form one cutover. Publish their evidence only after both writers are healthy
+  # so the durable ledger cannot claim a deployment that the failure trap subsequently closes.
+  promote_pending_evidence
 }
 
 leave_failure_state() {
@@ -436,6 +457,7 @@ leave_failure_state() {
       echo "Migration committed; writers remain closed. Rerun this workflow to finish the forward-only deployment." >&2
     fi
   fi
+  discard_pending_evidence
   exit "$exit_status"
 }
 trap 'leave_failure_state $?' EXIT
@@ -470,6 +492,7 @@ case "$plan_status" in
       cutover_committed=1
       deploy_and_reopen
       trap - EXIT
+      discard_pending_evidence
       exit 0
     fi
     if [[ "$api_running" == "0" || "$worker_running" == "0" ]]; then
@@ -479,6 +502,7 @@ case "$plan_status" in
     maintenance_read verify
     deploy_selected_releases
     trap - EXIT
+    discard_pending_evidence
     exit 0
     ;;
   *)
@@ -509,3 +533,4 @@ cutover_committed=1
 
 deploy_and_reopen
 trap - EXIT
+discard_pending_evidence
