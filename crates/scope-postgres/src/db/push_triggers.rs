@@ -92,7 +92,7 @@ pub(super) async fn evaluate<C>(
     job: &ClaimedOutboxJob,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
-) -> Result<(), PostgresError>
+) -> Result<Vec<String>, PostgresError>
 where
     C: ConnectionTrait + TransactionTrait,
 {
@@ -119,7 +119,7 @@ where
         )
         .await?;
         tx.commit().await.map_err(PostgresError::internal)?;
-        return Ok(());
+        return Ok(Vec::new());
     };
     let mut evaluation = model.try_into_domain()?;
     if evaluation.state != PushTriggerEvaluationState::Pending {
@@ -133,7 +133,7 @@ where
         )
         .await?;
         tx.commit().await.map_err(PostgresError::internal)?;
-        return Ok(());
+        return Ok(Vec::new());
     }
     let revisions = if let Some(message) = &payload.input.configuration_error {
         evaluation
@@ -161,6 +161,7 @@ where
         .filter(|revision| revision.definition().triggers().push_main())
         .collect::<Vec<_>>();
     let mut checks = Vec::new();
+    let mut created_run_ids = Vec::new();
     if evaluation.state == PushTriggerEvaluationState::Pending {
         for revision in revisions {
             let path = revision.workflow().path().as_str().to_string();
@@ -190,10 +191,13 @@ where
             )
             .map_err(PostgresError::from)?;
             let stored = enqueue_run_in_transaction(&tx, run, revision).await?;
+            if stored.inserted {
+                created_run_ids.push(stored.run.id.clone());
+            }
             checks.push(PushTriggerCheck {
                 workflow_path: path,
-                workflow_name: stored.workflow.path().name().to_string(),
-                run_id: stored.id,
+                workflow_name: stored.run.workflow.path().name().to_string(),
+                run_id: stored.run.id,
             });
         }
         evaluation
@@ -210,7 +214,8 @@ where
         generated_ids,
     )
     .await?;
-    tx.commit().await.map_err(PostgresError::internal)
+    tx.commit().await.map_err(PostgresError::internal)?;
+    Ok(created_run_ids)
 }
 
 async fn load_job_payload<C>(
@@ -470,6 +475,9 @@ jobs:
             .unwrap();
         assert_eq!(evaluation.state, PushTriggerEvaluationState::Succeeded);
         assert_eq!(evaluation.checks.len(), 1);
+        assert_eq!(summary.created_runs.len(), 1);
+        assert_eq!(summary.created_runs[0].repo_id, repo_id);
+        assert_eq!(summary.created_runs[0].run_id, evaluation.checks[0].run_id);
         let run = store
             .runs()
             .run(&evaluation.checks[0].run_id)
@@ -505,7 +513,7 @@ jobs:
             2
         );
 
-        store
+        let replay = store
             .jobs()
             .run_ready_outbox_jobs(
                 "push-worker",
@@ -515,7 +523,120 @@ jobs:
             )
             .await
             .unwrap();
+        assert!(replay.created_runs.is_empty());
         assert_eq!(store.runs().runs_by_ids(&[run.id]).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn idempotent_trigger_enqueue_emits_no_created_run_ids() {
+        let target = crate::db::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let repo_id = seed_repo(&store).await;
+        let head_oid = "7777777777777777777777777777777777777777";
+        enqueue_push_main_trigger_evaluation(
+            store.db.as_ref(),
+            &repo_id,
+            &trigger_head(head_oid, 7),
+            &trigger_pack_spans(head_oid, 7),
+            &PushTriggerInput::new(
+                head_oid,
+                vec![
+                    PushWorkflowFile::new(
+                        "/.scope/runs/idempotent.yml",
+                        br#"
+name: Idempotent
+on: { push: true }
+container: { image: alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa }
+timeout: 1m
+caches: []
+jobs:
+  checks:
+    steps:
+      - { name: Test, run: "true" }
+"#
+                        .to_vec(),
+                    )
+                    .unwrap(),
+                ],
+                None,
+            )
+            .unwrap(),
+            now(),
+            &crate::db::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+        let job = entities::outbox_job::Entity::find()
+            .filter(entities::outbox_job::Column::RepoId.eq(repo_id.clone()))
+            .filter(entities::outbox_job::Column::Kind.eq(JOB_KIND))
+            .one(store.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        let claimed = ClaimedOutboxJob {
+            id: job.id,
+            kind: job.kind,
+            repo_id: job.repo_id,
+            repo_version: job.repo_version,
+            attempts: job.attempts,
+        };
+        let payload = load_job_payload(store.db.as_ref(), &claimed.id)
+            .await
+            .unwrap();
+        let mut revisions = scope_run_config::parse_workflow_set(
+            &repo_id,
+            payload
+                .input
+                .workflows
+                .iter()
+                .map(|workflow| (workflow.path.as_str(), workflow.bytes.as_slice())),
+        )
+        .unwrap();
+        let revision = revisions.remove(0);
+        let idempotency_key = format!(
+            "push-main:{}:{}:{}",
+            claimed.repo_version,
+            payload.input.head_oid,
+            revision.workflow().path().as_str()
+        );
+        let run = Run::new(
+            stable_push_run_id(&repo_id, &idempotency_key),
+            idempotency_key,
+            revision.workflow().clone(),
+            revision.digest(),
+            RunTrigger::PushMain,
+            None,
+            RunSource::accepted_git_head(
+                &repo_id,
+                payload.head,
+                payload.pack_spans,
+                ProjectionViewKey::Private,
+            )
+            .unwrap(),
+            now(),
+        )
+        .unwrap();
+        store.runs().enqueue_run(run, revision).await.unwrap();
+
+        let replayed_enqueue = evaluate(
+            store.db.as_ref(),
+            &claimed,
+            now(),
+            &crate::db::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+        let replayed_evaluation = evaluate(
+            store.db.as_ref(),
+            &claimed,
+            now(),
+            &crate::db::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+
+        assert!(replayed_enqueue.is_empty());
+        assert!(replayed_evaluation.is_empty());
     }
 
     #[tokio::test]

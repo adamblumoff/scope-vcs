@@ -23,11 +23,13 @@ function RepoRunsRoute() {
   const initialResources = Route.useLoaderData()
   const params = Route.useParams()
   const loadHistory = useCallback(
-    (input: RepoRunHistoryInput) => loadRepoRunHistory({ data: input }),
+    (input: RepoRunHistoryInput, signal?: AbortSignal) =>
+      loadRepoRunHistory({ data: input, signal }),
     [],
   )
   const loadDetail = useCallback(
-    (input: RunActionInput) => loadRepoRunDetail({ data: input }),
+    (input: RunActionInput, signal?: AbortSignal) =>
+      loadRepoRunDetail({ data: input, signal }),
     [],
   )
 

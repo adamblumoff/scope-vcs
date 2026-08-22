@@ -61,6 +61,7 @@ async fn workflow_catalog_and_filtered_history_follow_current_main() {
     )
     .unwrap();
     let bundle = fs::read(bundle_path).unwrap();
+    let mut created_run_ids = Vec::new();
     for request_id in [
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -82,6 +83,12 @@ async fn workflow_catalog_and_filtered_history_follow_current_main() {
             .await
             .unwrap();
         assert_eq!(created.status(), StatusCode::OK);
+        created_run_ids.push(
+            response_json(created).await["id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
     }
 
     let first = app
@@ -102,6 +109,7 @@ async fn workflow_catalog_and_filtered_history_follow_current_main() {
     let first = response_json(first).await;
     assert_eq!(first["runs"].as_array().unwrap().len(), 1);
     let first_id = first["runs"][0]["id"].as_str().unwrap();
+    assert_eq!(first_id, created_run_ids[1]);
     let cursor = first["next_cursor"].as_str().unwrap();
     let second = app
         .clone()
@@ -121,6 +129,7 @@ async fn workflow_catalog_and_filtered_history_follow_current_main() {
     let second = response_json(second).await;
     assert_eq!(second["runs"].as_array().unwrap().len(), 1);
     assert_ne!(second["runs"][0]["id"], first_id);
+    assert_eq!(second["runs"][0]["id"], created_run_ids[0]);
     assert!(second["next_cursor"].is_null());
 
     let wrong_filter = app

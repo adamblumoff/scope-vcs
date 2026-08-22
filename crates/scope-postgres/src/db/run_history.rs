@@ -1,12 +1,11 @@
 use super::{RunStore, entities, run_operations::run_jobs_by_ids};
 use crate::error::PostgresError;
 use scope_domain::runs::{job::RunJob, run::Run};
-use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunHistoryCursor {
-    pub created_at_unix: u64,
-    pub run_id: String,
+    pub creation_sequence: u64,
 }
 
 pub struct RunHistoryPageQuery<'a> {
@@ -20,6 +19,7 @@ pub struct RunHistoryPageQuery<'a> {
 pub struct RepositoryRun {
     pub run: Run,
     pub jobs: Vec<RunJob>,
+    pub creation_sequence: u64,
 }
 
 impl RunStore {
@@ -34,22 +34,13 @@ impl RunStore {
             select = select.filter(entities::run::Column::WorkflowPath.eq(workflow_path));
         }
         if let Some(after) = query.after {
-            let created_at_unix = i64::try_from(after.created_at_unix).map_err(|_| {
-                PostgresError::invalid_input("run history cursor time exceeds PostgreSQL range")
+            let creation_sequence = i64::try_from(after.creation_sequence).map_err(|_| {
+                PostgresError::invalid_input("run history cursor sequence exceeds PostgreSQL range")
             })?;
-            select = select.filter(
-                Condition::any()
-                    .add(entities::run::Column::CreatedAtUnix.lt(created_at_unix))
-                    .add(
-                        Condition::all()
-                            .add(entities::run::Column::CreatedAtUnix.eq(created_at_unix))
-                            .add(entities::run::Column::Id.lt(after.run_id.as_str())),
-                    ),
-            );
+            select = select.filter(entities::run::Column::CreationSequence.lt(creation_sequence));
         }
         let models = select
-            .order_by_desc(entities::run::Column::CreatedAtUnix)
-            .order_by_desc(entities::run::Column::Id)
+            .order_by_desc(entities::run::Column::CreationSequence)
             .limit(query.limit)
             .all(&tx)
             .await
@@ -58,16 +49,22 @@ impl RunStore {
         let mut jobs = run_jobs_by_ids(&tx, &run_ids).await?;
         let runs = models
             .into_iter()
-            .map(entities::run::Model::try_into_domain)
-            .map(|run| {
-                let run = run?;
+            .map(|model| {
+                let creation_sequence = u64::try_from(model.creation_sequence).map_err(|_| {
+                    PostgresError::internal_message("run creation sequence is negative")
+                })?;
+                let run = model.try_into_domain()?;
                 let jobs = jobs
                     .remove(&run.id)
                     .filter(|jobs| !jobs.is_empty())
                     .ok_or_else(|| {
                         PostgresError::internal_message("run is missing its persisted jobs")
                     })?;
-                Ok(RepositoryRun { jobs, run })
+                Ok(RepositoryRun {
+                    jobs,
+                    run,
+                    creation_sequence,
+                })
             })
             .collect();
         tx.commit().await.map_err(PostgresError::internal)?;

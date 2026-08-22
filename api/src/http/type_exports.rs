@@ -28,7 +28,7 @@ use scope_api_contract::{
     RequestMutationResponse, RequestPermissionsResponse, RequestQueueSection,
     RequestRatingParticipantResponse, RequestRatingResponse, RequestRatingsResponse,
     RequestRevisionCommitResponse, RequestRevisionInspectionState, RequestRevisionListResponse,
-    RequestRevisionResponse, RequestState, RequestSummaryResponse, SessionIdentity,
+    RequestRevisionResponse, RequestState, RequestSummaryResponse, RunChangeKind, SessionIdentity,
     StartRequestRequest, SubmitRequestRequest, UserResponse, Visibility,
 };
 use std::{fs, path::Path};
@@ -173,6 +173,7 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<ReopenAndReplyRequest>(&ts_config),
         declaration::<MarkRequestDiscussionReadRequest>(&ts_config),
         declaration::<RepoChangeKind>(&ts_config),
+        declaration::<RunChangeKind>(&ts_config),
         declaration::<RepositoryExecutionProvider>(&ts_config),
         declaration::<RepositoryRunState>(&ts_config),
         declaration::<RepositoryRunSummaryResponse>(&ts_config),

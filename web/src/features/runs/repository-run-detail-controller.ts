@@ -18,11 +18,12 @@ import {
   reconcileExpandedAttempts,
   reconcileExpandedJobs,
   runAttempts,
-  runNeedsPolling,
+  runCanChange,
 } from './repository-run-detail-model'
+import { useRunLiveRefresh, type RunRefresh } from './run-live-refresh'
 
-const REFRESH_INTERVAL_MS = 2_000
 const MAX_CACHED_LOG_STEPS = 8
+const DETAIL_CHANGES = ['StatusChanged', 'LogsAppended'] as const
 
 export type StepSelection = {
   jobKey: string
@@ -88,8 +89,11 @@ export function useRepositoryRunDetailController({
   params,
 }: {
   initialDetail: RepoRunDetail
-  loadDetail: () => Promise<RepoRunDetail>
-  loadLogs: (input: RunStepLogsInput) => Promise<RepoRunStepLogPage>
+  loadDetail: (signal?: AbortSignal) => Promise<RepoRunDetail>
+  loadLogs: (
+    input: RunStepLogsInput,
+    signal?: AbortSignal,
+  ) => Promise<RepoRunStepLogPage>
   params: RunActionInput
 }) {
   const [view, updateView] = useReducer(
@@ -104,24 +108,27 @@ export function useRepositoryRunDetailController({
     logInFlightRef.current = new Map()
   }
   const logStatesRef = useRef(view.logStates)
+  const selectionRef = useRef(view.selection)
   const mountedRef = useRef(false)
 
   useEffect(() => {
     logStatesRef.current = view.logStates
   }, [view.logStates])
 
-  const refreshDetail = useCallback(async (forceAfterInFlight = false) => {
+  useEffect(() => {
+    selectionRef.current = view.selection
+  }, [view.selection])
+
+  const refreshDetail = useCallback(async (
+    forceAfterInFlight = false,
+    signal?: AbortSignal,
+  ) => {
     if (detailInFlightRef.current) {
-      try {
-        await detailInFlightRef.current
-      } catch (error) {
-        if (forceAfterInFlight) throw error
-        return
-      }
+      await detailInFlightRef.current
       if (!forceAfterInFlight) return
     }
     const generation = ++detailGenerationRef.current
-    const request = loadDetail()
+    const request = loadDetail(signal)
       .then((nextDetail) => {
         if (!mountedRef.current) return
         const nextAttempts = runAttempts(nextDetail.jobs)
@@ -159,7 +166,7 @@ export function useRepositoryRunDetailController({
             metadataError: errorMessage(error),
           }))
         }
-        if (forceAfterInFlight) throw error
+        throw error
       })
       .finally(() => {
         if (detailInFlightRef.current === request) {
@@ -170,7 +177,10 @@ export function useRepositoryRunDetailController({
     return request
   }, [loadDetail])
 
-  const refreshLogs = useCallback((target: StepSelection) => {
+  const refreshLogs = useCallback((
+    target: StepSelection,
+    signal?: AbortSignal,
+  ) => {
     const key = stepKey(target)
     const inFlight = logInFlightRef.current
     if (!inFlight) return
@@ -195,12 +205,15 @@ export function useRepositoryRunDetailController({
         loadingState,
       ),
     }))
-    const request = loadLogs({
-      ...params,
-      after: current.nextAfter,
-      attempt_id: target.attemptId,
-      step_index: target.stepIndex,
-    })
+    const request = loadLogs(
+      {
+        ...params,
+        after: current.nextAfter,
+        attempt_id: target.attemptId,
+        step_index: target.stepIndex,
+      },
+      signal,
+    )
       .then((page) => {
         if (!mountedRef.current) return false
         const previous = logStatesRef.current[key] ?? current
@@ -260,6 +273,7 @@ export function useRepositoryRunDetailController({
 
   const refreshLogsAfterInFlight = useCallback(async (
     target: StepSelection,
+    signal?: AbortSignal,
   ) => {
     const key = stepKey(target)
     const existing = logInFlightRef.current?.get(key)
@@ -267,13 +281,35 @@ export function useRepositoryRunDetailController({
     let previousAfter: number
     do {
       previousAfter = logStatesRef.current[key]?.nextAfter ?? 0
-      if (!await refreshLogs(target)) return false
+      if (!await refreshLogs(target, signal)) return false
     } while (
       mountedRef.current &&
       (logStatesRef.current[key]?.nextAfter ?? 0) > previousAfter
     )
     return mountedRef.current
   }, [refreshLogs])
+
+  const refreshFromRunEvents = useCallback<RunRefresh>(async (
+    reasons,
+    signal,
+  ) => {
+    const refreshMetadata = reasons.has('Recovery') ||
+      reasons.has('StatusChanged')
+    if (refreshMetadata) await refreshDetail(false, signal)
+    const selection = selectionRef.current
+    if (selection && (refreshMetadata || reasons.has('LogsAppended'))) {
+      if (!await refreshLogsAfterInFlight(selection, signal)) {
+        throw new Error('Selected run logs could not refresh.')
+      }
+    }
+  }, [refreshDetail, refreshLogsAfterInFlight])
+
+  const refreshRun = useRunLiveRefresh({
+    acceptedChanges: DETAIL_CHANGES,
+    mutable: runCanChange(view.detail.run.state),
+    refresh: refreshFromRunEvents,
+    runId: params.run_id,
+  })
 
   useEffect(() => {
     mountedRef.current = true
@@ -283,27 +319,13 @@ export function useRepositoryRunDetailController({
   }, [])
 
   useEffect(() => {
-    if (!runNeedsPolling(view.detail.run.state)) return
-    const timer = window.setInterval(
-      () => void refreshDetail(),
-      REFRESH_INTERVAL_MS,
-    )
-    return () => window.clearInterval(timer)
-  }, [refreshDetail, view.detail.run.state])
-
-  useEffect(() => {
     const selection = view.selection
     if (!selection) return
-    if (!runNeedsPolling(view.detail.run.state)) {
+    if (!runCanChange(view.detail.run.state)) {
       void refreshLogsAfterInFlight(selection)
       return
     }
     void refreshLogs(selection)
-    const timer = window.setInterval(
-      () => void refreshLogs(selection),
-      REFRESH_INTERVAL_MS,
-    )
-    return () => window.clearInterval(timer)
   }, [
     refreshLogs,
     refreshLogsAfterInFlight,
@@ -395,7 +417,7 @@ export function useRepositoryRunDetailController({
   return {
     ...view,
     performAction,
-    refreshDetail,
+    refreshDetail: refreshRun,
     refreshLogs,
     selectedLogState,
     toggleAttempt,

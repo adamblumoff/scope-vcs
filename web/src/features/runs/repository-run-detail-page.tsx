@@ -49,8 +49,11 @@ export function RepositoryRunDetailPage({
 }: {
   cancelRun: () => Promise<void>
   initialDetail: RepoRunDetail
-  loadDetail: () => Promise<RepoRunDetail>
-  loadLogs: (input: RunStepLogsInput) => Promise<RepoRunStepLogPage>
+  loadDetail: (signal?: AbortSignal) => Promise<RepoRunDetail>
+  loadLogs: (
+    input: RunStepLogsInput,
+    signal?: AbortSignal,
+  ) => Promise<RepoRunStepLogPage>
   params: RunActionInput
   retryRun: () => Promise<void>
 }) {

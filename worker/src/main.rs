@@ -4,6 +4,7 @@ mod control;
 mod execution;
 mod git_repo;
 mod health;
+mod run_events;
 mod settings;
 
 use crate::{

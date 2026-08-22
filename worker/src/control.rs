@@ -13,7 +13,9 @@ pub(crate) async fn run(
     let execution = settings
         .execution
         .clone()
-        .map(|cloud| CloudExecutionCoordinator::new(metadata.clone(), cloud))
+        .map(|cloud| {
+            CloudExecutionCoordinator::new(metadata.clone(), cloud, settings.worker_id.clone())
+        })
         .transpose()?;
     loop {
         if !super::schema_ready_or_wait(&metadata, &health).await {
@@ -46,6 +48,16 @@ pub(crate) async fn run(
                 failed = summary.failed,
                 "processed outbox jobs"
             );
+        }
+        for run in &summary.created_runs {
+            crate::run_events::publish_run_change(
+                &metadata,
+                &settings.worker_id,
+                &run.repo_id,
+                &run.run_id,
+                scope_api_contract::RunChangeKind::Created,
+            )
+            .await;
         }
         if let Some(execution) = &execution {
             if let Err(error) = execution.abort_canceled(super::unix_now()?).await {

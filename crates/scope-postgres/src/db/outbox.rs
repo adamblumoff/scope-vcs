@@ -35,6 +35,13 @@ pub struct OutboxRunSummary {
     pub claimed: usize,
     pub completed: usize,
     pub failed: usize,
+    pub created_runs: Vec<OutboxCreatedRun>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutboxCreatedRun {
+    pub repo_id: String,
+    pub run_id: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -90,10 +97,11 @@ impl JobStore {
             summary.claimed += 1;
 
             match execute_outbox_job(db.as_ref(), &job, claim_now_unix, generated_ids).await {
-                Ok(()) => {
+                Ok(created_runs) => {
                     let (_, completion_now) = outbox_time(current_time)?;
                     complete_outbox_job(db.as_ref(), &job, &worker_id, completion_now).await?;
                     summary.completed += 1;
+                    summary.created_runs.extend(created_runs);
                 }
                 Err(error) => {
                     let message = error.message;
@@ -280,16 +288,25 @@ async fn execute_outbox_job<C>(
     job: &ClaimedOutboxJob,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
-) -> Result<(), PostgresError>
+) -> Result<Vec<OutboxCreatedRun>, PostgresError>
 where
     C: ConnectionTrait + TransactionTrait,
 {
     match job.kind.as_str() {
         PROJECTION_READ_MODEL_REBUILD => {
-            rebuild_live_projection_read_models_for_job(conn, job, now_unix).await
+            rebuild_live_projection_read_models_for_job(conn, job, now_unix).await?;
+            Ok(Vec::new())
         }
         super::push_triggers::JOB_KIND => {
-            super::push_triggers::evaluate(conn, job, now_unix, generated_ids).await
+            let run_ids =
+                super::push_triggers::evaluate(conn, job, now_unix, generated_ids).await?;
+            Ok(run_ids
+                .into_iter()
+                .map(|run_id| OutboxCreatedRun {
+                    repo_id: job.repo_id.clone(),
+                    run_id,
+                })
+                .collect())
         }
         kind => Err(PostgresError::internal_message(format!(
             "unknown outbox job kind {kind}"

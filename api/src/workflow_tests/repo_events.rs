@@ -1,5 +1,6 @@
 use super::*;
 use crate::repo_events::RepoChangeReason;
+use scope_api_contract::RunChangeKind;
 use scope_domain::requests::{RequestActorRole, RequestAudience, StartRequestInput};
 use std::time::Duration;
 use tokio_stream::StreamExt;
@@ -372,4 +373,36 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
     assert!(visible.contains("req_public_stream"));
     assert!(visible.contains("discussion_open"));
     assert!(!visible.contains("req_private_stream"));
+}
+
+#[tokio::test]
+async fn run_changes_are_visible_to_members_and_hidden_from_public_repo_streams() {
+    let state = test_state_with_readme().await;
+    cache_test_jwks(&state);
+    let public = events(state.clone(), None).await;
+    let member = events(state.clone(), Some(bearer_header())).await;
+    assert_eq!(public.status(), StatusCode::OK);
+    assert_eq!(member.status(), StatusCode::OK);
+    let mut public_stream = public.into_body().into_data_stream();
+    let mut member_stream = member.into_body().into_data_stream();
+    assert!(next_event(&mut public_stream).await.contains("Connected"));
+    assert!(next_event(&mut member_stream).await.contains("Connected"));
+
+    state
+        .publish_run_change(
+            TEST_REPO_ID,
+            "run_private".to_string(),
+            RunChangeKind::Created,
+        )
+        .await;
+
+    let member_event = next_event(&mut member_stream).await;
+    assert!(member_event.contains(r#""RunChanged""#));
+    assert!(member_event.contains(r#""run_id":"run_private""#));
+    assert!(member_event.contains(r#""change":"Created""#));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), public_stream.next())
+            .await
+            .is_err()
+    );
 }

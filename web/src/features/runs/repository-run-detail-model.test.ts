@@ -4,20 +4,20 @@ import {
   mergeStepLogs,
   reconcileExpandedAttempts,
   reconcileExpandedJobs,
-  runNeedsPolling,
+  runCanChange,
 } from './repository-run-detail-model'
 
 describe('repository run detail model', () => {
-  it('polls only while a run can still change', () => {
+  it('identifies states that can still change', () => {
     for (const state of ['queued', 'dispatching', 'running'] as const) {
-      assert.equal(runNeedsPolling(state), true)
+      assert.equal(runCanChange(state), true)
     }
     for (const state of ['succeeded', 'failed', 'canceled', 'lost'] as const) {
-      assert.equal(runNeedsPolling(state), false)
+      assert.equal(runCanChange(state), false)
     }
   })
 
-  it('preserves manual expansion without opening new attempts during polling', () => {
+  it('preserves manual expansion without opening new attempts during refresh', () => {
     const expanded = reconcileExpandedAttempts(
       new Set(['old']),
       ['retry', 'current', 'old'],

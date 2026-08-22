@@ -14,6 +14,7 @@ mod logical_run_sources;
 mod maintenance_cutover;
 mod repository_landing_files;
 mod request_revisions;
+mod run_creation_sequence;
 mod visibility_change_sets;
 
 const V6_SCHEMA: &str = include_str!("../migrations/v6.sql");
@@ -50,6 +51,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0024_git_compaction_scheduler",
     "m0025_visibility_change_sets",
     "m0026_repository_landing_files",
+    "m0027_run_creation_sequence",
 ];
 
 pub(super) async fn isolated_database() -> (

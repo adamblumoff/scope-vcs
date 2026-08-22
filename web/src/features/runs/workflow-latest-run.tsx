@@ -10,7 +10,8 @@ import { Button } from '@/components/ui/button'
 import { Link } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { reconcileExpandedJobs, runNeedsPolling } from './repository-run-detail-model'
+import { reconcileExpandedJobs, runCanChange } from './repository-run-detail-model'
+import { useRunLiveRefresh } from './run-live-refresh'
 import { RunStatusDot } from './run-status-dot'
 import { RunJobGraph } from './run-job-graph'
 import { RunGraphSkeleton } from './run-graph-skeleton'
@@ -18,14 +19,17 @@ import { runJobPanelId } from './run-job-ids'
 import { runDisplayState } from './run-formatting'
 import { RunTimestamp } from './run-timestamp'
 
-const LATEST_RUN_REFRESH_INTERVAL_MS = 2_000
+const LATEST_RUN_CHANGES = ['StatusChanged'] as const
 
 export function WorkflowLatestRun({
   loadDetail,
   params,
   run,
 }: {
-  loadDetail: (input: RunActionInput) => Promise<RepoRunDetail>
+  loadDetail: (
+    input: RunActionInput,
+    signal?: AbortSignal,
+  ) => Promise<RepoRunDetail>
   params: { owner: string; repo: string }
   run: RepoRunHistoryPage['runs'][number] | undefined
 }) {
@@ -42,10 +46,10 @@ export function WorkflowLatestRun({
     [owner, repo, runId],
   )
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((signal?: AbortSignal) => {
     if (!input) return
     if (inFlightRef.current) return inFlightRef.current
-    const request = loadDetail(input)
+    const request = loadDetail(input, signal)
       .then((next) => {
         if (!mountedRef.current) return
         setDetail(next)
@@ -54,6 +58,7 @@ export function WorkflowLatestRun({
       })
       .catch((cause: unknown) => {
         if (mountedRef.current) setError(errorMessage(cause))
+        throw cause
       })
       .finally(() => {
         if (inFlightRef.current === request) inFlightRef.current = null
@@ -62,28 +67,21 @@ export function WorkflowLatestRun({
     return request
   }, [input, loadDetail])
 
+  const refreshLatestRun = useRunLiveRefresh({
+    acceptedChanges: LATEST_RUN_CHANGES,
+    mutable: Boolean(input && (!detailState || runCanChange(detailState))),
+    refresh: async (_reasons, signal) => {
+      await refresh(signal)
+    },
+    runId,
+  })
+
   useEffect(() => {
     mountedRef.current = true
-    if (!input) {
-      return () => {
-        mountedRef.current = false
-      }
-    }
-    if (!detailState) void refresh()
-    if (detailState && !runNeedsPolling(detailState)) {
-      return () => {
-        mountedRef.current = false
-      }
-    }
-    const timer = window.setInterval(
-      () => void refresh(),
-      LATEST_RUN_REFRESH_INTERVAL_MS,
-    )
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [detailState, input, refresh])
+  }, [])
 
   if (!run) return null
   const displayedRun = detail?.run ?? run
@@ -121,7 +119,7 @@ export function WorkflowLatestRun({
           <PageErrorAlert title="Latest run could not refresh">
             <div className="flex flex-wrap items-center gap-3">
               <span>{error}</span>
-              <Button onClick={() => void refresh()} size="sm" variant="secondary">
+              <Button onClick={refreshLatestRun} size="sm" variant="secondary">
                 Retry now
               </Button>
             </div>

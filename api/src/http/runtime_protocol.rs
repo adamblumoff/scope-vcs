@@ -22,7 +22,7 @@ use scope_api_contract::{
     AttemptHeartbeatResponse, AttemptRecoveryStatusResponse, AttemptStatusResponse,
     AttemptStepStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
     CompleteAttemptStepRequest, ReportAttemptCacheFinalizationsRequest,
-    ReportAttemptCachePreparationsRequest, RunJobResponse, StepConclusionRequest,
+    ReportAttemptCachePreparationsRequest, RunChangeKind, RunJobResponse, StepConclusionRequest,
 };
 use scope_domain::runs::cache::{CacheIdentity, CacheNamespace, CachePlatform};
 use scope_domain::runs::run::{AttemptConclusion, RunAttemptStep, RunLogChunk, StepConclusion};
@@ -49,6 +49,7 @@ pub(crate) async fn claim(
             lease_expires_at_unix,
         )
         .await?;
+    publish_claim_status_change(&state, &claim).await;
     let job_definition = claimed_job_definition(&claim);
     let cache_grant = issue_cache_grant(&state, &claim)?;
     Ok(Json(ClaimRuntimeResponse {
@@ -80,6 +81,7 @@ pub(crate) async fn start_step(
         .runs()
         .start_attempt_step(&attempt_id, &token_hash, step_index, unix_now()?)
         .await?;
+    publish_claim_status_change(&state, &claim).await;
     Ok(Json(attempt_status(&claim)))
 }
 
@@ -115,7 +117,7 @@ pub(crate) async fn report_cache_preparations(
     Json(input): Json<ReportAttemptCachePreparationsRequest>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
-    state
+    let changed = state
         .metadata
         .runs()
         .report_attempt_cache_preparations(
@@ -134,6 +136,9 @@ pub(crate) async fn report_cache_preparations(
             unix_now()?,
         )
         .await?;
+    if let Some(claim) = changed {
+        publish_claim_status_change(&state, &claim).await;
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -144,7 +149,7 @@ pub(crate) async fn report_cache_finalizations(
     Json(input): Json<ReportAttemptCacheFinalizationsRequest>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
-    state
+    let changed = state
         .metadata
         .runs()
         .report_attempt_cache_finalizations(
@@ -164,6 +169,9 @@ pub(crate) async fn report_cache_finalizations(
             unix_now()?,
         )
         .await?;
+    if let Some(claim) = changed {
+        publish_claim_status_change(&state, &claim).await;
+    }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -230,7 +238,7 @@ pub(crate) async fn append_log(
     Json(input): Json<AppendAttemptLogRequest>,
 ) -> Result<Json<scope_api_contract::RunLogResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
-    let log = state
+    let appended = state
         .metadata
         .runs()
         .append_attempt_log(
@@ -245,6 +253,16 @@ pub(crate) async fn append_log(
             unix_now()?,
         )
         .await?;
+    if appended.appended {
+        state
+            .publish_run_change(
+                &appended.repo_id,
+                appended.log.run_id.clone(),
+                RunChangeKind::LogsAppended,
+            )
+            .await;
+    }
+    let log = appended.log;
     Ok(Json(scope_api_contract::RunLogResponse {
         attempt_id: log.chunk.attempt_id,
         job_key: log.job_key,
@@ -279,6 +297,7 @@ pub(crate) async fn complete_step(
             unix_now()?,
         )
         .await?;
+    publish_claim_status_change(&state, &claim).await;
     Ok(Json(attempt_status(&claim)))
 }
 
@@ -308,6 +327,7 @@ pub(crate) async fn complete(
             unix_now()?,
         )
         .await?;
+    publish_claim_status_change(&state, &claim).await;
     Ok(Json(attempt_status(&claim)))
 }
 
@@ -322,7 +342,18 @@ pub(crate) async fn abandon(
         .runs()
         .abandon_attempt(&attempt_id, &token_hash, unix_now()?)
         .await?;
+    publish_claim_status_change(&state, &claim).await;
     Ok(Json(attempt_status(&claim)))
+}
+
+async fn publish_claim_status_change(state: &AppState, claim: &scope_postgres::db::DispatchClaim) {
+    state
+        .publish_run_change(
+            claim.run.workflow.repository_id(),
+            claim.run.id.clone(),
+            RunChangeKind::StatusChanged,
+        )
+        .await;
 }
 
 fn attempt_status(claim: &scope_postgres::db::DispatchClaim) -> AttemptStatusResponse {

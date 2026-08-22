@@ -1,5 +1,5 @@
 import type { RepoLiveState } from '@/api/types'
-import type { RepoChangeEvent } from '@/api/types.generated'
+import type { RepoChangeEvent, RunChangeKind } from '@/api/types.generated'
 import { useAuth } from '@clerk/tanstack-react-start'
 import { useCallback, useEffect, useRef } from 'react'
 
@@ -167,7 +167,7 @@ export function createRepoRefreshCoordinator({
         event.repo_id !== repoId ||
         event.kind === 'Connected' ||
         typeof event.kind === 'object' &&
-          'RequestTimelineChanged' in event.kind
+          ('RequestTimelineChanged' in event.kind || 'RunChanged' in event.kind)
       ) {
         return
       }
@@ -269,7 +269,7 @@ export function parseRepoChangeEvent(message: string): RepoChangeEvent | null {
     kind: payload.kind,
     repo_id: payload.repo_id,
     version: payload.version,
-  }
+  } as RepoChangeEvent
 }
 
 function isRepoChangeKind(value: unknown): value is RepoChangeEvent['kind'] {
@@ -297,7 +297,24 @@ function isRepoChangeKind(value: unknown): value is RepoChangeEvent['kind'] {
       typeof changed.through_position === 'number'
     )
   }
+  if ('RunChanged' in value) {
+    const changed = value.RunChanged
+    return (
+      !!changed &&
+      typeof changed === 'object' &&
+      'run_id' in changed &&
+      typeof changed.run_id === 'string' &&
+      'change' in changed &&
+      isRunChangeKind(changed.change)
+    )
+  }
   return false
+}
+
+function isRunChangeKind(value: unknown): value is RunChangeKind {
+  return value === 'Created' ||
+    value === 'StatusChanged' ||
+    value === 'LogsAppended'
 }
 
 export function takeSseMessages(buffer: string) {

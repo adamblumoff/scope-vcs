@@ -113,6 +113,7 @@ pub mod push_trigger_evaluation {
 
 pub mod run {
     use super::*;
+    use sea_orm::ActiveValue::{NotSet, Set};
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "scope_runs")]
@@ -128,6 +129,7 @@ pub mod run {
         pub source: Json,
         pub state: String,
         pub cancellation_requested: bool,
+        pub creation_sequence: i64,
         pub created_at_unix: i64,
         pub updated_at_unix: i64,
         pub completed_at_unix: Option<i64>,
@@ -138,28 +140,31 @@ pub mod run {
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    impl Model {
+    impl ActiveModel {
         pub fn from_domain(run: &Run) -> Result<Self, PostgresError> {
             Ok(Self {
-                id: run.id.clone(),
-                idempotency_key: run.idempotency_key.clone(),
-                repo_id: run.workflow.repository_id().to_string(),
-                workflow_path: run.workflow.path().as_str().to_string(),
-                workflow_revision_digest: run.workflow_revision_digest.clone(),
-                trigger: encode_enum(run.trigger)?,
-                requested_by_user_id: run.requested_by_user_id.clone(),
-                source: encode_json(&run.source)?,
-                state: encode_enum(run.state)?,
-                cancellation_requested: run.cancellation_requested,
-                created_at_unix: u64_to_i64(run.created_at_unix, "run creation time")?,
-                updated_at_unix: u64_to_i64(run.updated_at_unix, "run update time")?,
-                completed_at_unix: run
+                id: Set(run.id.clone()),
+                idempotency_key: Set(run.idempotency_key.clone()),
+                repo_id: Set(run.workflow.repository_id().to_string()),
+                workflow_path: Set(run.workflow.path().as_str().to_string()),
+                workflow_revision_digest: Set(run.workflow_revision_digest.clone()),
+                trigger: Set(encode_enum(run.trigger)?),
+                requested_by_user_id: Set(run.requested_by_user_id.clone()),
+                source: Set(encode_json(&run.source)?),
+                state: Set(encode_enum(run.state)?),
+                cancellation_requested: Set(run.cancellation_requested),
+                creation_sequence: NotSet,
+                created_at_unix: Set(u64_to_i64(run.created_at_unix, "run creation time")?),
+                updated_at_unix: Set(u64_to_i64(run.updated_at_unix, "run update time")?),
+                completed_at_unix: Set(run
                     .completed_at_unix
                     .map(|value| u64_to_i64(value, "run completion time"))
-                    .transpose()?,
+                    .transpose()?),
             })
         }
+    }
 
+    impl Model {
         pub fn try_into_domain(self) -> Result<Run, PostgresError> {
             let workflow = WorkflowIdentity::new(
                 self.repo_id,

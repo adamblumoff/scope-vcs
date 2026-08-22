@@ -1,6 +1,6 @@
 import type { RepoRunHistoryPage } from '@/api/types'
 
-export async function refreshRunHistoryPages(
+export async function reloadRunHistoryPages(
   pageCount: number,
   loadPage: (after?: string) => Promise<RepoRunHistoryPage | null>,
 ) {

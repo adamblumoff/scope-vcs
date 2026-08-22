@@ -31,9 +31,10 @@ impl RunStore {
         token_hash: &str,
         reports: Vec<AttemptCachePreparationCommand>,
         now_unix: u64,
-    ) -> Result<(), PostgresError> {
+    ) -> Result<Option<super::DispatchClaim>, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let claim = authenticated_attempt(&tx, attempt_id, token_hash, now_unix).await?;
+        let mut changed = false;
         let workflow_path = WorkflowPath::parse(claim.run.workflow.path().as_str().to_string())
             .map_err(PostgresError::invalid_input)?;
         let job_definition = claim
@@ -107,8 +108,10 @@ impl RunStore {
                 .insert(&tx)
                 .await
                 .map_err(PostgresError::internal)?;
+            changed = true;
         }
-        tx.commit().await.map_err(PostgresError::internal)
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(changed.then_some(claim))
     }
 
     pub async fn report_attempt_cache_finalizations(
@@ -117,9 +120,10 @@ impl RunStore {
         token_hash: &str,
         reports: Vec<AttemptCacheFinalizationCommand>,
         now_unix: u64,
-    ) -> Result<(), PostgresError> {
+    ) -> Result<Option<super::DispatchClaim>, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        authenticated_attempt(&tx, attempt_id, token_hash, now_unix).await?;
+        let claim = authenticated_attempt(&tx, attempt_id, token_hash, now_unix).await?;
+        let mut changed = false;
         for report in reports {
             let model = entities::run_attempt_cache::Entity::find_by_id((
                 attempt_id.to_string(),
@@ -143,9 +147,11 @@ impl RunStore {
                 .exec(&tx)
                 .await
                 .map_err(PostgresError::internal)?;
+                changed = true;
             }
         }
-        tx.commit().await.map_err(PostgresError::internal)
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(changed.then_some(claim))
     }
 }
 

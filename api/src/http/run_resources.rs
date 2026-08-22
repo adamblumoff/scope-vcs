@@ -105,7 +105,7 @@ pub(crate) async fn get_repository_run_history(
         let last = entries
             .last()
             .expect("a run history page with more results is non-empty");
-        encode_history_cursor(last.run.created_at_unix, &last.run.id, workflow)
+        encode_history_cursor(last.creation_sequence, workflow)
     });
     let runs = entries
         .iter()
@@ -173,19 +173,14 @@ async fn require_repository_member(
 }
 
 fn parse_history_cursor(value: &str, workflow: Option<&str>) -> Result<RunHistoryCursor, ApiError> {
-    let mut parts = value.splitn(4, ':');
-    if parts.next() != Some("v1") {
+    let mut parts = value.splitn(3, ':');
+    if parts.next() != Some("v2") {
         return Err(ApiError::bad_request("invalid run history cursor"));
     }
-    let created_at_unix = parts
+    let creation_sequence = parts
         .next()
         .and_then(|value| value.parse().ok())
         .ok_or_else(|| ApiError::bad_request("invalid run history cursor"))?;
-    let run_id = parts
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| ApiError::bad_request("invalid run history cursor"))?
-        .to_string();
     let cursor_workflow = parts
         .next()
         .ok_or_else(|| ApiError::bad_request("invalid run history cursor"))?;
@@ -194,14 +189,11 @@ fn parse_history_cursor(value: &str, workflow: Option<&str>) -> Result<RunHistor
             "run history cursor does not match the workflow filter",
         ));
     }
-    Ok(RunHistoryCursor {
-        created_at_unix,
-        run_id,
-    })
+    Ok(RunHistoryCursor { creation_sequence })
 }
 
-fn encode_history_cursor(created_at_unix: u64, run_id: &str, workflow: Option<&str>) -> String {
-    format!("v1:{created_at_unix}:{run_id}:{}", workflow.unwrap_or("*"))
+fn encode_history_cursor(creation_sequence: u64, workflow: Option<&str>) -> String {
+    format!("v2:{creation_sequence}:{}", workflow.unwrap_or("*"))
 }
 
 #[cfg(test)]
@@ -210,15 +202,15 @@ mod tests {
 
     #[test]
     fn history_cursor_is_bound_to_the_workflow_filter() {
-        let encoded = encode_history_cursor(42, "run_2", Some("checks"));
+        let encoded = encode_history_cursor(42, Some("checks"));
         assert_eq!(
             parse_history_cursor(&encoded, Some("checks")).unwrap(),
             RunHistoryCursor {
-                created_at_unix: 42,
-                run_id: "run_2".to_string(),
+                creation_sequence: 42,
             }
         );
         assert!(parse_history_cursor(&encoded, None).is_err());
-        assert!(parse_history_cursor("v1:42:run_2", Some("checks")).is_err());
+        assert!(parse_history_cursor("v1:42:checks", Some("checks")).is_err());
+        assert!(parse_history_cursor("v2:42", Some("checks")).is_err());
     }
 }

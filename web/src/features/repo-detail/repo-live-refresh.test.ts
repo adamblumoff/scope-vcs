@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict'
 import { test } from 'node:test'
-
 import type { RepoChangeEvent } from '@/api/types.generated'
+
 import {
   createRepoRefreshCoordinator,
   parseRepoChangeEvent,
@@ -29,6 +29,17 @@ const discussionEvent = (version: number) =>
     repo_id: 'owner/repo',
     version,
   }) satisfies RepoChangeEvent
+const runEvent = (version: number) =>
+  ({
+    kind: {
+      RunChanged: {
+        change: 'StatusChanged',
+        run_id: 'run-1',
+      },
+    },
+    repo_id: 'owner/repo',
+    version,
+  }) satisfies RepoChangeEvent
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 
 test('SSE parsing validates events and retains partial messages', () => {
@@ -38,12 +49,23 @@ test('SSE parsing validates events and retains partial messages', () => {
     ),
     event(2, 'visibility-changed'),
   )
+  assert.deepEqual(
+    parseRepoChangeEvent(
+      'event: repo-change\ndata: {"repo_id":"owner/repo","version":3,"kind":{"RunChanged":{"run_id":"run-1","change":"LogsAppended"}}}',
+    ),
+    {
+      kind: { RunChanged: { change: 'LogsAppended', run_id: 'run-1' } },
+      repo_id: 'owner/repo',
+      version: 3,
+    },
+  )
   for (const message of [
     ': keep-alive',
     'event: other\ndata: {}',
     'event: repo-change\ndata: {',
     'event: repo-change\ndata: {"repo_id":1,"version":2,"kind":"Connected"}',
     'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RequestTimelineChanged":{"request_id":"request-1"}}}',
+    'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RunChanged":{"run_id":"run-1","change":"unknown"}}}',
   ]) assert.equal(parseRepoChangeEvent(message), null)
   assert.deepEqual(takeSseMessages('event: one\n\nevent: two'), {
     messages: ['event: one'],
@@ -57,6 +79,7 @@ test('coordinator ignores stale, connected, and wrong-repo events', async () => 
   coordinator.onEvent(event(2))
   coordinator.onEvent({ kind: 'Connected', repo_id: 'owner/repo', version: 3 })
   coordinator.onEvent(discussionEvent(3))
+  coordinator.onEvent(runEvent(3))
   coordinator.onEvent(event(3, 'changed', 'other/repo'))
   await tick()
   assert.equal(refreshes, 0)

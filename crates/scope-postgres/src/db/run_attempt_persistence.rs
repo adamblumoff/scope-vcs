@@ -152,14 +152,10 @@ pub(super) async fn locked_attempt_steps(
 }
 
 pub(super) async fn save_run(tx: &DatabaseTransaction, run: &Run) -> Result<(), PostgresError> {
-    entities::run::Entity::update(
-        entities::run::Model::from_domain(run)?
-            .into_active_model()
-            .reset_all(),
-    )
-    .exec(tx)
-    .await
-    .map_err(PostgresError::internal)?;
+    entities::run::Entity::update(entities::run::ActiveModel::from_domain(run)?)
+        .exec(tx)
+        .await
+        .map_err(PostgresError::internal)?;
     Ok(())
 }
 
