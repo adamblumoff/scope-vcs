@@ -3,10 +3,21 @@ import test from 'node:test';
 
 import {
   capacityRejectionFields, compactionFields, numericFields, objectStoreFields,
-  gitOperationFields, pushPersistenceFields, stripAnsi, summarizeCapacityRejections,
+  gitOperationFields, pushPersistenceFields, railwayMetricArgs, stripAnsi, summarizeCapacityRejections,
   summarizeCompactions, summarizeGitOperations, summarizeMaterializations, summarizeObjectStore,
   summarizePushPersistence, summarizeSnapshots,
 } from './railway-telemetry.mjs';
+
+test('resource metrics use the exact requested run window', () => {
+  assert.deepEqual(
+    railwayMetricArgs('scope-api', 'staging', '2026-08-22T20:00:00Z', '2026-08-22T20:05:00Z'),
+    [
+      'metrics', '--service', 'scope-api', '--environment', 'staging',
+      '--since', '2026-08-22T20:00:00Z', '--raw', '--cpu', '--memory', '--json',
+      '--until', '2026-08-22T20:05:00Z',
+    ],
+  );
+});
 
 test('runtime snapshot parsing strips tracing colors and reads numeric fields', () => {
   const message = '\u001b[32mINFO\u001b[0m runtime process snapshot threads=31 cgroup_pids_current=48';
@@ -128,4 +139,12 @@ test('Git restore telemetry stays joined to request, replica, cache, and frontie
       totalBytes: 1048576,
     },
   });
+});
+
+test('Git content telemetry counts validated cat-file output bytes', () => {
+  const read = gitOperationFields('http_request{request_id=abc replica_id=replica-a}: Git content read completed operation=cat_file duration_ms=3 git_oid=deadbeef expected_size_bytes=1024 actual_size_bytes=1024 success=true');
+  assert.equal(read.expected_size_bytes, 1024);
+  assert.equal(read.actual_size_bytes, 1024);
+  assert.equal(read.size_bytes, 1024);
+  assert.equal(summarizeGitOperations([read]).cat_file.totalBytes, 1024);
 });
