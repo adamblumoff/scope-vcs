@@ -18,7 +18,13 @@ jobs:
     caches:
       - name: cargo
         path: /scope/cache/cargo
+      - name: cargo-target
+        path: /scope/cache/cargo-target
     env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: /scope/cache/cargo-target
       SCOPE_TEST_DATABASE_URL: postgres://scope:scope@127.0.0.1:5432/scope_test
     steps:
       - name: Check Rust workspace
