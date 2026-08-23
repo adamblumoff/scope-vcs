@@ -420,13 +420,19 @@ test('public repository history renders its seeded push as an update', async () 
       )
       return button && Object.keys(button).some((key) => key.startsWith('__reactProps$'))
     })
+    await page.locator('#main-content > .scope-content-enter').evaluate(
+      (page) => { page.style.minHeight = '1200px' },
+    )
     await update.click()
     await page.waitForURL((url) =>
       url.searchParams.get('entry') === 'dev-public-1'
     )
+    await page.waitForFunction(() => globalThis.__TSR_ROUTER__.state.status === 'idle')
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)))
+    assert.equal(new URL(page.url()).searchParams.get('entry'), 'dev-public-1')
     assert.equal(
-      new URL(page.url()).searchParams.get('entry'),
-      'dev-public-1',
+      await page.evaluate(() => document.querySelector('#main-content')?.scrollTop),
+      0,
     )
   })
 })

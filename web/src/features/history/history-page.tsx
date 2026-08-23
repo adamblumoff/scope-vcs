@@ -108,7 +108,7 @@ export function HistoryPage(props: HistoryPageProps) {
               selectedEntryId={selectedEntryId}
               showLoadOlder={showLoadOlder}
             />
-            <div className="min-w-0" id="history-entry-detail">
+            <div className="min-w-0">
               <CommitDetailPanel
                 commitState={detailState}
                 diffIdentity={diffIdentity}
@@ -263,11 +263,8 @@ function useHistoryPageModel({ initialPage, params, search }: HistoryPageProps) 
     [replaceHistorySearch],
   )
   const selectEntry = useCallback(
-    (entry: HistoryEntrySummary) => {
-      void replaceHistorySearch(audience, entry.source_id).then(() => {
-        document.getElementById('history-entry-detail')?.scrollIntoView({ block: 'start' })
-      })
-    },
+    (entry: HistoryEntrySummary) =>
+      replaceHistorySearch(audience, entry.source_id),
     [audience, replaceHistorySearch],
   )
   const selectFile = useCallback(
