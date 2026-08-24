@@ -59,6 +59,7 @@ pub(super) fn build_run_detail_response(
             .or_default()
             .push(RepositoryRunAttemptResponse {
                 id: attempt.id,
+                number: attempt.number,
                 execution_provider: attempt.execution_provider.into(),
                 external_run_id: attempt.external_run_id,
                 runtime_version: attempt.runtime_version,

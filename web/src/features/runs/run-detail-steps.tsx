@@ -89,15 +89,17 @@ function AttemptSwitcher({
   onSelect: (attemptId: string) => void
   selectedAttemptId: string | null
 }) {
+  // The API returns attempts newest first; a switcher reads better in run order.
+  const orderedAttempts = [...attempts].sort((left, right) =>
+    left.number - right.number)
   return (
     <div
       aria-label="Attempts"
       className="flex flex-wrap items-center gap-1.5 border-b border-border py-3"
-      role="tablist"
     >
-      {attempts.map((attempt, index) => (
+      {orderedAttempts.map((attempt) => (
         <button
-          aria-selected={attempt.id === selectedAttemptId}
+          aria-pressed={attempt.id === selectedAttemptId}
           className={cn(
             'flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
             attempt.id === selectedAttemptId
@@ -106,11 +108,10 @@ function AttemptSwitcher({
           )}
           key={attempt.id}
           onClick={() => onSelect(attempt.id)}
-          role="tab"
           type="button"
         >
           <RunStatusIcon state={attempt.state} terminalReason={attempt.terminal_reason} />
-          Attempt {index + 1}
+          Attempt {attempt.number}
         </button>
       ))}
     </div>
@@ -158,6 +159,7 @@ function StepRow({
       {selected ? (
         <RunLogView
           id={panelId}
+          key={panelId}
           logState={selectedLogState}
           onRetry={onLogRetry}
           step={step}

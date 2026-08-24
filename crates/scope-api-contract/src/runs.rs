@@ -316,6 +316,7 @@ pub struct RepositoryRunStepResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RepositoryRunAttemptResponse {
     pub id: String,
+    pub number: u32,
     pub execution_provider: RepositoryExecutionProvider,
     pub external_run_id: Option<String>,
     pub runtime_version: String,

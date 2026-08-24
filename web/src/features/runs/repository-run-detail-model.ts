@@ -7,6 +7,7 @@ type StepLike = {
 
 type AttemptLike = {
   id: string
+  number: number
   steps: readonly StepLike[]
 }
 
@@ -105,7 +106,7 @@ export function attemptForJob<Attempt extends AttemptLike>(
     const overridden = jobDetail.attempts.find((attempt) => attempt.id === overrideId)
     if (overridden) return overridden
   }
-  return jobDetail.attempts.at(-1) ?? null
+  return latestAttempt(jobDetail.attempts)
 }
 
 export function reconcileAttemptOverrides(
@@ -157,6 +158,20 @@ export function mergeStepLogs<T extends { position: number; text: string }>(
   }
 }
 
+/**
+ * The run detail response returns attempts newest first, so "latest" is the
+ * highest attempt number rather than a position in the array.
+ */
 function lastAttempt(jobDetail: JobLike) {
-  return jobDetail.attempts.at(-1) ?? null
+  return latestAttempt(jobDetail.attempts)
+}
+
+export function latestAttempt<Attempt extends { number: number }>(
+  attempts: readonly Attempt[],
+): Attempt | null {
+  return attempts.reduce<Attempt | null>(
+    (latest, attempt) =>
+      latest === null || attempt.number > latest.number ? attempt : latest,
+    null,
+  )
 }

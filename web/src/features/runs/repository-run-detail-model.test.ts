@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   attemptForJob,
   defaultShowGraph,
+  latestAttempt,
   mergeStepLogs,
   reconcileAttemptOverrides,
   runCanChange,
@@ -10,7 +11,11 @@ import {
 } from './repository-run-detail-model'
 
 function job(overrides: {
-  attempts?: Array<{ id: string; steps: Array<{ index: number; state: string }> }>
+  attempts?: Array<{
+    id: string
+    number: number
+    steps: Array<{ index: number; state: string }>
+  }>
   key: string
   needs?: string[]
   state: string
@@ -34,13 +39,14 @@ describe('repository run detail model', () => {
   it('selects the first failed step of the first failed job', () => {
     const jobs = [
       job({
-        attempts: [{ id: 'a1', steps: [{ index: 0, state: 'succeeded' }] }],
+        attempts: [{ id: 'a1', number: 1, steps: [{ index: 0, state: 'succeeded' }] }],
         key: 'lint',
         state: 'succeeded',
       }),
       job({
         attempts: [{
           id: 'a2',
+          number: 2,
           steps: [
             { index: 0, state: 'succeeded' },
             { index: 1, state: 'failed' },
@@ -50,7 +56,7 @@ describe('repository run detail model', () => {
         state: 'failed',
       }),
       job({
-        attempts: [{ id: 'a3', steps: [{ index: 0, state: 'running' }] }],
+        attempts: [{ id: 'a3', number: 3, steps: [{ index: 0, state: 'running' }] }],
         key: 'web',
         state: 'running',
       }),
@@ -65,13 +71,14 @@ describe('repository run detail model', () => {
   it('falls back to the currently running step when nothing failed', () => {
     const jobs = [
       job({
-        attempts: [{ id: 'a1', steps: [{ index: 0, state: 'succeeded' }] }],
+        attempts: [{ id: 'a1', number: 1, steps: [{ index: 0, state: 'succeeded' }] }],
         key: 'lint',
         state: 'succeeded',
       }),
       job({
         attempts: [{
           id: 'a2',
+          number: 2,
           steps: [
             { index: 0, state: 'succeeded' },
             { index: 1, state: 'running' },
@@ -91,13 +98,14 @@ describe('repository run detail model', () => {
   it('falls back to the last step of the last job when the run is idle', () => {
     const jobs = [
       job({
-        attempts: [{ id: 'a1', steps: [{ index: 0, state: 'succeeded' }] }],
+        attempts: [{ id: 'a1', number: 1, steps: [{ index: 0, state: 'succeeded' }] }],
         key: 'lint',
         state: 'succeeded',
       }),
       job({
         attempts: [{
           id: 'a2',
+          number: 2,
           steps: [
             { index: 0, state: 'succeeded' },
             { index: 1, state: 'succeeded' },
@@ -125,8 +133,8 @@ describe('repository run detail model', () => {
   it('picks the selected step attempt over the switcher and default attempt', () => {
     const target = job({
       attempts: [
-        { id: 'a1', steps: [{ index: 0, state: 'failed' }] },
-        { id: 'a2', steps: [{ index: 0, state: 'succeeded' }] },
+        { id: 'a1', number: 1, steps: [{ index: 0, state: 'failed' }] },
+        { id: 'a2', number: 2, steps: [{ index: 0, state: 'succeeded' }] },
       ],
       key: 'backend',
       state: 'succeeded',
@@ -145,7 +153,7 @@ describe('repository run detail model', () => {
 
   it('drops attempt overrides that reference retired attempts', () => {
     const jobs = [
-      job({ attempts: [{ id: 'new', steps: [] }], key: 'backend', state: 'succeeded' }),
+      job({ attempts: [{ id: 'new', number: 1, steps: [] }], key: 'backend', state: 'succeeded' }),
     ]
     assert.deepEqual(
       reconcileAttemptOverrides({ backend: 'old', missing: 'x' }, jobs),
@@ -195,5 +203,25 @@ describe('repository run detail model', () => {
       logs: [{ position: 2, text }],
       truncated: true,
     })
+  })
+})
+
+describe('attempt ordering', () => {
+  // The run detail response returns attempts newest first, so anything that
+  // relies on array position picks the wrong attempt.
+  const newestFirst = [
+    { id: 'a2', number: 2, steps: [] },
+    { id: 'a1', number: 1, steps: [] },
+  ]
+
+  it('reads the latest attempt by number, not by position', () => {
+    assert.equal(latestAttempt(newestFirst)?.id, 'a2')
+    assert.equal(latestAttempt(newestFirst.slice(0, 0))?.id, undefined)
+  })
+
+  it('defaults a job to its latest attempt', () => {
+    const jobDetail = { attempts: newestFirst, job: { key: 'lint' } }
+
+    assert.equal(attemptForJob(jobDetail, {}, null)?.id, 'a2')
   })
 })
