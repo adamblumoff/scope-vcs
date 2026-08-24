@@ -39,15 +39,18 @@ jobs:
       - name: Check API TypeScript contract
         run: node web/scripts/check-api-contract.mjs
 
-  cli:
+  cli-checks:
     caches:
       - name: cargo
         path: /scope/cache/cargo
-      - name: pnpm-store
-        path: /root/.local/share/pnpm/store
+      - name: cargo-target
+        path: /scope/cache/cargo-target
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: /scope/cache/cargo-target
     steps:
-      - name: Install JavaScript dependencies
-        run: (cd web && pnpm install --frozen-lockfile)
       - name: Check formatting
         run: |
           cargo fmt --manifest-path cli/Cargo.toml -- --check
@@ -61,40 +64,30 @@ jobs:
         run: |
           cargo build --manifest-path cli/Cargo.toml --release --locked \
               --bin scope --bin scope-cli-service
-      - name: Two-actor contribution flow
-        run: |
-          service postgresql start
-          su postgres -c "psql --set=ON_ERROR_STOP=1 --command=\"CREATE ROLE scope LOGIN PASSWORD 'scope'\""
-          su postgres -c "createdb --owner=scope scope_dev"
-          clerk_host='scope-e2e.clerk.accounts.dev$'
-          clerk_payload="$(printf '%s' "$clerk_host" | base64 | tr '/+' '_-' | tr -d '=\n')"
-          printf '%s\n' 'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
-            'SCOPE_DEV_USER_EMAIL=smoke@example.test' 'SCOPE_DEV_USER_HANDLE=dev' > .env.local
-          printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\n' "$clerk_payload" > web/.env.local
-          cargo build -p api --features local-dev --locked
-          cargo build -p worker --locked
-          cargo build --manifest-path cli/Cargo.toml --locked --bin scope
-          cleanup() {
-            status="$?"
-            if [ "$status" -ne 0 ]; then
-              for log in .tmp/local-dev/*.log; do
-                [ -f "$log" ] || continue
-                tail -n 300 "$log"
-              done
-            fi
-            ./dev/scope-dev down
-            exit "$status"
-          }
-          trap cleanup EXIT
-          SCOPE_DEV_HEADLESS_E2E=1 ./dev/scope-dev up
-          SCOPE_API_URL=http://localhost:8080 SCOPE_CLI_E2E=1 \
-            cargo test --manifest-path cli/Cargo.toml --test contribution_flow --locked -- --nocapture
 
-  web:
-    timeout: 45m
+  cli-e2e:
     caches:
       - name: cargo
         path: /scope/cache/cargo
+      - name: cargo-target
+        path: /scope/cache/cargo-target
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: /scope/cache/cargo-target
+    steps:
+      - name: Two-actor contribution flow
+        run: |
+          cargo build --manifest-path cli/Cargo.toml --locked --bin scope
+          ./dev/run-ci-local-stack cli env \
+            SCOPE_API_URL=http://localhost:8080 \
+            SCOPE_CLI_E2E=1 \
+            cargo test --manifest-path cli/Cargo.toml --test contribution_flow --locked -- --nocapture
+
+  web-checks:
+    timeout: 45m
+    caches:
       - name: pnpm-store
         path: /root/.local/share/pnpm/store
     steps:
@@ -113,31 +106,27 @@ jobs:
           )
       - name: Build
         run: (cd web && pnpm build)
+
+  web-smoke:
+    timeout: 45m
+    caches:
+      - name: cargo
+        path: /scope/cache/cargo
+      - name: cargo-target
+        path: /scope/cache/cargo-target
+      - name: pnpm-store
+        path: /root/.local/share/pnpm/store
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: /scope/cache/cargo-target
+    steps:
+      - name: Install dependencies
+        run: (cd web && pnpm install --frozen-lockfile)
       - name: Browser smoke against seeded local stack
         run: |
-          service postgresql start
-          su postgres -c "psql --set=ON_ERROR_STOP=1 --command=\"CREATE ROLE scope LOGIN PASSWORD 'scope'\""
-          su postgres -c "createdb --owner=scope scope_dev"
-          clerk_host='scope-e2e.clerk.accounts.dev$'
-          clerk_payload="$(printf '%s' "$clerk_host" | base64 | tr '/+' '_-' | tr -d '=\n')"
-          printf '%s\n' 'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
-            'SCOPE_DEV_USER_EMAIL=smoke@example.test' 'SCOPE_DEV_USER_HANDLE=dev' > .env.local
-          printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\nCLERK_SECRET_KEY=sk_test_scope_e2e\n' \
-            "$clerk_payload" > web/.env.local
-          cargo build -p api --features local-dev --locked
-          cargo build -p worker --locked
-          cleanup() {
-            status="$?"
-            if [ "$status" -ne 0 ]; then
-              for log in .tmp/local-dev/*.log; do
-                [ -f "$log" ] || continue
-                tail -n 300 "$log"
-              done
-            fi
-            ./dev/scope-dev down
-            exit "$status"
-          }
-          trap cleanup EXIT
-          VITE_SCOPE_WEB_FORCE_SIGNED_OUT=1 ./dev/scope-dev up
-          SCOPE_SMOKE_REPO=dev/public-demo SCOPE_WEB_BASE_URL=http://localhost:3000 \
+          ./dev/run-ci-local-stack web env \
+            SCOPE_SMOKE_REPO=dev/public-demo \
+            SCOPE_WEB_BASE_URL=http://localhost:3000 \
             sh -c 'cd web && pnpm test:smoke'
