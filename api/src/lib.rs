@@ -26,8 +26,8 @@ pub(crate) mod run_retention;
 pub(crate) mod runtime_budgets;
 #[cfg(feature = "smoke-seed")]
 pub mod smoke_seed;
-mod workflow_catalog_backfill;
 pub(crate) mod telemetry;
+mod workflow_catalog_backfill;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
