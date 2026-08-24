@@ -194,6 +194,7 @@ mod tests {
                 id: "run-1".to_string(),
                 workflow_name: "checks".to_string(),
                 git_oid: "1234567890".to_string(),
+                trigger: scope_api_contract::RepositoryRunTrigger::PushMain,
                 state: RepositoryRunState::Succeeded,
                 cancellation_requested: false,
                 created_at_unix: 1,
@@ -214,6 +215,7 @@ mod tests {
                 },
                 attempts: vec![RepositoryRunAttemptResponse {
                     id: "attempt-1".to_string(),
+                    number: 1,
                     execution_provider: scope_api_contract::RepositoryExecutionProvider::Northflank,
                     external_run_id: Some("nf-run-1".to_string()),
                     runtime_version: "0.1.0".to_string(),
