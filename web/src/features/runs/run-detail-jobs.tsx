@@ -1,4 +1,5 @@
 import type { RepoRunJobDetail } from '@/api/types'
+import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { StepLogState, StepSelection } from './repository-run-detail-controller'
@@ -7,6 +8,7 @@ import { RunDetailSteps } from './run-detail-steps'
 import { RunDuration } from './run-duration'
 import { runJobPanelId } from './run-job-ids'
 import { RunJobGraph } from './run-job-graph'
+import { orderJobsByDependency } from './run-job-graph-model'
 import { RunStatusIcon } from './run-status-icon'
 
 /** The Jobs section: a job strip (or dependency graph, behind a toggle) and
@@ -37,6 +39,7 @@ export function RunDetailJobs({
   showGraph: boolean
 }) {
   const selectedJob = jobs.find(({ job }) => job.key === selectedJobKey) ?? null
+  const orderedJobs = useMemo(() => orderJobsByDependency(jobs), [jobs])
 
   return (
     <section aria-labelledby="jobs-heading" className="pt-7">
@@ -65,7 +68,7 @@ export function RunDetailJobs({
           />
         ) : (
           <RunJobStrip
-            jobs={jobs}
+            jobs={orderedJobs}
             onSelectJob={onSelectJob}
             selectedJobKey={selectedJobKey}
           />

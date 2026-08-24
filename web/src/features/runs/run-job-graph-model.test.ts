@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { buildRunJobGraph } from './run-job-graph-model'
+import {
+  buildRunJobGraph,
+  orderJobsByDependency,
+} from './run-job-graph-model'
 
 function job(key: string, needs: string[] = []) {
   return { job: { key, needs } }
@@ -59,5 +62,32 @@ describe('run job graph layout', () => {
 
     assert.match(longEdge?.path ?? '', / L /)
     assert.ok(layout.height < 300)
+  })
+})
+
+describe('run job ordering', () => {
+  it('orders the job strip by dependency, not alphabetically', () => {
+    const jobs = [
+      { job: { key: 'build', needs: [] } },
+      { job: { key: 'deploy', needs: ['test'] } },
+      { job: { key: 'test', needs: ['build'] } },
+    ]
+
+    assert.deepEqual(
+      orderJobsByDependency(jobs).map(({ job }) => job.key),
+      ['build', 'test', 'deploy'],
+    )
+  })
+
+  it('keeps the given order when the graph cannot be laid out', () => {
+    const jobs = [
+      { job: { key: 'a', needs: ['b'] } },
+      { job: { key: 'b', needs: ['a'] } },
+    ]
+
+    assert.deepEqual(
+      orderJobsByDependency(jobs).map(({ job }) => job.key),
+      ['a', 'b'],
+    )
   })
 })
