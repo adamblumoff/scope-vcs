@@ -48,9 +48,8 @@ async fn main() -> anyhow::Result<()> {
             println!(r#"{{"terminated":{terminated}}}"#);
         }
         "validate-workflow-catalogs" => {
-            verify_schema(database_url).await?;
-            let state = api::AppState::from_env().await?;
-            let validated = state.validate_repository_workflow_catalogs().await?;
+            let validated =
+                api::validate_repository_workflow_catalogs_for_maintenance(database_url).await?;
             println!(r#"{{"workflowCatalogsValidated":{validated}}}"#);
         }
         "verify" => {
