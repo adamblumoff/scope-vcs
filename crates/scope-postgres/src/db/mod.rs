@@ -50,8 +50,8 @@ mod request_activity_migration_tests;
 #[cfg(test)]
 mod request_submission_migration_tests;
 pub use cache_service::{
-    CacheCommitResult, CacheObjectRecord, CachePrepareResult, CacheUploadRecord,
-    PendingCacheDeletion,
+    CacheCommitResult, CacheObjectRecord, CachePrepareResult, CacheRestoreKind, CacheRestoreRecord,
+    CacheUploadRecord, PendingCacheDeletion,
 };
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;

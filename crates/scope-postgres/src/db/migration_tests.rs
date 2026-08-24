@@ -54,6 +54,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0026_repository_landing_files",
     "m0027_run_creation_sequence",
     "m0028_repository_workflow_catalogs",
+    "m0029_exact_compatible_caches",
 ];
 
 pub(super) async fn isolated_database() -> (

@@ -18,9 +18,9 @@ use axum::{
     response::IntoResponse,
 };
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptHeartbeatResponse, AttemptRecoveryStatusResponse, AttemptStatusResponse,
-    AttemptStepStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
+    AppendAttemptLogRequest, AttemptCacheKeyMaterial, AttemptConclusionRequest,
+    AttemptHeartbeatRequest, AttemptHeartbeatResponse, AttemptRecoveryStatusResponse,
+    AttemptStatusResponse, AttemptStepStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
     CompleteAttemptStepRequest, ReportAttemptCacheFinalizationsRequest,
     ReportAttemptCachePreparationsRequest, RunChangeKind, RunJobResponse, StepConclusionRequest,
 };
@@ -51,7 +51,7 @@ pub(crate) async fn claim(
         .await?;
     publish_claim_status_change(&state, &claim).await;
     let job_definition = claimed_job_definition(&claim);
-    let cache_grant = issue_cache_grant(&state, &claim)?;
+    let cache_grant = issue_cache_grant(&state, &claim, &[])?;
     Ok(Json(ClaimRuntimeResponse {
         attempt_token,
         lease_expires_at_unix,
@@ -89,7 +89,7 @@ pub(crate) async fn heartbeat(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(attempt_id): Path<String>,
-    Json(_input): Json<AttemptHeartbeatRequest>,
+    Json(input): Json<AttemptHeartbeatRequest>,
 ) -> Result<Json<AttemptHeartbeatResponse>, ApiError> {
     let token_hash = attempt_token_hash(&headers)?;
     let now = unix_now()?;
@@ -103,7 +103,7 @@ pub(crate) async fn heartbeat(
         .runs()
         .authenticate_attempt(&attempt_id, &token_hash, now)
         .await?;
-    let cache_grant = issue_cache_grant(&state, &claim)?;
+    let cache_grant = issue_cache_grant(&state, &claim, &input.cache_keys)?;
     Ok(Json(AttemptHeartbeatResponse {
         status: attempt_status(&claim),
         cache_grant,
@@ -378,22 +378,44 @@ fn claimed_job_definition(
 fn issue_cache_grant(
     state: &AppState,
     claim: &scope_postgres::db::DispatchClaim,
+    materials: &[AttemptCacheKeyMaterial],
 ) -> Result<String, ApiError> {
     let job_definition = claimed_job_definition(claim);
     let namespace = CacheNamespace::workflow(claim.run.workflow.path(), &claim.job.key);
-    let allowed_identity_digests = job_definition
-        .caches()
+    let mut names = std::collections::BTreeSet::new();
+    let allowed_caches = materials
         .iter()
-        .map(|cache| {
-            let digest = CacheIdentity::new(
+        .map(|material| {
+            if !names.insert(material.cache_name.as_str()) {
+                return Err(ApiError::bad_request(
+                    "cache key material contains a duplicate name",
+                ));
+            }
+            let cache = job_definition
+                .caches()
+                .iter()
+                .find(|cache| cache.as_str() == material.cache_name)
+                .ok_or_else(|| {
+                    ApiError::bad_request("cache key material does not belong to the claimed job")
+                })?;
+            let identity = CacheIdentity::new(
                 claim.run.workflow.repository_id(),
                 namespace.clone(),
                 cache.clone(),
-                &claim.job.pinned_container_image,
                 CachePlatform::LinuxAmd64,
-            )?
-            .digest();
-            scope_cache_domain::CacheDigest::parse(digest).map_err(ApiError::bad_request)
+                &material.compatibility_inputs_digest,
+                &material.exact_inputs_digest,
+            )?;
+            Ok(scope_cache_contract::AuthorizedCache {
+                exact_identity_digest: scope_cache_domain::CacheDigest::parse(
+                    identity.exact_digest(),
+                )
+                .map_err(ApiError::bad_request)?,
+                compatibility_group_digest: scope_cache_domain::CacheDigest::parse(
+                    identity.compatibility_group_digest(),
+                )
+                .map_err(ApiError::bad_request)?,
+            })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
     state
@@ -402,7 +424,7 @@ fn issue_cache_grant(
             claim.attempt.id.clone(),
             scope_cache_domain::RepositoryId::parse(claim.run.workflow.repository_id().to_string())
                 .map_err(ApiError::bad_request)?,
-            allowed_identity_digests,
+            allowed_caches,
             claim.attempt.lease_expires_at_unix,
         )
         .map_err(|error| ApiError::internal_message(error.to_string()))

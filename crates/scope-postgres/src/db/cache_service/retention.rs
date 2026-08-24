@@ -6,7 +6,8 @@ impl CacheStore {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let rows = tx
             .query_all(statement(
-                "SELECT repository_id, identity_digest, checksum_sha256, version,
+                "SELECT repository_id, identity_digest, compatibility_group_digest,
+                        checksum_sha256,
                         last_accessed_at_unix, expires_at_unix
                  FROM scope_cache_references
                  WHERE expires_at_unix <= $1
@@ -76,8 +77,9 @@ impl CacheStore {
                  UPDATE scope_cache_uploads u SET state = 'deleting'
                  FROM due WHERE u.upload_id = due.upload_id
                  RETURNING u.upload_id, u.repository_id, u.identity_digest,
-                    u.checksum_sha256, u.storage_backend, u.object_key, u.size_bytes,
-                    u.expected_reference_version, u.state, u.created_at_unix, u.expires_at_unix",
+                    u.compatibility_group_digest, u.checksum_sha256,
+                    u.storage_backend, u.object_key, u.size_bytes,
+                    u.state, u.created_at_unix, u.expires_at_unix",
                 vec![to_i64(now_unix)?.into(), to_i64(limit)?.into()],
             ))
             .await
@@ -280,7 +282,7 @@ pub(super) async fn expire_repository_references(
 ) -> Result<(), PostgresError> {
     let rows = tx
         .query_all(statement(
-            "SELECT identity_digest, checksum_sha256, version,
+            "SELECT identity_digest, compatibility_group_digest, checksum_sha256,
                     last_accessed_at_unix, expires_at_unix
              FROM scope_cache_references
              WHERE repository_id = $1 AND expires_at_unix <= $2
@@ -342,7 +344,7 @@ pub(super) async fn make_repository_room(
         }
         let victim = tx
             .query_one(statement(
-                "SELECT identity_digest, checksum_sha256, version,
+                "SELECT identity_digest, compatibility_group_digest, checksum_sha256,
                         last_accessed_at_unix, expires_at_unix
                  FROM scope_cache_references
                  WHERE repository_id = $1 AND identity_digest <> $2

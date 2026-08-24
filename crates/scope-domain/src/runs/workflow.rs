@@ -1,4 +1,4 @@
-use super::cache::{CacheError, WorkflowCache};
+use super::cache::{CacheError, CacheKeyInputs, WorkflowCache};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,7 +20,7 @@ pub const MAX_STEP_COMMAND_BYTES: usize = 64 * 1024;
 pub const MAX_WORKFLOW_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
 
 const WORKFLOW_PATH_PREFIX: &str = "/.scope/runs/";
-const WORKFLOW_DIGEST_VERSION: u8 = 5;
+const WORKFLOW_DIGEST_VERSION: u8 = 6;
 
 #[derive(Debug, Error)]
 pub enum WorkflowError {
@@ -66,6 +66,8 @@ pub enum WorkflowError {
     DuplicateCacheName(String),
     #[error("workflow job cache path {0:?} overlaps another cache mount")]
     OverlappingCachePath(String),
+    #[error("workflow cache environment input {0:?} is not declared by the workflow job")]
+    UndeclaredCacheEnvironmentInput(String),
     #[error(
         "workflow job cannot define more than {MAX_WORKFLOW_ENVIRONMENT_VARIABLES} environment variables"
     )]
@@ -284,6 +286,7 @@ impl WorkflowJob {
         container: ContainerSpec,
         timeout_seconds: u64,
         mut caches: Vec<WorkflowCache>,
+        environment: BTreeMap<String, String>,
         steps: Vec<WorkflowStep>,
     ) -> Result<Self, WorkflowError> {
         if timeout_seconds == 0 || timeout_seconds > MAX_WORKFLOW_TIMEOUT_SECONDS {
@@ -327,6 +330,20 @@ impl WorkflowJob {
                 ));
             }
         }
+        validate_environment(&environment)?;
+        for input in caches.iter().flat_map(|cache| {
+            cache
+                .compatibility_inputs()
+                .environment()
+                .iter()
+                .chain(cache.exact_inputs().environment())
+        }) {
+            if !environment.contains_key(input) {
+                return Err(WorkflowError::UndeclaredCacheEnvironmentInput(
+                    input.clone(),
+                ));
+            }
+        }
         if steps.is_empty() {
             return Err(WorkflowError::MissingSteps);
         }
@@ -345,18 +362,9 @@ impl WorkflowJob {
             container,
             timeout_seconds,
             caches,
-            environment: BTreeMap::new(),
+            environment,
             steps,
         })
-    }
-
-    pub fn with_environment(
-        mut self,
-        environment: BTreeMap<String, String>,
-    ) -> Result<Self, WorkflowError> {
-        validate_environment(&environment)?;
-        self.environment = environment;
-        Ok(self)
     }
 
     pub fn id(&self) -> &WorkflowJobId {
@@ -433,6 +441,16 @@ struct PersistedWorkflowJob {
 struct PersistedWorkflowCache {
     name: String,
     path: String,
+    format: String,
+    compatibility: PersistedCacheKeyInputs,
+    exact: PersistedCacheKeyInputs,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedCacheKeyInputs {
+    files: Vec<String>,
+    environment: Vec<String>,
 }
 
 impl<'de> Deserialize<'de> for WorkflowJob {
@@ -452,7 +470,18 @@ impl<'de> Deserialize<'de> for WorkflowJob {
         let caches = job
             .caches
             .into_iter()
-            .map(|cache| WorkflowCache::new(cache.name, cache.path))
+            .map(|cache| {
+                WorkflowCache::new(
+                    cache.name,
+                    cache.path,
+                    cache.format,
+                    CacheKeyInputs::new(
+                        cache.compatibility.files,
+                        cache.compatibility.environment,
+                    )?,
+                    CacheKeyInputs::new(cache.exact.files, cache.exact.environment)?,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(D::Error::custom)?;
         let steps = job
@@ -461,10 +490,16 @@ impl<'de> Deserialize<'de> for WorkflowJob {
             .map(|step| WorkflowStep::new(step.name, step.run))
             .collect::<Result<Vec<_>, _>>()
             .map_err(D::Error::custom)?;
-        let environment = job.environment;
-        WorkflowJob::new(id, needs, container, job.timeout_seconds, caches, steps)
-            .and_then(|job| job.with_environment(environment))
-            .map_err(D::Error::custom)
+        WorkflowJob::new(
+            id,
+            needs,
+            container,
+            job.timeout_seconds,
+            caches,
+            job.environment,
+            steps,
+        )
+        .map_err(D::Error::custom)
     }
 }
 
@@ -498,16 +533,33 @@ impl<'de> Deserialize<'de> for CompiledWorkflow {
                 let caches = job
                     .caches
                     .into_iter()
-                    .map(|cache| WorkflowCache::new(cache.name, cache.path))
+                    .map(|cache| {
+                        WorkflowCache::new(
+                            cache.name,
+                            cache.path,
+                            cache.format,
+                            CacheKeyInputs::new(
+                                cache.compatibility.files,
+                                cache.compatibility.environment,
+                            )?,
+                            CacheKeyInputs::new(cache.exact.files, cache.exact.environment)?,
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 let steps = job
                     .steps
                     .into_iter()
                     .map(|step| WorkflowStep::new(step.name, step.run))
                     .collect::<Result<Vec<_>, _>>()?;
-                let environment = job.environment;
-                WorkflowJob::new(id, needs, container, job.timeout_seconds, caches, steps)
-                    .and_then(|job| job.with_environment(environment))
+                WorkflowJob::new(
+                    id,
+                    needs,
+                    container,
+                    job.timeout_seconds,
+                    caches,
+                    job.environment,
+                    steps,
+                )
             })
             .collect::<Result<Vec<_>, WorkflowError>>()
             .map_err(D::Error::custom)?;
@@ -743,6 +795,7 @@ mod tests {
             ContainerSpec::new(format!("rust@sha256:{DIGEST}")).unwrap(),
             600,
             vec![],
+            BTreeMap::new(),
             vec![WorkflowStep::new("Build", "cargo build").unwrap()],
         )
         .unwrap();
@@ -752,6 +805,7 @@ mod tests {
             ContainerSpec::new(format!("rust@sha256:{DIGEST}")).unwrap(),
             600,
             vec![],
+            BTreeMap::new(),
             vec![WorkflowStep::new("Test", "cargo test").unwrap()],
         )
         .unwrap();
@@ -763,5 +817,31 @@ mod tests {
         .unwrap();
         assert_eq!(workflow.serial_jobs()[0].id().as_str(), "build");
         assert_eq!(workflow.serial_jobs()[1].id().as_str(), "test");
+    }
+
+    #[test]
+    fn job_construction_rejects_undeclared_cache_environment_inputs() {
+        let cache = WorkflowCache::new(
+            "cargo",
+            "/scope/cache/cargo",
+            "v1",
+            CacheKeyInputs::new(vec![], vec!["CARGO_INCREMENTAL".to_string()]).unwrap(),
+            CacheKeyInputs::new(vec![], vec![]).unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            WorkflowJob::new(
+                WorkflowJobId::parse("build").unwrap(),
+                vec![],
+                ContainerSpec::new(format!("rust@sha256:{DIGEST}")).unwrap(),
+                600,
+                vec![cache],
+                BTreeMap::new(),
+                vec![WorkflowStep::new("Build", "cargo build").unwrap()],
+            ),
+            Err(WorkflowError::UndeclaredCacheEnvironmentInput(name))
+                if name == "CARGO_INCREMENTAL"
+        ));
     }
 }

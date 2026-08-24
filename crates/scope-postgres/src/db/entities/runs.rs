@@ -455,7 +455,8 @@ pub mod run_attempt_cache {
     impl Model {
         pub fn from_domain(observation: &AttemptCacheObservation) -> Result<Self, PostgresError> {
             let (preparation, cold_reason) = match observation.preparation {
-                CachePreparation::Warm => ("warm".to_string(), None),
+                CachePreparation::Exact => ("exact".to_string(), None),
+                CachePreparation::Compatible => ("compatible".to_string(), None),
                 CachePreparation::Cold { reason } => {
                     ("cold".to_string(), Some(encode_enum(reason)?))
                 }
@@ -479,7 +480,8 @@ pub mod run_attempt_cache {
 
         pub fn try_into_domain(self) -> Result<AttemptCacheObservation, PostgresError> {
             let preparation = match (self.preparation.as_str(), self.cold_reason) {
-                ("warm", None) => CachePreparation::Warm,
+                ("exact", None) => CachePreparation::Exact,
+                ("compatible", None) => CachePreparation::Compatible,
                 ("cold", Some(reason)) => CachePreparation::Cold {
                     reason: decode_enum::<CacheColdReason>(reason)?,
                 },

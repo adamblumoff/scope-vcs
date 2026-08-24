@@ -26,6 +26,7 @@ mod m0025_visibility_change_sets;
 mod m0026_repository_landing_files;
 mod m0027_run_creation_sequence;
 mod m0028_repository_workflow_catalogs;
+mod m0029_exact_compatible_caches;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -126,6 +127,10 @@ fn inventory() -> Vec<MigrationSpec> {
         spec(m0027_run_creation_sequence::Migration, MaintenanceRequired),
         spec(
             m0028_repository_workflow_catalogs::Migration,
+            MaintenanceRequired,
+        ),
+        spec(
+            m0029_exact_compatible_caches::Migration,
             MaintenanceRequired,
         ),
     ]

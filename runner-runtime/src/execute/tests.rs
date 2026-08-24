@@ -533,6 +533,7 @@ fn job(steps: &[(&str, &str)]) -> WorkflowJob {
         ContainerSpec::new(format!("test@sha256:{}", "0".repeat(64))).unwrap(),
         30,
         Vec::new(),
+        Default::default(),
         steps
             .iter()
             .map(|(name, run)| WorkflowStep::new(*name, *run).unwrap())

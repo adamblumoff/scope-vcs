@@ -4,13 +4,22 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RestoreCacheRequest {
-    pub identity_digest: CacheDigest,
+    pub exact_identity_digest: CacheDigest,
+    pub compatibility_group_digest: CacheDigest,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CacheRestoreSource {
+    Exact,
+    Compatible,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "result", rename_all = "kebab-case")]
 pub enum RestoreCacheResponse {
     Hit {
+        source: CacheRestoreSource,
         object_digest: CacheDigest,
         size_bytes: u64,
         download_url: String,
@@ -21,7 +30,8 @@ pub enum RestoreCacheResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PrepareCacheUploadRequest {
-    pub identity_digest: CacheDigest,
+    pub exact_identity_digest: CacheDigest,
+    pub compatibility_group_digest: CacheDigest,
     pub object_digest: CacheDigest,
     pub size_bytes: u64,
 }
@@ -50,7 +60,7 @@ pub struct CommitCacheUploadRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitCacheUploadResponse {
-    pub identity_digest: CacheDigest,
+    pub exact_identity_digest: CacheDigest,
     pub object_digest: CacheDigest,
     pub expires_at_unix: u64,
 }
@@ -74,13 +84,15 @@ mod tests {
     #[test]
     fn prepare_upload_wire_shape_carries_the_exact_content_claim() {
         let request = PrepareCacheUploadRequest {
-            identity_digest: digest('a'),
+            exact_identity_digest: digest('a'),
+            compatibility_group_digest: digest('c'),
             object_digest: digest('b'),
             size_bytes: 42,
         };
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["size_bytes"], 42);
-        assert_eq!(value["identity_digest"], "a".repeat(64));
+        assert_eq!(value["exact_identity_digest"], "a".repeat(64));
+        assert_eq!(value["compatibility_group_digest"], "c".repeat(64));
         assert_eq!(value["object_digest"], "b".repeat(64));
     }
 

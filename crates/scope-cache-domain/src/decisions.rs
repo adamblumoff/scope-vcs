@@ -8,8 +8,6 @@ pub enum PrepareUploadDecision {
     /// No upload is needed. Persist this reference to refresh its TTL or relink it.
     UseObject {
         reference: CacheReference,
-        expected_reference_version: Option<u64>,
-        superseded: Option<DeletionCandidate>,
     },
     Upload {
         lease: UploadLease,
@@ -19,6 +17,7 @@ pub enum PrepareUploadDecision {
 #[derive(Clone, Debug)]
 pub struct PrepareUpload<'a> {
     pub identity_digest: CacheDigest,
+    pub compatibility_group_digest: CacheDigest,
     pub object: &'a CacheObject,
     pub object_already_stored: bool,
     pub current_reference: Option<&'a CacheReference>,
@@ -35,30 +34,24 @@ pub fn prepare_upload(
         request.current_reference,
         request.object,
         &request.identity_digest,
+        &request.compatibility_group_digest,
     )?;
 
-    let already_available = request.object_already_stored
-        || request
-            .current_reference
-            .is_some_and(|reference| reference.object_digest() == request.object.digest());
-    if already_available {
-        let superseded = request
-            .current_reference
-            .filter(|reference| reference.object_digest() != request.object.digest())
-            .map(|reference| {
-                DeletionCandidate::after_reference_removal(reference, request.now_unix, policy)
-            })
-            .transpose()?;
+    if let Some(reference) = request.current_reference {
+        return Ok(PrepareUploadDecision::UseObject {
+            reference: reference.clone(),
+        });
+    }
+
+    if request.object_already_stored {
         return Ok(PrepareUploadDecision::UseObject {
             reference: CacheReference::point_to(
                 request.identity_digest,
+                request.compatibility_group_digest,
                 request.object,
-                request.current_reference,
                 request.now_unix,
                 policy,
             )?,
-            expected_reference_version: request.current_reference.map(CacheReference::version),
-            superseded,
         });
     }
 
@@ -70,19 +63,18 @@ pub fn prepare_upload(
         lease: UploadLease::issue(
             request.lease_id,
             request.identity_digest,
+            request.compatibility_group_digest,
             request.object,
-            request.current_reference,
             request.now_unix,
             policy,
         )?,
     })
 }
 
-/// Refresh a successful restore without changing the logical reference revision.
+/// Refresh a successful restore without changing its immutable object mapping.
 ///
-/// Access does not repoint the identity, so an upload lease prepared against the
-/// same version remains valid. The access timestamp and policy-owned TTL advance
-/// together and can be persisted as one atomic update.
+/// The access timestamp and policy-owned TTL advance together and can be
+/// persisted as one atomic update.
 pub fn access_reference(
     policy: CachePolicy,
     reference: &CacheReference,
@@ -93,13 +85,8 @@ pub fn access_reference(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommitUploadDecision {
-    Committed {
-        reference: CacheReference,
-        superseded: Option<DeletionCandidate>,
-    },
-    AlreadyCommitted {
-        reference: CacheReference,
-    },
+    Committed { reference: CacheReference },
+    AlreadyCommitted { reference: CacheReference },
 }
 
 pub fn commit_upload(
@@ -109,7 +96,12 @@ pub fn commit_upload(
     current_reference: Option<&CacheReference>,
     now_unix: u64,
 ) -> Result<CommitUploadDecision, CacheDomainError> {
-    validate_reference_scope(current_reference, uploaded_object, lease.identity_digest())?;
+    validate_reference_scope(
+        current_reference,
+        uploaded_object,
+        lease.identity_digest(),
+        lease.compatibility_group_digest(),
+    )?;
     if lease.repository_id() != uploaded_object.repository_id()
         || lease.object_digest() != uploaded_object.digest()
         || lease.size_bytes() != uploaded_object.size_bytes()
@@ -120,12 +112,13 @@ pub fn commit_upload(
     if let Some(reference) = current_reference.filter(|reference| {
         reference.object_digest() == uploaded_object.digest()
             && reference.identity_digest() == lease.identity_digest()
+            && reference.compatibility_group_digest() == lease.compatibility_group_digest()
     }) {
         return Ok(CommitUploadDecision::AlreadyCommitted {
             reference: reference.clone(),
         });
     }
-    if current_reference.map(CacheReference::version) != lease.expected_reference_version() {
+    if current_reference.is_some() {
         return Err(CacheDomainError::StaleUploadLease);
     }
     if lease.is_expired_at(now_unix) {
@@ -134,18 +127,12 @@ pub fn commit_upload(
 
     let reference = CacheReference::point_to(
         lease.identity_digest().clone(),
+        lease.compatibility_group_digest().clone(),
         uploaded_object,
-        current_reference,
         now_unix,
         policy,
     )?;
-    let superseded = current_reference
-        .map(|previous| DeletionCandidate::after_reference_removal(previous, now_unix, policy))
-        .transpose()?;
-    Ok(CommitUploadDecision::Committed {
-        reference,
-        superseded,
-    })
+    Ok(CommitUploadDecision::Committed { reference })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -230,10 +217,12 @@ fn validate_reference_scope(
     reference: Option<&CacheReference>,
     object: &CacheObject,
     identity_digest: &CacheDigest,
+    compatibility_group_digest: &CacheDigest,
 ) -> Result<(), CacheDomainError> {
     if reference.is_some_and(|reference| {
         reference.repository_id() != object.repository_id()
             || reference.identity_digest() != identity_digest
+            || reference.compatibility_group_digest() != compatibility_group_digest
     }) {
         return Err(CacheDomainError::ReferenceScopeMismatch);
     }
@@ -280,6 +269,7 @@ mod tests {
             CachePolicy,
             PrepareUpload {
                 identity_digest,
+                compatibility_group_digest: digest('f'),
                 object,
                 object_already_stored,
                 current_reference,
@@ -293,18 +283,12 @@ mod tests {
     #[test]
     fn existing_content_is_referenced_without_an_upload_and_refreshes_ttl() {
         let object = cache_object("repo-1", 'a', 100, 1);
-        let PrepareUploadDecision::UseObject {
-            reference,
-            expected_reference_version,
-            superseded,
-        } = upload(&object, digest('b'), None, true, 100, 10).unwrap()
+        let PrepareUploadDecision::UseObject { reference } =
+            upload(&object, digest('b'), None, true, 100, 10).unwrap()
         else {
             panic!("expected existing object to be reused");
         };
         assert_eq!(reference.object_digest(), object.digest());
-        assert_eq!(reference.version(), 1);
-        assert_eq!(expected_reference_version, None);
-        assert_eq!(superseded, None);
         assert_eq!(reference.updated_at_unix(), 10);
         assert_eq!(
             reference.expires_at_unix(),
@@ -313,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn access_refreshes_ttl_without_changing_identity_object_or_version() {
+    fn access_refreshes_ttl_without_changing_identity_or_object() {
         let object = cache_object("repo-1", 'a', 100, 1);
         let PrepareUploadDecision::UseObject { reference, .. } =
             upload(&object, digest('b'), None, true, 100, 10).unwrap()
@@ -325,7 +309,6 @@ mod tests {
         assert_eq!(refreshed.repository_id(), reference.repository_id());
         assert_eq!(refreshed.identity_digest(), reference.identity_digest());
         assert_eq!(refreshed.object_digest(), reference.object_digest());
-        assert_eq!(refreshed.version(), reference.version());
         assert_eq!(refreshed.updated_at_unix(), 20);
         assert_eq!(
             refreshed.expires_at_unix(),
@@ -338,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn reusing_a_different_stored_object_marks_the_old_object_for_deletion() {
+    fn an_existing_exact_identity_is_immutable() {
         let first = cache_object("repo-1", 'a', 100, 1);
         let PrepareUploadDecision::UseObject {
             reference: first_reference,
@@ -348,11 +331,7 @@ mod tests {
             unreachable!();
         };
         let replacement = cache_object("repo-1", 'c', 100, 20);
-        let PrepareUploadDecision::UseObject {
-            reference,
-            expected_reference_version,
-            superseded,
-        } = upload(
+        let PrepareUploadDecision::UseObject { reference } = upload(
             &replacement,
             digest('b'),
             Some(&first_reference),
@@ -360,20 +339,11 @@ mod tests {
             200,
             20,
         )
-        .unwrap()
-        else {
+        .unwrap() else {
             unreachable!();
         };
 
-        assert_eq!(reference.version(), 2);
-        assert_eq!(reference.object_digest(), replacement.digest());
-        assert_eq!(expected_reference_version, Some(1));
-        let superseded = superseded.expect("old object must be considered for deletion");
-        assert_eq!(superseded.object_digest(), first.digest());
-        assert_eq!(
-            superseded.eligible_after_unix(),
-            20 + DELETION_GRACE_SECONDS
-        );
+        assert_eq!(reference.object_digest(), first.digest());
     }
 
     #[test]
@@ -407,14 +377,11 @@ mod tests {
         else {
             unreachable!();
         };
-        let CommitUploadDecision::Committed {
-            reference,
-            superseded,
-        } = commit_upload(CachePolicy, &lease, &object, None, 20).unwrap()
+        let CommitUploadDecision::Committed { reference } =
+            commit_upload(CachePolicy, &lease, &object, None, 20).unwrap()
         else {
             unreachable!();
         };
-        assert!(superseded.is_none());
 
         assert!(matches!(
             commit_upload(
@@ -453,52 +420,27 @@ mod tests {
     }
 
     #[test]
-    fn commit_rejects_a_lease_when_another_writer_advanced_the_reference() {
-        let original = cache_object("repo-1", 'a', 100, 1);
-        let PrepareUploadDecision::UseObject {
-            reference: original_reference,
-            ..
-        } = upload(&original, digest('b'), None, true, 100, 10).unwrap()
+    fn commit_rejects_a_losing_lease_after_the_exact_identity_is_published() {
+        let replacement = cache_object("repo-1", 'c', 100, 20);
+        let PrepareUploadDecision::Upload { lease } =
+            upload(&replacement, digest('b'), None, false, 100, 20).unwrap()
         else {
             unreachable!();
         };
-        let replacement = cache_object("repo-1", 'c', 100, 20);
-        let PrepareUploadDecision::Upload { lease } = upload(
-            &replacement,
-            digest('b'),
-            Some(&original_reference),
-            false,
-            100,
-            20,
-        )
-        .unwrap() else {
-            unreachable!();
-        };
-        assert_eq!(lease.expected_reference_version(), Some(1));
-
         let winner = cache_object("repo-1", 'd', 100, 21);
         let PrepareUploadDecision::UseObject {
-            reference: advanced_reference,
+            reference: published_reference,
             ..
-        } = upload(
-            &winner,
-            digest('b'),
-            Some(&original_reference),
-            true,
-            200,
-            21,
-        )
-        .unwrap()
+        } = upload(&winner, digest('b'), None, true, 200, 21).unwrap()
         else {
             unreachable!();
         };
-        assert_eq!(advanced_reference.version(), 2);
         assert_eq!(
             commit_upload(
                 CachePolicy,
                 &lease,
                 &replacement,
-                Some(&advanced_reference),
+                Some(&published_reference),
                 22,
             ),
             Err(CacheDomainError::StaleUploadLease)

@@ -77,9 +77,9 @@ impl From<scope_cache_domain::CacheDomainError> for PostgresError {
             CacheDomainError::RepositoryBudgetExceeded { .. } => {
                 PostgresErrorKind::ResourceExhausted
             }
-            CacheDomainError::UploadLeaseExpired
-            | CacheDomainError::StaleUploadLease
-            | CacheDomainError::ReferenceVersionOverflow => PostgresErrorKind::Conflict,
+            CacheDomainError::UploadLeaseExpired | CacheDomainError::StaleUploadLease => {
+                PostgresErrorKind::Conflict
+            }
             CacheDomainError::InvalidReferenceExpiry
             | CacheDomainError::InvalidUploadLeaseExpiry => PostgresErrorKind::Internal,
             _ => PostgresErrorKind::InvalidInput,

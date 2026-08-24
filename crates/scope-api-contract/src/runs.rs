@@ -243,7 +243,8 @@ impl From<CacheColdReason> for RepositoryRunCacheColdReason {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(tag = "kind", rename_all = "kebab-case"))]
 pub enum RepositoryRunCachePreparation {
-    Warm,
+    Exact,
+    Compatible,
     Cold {
         reason: RepositoryRunCacheColdReason,
     },
@@ -252,7 +253,8 @@ pub enum RepositoryRunCachePreparation {
 impl From<CachePreparation> for RepositoryRunCachePreparation {
     fn from(preparation: CachePreparation) -> Self {
         match preparation {
-            CachePreparation::Warm => Self::Warm,
+            CachePreparation::Exact => Self::Exact,
+            CachePreparation::Compatible => Self::Compatible,
             CachePreparation::Cold { reason } => Self::Cold {
                 reason: reason.into(),
             },
@@ -437,7 +439,16 @@ pub struct AttemptStepStatusResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AttemptHeartbeatRequest {}
+pub struct AttemptHeartbeatRequest {
+    pub cache_keys: Vec<AttemptCacheKeyMaterial>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AttemptCacheKeyMaterial {
+    pub cache_name: String,
+    pub compatibility_inputs_digest: String,
+    pub exact_inputs_digest: String,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AttemptCacheFinalizationRequest {

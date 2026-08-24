@@ -48,14 +48,15 @@ impl GrantVerifier {
     }
 }
 
-pub(crate) fn require_identity(
+pub(crate) fn require_cache(
     claims: &SignedCacheGrantClaims,
-    identity: &CacheDigest,
+    exact_identity: &CacheDigest,
+    compatibility_group: &CacheDigest,
     now_unix: u64,
 ) -> Result<(), ServiceError> {
-    if !claims.allows_identity(identity, now_unix) {
+    if !claims.allows_cache(exact_identity, compatibility_group, now_unix) {
         return Err(ServiceError::forbidden(
-            "cache grant does not allow this logical identity",
+            "cache grant does not allow this exact identity and compatibility group",
         ));
     }
     Ok(())
@@ -66,16 +67,21 @@ mod tests {
     use super::*;
     use axum::http::{HeaderValue, header::AUTHORIZATION};
     use jsonwebtoken::{EncodingKey, Header, encode};
+    use scope_cache_contract::AuthorizedCache;
     use scope_cache_domain::RepositoryId;
 
     #[test]
     fn verifier_enforces_signature_backend_expiry_and_identity() {
         let verifier = GrantVerifier::new(TEST_PUBLIC_KEY, "test-local".to_string()).unwrap();
         let identity = CacheDigest::parse("a".repeat(64)).unwrap();
+        let group = CacheDigest::parse("c".repeat(64)).unwrap();
         let claims = SignedCacheGrantClaims {
             attempt_id: "attempt-1".to_string(),
             repository_id: RepositoryId::parse("repo-1").unwrap(),
-            allowed_identity_digests: vec![identity.clone()],
+            allowed_caches: vec![AuthorizedCache {
+                exact_identity_digest: identity.clone(),
+                compatibility_group_digest: group.clone(),
+            }],
             backend: "test-local".to_string(),
             expires_at_unix: 100,
         };
@@ -92,10 +98,16 @@ mod tests {
         );
 
         let verified = verifier.verify(&headers, 99).unwrap();
-        require_identity(&verified, &identity, 99).unwrap();
+        require_cache(&verified, &identity, &group, 99).unwrap();
         assert!(verifier.verify(&headers, 100).is_err());
         assert!(
-            require_identity(&verified, &CacheDigest::parse("b".repeat(64)).unwrap(), 99,).is_err()
+            require_cache(
+                &verified,
+                &CacheDigest::parse("b".repeat(64)).unwrap(),
+                &group,
+                99,
+            )
+            .is_err()
         );
         assert!(
             GrantVerifier::new(TEST_PUBLIC_KEY, "other".to_string())

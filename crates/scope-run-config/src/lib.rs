@@ -1,5 +1,5 @@
 use scope_domain::runs::{
-    cache::WorkflowCache,
+    cache::{CacheKeyInputs, WorkflowCache},
     catalog::RepositoryWorkflowCatalog,
     workflow::{
         CompiledWorkflow, ContainerSpec, WorkflowError, WorkflowIdentity, WorkflowJob,
@@ -80,7 +80,7 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
     let caches = raw
         .caches
         .into_iter()
-        .map(|cache| WorkflowCache::new(cache.name, cache.path).map_err(WorkflowError::from))
+        .map(compile_cache)
         .collect::<Result<Vec<_>, _>>()?;
     let environment = raw.environment;
     let jobs = raw
@@ -105,9 +105,7 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
             let job_caches = match job.caches {
                 Some(caches) => caches
                     .into_iter()
-                    .map(|cache| {
-                        WorkflowCache::new(cache.name, cache.path).map_err(WorkflowError::from)
-                    })
+                    .map(compile_cache)
                     .collect::<Result<Vec<_>, _>>()?,
                 None => caches.clone(),
             };
@@ -124,9 +122,9 @@ pub fn parse_workflow(path: &str, bytes: &[u8]) -> Result<ParsedWorkflow, RunCon
                 job_container,
                 job_timeout_seconds,
                 job_caches,
+                job_environment,
                 steps,
             )
-            .and_then(|job| job.with_environment(job_environment))
             .map_err(RunConfigError::from)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -206,6 +204,29 @@ struct RawWorkflow {
 struct RawCache {
     name: String,
     path: String,
+    format: String,
+    compatibility: RawCacheKeyInputs,
+    exact: RawCacheKeyInputs,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCacheKeyInputs {
+    #[serde(default)]
+    files: Vec<String>,
+    #[serde(default)]
+    environment: Vec<String>,
+}
+
+fn compile_cache(cache: RawCache) -> Result<WorkflowCache, WorkflowError> {
+    WorkflowCache::new(
+        cache.name,
+        cache.path,
+        cache.format,
+        CacheKeyInputs::new(cache.compatibility.files, cache.compatibility.environment)?,
+        CacheKeyInputs::new(cache.exact.files, cache.exact.environment)?,
+    )
+    .map_err(WorkflowError::from)
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,8 +330,14 @@ timeout: 20m
 caches:
   - name: cargo-target
     path: /scope/cache/cargo-target
+    format: v1
+    compatibility: { files: [], environment: [] }
+    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }
   - name: cargo
     path: /scope/cache/cargo
+    format: v1
+    compatibility: { files: [], environment: [] }
+    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }
 env:
   RUSTUP_TOOLCHAIN: stable
 jobs:
@@ -360,8 +387,8 @@ on: { push: true, manual: true }
 container: { image: "rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 timeout: 1200s
 caches:
-  - { name: cargo, path: /scope/cache/cargo }
-  - { name: cargo-target, path: /scope/cache/cargo-target }
+  - { name: cargo, path: /scope/cache/cargo, format: v1, compatibility: { files: [], environment: [] }, exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] } }
+  - { name: cargo-target, path: /scope/cache/cargo-target, format: v1, compatibility: { files: [], environment: [] }, exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] } }
 env: { TEST_MODE: strict, RUSTUP_TOOLCHAIN: stable }
 jobs:
   checks:
@@ -385,8 +412,8 @@ jobs:
     fn cache_yaml_order_does_not_change_the_revision_digest() {
         let reversed =
             WORKFLOW.replace(
-                "  - name: cargo-target\n    path: /scope/cache/cargo-target\n  - name: cargo\n    path: /scope/cache/cargo",
-                "  - name: cargo\n    path: /scope/cache/cargo\n  - name: cargo-target\n    path: /scope/cache/cargo-target",
+                "  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }",
+                "  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }",
             );
         let first = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes())
             .unwrap()
@@ -451,7 +478,7 @@ jobs:
     #[test]
     fn caches_default_to_empty_and_reject_invalid_or_ambiguous_mounts() {
         let missing = WORKFLOW.replace(
-            "caches:\n  - name: cargo-target\n    path: /scope/cache/cargo-target\n  - name: cargo\n    path: /scope/cache/cargo\n",
+            "caches:\n  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n",
             "",
         );
         assert!(
@@ -481,7 +508,7 @@ jobs:
         ));
 
         let old_list = WORKFLOW.replace(
-            "  - name: cargo-target\n    path: /scope/cache/cargo-target\n  - name: cargo\n    path: /scope/cache/cargo",
+            "  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }",
             "  - cargo-target\n  - cargo",
         );
         assert!(matches!(
@@ -498,6 +525,17 @@ jobs:
             Err(RunConfigError::InvalidWorkflow(
                 WorkflowError::OverlappingCachePath(_)
             ))
+        ));
+
+        let undeclared_environment = WORKFLOW.replace(
+            "environment: [RUSTUP_TOOLCHAIN]",
+            "environment: [UNDECLARED_CACHE_KEY]",
+        );
+        assert!(matches!(
+            parse_workflow("/.scope/runs/test.yml", undeclared_environment.as_bytes()),
+            Err(RunConfigError::InvalidWorkflow(
+                WorkflowError::UndeclaredCacheEnvironmentInput(name)
+            )) if name == "UNDECLARED_CACHE_KEY"
         ));
     }
 
@@ -526,7 +564,7 @@ name: Graph
 on: { manual: true }
 container: { image: rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa }
 timeout: 20m
-caches: [{ name: cargo, path: /scope/cache/cargo }]
+caches: [{ name: cargo, path: /scope/cache/cargo, format: v1, compatibility: { files: [], environment: [] }, exact: { files: [], environment: [] } }]
 env: { SHARED: workflow, WORKFLOW_ONLY: yes }
 jobs:
   backend:

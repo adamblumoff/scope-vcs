@@ -18,7 +18,7 @@ const caches: RepoRunCache[] = [
       workflow_path: '/.scope/runs/checks.yml',
       job_key: 'backend',
       identity_digest: 'a'.repeat(64),
-      preparation: { kind: 'warm' },
+      preparation: { kind: 'exact' },
       prepare_ms: 200,
       final_state: 'ready',
       finalize_ms: 100,
@@ -38,6 +38,19 @@ const caches: RepoRunCache[] = [
     },
   },
   {
+    name: 'cargo-target',
+    path: '/scope/cache/cargo-target',
+    observation: {
+      workflow_path: '/.scope/runs/checks.yml',
+      job_key: 'backend',
+      identity_digest: 'c'.repeat(64),
+      preparation: { kind: 'compatible' },
+      prepare_ms: 900,
+      final_state: 'ready',
+      finalize_ms: 50,
+    },
+  },
+  {
     name: 'playwright',
     path: '/root/.cache/ms-playwright',
     observation: null,
@@ -50,11 +63,11 @@ describe('run attempt environment model', () => {
       cold: 1,
       prepareMs: 1_100,
       unavailable: 1,
-      warm: 1,
+      warm: 2,
     })
     assert.equal(
       cacheSummaryLabel(caches),
-      '1 warm · 1 cold · 1 not reported · prepared in 1.1s',
+      '2 warm · 1 cold · 1 not reported · prepared in 1.1s',
     )
   })
 
@@ -64,15 +77,21 @@ describe('run attempt environment model', () => {
       'No reusable entry for this identity · pending',
     )
     assert.equal(
-      cacheExplanation(caches[2]!),
+      cacheExplanation(caches[3]!),
       'Cache facts were not reported for this attempt.',
     )
-    assert.equal(cacheTimingLabel(caches[2]!), 'unavailable')
+    assert.equal(cacheExplanation(caches[0]!), 'Exact entry found · ready')
+    assert.equal(
+      cacheExplanation(caches[2]!),
+      'Compatible fallback found · ready',
+    )
+    assert.equal(cacheTimingLabel(caches[3]!), 'unavailable')
     assert.equal(cacheStateClass(caches[0]!), 'text-success')
     assert.equal(cacheStateClass(caches[1]!), 'text-warning')
-    assert.equal(cacheStateClass(caches[2]!), 'text-muted-foreground')
+    assert.equal(cacheStateClass(caches[2]!), 'text-success')
+    assert.equal(cacheStateClass(caches[3]!), 'text-muted-foreground')
     assert.equal(
-      cacheSummaryLabel([caches[2]!]),
+      cacheSummaryLabel([caches[3]!]),
       '1 not reported',
     )
   })

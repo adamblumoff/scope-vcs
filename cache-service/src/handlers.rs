@@ -1,4 +1,4 @@
-use crate::{AppState, auth::require_identity, error::ServiceError};
+use crate::{AppState, auth::require_cache, error::ServiceError};
 use axum::{
     Json,
     extract::State,
@@ -36,32 +36,46 @@ pub(crate) async fn restore(
 ) -> Result<Json<RestoreCacheResponse>, ServiceError> {
     let now = unix_now()?;
     let claims = authorize_grant(&state, &headers, now).await?;
-    require_identity(&claims, &request.identity_digest, now)?;
+    require_cache(
+        &claims,
+        &request.exact_identity_digest,
+        &request.compatibility_group_digest,
+        now,
+    )?;
     let signed_url_ttl = signed_url_ttl(&claims, now)?;
     let object = state
         .metadata
         .caches()
         .restore(
             claims.repository_id.as_str(),
-            request.identity_digest.as_str(),
+            request.exact_identity_digest.as_str(),
+            request.compatibility_group_digest.as_str(),
             now,
         )
         .await?;
     let Some(object) = object else {
         return Ok(Json(RestoreCacheResponse::Miss));
     };
-    if object.storage_backend != state.backend.as_ref() {
+    if object.object.storage_backend != state.backend.as_ref() {
         return Err(ServiceError::internal(
             "cache reference targets a different storage backend",
         ));
     }
     let url = state
         .presigner
-        .presign("GET", &object.object_key, signed_url_ttl)
+        .presign("GET", &object.object.object_key, signed_url_ttl)
         .map_err(|error| ServiceError::internal(error.to_string()))?;
     Ok(Json(RestoreCacheResponse::Hit {
-        object_digest: CacheDigest::parse(object.checksum_sha256)?,
-        size_bytes: object.size_bytes,
+        source: match object.source {
+            scope_postgres::db::CacheRestoreKind::Exact => {
+                scope_cache_contract::CacheRestoreSource::Exact
+            }
+            scope_postgres::db::CacheRestoreKind::Compatible => {
+                scope_cache_contract::CacheRestoreSource::Compatible
+            }
+        },
+        object_digest: CacheDigest::parse(object.object.checksum_sha256)?,
+        size_bytes: object.object.size_bytes,
         download_url: url,
         expires_at_unix: checked_add(now, u64::from(signed_url_ttl))?,
     }))
@@ -74,7 +88,12 @@ pub(crate) async fn prepare_upload(
 ) -> Result<Json<PrepareCacheUploadResponse>, ServiceError> {
     let now = unix_now()?;
     let claims = authorize_grant(&state, &headers, now).await?;
-    require_identity(&claims, &request.identity_digest, now)?;
+    require_cache(
+        &claims,
+        &request.exact_identity_digest,
+        &request.compatibility_group_digest,
+        now,
+    )?;
     let signed_url_ttl = signed_url_ttl(&claims, now)?;
     let upload_id = UploadLeaseId::parse(random_upload_id()?)?;
     let result = state
@@ -82,7 +101,8 @@ pub(crate) async fn prepare_upload(
         .caches()
         .prepare_upload(
             claims.repository_id.as_str(),
-            request.identity_digest.as_str(),
+            request.exact_identity_digest.as_str(),
+            request.compatibility_group_digest.as_str(),
             request.object_digest.as_str(),
             request.size_bytes,
             state.backend.as_ref(),
@@ -132,7 +152,8 @@ pub(crate) async fn commit_upload(
         .upload(request.lease_id.as_str())
         .await?;
     let identity = CacheDigest::parse(upload.identity_digest.clone())?;
-    require_identity(&claims, &identity, now)?;
+    let compatibility_group = CacheDigest::parse(upload.compatibility_group_digest.clone())?;
+    require_cache(&claims, &identity, &compatibility_group, now)?;
     if claims.repository_id.as_str() != upload.repository_id
         || upload.storage_backend != state.backend.as_ref()
         || request.object_digest.as_str() != upload.checksum_sha256
@@ -192,7 +213,7 @@ pub(crate) async fn commit_upload(
         }
     };
     Ok(Json(CommitCacheUploadResponse {
-        identity_digest: identity,
+        exact_identity_digest: identity,
         object_digest: CacheDigest::parse(object.checksum_sha256)?,
         expires_at_unix,
     }))
@@ -304,7 +325,7 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use scope_cache_contract::{
-        COMMIT_CACHE_UPLOAD_PATH, PREPARE_CACHE_UPLOAD_PATH, RESTORE_CACHE_PATH,
+        AuthorizedCache, COMMIT_CACHE_UPLOAD_PATH, PREPARE_CACHE_UPLOAD_PATH, RESTORE_CACHE_PATH,
         SignedCacheGrantClaims,
     };
     use scope_cache_domain::RepositoryId;
@@ -331,7 +352,7 @@ mod tests {
         let claims = SignedCacheGrantClaims {
             attempt_id: "attempt-1".to_string(),
             repository_id: RepositoryId::parse("repo-1").unwrap(),
-            allowed_identity_digests: vec![],
+            allowed_caches: vec![],
             backend: "test-local".to_string(),
             expires_at_unix: 100,
         };
@@ -359,6 +380,7 @@ mod tests {
         let (attempt_id, attempt_token_hash) = seed_active_attempt(&metadata, &repository_id).await;
         let terminal_metadata = metadata.clone();
         let identity = CacheDigest::parse("1".repeat(64)).unwrap();
+        let group = CacheDigest::parse("2".repeat(64)).unwrap();
         let object_bytes = b"real cache-service round trip".to_vec();
         let object_digest = CacheDigest::parse(hex::encode(Sha256::digest(&object_bytes))).unwrap();
         let mut settings = S3ObjectStoreSettings::new(
@@ -386,7 +408,7 @@ mod tests {
             http: reqwest::Client::new(),
             backend: Arc::from("test-local"),
         };
-        let token = grant(&attempt_id, &repository_id, identity.clone());
+        let token = grant(&attempt_id, &repository_id, identity.clone(), group.clone());
         let app = router(state);
 
         let first = post_json(
@@ -394,7 +416,8 @@ mod tests {
             PREPARE_CACHE_UPLOAD_PATH,
             &token,
             &PrepareCacheUploadRequest {
-                identity_digest: identity.clone(),
+                exact_identity_digest: identity.clone(),
+                compatibility_group_digest: group.clone(),
                 object_digest: object_digest.clone(),
                 size_bytes: object_bytes.len() as u64,
             },
@@ -431,7 +454,8 @@ mod tests {
             RESTORE_CACHE_PATH,
             &token,
             &RestoreCacheRequest {
-                identity_digest: identity.clone(),
+                exact_identity_digest: identity.clone(),
+                compatibility_group_digest: group.clone(),
             },
         )
         .await;
@@ -455,7 +479,8 @@ mod tests {
             PREPARE_CACHE_UPLOAD_PATH,
             &token,
             &PrepareCacheUploadRequest {
-                identity_digest: identity,
+                exact_identity_digest: identity,
+                compatibility_group_digest: group.clone(),
                 object_digest,
                 size_bytes: object_bytes.len() as u64,
             },
@@ -478,7 +503,8 @@ mod tests {
                     .header(reqwest::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RestoreCacheRequest {
-                            identity_digest: CacheDigest::parse("1".repeat(64)).unwrap(),
+                            exact_identity_digest: CacheDigest::parse("1".repeat(64)).unwrap(),
+                            compatibility_group_digest: group,
                         })
                         .unwrap(),
                     ))
@@ -608,13 +634,21 @@ mod tests {
         bytes.to_vec()
     }
 
-    fn grant(attempt_id: &str, repository_id: &str, identity: CacheDigest) -> String {
+    fn grant(
+        attempt_id: &str,
+        repository_id: &str,
+        identity: CacheDigest,
+        group: CacheDigest,
+    ) -> String {
         encode(
             &Header::new(Algorithm::EdDSA),
             &SignedCacheGrantClaims {
                 attempt_id: attempt_id.to_string(),
                 repository_id: RepositoryId::parse(repository_id).unwrap(),
-                allowed_identity_digests: vec![identity],
+                allowed_caches: vec![AuthorizedCache {
+                    exact_identity_digest: identity,
+                    compatibility_group_digest: group,
+                }],
                 backend: "test-local".to_string(),
                 expires_at_unix: unix_now().unwrap() + 3_600,
             },
@@ -658,6 +692,7 @@ mod tests {
                     ContainerSpec::new(format!("alpine@sha256:{}", "a".repeat(64))).unwrap(),
                     600,
                     vec![],
+                    Default::default(),
                     vec![WorkflowStep::new("Test", "true").unwrap()],
                 )
                 .unwrap(),

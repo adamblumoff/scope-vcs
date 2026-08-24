@@ -8,9 +8,9 @@ use reqwest::{
     blocking::{Client, Response},
 };
 use scope_api_contract::{
-    AppendAttemptLogRequest, AttemptConclusionRequest, AttemptHeartbeatRequest,
-    AttemptHeartbeatResponse, AttemptStatusResponse, ClaimRuntimeResponse, CompleteAttemptRequest,
-    CompleteAttemptStepRequest, ReportAttemptCacheFinalizationsRequest,
+    AppendAttemptLogRequest, AttemptCacheKeyMaterial, AttemptConclusionRequest,
+    AttemptHeartbeatRequest, AttemptHeartbeatResponse, AttemptStatusResponse, ClaimRuntimeResponse,
+    CompleteAttemptRequest, CompleteAttemptStepRequest, ReportAttemptCacheFinalizationsRequest,
     ReportAttemptCachePreparationsRequest, StepConclusionRequest,
 };
 use scope_cache_contract::{
@@ -50,6 +50,8 @@ pub struct RuntimeClient {
     attempt_id: String,
     attempt_token: Arc<Mutex<Option<String>>>,
     cache_access: Arc<Mutex<Option<CacheAccess>>>,
+    cache_keys: Arc<Mutex<Vec<AttemptCacheKeyMaterial>>>,
+    heartbeat_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -70,7 +72,25 @@ impl RuntimeClient {
             attempt_id: settings.attempt_id.clone(),
             attempt_token: Arc::new(Mutex::new(None)),
             cache_access: Arc::new(Mutex::new(None)),
+            cache_keys: Arc::new(Mutex::new(Vec::new())),
+            heartbeat_lock: Arc::new(Mutex::new(())),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disconnected_for_cache_tests() -> Self {
+        Self {
+            client: Client::new(),
+            api_url: "http://127.0.0.1:1".to_string(),
+            attempt_id: "test".to_string(),
+            attempt_token: Arc::new(Mutex::new(Some("test".to_string()))),
+            cache_access: Arc::new(Mutex::new(Some(CacheAccess {
+                endpoint: "http://127.0.0.1:1".to_string(),
+                grant: "test".to_string(),
+            }))),
+            cache_keys: Arc::new(Mutex::new(Vec::new())),
+            heartbeat_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     pub fn claim(&self, bootstrap_token: &str) -> anyhow::Result<ClaimRuntimeResponse> {
@@ -201,9 +221,18 @@ impl RuntimeClient {
     }
 
     pub fn heartbeat(&self) -> anyhow::Result<AttemptStatusResponse> {
+        let _heartbeat = self
+            .heartbeat_lock
+            .lock()
+            .expect("heartbeat mutex poisoned");
+        let cache_keys = self
+            .cache_keys
+            .lock()
+            .expect("cache keys mutex poisoned")
+            .clone();
         let response: AttemptHeartbeatResponse = self.post_json(
             "heartbeat",
-            &AttemptHeartbeatRequest {},
+            &AttemptHeartbeatRequest { cache_keys },
             "heartbeat attempt",
         )?;
         let mut access = self
@@ -215,6 +244,15 @@ impl RuntimeClient {
             .context("cache access is unavailable before attempt claim")?;
         access.grant = response.cache_grant;
         Ok(response.status)
+    }
+
+    pub fn authorize_cache_keys(
+        &self,
+        cache_keys: Vec<AttemptCacheKeyMaterial>,
+    ) -> anyhow::Result<()> {
+        *self.cache_keys.lock().expect("cache keys mutex poisoned") = cache_keys;
+        self.heartbeat()?;
+        Ok(())
     }
 
     pub fn restore_cache(
@@ -694,6 +732,79 @@ mod tests {
         server.join().unwrap();
     }
 
+    #[test]
+    fn heartbeats_cannot_replace_a_new_keyed_grant_with_an_older_empty_grant() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (first_request_sender, first_request_receiver) = mpsc::channel();
+        let (release_first_sender, release_first_receiver) = mpsc::channel();
+        let (second_request_sender, second_request_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            first_request_sender.send(read_request(&mut first)).unwrap();
+            release_first_receiver.recv().unwrap();
+            write_heartbeat_response(&mut first, "empty-grant");
+
+            let (mut second, _) = listener.accept().unwrap();
+            second_request_sender
+                .send(read_request(&mut second))
+                .unwrap();
+            write_heartbeat_response(&mut second, "keyed-grant");
+        });
+        let client = RuntimeClient {
+            client: Client::builder()
+                .timeout(Duration::from_secs(1))
+                .build()
+                .unwrap(),
+            api_url: format!("http://{address}"),
+            attempt_id: "test".to_string(),
+            attempt_token: Arc::new(Mutex::new(Some("token".to_string()))),
+            cache_access: Arc::new(Mutex::new(Some(CacheAccess {
+                endpoint: "http://cache.invalid".to_string(),
+                grant: "claim-grant".to_string(),
+            }))),
+            cache_keys: Arc::new(Mutex::new(Vec::new())),
+            heartbeat_lock: Arc::new(Mutex::new(())),
+        };
+
+        let first_client = client.clone();
+        let first_heartbeat = thread::spawn(move || first_client.heartbeat().unwrap());
+        let first_request = first_request_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        let material = AttemptCacheKeyMaterial {
+            cache_name: "cargo".to_string(),
+            compatibility_inputs_digest: "a".repeat(64),
+            exact_inputs_digest: "b".repeat(64),
+        };
+        let second_client = client.clone();
+        let authorization =
+            thread::spawn(move || second_client.authorize_cache_keys(vec![material]).unwrap());
+        while client.cache_keys.lock().unwrap().is_empty() {
+            thread::yield_now();
+        }
+        release_first_sender.send(()).unwrap();
+        first_heartbeat.join().unwrap();
+        authorization.join().unwrap();
+        let second_request = second_request_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(
+            request_json(&first_request)["cache_keys"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            request_json(&second_request)["cache_keys"][0]["cache_name"],
+            "cargo"
+        );
+        assert_eq!(
+            client.cache_access.lock().unwrap().as_ref().unwrap().grant,
+            "keyed-grant"
+        );
+    }
+
     fn test_client(
         responses: &[(&'static str, &'static str)],
     ) -> (
@@ -727,6 +838,8 @@ mod tests {
             attempt_id: "test".to_string(),
             attempt_token: Arc::new(Mutex::new(Some("token".to_string()))),
             cache_access: Arc::new(Mutex::new(None)),
+            cache_keys: Arc::new(Mutex::new(Vec::new())),
+            heartbeat_lock: Arc::new(Mutex::new(())),
         };
         (client, requests, server)
     }
@@ -763,5 +876,23 @@ mod tests {
     fn request_json(request: &str) -> serde_json::Value {
         let (_, body) = request.split_once("\r\n\r\n").unwrap();
         serde_json::from_str(body).unwrap()
+    }
+
+    fn write_heartbeat_response(stream: &mut std::net::TcpStream, grant: &str) {
+        let body = serde_json::json!({
+            "status": {
+                "state": "succeeded",
+                "cancellation_requested": false,
+                "lease_expires_at_unix": 1
+            },
+            "cache_grant": grant
+        })
+        .to_string();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
     }
 }

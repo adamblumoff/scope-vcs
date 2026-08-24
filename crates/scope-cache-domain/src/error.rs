@@ -28,10 +28,6 @@ pub enum CacheDomainError {
     ByteCountOverflow,
     #[error("cache reference belongs to a different repository or logical identity")]
     ReferenceScopeMismatch,
-    #[error("cache reference version must be greater than zero")]
-    InvalidReferenceVersion,
-    #[error("cache reference version overflowed")]
-    ReferenceVersionOverflow,
     #[error("cache reference expiry does not match policy")]
     InvalidReferenceExpiry,
     #[error("cache reference access cannot precede its last update")]
@@ -42,6 +38,6 @@ pub enum CacheDomainError {
     UploadLeaseMismatch,
     #[error("upload lease expired")]
     UploadLeaseExpired,
-    #[error("upload lease was prepared against a stale cache reference")]
+    #[error("the immutable exact cache identity is already published")]
     StaleUploadLease,
 }

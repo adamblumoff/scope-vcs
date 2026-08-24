@@ -1,10 +1,7 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    cache::{
-        AttemptCacheObservation, CacheFinalState, CacheIdentity, CacheNamespace, CachePlatform,
-        CachePreparation,
-    },
+    cache::{AttemptCacheObservation, CacheFinalState, CachePreparation},
     workflow::WorkflowPath,
 };
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QuerySelect, TransactionTrait};
@@ -44,14 +41,12 @@ impl RunStore {
             .ok_or_else(|| {
                 PostgresError::internal_message("run attempt job definition is missing")
             })?;
-        let image = &claim.job.pinned_container_image;
-        let namespace = CacheNamespace::workflow(&workflow_path, &claim.job.key);
 
         // authenticated_attempt holds the attempt row lock until this transaction
         // commits, so concurrent exact retries serialize before checking this table.
 
         for report in reports {
-            let cache = job_definition
+            job_definition
                 .caches()
                 .iter()
                 .find(|cache| cache.as_str() == report.cache_name)
@@ -60,20 +55,6 @@ impl RunStore {
                         "cache preparation does not belong to the claimed workflow job",
                     )
                 })?;
-            let expected_digest = CacheIdentity::new(
-                claim.run.workflow.repository_id(),
-                namespace.clone(),
-                cache.clone(),
-                image,
-                CachePlatform::LinuxAmd64,
-            )
-            .map_err(PostgresError::from)?
-            .digest();
-            if report.identity_digest != expected_digest {
-                return Err(PostgresError::invalid_input(
-                    "cache preparation identity does not match the claimed workflow job",
-                ));
-            }
             let observation = AttemptCacheObservation::prepared(
                 attempt_id,
                 workflow_path.clone(),

@@ -84,21 +84,21 @@ async fn cache_service_schema_enforces_content_and_lifecycle_invariants() {
             1024, 10, 10
         );
         INSERT INTO scope_cache_references (
-            repository_id, identity_digest, checksum_sha256, version,
-            expires_at_unix, last_accessed_at_unix
+            repository_id, identity_digest, compatibility_group_digest,
+            checksum_sha256, created_at_unix, expires_at_unix, last_accessed_at_unix
         ) VALUES (
-            '{REPOSITORY_ID}', '{IDENTITY_DIGEST}', '{OBJECT_DIGEST}',
-            1, 604810, 10
+            '{REPOSITORY_ID}', '{IDENTITY_DIGEST}', repeat('c', 64), '{OBJECT_DIGEST}',
+            10, 604810, 10
         );
         INSERT INTO scope_cache_uploads (
-            upload_id, repository_id, identity_digest, checksum_sha256,
-            storage_backend, object_key, size_bytes, expected_reference_version,
+            upload_id, repository_id, identity_digest, compatibility_group_digest,
+            checksum_sha256, storage_backend, object_key, size_bytes,
             state, created_at_unix, expires_at_unix
         ) VALUES (
-            'upload-1', '{REPOSITORY_ID}', repeat('c', 64), repeat('d', 64),
+            'upload-1', '{REPOSITORY_ID}', repeat('d', 64), repeat('e', 64), repeat('f', 64),
             'railway-iad',
-            'repos/{REPOSITORY_ID}/objects/sha256/' || repeat('d', 64),
-            2048, 1, 'active', 20, 1820
+            'repos/{REPOSITORY_ID}/objects/sha256/' || repeat('f', 64),
+            2048, 'active', 20, 1820
         );
         INSERT INTO scope_cache_deletion_queue (
             repository_id, checksum_sha256, not_before_unix, attempts, last_error
@@ -155,10 +155,11 @@ async fn cache_service_schema_enforces_content_and_lifecycle_invariants() {
     assert!(
         db.execute_unprepared(&format!(
             "INSERT INTO scope_cache_references (
-                repository_id, identity_digest, checksum_sha256, version,
-                expires_at_unix, last_accessed_at_unix
+                repository_id, identity_digest, compatibility_group_digest,
+                checksum_sha256, created_at_unix, expires_at_unix, last_accessed_at_unix
             ) VALUES (
-                '{REPOSITORY_ID}', repeat('f', 64), repeat('e', 64), 1, 20, 10
+                '{REPOSITORY_ID}', repeat('f', 64), repeat('d', 64), repeat('e', 64),
+                10, 20, 10
             )"
         ))
         .await
@@ -189,4 +190,89 @@ async fn cache_service_schema_enforces_content_and_lifecycle_invariants() {
             .unwrap();
         assert_eq!(count, 0, "repository deletion must clear {table}");
     }
+}
+
+#[tokio::test]
+async fn exact_compatible_cutover_preserves_objects_and_queues_physical_cleanup() {
+    let (_target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(28))
+        .await
+        .unwrap();
+    db.execute_unprepared(&format!(
+        "
+        INSERT INTO scope_users (id, handle, email, email_verified)
+        VALUES ('cache-user', 'cache-owner', 'cache@scope.test', TRUE);
+        INSERT INTO scope_repositories (
+            id, owner_handle, name, owner_user_id, publication_state,
+            change_version, repo_config, policy
+        ) VALUES (
+            '{REPOSITORY_ID}', 'cache-owner', 'cache-repo', 'cache-user', 'Ready',
+            1, '{{}}'::jsonb, '{{}}'::jsonb
+        );
+        INSERT INTO scope_cache_objects (
+            repository_id, checksum_sha256, storage_backend, object_key,
+            size_bytes, created_at_unix, last_accessed_at_unix
+        ) VALUES (
+            '{REPOSITORY_ID}', '{OBJECT_DIGEST}', 'railway-iad',
+            'repos/{REPOSITORY_ID}/objects/sha256/{OBJECT_DIGEST}',
+            1024, 10, 10
+        );
+        INSERT INTO scope_cache_references (
+            repository_id, identity_digest, checksum_sha256, version,
+            expires_at_unix, last_accessed_at_unix
+        ) VALUES (
+            '{REPOSITORY_ID}', '{IDENTITY_DIGEST}', '{OBJECT_DIGEST}', 1, 604810, 10
+        );
+        INSERT INTO scope_cache_uploads (
+            upload_id, repository_id, identity_digest, checksum_sha256,
+            storage_backend, object_key, size_bytes, expected_reference_version,
+            state, created_at_unix, expires_at_unix
+        ) VALUES (
+            'old-upload', '{REPOSITORY_ID}', repeat('c', 64), repeat('d', 64),
+            'railway-iad',
+            'repos/{REPOSITORY_ID}/objects/sha256/' || repeat('d', 64),
+            2048, NULL, 'active', 20, 1820
+        );
+        "
+    ))
+    .await
+    .unwrap();
+
+    migrations::Migrator::up(db.as_ref(), Some(1))
+        .await
+        .unwrap();
+
+    for (table, expected) in [
+        ("scope_cache_objects", 1_i64),
+        ("scope_cache_references", 0),
+        ("scope_cache_uploads", 0),
+        ("scope_cache_deletion_queue", 1),
+    ] {
+        let count = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!("SELECT count(*) AS count FROM {table}"),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get::<i64>("", "count")
+            .unwrap();
+        assert_eq!(count, expected, "unexpected rows in {table}");
+    }
+    let obsolete_columns = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND column_name IN ('version', 'expected_reference_version')
+               AND table_name IN ('scope_cache_references', 'scope_cache_uploads')"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(obsolete_columns, 0);
 }
