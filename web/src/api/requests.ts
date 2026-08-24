@@ -4,7 +4,6 @@ import type {
   RequestList,
   RequestRating,
   RequestRatings,
-  RequestRevisionCommitFiles,
   RequestRevisions,
   ReviewFileDiff,
   RequestParams,
@@ -72,15 +71,6 @@ export async function loadRequestRevisionsForRequest(
 export type LoadRequestRevisionCommitInput = RequestParams & {
   commit_oid: string
   revision_id: string
-}
-
-export async function loadRequestRevisionCommitForRequest(
-  data: LoadRequestRevisionCommitInput,
-): Promise<RequestRevisionCommitFiles> {
-  return createApiClient().get<RequestRevisionCommitFiles>(
-    requestRevisionCommitRoute(ApiRouteTemplates.repoRequestRevisionCommit, data),
-    { auth: 'optional' },
-  )
 }
 
 export async function loadRequestRevisionCommitFileDiffForRequest(

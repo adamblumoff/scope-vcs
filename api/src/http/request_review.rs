@@ -10,8 +10,8 @@ use crate::{
         },
         requests::{repo_and_access, visible_request},
         responses::{
-            CommitFileResponse, RequestFileDiffRequest, RequestRevisionCommitFilesResponse,
-            ReviewFileContentResponse, ReviewFileDiffResponse, request_actor_summary_response,
+            RequestFileDiffRequest, ReviewFileContentResponse, ReviewFileDiffResponse,
+            request_actor_summary_response,
         },
     },
     state::AppState,
@@ -22,7 +22,7 @@ use axum::{
     http::HeaderMap,
 };
 use scope_api_contract::{
-    GitOid, RequestDiscussionAnchor as RequestDiscussionAnchorRequest,
+    CommitFileResponse, GitOid, RequestDiscussionAnchor as RequestDiscussionAnchorRequest,
     RequestRevisionCommitResponse, RequestRevisionInspectionState, RequestRevisionListResponse,
     RequestRevisionResponse,
 };
@@ -204,50 +204,6 @@ impl RequestRevisionListWorkBudget {
     }
 }
 
-pub(crate) async fn get_request_revision_commit(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id, revision_id, commit_oid)): Path<(
-        String,
-        String,
-        String,
-        String,
-        String,
-    )>,
-) -> Result<Json<RequestRevisionCommitFilesResponse>, ApiError> {
-    let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(
-        &state,
-        &repo,
-        access,
-        viewer_user_id.as_deref(),
-        &request_id,
-    )
-    .await?;
-    let revision = state
-        .metadata
-        .requests()
-        .request_revision(&request.id, &revision_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("request revision not found"))?;
-    let commit_oid = canonical_commit_oid(commit_oid)?;
-    let inspected = with_request_revision_store_repo(
-        &state,
-        &owner,
-        &repo_name,
-        &request,
-        &revision,
-        |raw_repo| request_revision_commit_files(raw_repo, &repo, access, &revision, &commit_oid),
-    )?;
-    Ok(Json(RequestRevisionCommitFilesResponse {
-        revision_id: revision.id,
-        inspection: inspected.inspection,
-        commit: inspected.commit,
-        files: inspected.files,
-    }))
-}
-
 pub(crate) async fn get_request_revision_commit_file_diff(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -288,6 +244,7 @@ pub(crate) async fn get_request_revision_commit_file_diff(
             let inspected =
                 request_revision_commit_files(raw_repo, &repo, access, &revision, &commit_oid)?;
             let file = inspected
+                .commit
                 .files
                 .into_iter()
                 .find(|file| file.path == path)
@@ -351,6 +308,7 @@ pub(crate) async fn validate_request_discussion_anchor(
         )?;
         if let Some(path) = path.as_ref()
             && !inspected
+                .commit
                 .files
                 .iter()
                 .any(|file| file.path == path.as_str().trim_start_matches('/'))

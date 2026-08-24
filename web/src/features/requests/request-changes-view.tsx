@@ -1,5 +1,4 @@
 import type {
-  RequestRevisionCommitFiles,
   RequestRevisions,
   ReviewFileDiff,
 } from '@/api/types'
@@ -17,9 +16,7 @@ import type { RequestDiscussionPage } from './request-discussion-types'
 
 type RequestChangesViewProps = {
   audience: 'private' | 'public'
-  loadCommit: (
-    input: LoadRequestRevisionCommitInput,
-  ) => Promise<RequestRevisionCommitFiles>
+  initialDiscussionReferences: RequestDiscussionPage | null
   loadDiff: (
     input: LoadRequestRevisionCommitInput & { path: string },
   ) => Promise<ReviewFileDiff>
@@ -37,7 +34,7 @@ type RequestChangesViewProps = {
 
 export function RequestChangesView({
   audience,
-  loadCommit,
+  initialDiscussionReferences,
   loadDiff,
   loadDiscussions,
   onSearchChange,
@@ -59,7 +56,7 @@ export function RequestChangesView({
   return (
     <RequestChangesWorkbench
       audience={audience}
-      loadCommit={loadCommit}
+      initialDiscussionReferences={initialDiscussionReferences}
       loadDiff={loadDiff}
       loadDiscussions={loadDiscussions}
       onSearchChange={onSearchChange}

@@ -1,7 +1,7 @@
 use crate::{
-    FirstPushTokenStatus, RepoConfig, RepoLifecycleState, RepositoryActor, RequestActorRole,
-    RequestAudience, RequestDiscussionStatus, RequestEventKind, RequestEventPayload,
-    RequestMergeabilityStatus, RequestState, SessionIdentity, Visibility,
+    FileChangeKind, FirstPushTokenStatus, RepoConfig, RepoLifecycleState, RepositoryActor,
+    RequestActorRole, RequestAudience, RequestDiscussionStatus, RequestEventKind,
+    RequestEventPayload, RequestMergeabilityStatus, RequestState, SessionIdentity, Visibility,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{fmt, ops::Deref};
@@ -526,6 +526,19 @@ pub struct RequestRevisionCommitResponse {
     pub authored_at_unix: u64,
     pub message: String,
     pub change_count: usize,
+    pub files: Vec<CommitFileResponse>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CommitFileResponse {
+    pub path: String,
+    pub kind: FileChangeKind,
+    pub old_mode: Option<String>,
+    pub new_mode: Option<String>,
+    pub old_oid: Option<String>,
+    pub new_oid: Option<String>,
+    pub visibility: Visibility,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

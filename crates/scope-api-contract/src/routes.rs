@@ -59,8 +59,6 @@ pub const REPO_SESSION: &str = "/v1/repos/{owner}/{repo}/session";
 pub const REPO_FILES: &str = "/v1/repos/{owner}/{repo}/files";
 pub const REPO_FILE_CONTENT: &str = "/v1/repos/{owner}/{repo}/files/content";
 pub const REPO_REQUEST_REVISIONS: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/changes";
-pub const REPO_REQUEST_REVISION_COMMIT: &str =
-    "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{revision_id}/commits/{commit_oid}";
 pub const REPO_REQUEST_REVISION_COMMIT_FILE_DIFF: &str = "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{revision_id}/commits/{commit_oid}/file-diff";
 pub const REPO_REQUEST_DISCUSSIONS: &str =
     "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline";
