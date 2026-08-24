@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="${1:-}"
+if [[ "$MODE" != "cli" && "$MODE" != "web" ]]; then
+  echo "usage: $0 <cli|web> <command> [args...]" >&2
+  exit 2
+fi
+shift
+if [[ "$#" -eq 0 ]]; then
+  echo "usage: $0 <cli|web> <command> [args...]" >&2
+  exit 2
+fi
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+ENV_BACKUP_DIR="$(mktemp -d)"
+root_env_existed=0
+web_env_existed=0
+if [[ -f .env.local ]]; then
+  cp .env.local "$ENV_BACKUP_DIR/root.env.local"
+  root_env_existed=1
+fi
+if [[ -f web/.env.local ]]; then
+  cp web/.env.local "$ENV_BACKUP_DIR/web.env.local"
+  web_env_existed=1
+fi
+
+cleanup() {
+  status="$?"
+  trap - EXIT
+  if [[ "$status" -ne 0 ]]; then
+    for log in .tmp/local-dev/*.log; do
+      [[ -f "$log" ]] || continue
+      tail -n 300 "$log"
+    done
+  fi
+  ./dev/scope-dev down || true
+  if [[ "$root_env_existed" -eq 1 ]]; then
+    mv "$ENV_BACKUP_DIR/root.env.local" .env.local
+  else
+    rm -f -- .env.local
+  fi
+  if [[ "$web_env_existed" -eq 1 ]]; then
+    mv "$ENV_BACKUP_DIR/web.env.local" web/.env.local
+  else
+    rm -f -- web/.env.local
+  fi
+  rmdir "$ENV_BACKUP_DIR"
+  exit "$status"
+}
+trap cleanup EXIT
+
+service postgresql start
+su postgres -c "psql --set=ON_ERROR_STOP=1 --command=\"CREATE ROLE scope LOGIN PASSWORD 'scope'\""
+su postgres -c "createdb --owner=scope scope_dev"
+
+clerk_host='scope-e2e.clerk.accounts.dev$'
+clerk_payload="$(printf '%s' "$clerk_host" | base64 | tr '/+' '_-' | tr -d '=\n')"
+printf '%s\n' 'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
+  'SCOPE_DEV_USER_EMAIL=smoke@example.test' 'SCOPE_DEV_USER_HANDLE=dev' > .env.local
+
+case "$MODE" in
+  cli)
+    printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\n' "$clerk_payload" > web/.env.local
+    export SCOPE_DEV_HEADLESS_E2E=1
+    ;;
+  web)
+    printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\nCLERK_SECRET_KEY=sk_test_scope_e2e\n' \
+      "$clerk_payload" > web/.env.local
+    export VITE_SCOPE_WEB_FORCE_SIGNED_OUT=1
+    ;;
+esac
+
+cargo build -p api --features local-dev --locked
+cargo build -p worker --locked
+
+./dev/scope-dev up
+"$@"
