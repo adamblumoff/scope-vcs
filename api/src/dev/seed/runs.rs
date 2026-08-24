@@ -12,6 +12,7 @@ use scope_domain::{
 };
 use scope_postgres::db::{MetadataStore, RunStore};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 const RUNTIME_VERSION: &str = "scope-dev-seed/1";
 const DEFAULT_LEASE_SECONDS: u64 = 6 * 60 * 60;
@@ -132,6 +133,7 @@ fn checks_workflow_revision(repo_id: &str) -> Result<WorkflowRevision, ApiError>
         container.clone(),
         600,
         vec![],
+        BTreeMap::new(),
         vec![step("Build", "cargo build --workspace")?],
     )
     .map_err(ApiError::internal)?;
@@ -141,6 +143,7 @@ fn checks_workflow_revision(repo_id: &str) -> Result<WorkflowRevision, ApiError>
         container.clone(),
         600,
         vec![],
+        BTreeMap::new(),
         vec![step("Test", "cargo test --workspace")?],
     )
     .map_err(ApiError::internal)?;
@@ -150,6 +153,7 @@ fn checks_workflow_revision(repo_id: &str) -> Result<WorkflowRevision, ApiError>
         container,
         900,
         vec![],
+        BTreeMap::new(),
         vec![
             step("Package", "scripts/package.sh")?,
             step("Push image", "scripts/push-image.sh")?,
@@ -173,6 +177,7 @@ fn lint_workflow_revision(repo_id: &str) -> Result<WorkflowRevision, ApiError> {
         seed_container()?,
         300,
         vec![],
+        BTreeMap::new(),
         vec![step("Lint", "scripts/lint.sh")?],
     )
     .map_err(ApiError::internal)?;
