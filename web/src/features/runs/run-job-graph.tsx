@@ -1,6 +1,5 @@
 import type { RepoRunJobDetail } from '@/api/types'
 import { cn } from '@/lib/utils'
-import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useMemo } from 'react'
 import {
   JOB_GRAPH_NODE_HEIGHT,
@@ -8,19 +7,17 @@ import {
   buildRunJobGraph,
 } from './run-job-graph-model'
 import { runJobPanelId } from './run-job-ids'
-import { RunStatusDot } from './run-status-dot'
+import { RunStatusIcon } from './run-status-icon'
 import { RunTimestamp } from './run-timestamp'
 
 export function RunJobGraph({
-  compact = false,
-  expandedJobs,
   jobs,
-  onToggleJob,
+  onSelectJob,
+  selectedJobKey,
 }: {
-  compact?: boolean
-  expandedJobs: ReadonlySet<string>
   jobs: readonly RepoRunJobDetail[]
-  onToggleJob: (job: RepoRunJobDetail) => void
+  onSelectJob: (job: RepoRunJobDetail) => void
+  selectedJobKey: string | null
 }) {
   const layout = useMemo(() => buildRunJobGraph(jobs), [jobs])
   const jobsByKey = new Map(jobs.map((job) => [job.job.key, job]))
@@ -33,13 +30,18 @@ export function RunJobGraph({
     )
   }
 
+  function handleSelect(jobDetail: RepoRunJobDetail) {
+    onSelectJob(jobDetail)
+    requestAnimationFrame(() => {
+      document.getElementById(runJobPanelId(jobDetail.job.key))
+        ?.scrollIntoView({ block: 'nearest' })
+    })
+  }
+
   return (
     <div
       aria-label="Job dependency graph"
-      className={cn(
-        'max-h-[min(70vh,42rem)] overflow-auto border-y border-border py-3',
-        compact ? 'bg-background' : 'bg-muted/15',
-      )}
+      className="overflow-x-auto border-y border-border bg-muted/15 py-3"
     >
       <div
         className="relative"
@@ -76,17 +78,17 @@ export function RunJobGraph({
           const jobDetail = jobsByKey.get(node.key)
           if (!jobDetail) return null
           const { job, attempts } = jobDetail
-          const expanded = expandedJobs.has(job.key)
+          const selected = selectedJobKey === job.key
           return (
             <button
               aria-controls={runJobPanelId(job.key)}
-              aria-expanded={expanded}
+              aria-pressed={selected}
               className={cn(
                 'absolute flex flex-col justify-between border bg-background px-3 py-2.5 text-left shadow-sm outline-none transition-colors hover:border-foreground/35 hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-ring',
-                expanded && 'border-foreground/50 ring-1 ring-foreground/10',
+                selected && 'border-foreground/50 ring-1 ring-foreground/10',
               )}
               key={job.key}
-              onClick={() => onToggleJob(jobDetail)}
+              onClick={() => handleSelect(jobDetail)}
               style={{
                 height: JOB_GRAPH_NODE_HEIGHT,
                 left: node.x,
@@ -96,11 +98,8 @@ export function RunJobGraph({
               type="button"
             >
               <span className="flex min-w-0 items-center gap-2">
-                <RunStatusDot state={job.state} />
+                <RunStatusIcon state={job.state} />
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold">{job.key}</span>
-                {expanded
-                  ? <ChevronDown className="size-3.5 text-muted-foreground" />
-                  : <ChevronRight className="size-3.5 text-muted-foreground" />}
               </span>
               <span className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                 <span className="capitalize">{job.state}</span>

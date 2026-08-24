@@ -5,7 +5,8 @@ import { RepoSettingsPending } from '@/features/repo-detail/repo-settings-pendin
 import { RepositoryCodePending } from '@/features/repo-detail/repository-code-pending'
 import { RequestDetailPagePending } from '@/features/requests/request-page-pending'
 import { RequestsPagePending } from '@/features/requests/requests-page-pending'
-import { RunDetailPagePending, RunsPagePending } from '@/features/runs/runs-page-pending'
+import { RunDetailPagePending } from '@/features/runs/run-detail-pending'
+import { RunsPagePending } from '@/features/runs/runs-page-pending'
 import { useLocation, useParams } from '@tanstack/react-router'
 
 export function RepositoryRoutePending() {

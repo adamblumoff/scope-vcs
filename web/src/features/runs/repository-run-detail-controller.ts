@@ -1,5 +1,4 @@
 import type {
-  RepoRunAttempt,
   RepoRunDetail,
   RepoRunJobDetail,
   RepoRunLog,
@@ -14,22 +13,19 @@ import {
   useRef,
 } from 'react'
 import {
+  defaultShowGraph,
   mergeStepLogs,
-  reconcileExpandedAttempts,
-  reconcileExpandedJobs,
-  runAttempts,
+  reconcileAttemptOverrides,
   runCanChange,
+  selectInitialStep,
+  type StepSelection,
 } from './repository-run-detail-model'
 import { useRunLiveRefresh, type RunRefresh } from './run-live-refresh'
 
+export type { StepSelection } from './repository-run-detail-model'
+
 const MAX_CACHED_LOG_STEPS = 8
 const DETAIL_CHANGES = ['StatusChanged', 'LogsAppended'] as const
-
-export type StepSelection = {
-  jobKey: string
-  attemptId: string
-  stepIndex: number
-}
 
 export type StepLogState = {
   error: string | null
@@ -41,14 +37,16 @@ export type StepLogState = {
 
 type DetailViewState = {
   actionError: string | null
+  attemptOverrides: Record<string, string>
   detail: RepoRunDetail
-  expandedAttempts: Set<string>
-  expandedJobs: Set<string>
   logStates: Record<string, StepLogState>
+  manualSelection: boolean
   metadataError: string | null
   pendingAction: 'cancel' | 'retry' | null
   reconciliationGeneration: number | null
+  selectedJobKey: string | null
   selection: StepSelection | null
+  showGraph: boolean
 }
 
 type DetailViewUpdate = (state: DetailViewState) => DetailViewState
@@ -62,16 +60,19 @@ const EMPTY_LOG_STATE: StepLogState = {
 }
 
 function createDetailViewState(detail: RepoRunDetail): DetailViewState {
+  const initialSelection = selectInitialStep(detail.jobs)
   return {
     actionError: null,
+    attemptOverrides: {},
     detail,
-    expandedAttempts: new Set(),
-    expandedJobs: new Set(),
     logStates: {},
+    manualSelection: false,
     metadataError: null,
     pendingAction: null,
     reconciliationGeneration: null,
-    selection: null,
+    selectedJobKey: initialSelection?.jobKey ?? null,
+    selection: initialSelection,
+    showGraph: defaultShowGraph(detail.jobs),
   }
 }
 
@@ -131,31 +132,35 @@ export function useRepositoryRunDetailController({
     const request = loadDetail(signal)
       .then((nextDetail) => {
         if (!mountedRef.current) return
-        const nextAttempts = runAttempts(nextDetail.jobs)
-        const nextIds = nextAttempts.map((attempt) => attempt.id)
         updateView((current) => {
           const reconciledAction = current.reconciliationGeneration !== null &&
             generation >= current.reconciliationGeneration
+          const selectionStillValid = current.selection !== null &&
+            selectionExists(current.selection, nextDetail.jobs)
+          const nextSelection = selectionStillValid
+            ? current.selection
+            : current.manualSelection
+              ? null
+              : selectInitialStep(nextDetail.jobs)
+          const selectedJobKey = nextSelection
+            ? nextSelection.jobKey
+            : jobExists(current.selectedJobKey, nextDetail.jobs)
+              ? current.selectedJobKey
+              : null
           return {
             ...current,
-            detail: nextDetail,
-            expandedAttempts: reconcileExpandedAttempts(
-              current.expandedAttempts,
-              nextIds,
-            ),
-            expandedJobs: reconcileExpandedJobs(
-              current.expandedJobs,
+            attemptOverrides: reconcileAttemptOverrides(
+              current.attemptOverrides,
               nextDetail.jobs,
             ),
+            detail: nextDetail,
             metadataError: null,
             pendingAction: reconciledAction ? null : current.pendingAction,
             reconciliationGeneration: reconciledAction
               ? null
               : current.reconciliationGeneration,
-            selection: current.selection &&
-                selectionExists(current.selection, nextDetail.jobs)
-              ? current.selection
-              : null,
+            selectedJobKey,
+            selection: nextSelection,
           }
         })
       })
@@ -368,46 +373,36 @@ export function useRepositoryRunDetailController({
   }, [refreshDetail])
 
   function toggleJob(jobDetail: RepoRunJobDetail) {
-    updateView((current) => {
-      const nextJobs = new Set(current.expandedJobs)
-      const expanding = !nextJobs.has(jobDetail.job.key)
-      if (expanding) nextJobs.add(jobDetail.job.key)
-      else nextJobs.delete(jobDetail.job.key)
-      return {
-        ...current,
-        expandedJobs: nextJobs,
-        selection: !expanding && current.selection?.jobKey === jobDetail.job.key
-          ? null
-          : current.selection,
-      }
-    })
+    updateView((current) => ({
+      ...current,
+      selectedJobKey: current.selectedJobKey === jobDetail.job.key
+        ? null
+        : jobDetail.job.key,
+    }))
   }
 
-  function toggleAttempt(attempt: RepoRunAttempt) {
-    updateView((current) => {
-      const next = new Set(current.expandedAttempts)
-      const expanding = !next.has(attempt.id)
-      if (next.has(attempt.id)) next.delete(attempt.id)
-      else next.add(attempt.id)
-      return {
-        ...current,
-        expandedAttempts: next,
-        selection: !expanding && current.selection?.attemptId === attempt.id
-          ? null
-          : current.selection,
-      }
-    })
+  function selectAttempt(jobKey: string, attemptId: string) {
+    updateView((current) => ({
+      ...current,
+      attemptOverrides: { ...current.attemptOverrides, [jobKey]: attemptId },
+      selection: current.selection?.jobKey === jobKey ? null : current.selection,
+    }))
   }
 
   function toggleStep(jobKey: string, attemptId: string, stepIndex: number) {
     updateView((current) => ({
       ...current,
+      manualSelection: true,
       selection: current.selection?.jobKey === jobKey &&
         current.selection.attemptId === attemptId &&
         current.selection.stepIndex === stepIndex
         ? null
         : { attemptId, jobKey, stepIndex },
     }))
+  }
+
+  function toggleGraph() {
+    updateView((current) => ({ ...current, showGraph: !current.showGraph }))
   }
 
   const selectedLogState = view.selection
@@ -419,8 +414,9 @@ export function useRepositoryRunDetailController({
     performAction,
     refreshDetail: refreshRun,
     refreshLogs,
+    selectAttempt,
     selectedLogState,
-    toggleAttempt,
+    toggleGraph,
     toggleJob,
     toggleStep,
   }
@@ -441,6 +437,10 @@ function selectionExists(
       attempt.steps.some((step) => step.index === selection.stepIndex)
     )
   )
+}
+
+function jobExists(jobKey: string | null, jobs: readonly RepoRunJobDetail[]) {
+  return jobKey !== null && jobs.some(({ job }) => job.key === jobKey)
 }
 
 function withBoundedLogStates(

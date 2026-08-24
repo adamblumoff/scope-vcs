@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  attemptForJob,
+  defaultShowGraph,
   mergeStepLogs,
-  reconcileExpandedAttempts,
-  reconcileExpandedJobs,
+  reconcileAttemptOverrides,
   runCanChange,
+  selectInitialStep,
 } from './repository-run-detail-model'
+
+function job(overrides: {
+  attempts?: Array<{ id: string; steps: Array<{ index: number; state: string }> }>
+  key: string
+  needs?: string[]
+  state: string
+}) {
+  return {
+    attempts: overrides.attempts ?? [],
+    job: { key: overrides.key, needs: overrides.needs ?? [], state: overrides.state },
+  }
+}
 
 describe('repository run detail model', () => {
   it('identifies states that can still change', () => {
@@ -17,25 +31,145 @@ describe('repository run detail model', () => {
     }
   })
 
-  it('preserves manual expansion without opening new attempts during refresh', () => {
-    const expanded = reconcileExpandedAttempts(
-      new Set(['old']),
-      ['retry', 'current', 'old'],
-    )
-    assert.deepEqual([...expanded], ['old'])
-    assert.deepEqual([...reconcileExpandedAttempts(new Set(), ['new'])], [])
+  it('selects the first failed step of the first failed job', () => {
+    const jobs = [
+      job({
+        attempts: [{ id: 'a1', steps: [{ index: 0, state: 'succeeded' }] }],
+        key: 'lint',
+        state: 'succeeded',
+      }),
+      job({
+        attempts: [{
+          id: 'a2',
+          steps: [
+            { index: 0, state: 'succeeded' },
+            { index: 1, state: 'failed' },
+          ],
+        }],
+        key: 'backend',
+        state: 'failed',
+      }),
+      job({
+        attempts: [{ id: 'a3', steps: [{ index: 0, state: 'running' }] }],
+        key: 'web',
+        state: 'running',
+      }),
+    ]
+    assert.deepEqual(selectInitialStep(jobs), {
+      attemptId: 'a2',
+      jobKey: 'backend',
+      stepIndex: 1,
+    })
   })
 
-  it('keeps known job expansion without reopening collapsed jobs', () => {
+  it('falls back to the currently running step when nothing failed', () => {
     const jobs = [
-      { job: { key: 'backend', state: 'succeeded' }, attempts: [] },
-      { job: { key: 'web', state: 'queued' }, attempts: [] },
+      job({
+        attempts: [{ id: 'a1', steps: [{ index: 0, state: 'succeeded' }] }],
+        key: 'lint',
+        state: 'succeeded',
+      }),
+      job({
+        attempts: [{
+          id: 'a2',
+          steps: [
+            { index: 0, state: 'succeeded' },
+            { index: 1, state: 'running' },
+          ],
+        }],
+        key: 'backend',
+        state: 'running',
+      }),
     ]
-    assert.deepEqual([...reconcileExpandedJobs(new Set(), jobs)], [])
-    assert.deepEqual(
-      [...reconcileExpandedJobs(new Set(['web', 'removed']), jobs)],
-      ['web'],
+    assert.deepEqual(selectInitialStep(jobs), {
+      attemptId: 'a2',
+      jobKey: 'backend',
+      stepIndex: 1,
+    })
+  })
+
+  it('falls back to the last step of the last job when the run is idle', () => {
+    const jobs = [
+      job({
+        attempts: [{ id: 'a1', steps: [{ index: 0, state: 'succeeded' }] }],
+        key: 'lint',
+        state: 'succeeded',
+      }),
+      job({
+        attempts: [{
+          id: 'a2',
+          steps: [
+            { index: 0, state: 'succeeded' },
+            { index: 1, state: 'succeeded' },
+          ],
+        }],
+        key: 'backend',
+        state: 'succeeded',
+      }),
+    ]
+    assert.deepEqual(selectInitialStep(jobs), {
+      attemptId: 'a2',
+      jobKey: 'backend',
+      stepIndex: 1,
+    })
+  })
+
+  it('selects nothing when there are no steps to show', () => {
+    assert.equal(selectInitialStep([]), null)
+    assert.equal(
+      selectInitialStep([job({ key: 'lint', state: 'queued' })]),
+      null,
     )
+  })
+
+  it('picks the selected step attempt over the switcher and default attempt', () => {
+    const target = job({
+      attempts: [
+        { id: 'a1', steps: [{ index: 0, state: 'failed' }] },
+        { id: 'a2', steps: [{ index: 0, state: 'succeeded' }] },
+      ],
+      key: 'backend',
+      state: 'succeeded',
+    })
+    assert.equal(attemptForJob(target, {}, null)?.id, 'a2')
+    assert.equal(attemptForJob(target, { backend: 'a1' }, null)?.id, 'a1')
+    assert.equal(
+      attemptForJob(target, { backend: 'a1' }, {
+        attemptId: 'a2',
+        jobKey: 'backend',
+        stepIndex: 0,
+      })?.id,
+      'a2',
+    )
+  })
+
+  it('drops attempt overrides that reference retired attempts', () => {
+    const jobs = [
+      job({ attempts: [{ id: 'new', steps: [] }], key: 'backend', state: 'succeeded' }),
+    ]
+    assert.deepEqual(
+      reconcileAttemptOverrides({ backend: 'old', missing: 'x' }, jobs),
+      {},
+    )
+    assert.deepEqual(
+      reconcileAttemptOverrides({ backend: 'new' }, jobs),
+      { backend: 'new' },
+    )
+  })
+
+  it('only defaults to the graph once dependencies make the strip hard to scan', () => {
+    const independent = [0, 1, 2, 3].map((index) =>
+      job({ key: `job-${index}`, state: 'succeeded' }))
+    assert.equal(defaultShowGraph(independent), false)
+
+    const dependent = [
+      job({ key: 'a', state: 'succeeded' }),
+      job({ key: 'b', needs: ['a'], state: 'succeeded' }),
+      job({ key: 'c', state: 'succeeded' }),
+      job({ key: 'd', state: 'succeeded' }),
+    ]
+    assert.equal(defaultShowGraph(dependent), true)
+    assert.equal(defaultShowGraph(dependent.slice(0, 3)), false)
   })
 
   it('merges incremental logs by stable position', () => {
