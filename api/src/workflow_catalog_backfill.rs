@@ -8,6 +8,31 @@ use scope_domain::runs::{
 };
 
 impl AppState {
+    pub async fn validate_repository_workflow_catalogs(&self) -> anyhow::Result<usize> {
+        let catalogs = self
+            .metadata
+            .repositories()
+            .repository_workflow_catalogs()
+            .await?;
+        let mut validated = 0;
+        for catalog in catalogs {
+            // Capture-time rejections already describe repository-owned configuration errors.
+            // A captured catalog that the new binary cannot parse is a release incompatibility.
+            if catalog.configuration_error().is_some() {
+                continue;
+            }
+            scope_run_config::parse_repository_workflow_catalog(&catalog).map_err(|error| {
+                anyhow::anyhow!(
+                    "repository {} workflow catalog at {} is invalid under this release: {error}",
+                    catalog.repository_id(),
+                    catalog.source_head_oid(),
+                )
+            })?;
+            validated += 1;
+        }
+        Ok(validated)
+    }
+
     pub async fn backfill_repository_workflow_catalogs(&self) -> anyhow::Result<usize> {
         let candidates = self
             .metadata

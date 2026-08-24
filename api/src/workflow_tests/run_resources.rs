@@ -21,11 +21,15 @@ fn workflow_named(name: &str) -> String {
 }
 
 async fn state_with_pushed_workflow(label: &str) -> AppState {
+    state_with_pushed_workflow_source(label, WORKFLOW).await
+}
+
+async fn state_with_pushed_workflow_source(label: &str, workflow: &str) -> AppState {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     let source = temp_git_repo(label);
     fs::create_dir_all(source.join(".scope/runs")).unwrap();
-    fs::write(source.join(".scope/runs/test.yml"), WORKFLOW).unwrap();
+    fs::write(source.join(".scope/runs/test.yml"), workflow).unwrap();
     run_git(Some(&source), &["add", "."], "stage workflow source").unwrap();
     commit_all(&source, "add workflow");
     let bare = clone_test_repo(&source, &format!("{label}-bare"), true);
@@ -200,6 +204,10 @@ async fn workflow_catalog_and_filtered_history_follow_current_main() {
 #[tokio::test]
 async fn workflow_catalog_backfill_is_idempotent() {
     let state = state_with_pushed_workflow("workflow-catalog-backfill").await;
+    assert_eq!(
+        state.validate_repository_workflow_catalogs().await.unwrap(),
+        1
+    );
     state
         .metadata
         .repositories()
@@ -226,6 +234,26 @@ async fn workflow_catalog_backfill_is_idempotent() {
         0
     );
     assert_eq!(workflow_list_response(state).await.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn maintenance_rejects_a_previously_captured_workflow_that_the_release_cannot_parse() {
+    let legacy_workflow = WORKFLOW.replace(
+        "caches: []",
+        "caches:\n  - name: cargo\n    path: /scope/cache/cargo",
+    );
+    let state =
+        state_with_pushed_workflow_source("workflow-catalog-release-validation", &legacy_workflow)
+            .await;
+
+    let error = state
+        .validate_repository_workflow_catalogs()
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains(TEST_REPO_ID));
+    assert!(error.contains("missing field `format`"));
 }
 
 #[tokio::test]

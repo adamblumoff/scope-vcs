@@ -93,6 +93,31 @@ where
 }
 
 impl RepositoryStore {
+    pub async fn repository_workflow_catalogs(
+        &self,
+    ) -> Result<Vec<RepositoryWorkflowCatalog>, PostgresError> {
+        let tx = begin_metadata_read_snapshot(self.db.as_ref()).await?;
+        let headers = entities::repository_workflow_catalog::Entity::find()
+            .order_by_asc(entities::repository_workflow_catalog::Column::RepoId)
+            .all(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        let mut catalogs = Vec::with_capacity(headers.len());
+        for header in headers {
+            let files = entities::repository_workflow_file::Entity::find()
+                .filter(
+                    entities::repository_workflow_file::Column::RepoId.eq(header.repo_id.clone()),
+                )
+                .order_by_asc(entities::repository_workflow_file::Column::Path)
+                .all(&tx)
+                .await
+                .map_err(PostgresError::internal)?;
+            catalogs.push(catalog_from_rows(header, files)?);
+        }
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(catalogs)
+    }
+
     pub async fn repository_workflow_catalog(
         &self,
         repo_id: &str,
