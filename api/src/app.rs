@@ -1,8 +1,9 @@
-use crate::{git, http, state::AppState};
+use crate::{git, http, state::AppState, telemetry};
 use axum::{
     Router,
+    body::Body,
     http::{
-        Method,
+        Method, Request,
         header::{AUTHORIZATION, CONTENT_TYPE},
     },
     middleware,
@@ -303,5 +304,15 @@ pub fn router(state: AppState) -> Router {
                 ])
                 .allow_headers([AUTHORIZATION, CONTENT_TYPE]),
         )
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &Request<Body>| {
+                tracing::info_span!(
+                    "http_request",
+                    request_id = %telemetry::request_trace_id(),
+                    replica_id = telemetry::replica_id(),
+                    method = %request.method(),
+                    uri = %request.uri(),
+                )
+            }),
+        )
 }
