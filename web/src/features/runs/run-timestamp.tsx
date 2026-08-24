@@ -1,23 +1,32 @@
 import { useSyncExternalStore } from 'react'
-import { createRunTimeFormatter, runUnixTimeDate } from './run-formatting'
+import { useRunClock } from './run-clock'
+import {
+  createRunTimeFormatter,
+  formatRelativeTime,
+  runUnixTimeDate,
+} from './run-formatting'
 
-const BROWSER_LOCAL_FORMATTER = createRunTimeFormatter()
-const UTC_HYDRATION_FORMATTER = createRunTimeFormatter('UTC')
+const ABSOLUTE_FORMATTER = createRunTimeFormatter()
 
+/**
+ * Relative text for scanning, with the absolute time one hover away. The
+ * relative value depends on the reader's clock, so hydration is allowed to
+ * settle it rather than matching the server byte for byte.
+ */
 export function RunTimestamp({ value }: { value: number }) {
-  const hydrated = useSyncExternalStore(
-    subscribeToHydration,
-    getBrowserSnapshot,
-    getServerSnapshot,
-  )
+  const nowUnix = useRunClock()
+  const hydrated = useHydrated()
   const date = runUnixTimeDate(value)
-  const formatter = hydrated
-    ? BROWSER_LOCAL_FORMATTER
-    : UTC_HYDRATION_FORMATTER
 
   return (
-    <time dateTime={date.toISOString()}>
-      {formatter.format(date)}
+    <time
+      dateTime={date.toISOString()}
+      suppressHydrationWarning
+      // The absolute time is only meaningful in the reader's own zone, and
+      // suppressed hydration does not repaint a title rendered server-side.
+      title={hydrated ? ABSOLUTE_FORMATTER.format(date) : undefined}
+    >
+      {formatRelativeTime(value, nowUnix)}
     </time>
   )
 }
@@ -26,10 +35,10 @@ function subscribeToHydration() {
   return () => {}
 }
 
-function getBrowserSnapshot() {
-  return true
-}
-
-function getServerSnapshot() {
-  return false
+function useHydrated() {
+  return useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  )
 }

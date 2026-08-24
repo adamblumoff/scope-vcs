@@ -43,7 +43,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         object_encryption_key,
     ));
     let catalog =
-        seed::catalog(raw_object_store.as_ref(), settings.seed_user).map_err(|error| {
+        seed::catalog(raw_object_store.as_ref(), settings.seed_user.clone()).map_err(|error| {
             anyhow::anyhow!(
                 "building local dev catalog: {}",
                 error.into_operator_diagnostic()
@@ -63,6 +63,21 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
                 error.into_operator_diagnostic()
             )
         })?;
+    seed::seed_run_gallery(
+        &metadata,
+        &settings.seed_user.handle,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| anyhow::anyhow!("reading the local dev clock: {error}"))?
+            .as_secs(),
+    )
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "seeding local dev runs: {}",
+            error.into_operator_diagnostic()
+        )
+    })?;
     let repo_events = RepoChangeBus::default();
     let listener_bus = repo_events.clone();
     metadata

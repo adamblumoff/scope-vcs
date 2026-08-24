@@ -2,12 +2,20 @@
 mod request_discussions;
 #[path = "seed/request_revisions.rs"]
 mod request_revisions;
+#[cfg(any(test, feature = "local-dev"))]
+#[path = "seed/runs.rs"]
+mod runs;
 #[cfg(test)]
 #[path = "seed/tests.rs"]
 mod tests;
+#[path = "seed/workflow_files.rs"]
+mod workflow_files;
 #[cfg(any(feature = "local-dev", feature = "smoke-seed"))]
 pub(crate) use request_discussions::seed_request_discussion_gallery;
 use request_revisions::SeedRequestRevision;
+#[cfg(feature = "local-dev")]
+pub(crate) use runs::seed_run_gallery;
+use workflow_files::{PUBLIC_DEMO_CHECKS_WORKFLOW, PUBLIC_DEMO_LINT_WORKFLOW};
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 use scope_domain::{
@@ -230,6 +238,8 @@ fn published_demo(
     let readme = blob(object_store, PUBLIC_DEMO_README_HTML)?;
     let app = blob(object_store, PUBLIC_DEMO_APP)?;
     let private_plan = blob(object_store, PUBLIC_DEMO_PLAN)?;
+    let checks_workflow = blob(object_store, PUBLIC_DEMO_CHECKS_WORKFLOW)?;
+    let lint_workflow = blob(object_store, PUBLIC_DEMO_LINT_WORKFLOW)?;
     let private_path = ScopePath::parse("/internal/plan.md").map_err(ApiError::internal)?;
     repo.policy
         .add_rule(VisibilityRule::private(private_path.clone()))
@@ -241,6 +251,12 @@ fn published_demo(
         vec![
             add_change("/README.html", readme, Visibility::Public)?,
             add_change("/src/app.ts", app, Visibility::Public)?,
+            add_change(
+                "/.scope/runs/checks.yml",
+                checks_workflow,
+                Visibility::Public,
+            )?,
+            add_change("/.scope/runs/lint.yml", lint_workflow, Visibility::Public)?,
             add_change(private_path.as_str(), private_plan, Visibility::Private)?,
         ],
     ));
@@ -253,6 +269,8 @@ fn published_demo(
             files: &[
                 ("README.html", PUBLIC_DEMO_README_HTML),
                 ("src/app.ts", PUBLIC_DEMO_APP),
+                (".scope/runs/checks.yml", PUBLIC_DEMO_CHECKS_WORKFLOW),
+                (".scope/runs/lint.yml", PUBLIC_DEMO_LINT_WORKFLOW),
                 ("internal/plan.md", PUBLIC_DEMO_PLAN),
             ],
             message: "Seed public demo",

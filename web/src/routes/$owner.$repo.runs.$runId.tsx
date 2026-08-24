@@ -10,7 +10,7 @@ import {
   RepositoryRunDetailPage,
   RunDetailPageError,
 } from '@/features/runs/repository-run-detail-page'
-import { RunDetailPagePending } from '@/features/runs/runs-page-pending'
+import { RunDetailPagePending } from '@/features/runs/run-detail-pending'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { useCallback, useMemo } from 'react'

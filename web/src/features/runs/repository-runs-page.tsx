@@ -1,21 +1,21 @@
 import type {
   RepoParams,
-  RepoRunDetail,
   RepoRunHistoryInput,
   RepoRunHistoryPage,
   RepoRunWorkflowList,
-  RunActionInput,
 } from '@/api/types'
-import { PageContent, WorkbenchPane } from '@/components/page-header'
+import { PageContent, WorkbenchBar, WorkbenchPane } from '@/components/page-header'
 import { PageErrorAlert } from '@/components/page-error-alert'
 import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RunHistoryList } from './run-history-list'
 import { mergeRunHistory, reloadRunHistoryPages } from './run-history-model'
 import { useRunLiveRefresh } from './run-live-refresh'
-import { RunsHeader } from './runs-header'
-import { WorkflowLatestRun } from './workflow-latest-run'
-import { WorkflowNavigation } from './workflow-navigation'
+import { RunsFilterBar } from './runs-filter-bar'
+import {
+  type RunStatusFilter,
+  runMatchesStatusFilter,
+} from './runs-filter-model'
 
 const HISTORY_CHANGES = ['Created', 'StatusChanged'] as const
 
@@ -27,16 +27,11 @@ type RunPageResources = {
 
 export function RepositoryRunsPage({
   initialResources,
-  loadDetail,
   loadHistory,
   params,
   workflow,
 }: {
   initialResources: RunPageResources | null
-  loadDetail: (
-    input: RunActionInput,
-    signal?: AbortSignal,
-  ) => Promise<RepoRunDetail>
   loadHistory: (
     input: RepoRunHistoryInput,
     signal?: AbortSignal,
@@ -47,6 +42,7 @@ export function RepositoryRunsPage({
   const [history, setHistory] = useState(initialResources?.history ?? null)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<RunStatusFilter>('any')
   const historyRef = useRef(history)
   const loadedPageCountRef = useRef(1)
   const loadingMoreRef = useRef(false)
@@ -60,6 +56,12 @@ export function RepositoryRunsPage({
     [owner, repo, workflow],
   )
   const canRefresh = history !== null
+  const filteredRuns = useMemo(
+    () => history
+      ? history.runs.filter((run) => runMatchesStatusFilter(run, statusFilter))
+      : [],
+    [history, statusFilter],
+  )
 
   const refresh = useCallback((signal?: AbortSignal): Promise<void> | undefined => {
     if (refreshInFlightRef.current) return refreshInFlightRef.current
@@ -173,17 +175,23 @@ export function RepositoryRunsPage({
 
   return (
     <WorkbenchPane>
-      <RunsHeader runCount={history.runs.length} workflowName={selectedWorkflow?.name} />
-      <div className="grid min-w-0 border-t border-border lg:grid-cols-[14rem_minmax(0,1fr)]">
-        <WorkflowNavigation
-          params={params}
-          selectedWorkflow={workflow}
-          workflows={initialResources.workflows.workflows}
-        />
+      <WorkbenchBar
+        actions={(
+          <RunsFilterBar
+            onStatusFilterChange={setStatusFilter}
+            params={params}
+            selectedWorkflow={workflow}
+            statusFilter={statusFilter}
+            workflows={initialResources.workflows.workflows}
+          />
+        )}
+        title="Runs"
+      />
+      <div className="min-w-0 border-t border-border">
         <main className="min-w-0 px-4 pb-14 sm:px-6 lg:px-8">
           {initialResources.workflowsError ? (
             <div className="pt-5">
-              <PageErrorAlert title="Workflow navigation unavailable">
+              <PageErrorAlert title="Workflow filter unavailable">
                 <div>
                   <p>Run history is still available.</p>
                   <p className="mt-1 text-xs">{initialResources.workflowsError}</p>
@@ -203,20 +211,17 @@ export function RepositoryRunsPage({
               </PageErrorAlert>
             </div>
           ) : null}
-          <WorkflowLatestRun
-            key={history.runs[0]?.id ?? 'empty'}
-            loadDetail={loadDetail}
-            params={params}
-            run={history.runs[0]}
-          />
-          <RunHistoryList
-            loadMore={() => void loadMore()}
-            loadingMore={loadingMore}
-            params={params}
-            runs={history.runs}
-            selectedWorkflowName={selectedWorkflow?.name}
-            showLoadMore={history.next_cursor !== null}
-          />
+          <div className="pt-7">
+            <RunHistoryList
+              loadMore={() => void loadMore()}
+              loadingMore={loadingMore}
+              params={params}
+              runs={filteredRuns}
+              selectedWorkflowName={selectedWorkflow?.name}
+              showLoadMore={history.next_cursor !== null}
+              totalRunCount={history.runs.length}
+            />
+          </div>
         </main>
       </div>
     </WorkbenchPane>

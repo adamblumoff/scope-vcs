@@ -188,3 +188,22 @@ function stableLane(key: string) {
   for (const character of key) hash = (hash * 31 + character.charCodeAt(0)) >>> 0
   return hash % MAX_LONG_EDGE_LANES
 }
+
+/**
+ * Jobs in dependency order, so the flat job strip reads the way the work
+ * actually runs instead of alphabetically. Falls back to the given order when
+ * the graph cannot be laid out, because a broken graph must not blank the page.
+ */
+export function orderJobsByDependency<Job extends JobGraphInput>(
+  jobs: readonly Job[],
+): readonly Job[] {
+  let layout: RunJobGraphLayout
+  try {
+    layout = buildRunJobGraph(jobs)
+  } catch {
+    return jobs
+  }
+  const rank = new Map(layout.nodes.map((node, index) => [node.key, index]))
+  return [...jobs].sort((left, right) =>
+    (rank.get(left.job.key) ?? 0) - (rank.get(right.job.key) ?? 0))
+}
