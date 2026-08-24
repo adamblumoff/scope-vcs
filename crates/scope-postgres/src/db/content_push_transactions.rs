@@ -8,6 +8,7 @@ use super::{
     object_references::{insert_object_reference, replace_object_reference},
     outbox::enqueue_projection_read_model_rebuild,
     push_triggers::enqueue_push_main_trigger_evaluation,
+    workflow_catalogs::apply_repository_workflow_catalog,
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseTransaction, EntityTrait,
@@ -26,6 +27,7 @@ use {
             AcceptedContentPush, ContentPushState, ReviewedUpdateInput, accept_content_push,
             accept_request_merge,
         },
+        runs::catalog::RepositoryWorkflowCatalog,
         runs::trigger::PushTriggerInput,
         store::{GitHead, RequestMergeOrigin},
     },
@@ -35,7 +37,7 @@ pub(super) async fn accept_and_persist_content_push(
     tx: &DatabaseTransaction,
     repo_row: entities::repository::Model,
     update: ReviewedUpdateInput,
-    landing_file_mutation: RepositoryLandingFileMutation,
+    snapshots: RepositoryContentSnapshots,
     push_trigger_input: PushTriggerInput,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
@@ -44,7 +46,7 @@ pub(super) async fn accept_and_persist_content_push(
         tx,
         repo_row,
         update,
-        landing_file_mutation,
+        snapshots,
         ContentUpdateKind::MainPush(push_trigger_input),
         now_unix,
         generated_ids,
@@ -56,7 +58,7 @@ pub(super) async fn accept_and_persist_request_merge(
     tx: &DatabaseTransaction,
     repo_row: entities::repository::Model,
     update: ReviewedUpdateInput,
-    landing_file_mutation: RepositoryLandingFileMutation,
+    snapshots: RepositoryContentSnapshots,
     origin: RequestMergeOrigin,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
@@ -65,7 +67,7 @@ pub(super) async fn accept_and_persist_request_merge(
         tx,
         repo_row,
         update,
-        landing_file_mutation,
+        snapshots,
         ContentUpdateKind::RequestMerge(origin),
         now_unix,
         generated_ids,
@@ -78,15 +80,24 @@ enum ContentUpdateKind {
     RequestMerge(RequestMergeOrigin),
 }
 
+pub(super) struct RepositoryContentSnapshots {
+    pub(super) landing_file_mutation: RepositoryLandingFileMutation,
+    pub(super) workflow_catalog: RepositoryWorkflowCatalog,
+}
+
 async fn accept_and_persist_content_update(
     tx: &DatabaseTransaction,
     repo_row: entities::repository::Model,
     mut update: ReviewedUpdateInput,
-    landing_file_mutation: RepositoryLandingFileMutation,
+    snapshots: RepositoryContentSnapshots,
     kind: ContentUpdateKind,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<GitHead, PostgresError> {
+    let RepositoryContentSnapshots {
+        landing_file_mutation,
+        workflow_catalog,
+    } = snapshots;
     let repo_id = repo_row.id.clone();
     let mut changed_paths = update
         .changes
@@ -155,6 +166,9 @@ async fn accept_and_persist_content_update(
         git_pack_span,
         logical_commit,
     } = accepted.map_err(reviewed_update_domain_error)?;
+    workflow_catalog
+        .verify_source(&repo_id, &git_head.head_oid, change_version)
+        .map_err(PostgresError::internal)?;
 
     let persisted_change_version = i64::try_from(change_version).map_err(|_| {
         PostgresError::internal_message("repository change version exceeds PostgreSQL bigint range")
@@ -200,6 +214,7 @@ async fn accept_and_persist_content_update(
         save_live_file(tx, &repo_id, &change.path, change.new_content.as_ref()).await?;
     }
     apply_repository_landing_file_mutation(tx, &repo_id, landing_file_mutation).await?;
+    apply_repository_workflow_catalog(tx, &workflow_catalog).await?;
     enqueue_projection_read_model_rebuild(tx, &repo_id, change_version, now_unix, generated_ids)
         .await?;
     if let Some(input) = push_trigger_input {

@@ -3,8 +3,7 @@ use scope_postgres::db::{
     verify_schema, verify_writer_fence_available,
 };
 
-const USAGE: &str =
-    "usage: scope-maintenance <plan|fence|drain-writers|apply|backfill-landing-files|verify>";
+const USAGE: &str = "usage: scope-maintenance <plan|fence|drain-writers|apply|backfill-landing-files|backfill-workflow-catalogs|verify>";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -33,6 +32,12 @@ async fn main() -> anyhow::Result<()> {
             let state = api::AppState::from_env().await?;
             let stored = state.backfill_repository_landing_files().await?;
             println!(r#"{{"landingFilesBackfilled":{stored}}}"#);
+        }
+        "backfill-workflow-catalogs" => {
+            verify_schema(database_url).await?;
+            let state = api::AppState::from_env().await?;
+            let stored = state.backfill_repository_workflow_catalogs().await?;
+            println!(r#"{{"workflowCatalogsBackfilled":{stored}}}"#);
         }
         "fence" => {
             verify_writer_fence_available(database_url).await?;

@@ -1,5 +1,6 @@
 use scope_domain::runs::{
     cache::WorkflowCache,
+    catalog::RepositoryWorkflowCatalog,
     workflow::{
         CompiledWorkflow, ContainerSpec, WorkflowError, WorkflowIdentity, WorkflowJob,
         WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
@@ -12,7 +13,7 @@ use std::{
 };
 use thiserror::Error;
 
-pub const MAX_WORKFLOW_DEFINITION_BYTES: usize = 64 * 1024;
+pub use scope_domain::runs::catalog::MAX_WORKFLOW_DEFINITION_BYTES;
 
 #[derive(Debug, Error)]
 pub enum RunConfigError {
@@ -28,6 +29,8 @@ pub enum RunConfigError {
     InvalidTimeout,
     #[error("workflow name {0:?} is defined by more than one file")]
     DuplicateWorkflowName(String),
+    #[error("{0}")]
+    CatalogRejected(String),
     #[error(transparent)]
     InvalidWorkflow(#[from] WorkflowError),
 }
@@ -151,6 +154,20 @@ pub fn parse_workflow_set<'a>(
         revisions.push(workflow.into_revision(repository_id)?);
     }
     Ok(revisions)
+}
+
+pub fn parse_repository_workflow_catalog(
+    catalog: &RepositoryWorkflowCatalog,
+) -> Result<Vec<WorkflowRevision>, RunConfigError> {
+    if let Some(error) = catalog.configuration_error() {
+        return Err(RunConfigError::CatalogRejected(error.to_string()));
+    }
+    let files = catalog
+        .files()
+        .expect("a workflow catalog without an error always contains a captured file set")
+        .iter()
+        .map(|file| (file.path().as_str(), file.content_bytes()));
+    parse_workflow_set(catalog.repository_id(), files)
 }
 
 fn parse_timeout_seconds(timeout: &str) -> Result<u64, RunConfigError> {
@@ -593,6 +610,55 @@ jobs:
         assert!(matches!(
             error,
             RunConfigError::DuplicateWorkflowName(name) if name == "test"
+        ));
+    }
+
+    #[test]
+    fn repository_catalog_uses_the_existing_workflow_parser() {
+        use scope_domain::{
+            runs::catalog::{RepositoryWorkflowCatalog, RepositoryWorkflowFile},
+            store::DEFAULT_GIT_FILE_MODE,
+        };
+
+        let file = RepositoryWorkflowFile::from_content(
+            "/.scope/runs/test.yml",
+            DEFAULT_GIT_FILE_MODE,
+            WORKFLOW.as_bytes().to_vec(),
+        )
+        .unwrap();
+        let catalog = RepositoryWorkflowCatalog::captured(
+            "repo-1",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            3,
+            vec![file],
+        )
+        .unwrap();
+
+        let revisions = parse_repository_workflow_catalog(&catalog).unwrap();
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(revisions[0].workflow().repository_id(), "repo-1");
+        assert_eq!(
+            revisions[0].workflow().path().as_str(),
+            "/.scope/runs/test.yml"
+        );
+    }
+
+    #[test]
+    fn repository_catalog_surfaces_capture_errors_without_parsing() {
+        use scope_domain::runs::catalog::RepositoryWorkflowCatalog;
+
+        let catalog = RepositoryWorkflowCatalog::rejected(
+            "repo-1",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            3,
+            "invalid workflow path /.scope/runs/Bad.yml",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            parse_repository_workflow_catalog(&catalog),
+            Err(RunConfigError::CatalogRejected(message))
+                if message == "invalid workflow path /.scope/runs/Bad.yml"
         ));
     }
 }

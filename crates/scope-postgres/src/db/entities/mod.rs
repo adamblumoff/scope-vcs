@@ -97,7 +97,7 @@ pub use jobs::{
 pub use read_models::{projection_file, projection_read_model};
 pub use repositories::{
     git_head, git_pack_span, repository, repository_first_push_token, repository_git_push_token,
-    repository_landing_file,
+    repository_landing_file, repository_workflow_catalog, repository_workflow_file,
 };
 pub use requests::{
     request, request_discussion, request_discussion_read_state, request_discussion_reply,

@@ -134,6 +134,47 @@ pub mod repository_landing_file {
         }
     }
 }
+
+pub mod repository_workflow_catalog {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repository_workflow_catalogs")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        pub source_head_oid: String,
+        pub source_change_version: i64,
+        pub configuration_error: Option<String>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod repository_workflow_file {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_repository_workflow_files")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub repo_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub path: String,
+        pub oid: String,
+        pub size_bytes: i64,
+        pub git_file_mode: String,
+        pub content_bytes: Vec<u8>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
 pub mod repository_first_push_token {
     use super::*;
 

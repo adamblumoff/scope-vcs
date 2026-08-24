@@ -1,4 +1,7 @@
-use super::workflow::{WorkflowError, WorkflowPath};
+use super::{
+    catalog::RepositoryWorkflowCatalog,
+    workflow::{WorkflowError, WorkflowPath},
+};
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +45,25 @@ impl PushTriggerInput {
             workflows,
             configuration_error,
         })
+    }
+}
+
+impl From<&RepositoryWorkflowCatalog> for PushTriggerInput {
+    fn from(catalog: &RepositoryWorkflowCatalog) -> Self {
+        let workflows = catalog
+            .files()
+            .unwrap_or_default()
+            .iter()
+            .map(|file| PushWorkflowFile {
+                path: file.path().as_str().to_string(),
+                bytes: file.content_bytes().to_vec(),
+            })
+            .collect();
+        Self {
+            head_oid: catalog.source_head_oid().to_string(),
+            workflows,
+            configuration_error: catalog.configuration_error().map(str::to_string),
+        }
     }
 }
 
@@ -178,5 +200,54 @@ impl PushTriggerEvaluation {
         self.checks = checks;
         self.completed_at_unix = Some(now_unix);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        runs::catalog::{RepositoryWorkflowCatalog, RepositoryWorkflowFile},
+        store::DEFAULT_GIT_FILE_MODE,
+    };
+
+    const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn push_input_is_derived_from_the_captured_catalog() {
+        let file = RepositoryWorkflowFile::from_content(
+            "/.scope/runs/checks.yml",
+            DEFAULT_GIT_FILE_MODE,
+            b"workflow".to_vec(),
+        )
+        .unwrap();
+        let catalog = RepositoryWorkflowCatalog::captured("repo-1", HEAD, 4, vec![file]).unwrap();
+
+        let input = PushTriggerInput::from(&catalog);
+
+        assert_eq!(input.head_oid, HEAD);
+        assert_eq!(input.workflows.len(), 1);
+        assert_eq!(input.workflows[0].path, "/.scope/runs/checks.yml");
+        assert_eq!(input.workflows[0].bytes, b"workflow");
+        assert!(input.configuration_error.is_none());
+    }
+
+    #[test]
+    fn push_input_preserves_catalog_capture_errors() {
+        let catalog = RepositoryWorkflowCatalog::rejected(
+            "repo-1",
+            HEAD,
+            4,
+            "repository contains too many workflows",
+        )
+        .unwrap();
+
+        let input = PushTriggerInput::from(&catalog);
+
+        assert!(input.workflows.is_empty());
+        assert_eq!(
+            input.configuration_error.as_deref(),
+            Some("repository contains too many workflows")
+        );
     }
 }

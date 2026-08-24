@@ -25,6 +25,7 @@ mod m0024_git_compaction_scheduler;
 mod m0025_visibility_change_sets;
 mod m0026_repository_landing_files;
 mod m0027_run_creation_sequence;
+mod m0028_repository_workflow_catalogs;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -123,6 +124,10 @@ fn inventory() -> Vec<MigrationSpec> {
             MaintenanceRequired,
         ),
         spec(m0027_run_creation_sequence::Migration, MaintenanceRequired),
+        spec(
+            m0028_repository_workflow_catalogs::Migration,
+            MaintenanceRequired,
+        ),
     ]
 }
 

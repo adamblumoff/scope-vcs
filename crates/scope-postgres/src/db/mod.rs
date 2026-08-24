@@ -119,6 +119,8 @@ pub use runs::{DispatchClaim, EnqueueRunResult};
 ))]
 mod test_support;
 mod visibility_changes;
+mod workflow_catalogs;
+pub use workflow_catalogs::RepositoryWorkflowCatalogBackfillCandidate;
 
 use crate::error::PostgresError;
 pub use crate::migrations::{MigrationImpact, MigrationPlan, PendingMigration};

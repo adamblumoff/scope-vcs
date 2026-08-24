@@ -151,19 +151,24 @@ maintenance_read() {
   return 1
 }
 
-backfill_landing_files() {
-  local database_public_url maintenance_data_dir result
+backfill_repository_snapshots() {
+  local database_public_url maintenance_data_dir result backfill_command
   database_public_url="$(
     railway variable list "${railway_scope[@]}" --service "$database_service" --json |
       jq -er '.DATABASE_PUBLIC_URL | strings | select(length > 0)'
   )"
-  maintenance_data_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/scope-landing-file-backfill.XXXXXX")"
+  maintenance_data_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/scope-repository-snapshot-backfill.XXXXXX")"
   result=0
-  SCOPE_MAINTENANCE_DATABASE_URL="$database_public_url" \
-    SCOPE_MAINTENANCE_DATA_DIR="$maintenance_data_dir" \
-    railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
-      sh -c 'DATABASE_URL="$SCOPE_MAINTENANCE_DATABASE_URL" SCOPE_DATA_DIR="$SCOPE_MAINTENANCE_DATA_DIR" exec "$@"' \
-      scope-maintenance "$maintenance_binary" backfill-landing-files || result=$?
+  for backfill_command in backfill-landing-files backfill-workflow-catalogs; do
+    SCOPE_MAINTENANCE_DATABASE_URL="$database_public_url" \
+      SCOPE_MAINTENANCE_DATA_DIR="$maintenance_data_dir" \
+      railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
+        sh -c 'DATABASE_URL="$SCOPE_MAINTENANCE_DATABASE_URL" SCOPE_DATA_DIR="$SCOPE_MAINTENANCE_DATA_DIR" exec "$@"' \
+        scope-maintenance "$maintenance_binary" "$backfill_command" || {
+          result=$?
+          break
+        }
+  done
   rm -rf -- "$maintenance_data_dir"
   return "$result"
 }
@@ -433,7 +438,7 @@ deploy_selected_releases() {
 
 deploy_and_reopen() {
   maintenance_read verify
-  backfill_landing_files
+  backfill_repository_snapshots
   deploy_cache_release
   deploy_release worker "$worker_service" "$worker_upload_root"
   wait_for_service_health "$worker_service"

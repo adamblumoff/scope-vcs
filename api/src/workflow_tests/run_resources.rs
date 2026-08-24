@@ -1,4 +1,5 @@
 use super::*;
+use scope_object_store::ObjectStore;
 
 const WORKFLOW: &str = r#"
 name: Test
@@ -15,16 +16,69 @@ jobs:
         run: printf 'hello from runner\n'
 "#;
 
+fn workflow_named(name: &str) -> String {
+    WORKFLOW.replacen("name: Test", &format!("name: {name}"), 1)
+}
+
+async fn state_with_pushed_workflow(label: &str) -> AppState {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let source = temp_git_repo(label);
+    fs::create_dir_all(source.join(".scope/runs")).unwrap();
+    fs::write(source.join(".scope/runs/test.yml"), WORKFLOW).unwrap();
+    run_git(Some(&source), &["add", "."], "stage workflow source").unwrap();
+    commit_all(&source, "add workflow");
+    let bare = clone_test_repo(&source, &format!("{label}-bare"), true);
+    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
+    state
+}
+
+async fn workflow_list_response(state: AppState) -> Response {
+    router(state)
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::repo_run_workflows(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn workflow_catalog_and_filtered_history_follow_current_main() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
-    let mut repo = test_repo(&test_owner_id());
-    repo.live_files.insert(
-        ScopePath::parse("/.scope/runs/test.yml").unwrap(),
-        source_blob(&state, WORKFLOW),
-    );
-    replace_test_repo(&state, repo).await;
+    let source = temp_git_repo("run-history-pages");
+    fs::create_dir_all(source.join(".scope/runs")).unwrap();
+    fs::write(source.join(".scope/runs/test.yml"), WORKFLOW).unwrap();
+    run_git(Some(&source), &["add", "."], "stage workflow source").unwrap();
+    commit_all(&source, "add workflow");
+    let bare = clone_test_repo(&source, "run-history-pages-bare", true);
+    apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
+
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    let head = repo.git_head.as_ref().unwrap();
+    state
+        .test_object_store
+        .delete(&scope_object_store::object_key(&head.manifest))
+        .unwrap();
+    for span in &repo.git_pack_spans {
+        state
+            .test_object_store
+            .delete(&scope_object_store::object_key(&span.object))
+            .unwrap();
+    }
+    let cache_path = state.repository_engine.repository_path(TEST_REPO_ID);
+    if cache_path.exists() {
+        fs::remove_dir_all(cache_path).unwrap();
+    }
     let app = router(state);
 
     let workflows = app
@@ -47,11 +101,6 @@ async fn workflow_catalog_and_filtered_history_follow_current_main() {
     assert_eq!(workflows["workflows"][0]["name"], "Test");
     assert_eq!(workflows["workflows"][0]["job_count"], 1);
 
-    let source = temp_git_repo("run-history-pages");
-    fs::create_dir_all(source.join(".scope/runs")).unwrap();
-    fs::write(source.join(".scope/runs/test.yml"), WORKFLOW).unwrap();
-    run_git(Some(&source), &["add", "."], "stage run history source").unwrap();
-    commit_all(&source, "run history source");
     let git_oid = git_head_oid(&source);
     let bundle_path = source.join("source.bundle");
     run_git(
@@ -146,4 +195,193 @@ async fn workflow_catalog_and_filtered_history_follow_current_main() {
         .await
         .unwrap();
     assert_eq!(wrong_filter.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn workflow_catalog_backfill_is_idempotent() {
+    let state = state_with_pushed_workflow("workflow-catalog-backfill").await;
+    state
+        .metadata
+        .repositories()
+        .delete_repository_workflow_catalog_for_tests(TEST_REPO_ID)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        state.backfill_repository_workflow_catalogs().await.unwrap(),
+        1
+    );
+    assert_eq!(
+        state.backfill_repository_workflow_catalogs().await.unwrap(),
+        0
+    );
+    assert_eq!(workflow_list_response(state).await.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn missing_or_inconsistent_workflow_catalog_fails_closed() {
+    let missing = state_with_pushed_workflow("workflow-catalog-missing").await;
+    missing
+        .metadata
+        .repositories()
+        .delete_repository_workflow_catalog_for_tests(TEST_REPO_ID)
+        .await
+        .unwrap();
+    assert_eq!(
+        workflow_list_response(missing).await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+
+    let wrong_source = state_with_pushed_workflow("workflow-catalog-wrong-source").await;
+    wrong_source
+        .metadata
+        .repositories()
+        .corrupt_repository_workflow_catalog_source_for_tests(
+            TEST_REPO_ID,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        workflow_list_response(wrong_source).await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+
+    let corrupt_file = state_with_pushed_workflow("workflow-catalog-corrupt-file").await;
+    corrupt_file
+        .metadata
+        .repositories()
+        .corrupt_repository_workflow_file_content_for_tests(
+            TEST_REPO_ID,
+            "/.scope/runs/test.yml",
+            b"not the captured workflow".to_vec(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        workflow_list_response(corrupt_file).await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+}
+
+#[tokio::test]
+async fn direct_push_replaces_the_complete_workflow_catalog() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let source = temp_git_repo("workflow-catalog-replacement");
+    fs::create_dir_all(source.join(".scope/runs")).unwrap();
+    fs::write(source.join(".scope/runs/old.yml"), workflow_named("Old")).unwrap();
+    fs::write(
+        source.join(".scope/runs/deleted.yml"),
+        workflow_named("Deleted"),
+    )
+    .unwrap();
+    run_git(Some(&source), &["add", "."], "stage initial workflows").unwrap();
+    commit_all(&source, "add initial workflows");
+    let first = clone_test_repo(&source, "workflow-catalog-replacement-first", true);
+    apply_first_push_from_staging_repo(&state, &first, repo_config(Visibility::Public)).await;
+
+    fs::rename(
+        source.join(".scope/runs/old.yml"),
+        source.join(".scope/runs/renamed.yml"),
+    )
+    .unwrap();
+    fs::write(
+        source.join(".scope/runs/renamed.yml"),
+        workflow_named("Renamed and edited"),
+    )
+    .unwrap();
+    fs::remove_file(source.join(".scope/runs/deleted.yml")).unwrap();
+    fs::write(
+        source.join(".scope/runs/added.yml"),
+        workflow_named("Added"),
+    )
+    .unwrap();
+    run_git(Some(&source), &["add", "-A"], "stage workflow replacement").unwrap();
+    commit_all(&source, "replace workflows");
+    let second = clone_test_repo(&source, "workflow-catalog-replacement-second", true);
+    let current = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    let mut update = receive_pack_update_from_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &second,
+        &test_owner_id(),
+        repo_config(Visibility::Public),
+    )
+    .await
+    .unwrap();
+    update.base_git_manifest_ref =
+        Some(Some(current.git_head.unwrap().manifest.content_ref.clone()));
+    persist_test_update(&state, update).await.unwrap();
+
+    let response = workflow_list_response(state).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let workflows = body["workflows"].as_array().unwrap();
+    assert_eq!(workflows.len(), 2);
+    assert_eq!(workflows[0]["key"], "added");
+    assert_eq!(workflows[0]["name"], "Added");
+    assert_eq!(workflows[1]["key"], "renamed");
+    assert_eq!(workflows[1]["name"], "Renamed and edited");
+}
+
+#[tokio::test]
+async fn workflow_catalog_failure_rolls_back_the_push_transaction() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let source = temp_git_repo("workflow-catalog-rollback");
+    fs::create_dir_all(source.join(".scope/runs")).unwrap();
+    fs::write(source.join(".scope/runs/test.yml"), WORKFLOW).unwrap();
+    fs::write(source.join("README.md"), "before\n").unwrap();
+    run_git(Some(&source), &["add", "."], "stage rollback base").unwrap();
+    commit_all(&source, "add rollback base");
+    let first = clone_test_repo(&source, "workflow-catalog-rollback-first", true);
+    apply_first_push_from_staging_repo(&state, &first, repo_config(Visibility::Public)).await;
+    let before = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+
+    fs::write(source.join("README.md"), "after\n").unwrap();
+    run_git(Some(&source), &["add", "."], "stage rejected push").unwrap();
+    commit_all(&source, "prepare rejected push");
+    let second = clone_test_repo(&source, "workflow-catalog-rollback-second", true);
+    let mut update = receive_pack_update_from_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &second,
+        &test_owner_id(),
+        repo_config(Visibility::Public),
+    )
+    .await
+    .unwrap();
+    update.base_git_manifest_ref = Some(Some(
+        before
+            .git_head
+            .as_ref()
+            .unwrap()
+            .manifest
+            .content_ref
+            .clone(),
+    ));
+    update.workflow_catalog = scope_domain::runs::catalog::RepositoryWorkflowCatalog::captured(
+        TEST_REPO_ID,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        before.record.change_version + 1,
+        Vec::new(),
+    )
+    .unwrap();
+
+    assert!(persist_test_update(&state, update).await.is_err());
+    let after = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    assert_eq!(after.record.change_version, before.record.change_version);
+    assert_eq!(after.git_head, before.git_head);
+    let response = workflow_list_response(state).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["workflows"][0]["key"], "test");
 }
