@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react'
 import { useRunClock } from './run-clock'
 import {
   createRunTimeFormatter,
@@ -14,15 +15,30 @@ const ABSOLUTE_FORMATTER = createRunTimeFormatter()
  */
 export function RunTimestamp({ value }: { value: number }) {
   const nowUnix = useRunClock()
+  const hydrated = useHydrated()
   const date = runUnixTimeDate(value)
 
   return (
     <time
       dateTime={date.toISOString()}
       suppressHydrationWarning
-      title={ABSOLUTE_FORMATTER.format(date)}
+      // The absolute time is only meaningful in the reader's own zone, and
+      // suppressed hydration does not repaint a title rendered server-side.
+      title={hydrated ? ABSOLUTE_FORMATTER.format(date) : undefined}
     >
       {formatRelativeTime(value, nowUnix)}
     </time>
+  )
+}
+
+function subscribeToHydration() {
+  return () => {}
+}
+
+function useHydrated() {
+  return useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
   )
 }

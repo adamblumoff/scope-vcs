@@ -20,6 +20,10 @@ function tick() {
 }
 
 function subscribe(listener: () => void) {
+  // The snapshot freezes when the last runs page unmounts, so a reader coming
+  // back through client navigation would otherwise see times from their last
+  // visit until the first tick lands.
+  if (listeners.size === 0) tick()
   listeners.add(listener)
   timer ??= setInterval(tick, TICK_MS)
   return () => {

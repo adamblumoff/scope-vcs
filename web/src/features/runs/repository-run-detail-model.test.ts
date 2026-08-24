@@ -7,7 +7,10 @@ import {
   mergeStepLogs,
   reconcileAttemptOverrides,
   runCanChange,
+  selectAttempt,
   selectInitialStep,
+  selectJob,
+  selectStep,
 } from './repository-run-detail-model'
 
 function job(overrides: {
@@ -223,5 +226,59 @@ describe('attempt ordering', () => {
     const jobDetail = { attempts: newestFirst, job: { key: 'lint' } }
 
     assert.equal(attemptForJob(jobDetail, {}, null)?.id, 'a2')
+  })
+})
+
+describe('run detail navigation', () => {
+  // Reconciliation derives the open job from `selection`, so any handler that
+  // moves the reader without clearing a stale selection gets undone by the
+  // next poll.
+  const opened = {
+    attemptOverrides: {} as Record<string, string>,
+    manualSelection: false,
+    selectedJobKey: 'build',
+    selection: { attemptId: 'a1', jobKey: 'build', stepIndex: 0 },
+  }
+
+  it('drops a selection belonging to the job being left', () => {
+    const next = selectJob(opened, 'deploy')
+
+    assert.equal(next.selectedJobKey, 'deploy')
+    assert.equal(next.selection, null)
+    assert.equal(next.manualSelection, true)
+  })
+
+  it('keeps the selection when reopening its own job', () => {
+    const closed = selectJob(opened, 'build')
+    const reopened = selectJob({ ...closed, selection: opened.selection }, 'build')
+
+    assert.equal(closed.selectedJobKey, null)
+    assert.equal(reopened.selectedJobKey, 'build')
+    assert.deepEqual(reopened.selection, opened.selection)
+  })
+
+  it('treats an attempt switch as the reader taking over', () => {
+    const next = selectAttempt(opened, 'build', 'a2')
+
+    assert.equal(next.attemptOverrides.build, 'a2')
+    assert.equal(next.selection, null)
+    assert.equal(next.manualSelection, true)
+  })
+
+  it('leaves another job alone when switching attempts', () => {
+    const next = selectAttempt(opened, 'deploy', 'a9')
+
+    assert.deepEqual(next.selection, opened.selection)
+  })
+
+  it('opens a step in its own job and closes it on a second click', () => {
+    const target = { attemptId: 'a3', jobKey: 'deploy', stepIndex: 2 }
+    const open = selectStep(opened, target)
+    const closed = selectStep(open, target)
+
+    assert.equal(open.selectedJobKey, 'deploy')
+    assert.deepEqual(open.selection, target)
+    assert.equal(closed.selection, null)
+    assert.equal(closed.selectedJobKey, 'deploy')
   })
 })

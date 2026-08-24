@@ -175,3 +175,63 @@ export function latestAttempt<Attempt extends { number: number }>(
     null,
   )
 }
+
+/**
+ * What the reader is currently looking at. `selectedJobKey` and `selection`
+ * must always agree, because refresh reconciliation derives the open job from
+ * the selection; letting them drift snaps the page back after every poll.
+ */
+export type RunSelectionState = {
+  attemptOverrides: Readonly<Record<string, string>>
+  manualSelection: boolean
+  selectedJobKey: string | null
+  selection: StepSelection | null
+}
+
+/** Opening a job, or closing the one already open. */
+export function selectJob<State extends RunSelectionState>(
+  current: State,
+  jobKey: string,
+): State {
+  const selectedJobKey = current.selectedJobKey === jobKey ? null : jobKey
+  return {
+    ...current,
+    manualSelection: true,
+    selectedJobKey,
+    selection: current.selection?.jobKey === selectedJobKey
+      ? current.selection
+      : null,
+  }
+}
+
+/** Switching which attempt of a job is on screen. */
+export function selectAttempt<State extends RunSelectionState>(
+  current: State,
+  jobKey: string,
+  attemptId: string,
+): State {
+  return {
+    ...current,
+    attemptOverrides: { ...current.attemptOverrides, [jobKey]: attemptId },
+    manualSelection: true,
+    selection: current.selection?.jobKey === jobKey ? null : current.selection,
+  }
+}
+
+/** Opening a step's output, or closing the one already open. */
+export function selectStep<State extends RunSelectionState>(
+  current: State,
+  selection: StepSelection,
+): State {
+  const open = current.selection
+  const alreadyOpen = open !== null &&
+    open.jobKey === selection.jobKey &&
+    open.attemptId === selection.attemptId &&
+    open.stepIndex === selection.stepIndex
+  return {
+    ...current,
+    manualSelection: true,
+    selectedJobKey: alreadyOpen ? current.selectedJobKey : selection.jobKey,
+    selection: alreadyOpen ? null : selection,
+  }
+}

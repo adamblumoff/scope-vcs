@@ -16,6 +16,9 @@ import {
   defaultShowGraph,
   mergeStepLogs,
   reconcileAttemptOverrides,
+  selectAttempt as selectAttemptInJob,
+  selectJob,
+  selectStep,
   runCanChange,
   selectInitialStep,
   type StepSelection,
@@ -372,33 +375,18 @@ export function useRepositoryRunDetailController({
     }
   }, [refreshDetail])
 
+  // Navigation rules live in the model so `selection` and `selectedJobKey`
+  // cannot drift apart here.
   function toggleJob(jobDetail: RepoRunJobDetail) {
-    updateView((current) => ({
-      ...current,
-      selectedJobKey: current.selectedJobKey === jobDetail.job.key
-        ? null
-        : jobDetail.job.key,
-    }))
+    updateView((current) => selectJob(current, jobDetail.job.key))
   }
 
   function selectAttempt(jobKey: string, attemptId: string) {
-    updateView((current) => ({
-      ...current,
-      attemptOverrides: { ...current.attemptOverrides, [jobKey]: attemptId },
-      selection: current.selection?.jobKey === jobKey ? null : current.selection,
-    }))
+    updateView((current) => selectAttemptInJob(current, jobKey, attemptId))
   }
 
   function toggleStep(jobKey: string, attemptId: string, stepIndex: number) {
-    updateView((current) => ({
-      ...current,
-      manualSelection: true,
-      selection: current.selection?.jobKey === jobKey &&
-        current.selection.attemptId === attemptId &&
-        current.selection.stepIndex === stepIndex
-        ? null
-        : { attemptId, jobKey, stepIndex },
-    }))
+    updateView((current) => selectStep(current, { attemptId, jobKey, stepIndex }))
   }
 
   function toggleGraph() {

@@ -31,34 +31,34 @@ export function RunHistoryList({
     )
   }
 
-  if (runs.length === 0) {
-    return (
-      <EmptyState
-        description="Try a different workflow or status filter."
-        icon={<TerminalSquare />}
-        title="No runs match this filter"
-      />
-    )
-  }
-
   return (
     <div>
-      <div className="divide-y divide-border">
-        {runs.map((run) => (
-          <RunRow key={run.id} params={params} run={run} />
-        ))}
-      </div>
-      <div className="flex items-center justify-center gap-3 pt-5">
-        {showLoadMore ? (
-          <Button disabled={loadingMore} onClick={loadMore} variant="secondary">
-            {loadingMore ? <LoaderCircle className="animate-spin" /> : null}
-            Load older runs
-          </Button>
-        ) : null}
-        <span className="text-xs text-muted-foreground">
-          Showing {runs.length}
-        </span>
-      </div>
+      {runs.length === 0 ? (
+        <EmptyState
+          description="Older runs may still match. Load more history, or try a different filter."
+          icon={<TerminalSquare />}
+          title="No runs match this filter"
+        />
+      ) : (
+        <div className="divide-y divide-border">
+          {runs.map((run) => (
+            <RunRow key={run.id} params={params} run={run} />
+          ))}
+        </div>
+      )}
+      {showLoadMore || runs.length > 0 ? (
+        <div className="flex items-center justify-center gap-3 pt-5">
+          {showLoadMore ? (
+            <Button disabled={loadingMore} onClick={loadMore} variant="secondary">
+              {loadingMore ? <LoaderCircle className="animate-spin" /> : null}
+              Load older runs
+            </Button>
+          ) : null}
+          <span className="text-xs text-muted-foreground">
+            Showing {runs.length}
+          </span>
+        </div>
+      ) : null}
     </div>
   )
 }
