@@ -113,20 +113,30 @@ async fn current_workflows(
     state: &AppState,
     repo: &StoredRepository,
 ) -> Result<Vec<WorkflowRevision>, ApiError> {
-    let catalog = state
+    let snapshot = state
         .metadata
         .repositories()
-        .repository_workflow_catalog(&repo.record.id)
+        .current_repository_workflow_catalog(&repo.record.id)
         .await
         .map_err(ApiError::from)?
         .ok_or_else(|| {
-            ApiError::internal_message("repository workflow catalog is missing for current main")
+            ApiError::internal_message("repository disappeared while loading current workflows")
         })?;
-    let head = repo.git_head.as_ref().ok_or_else(|| {
-        ApiError::internal_message("repository workflow catalog requires an accepted Git head")
+    let repo = snapshot.repository;
+    let Some(head) = repo.git_head.as_ref() else {
+        return if snapshot.catalog.is_none() {
+            Ok(Vec::new())
+        } else {
+            Err(ApiError::internal_message(
+                "repository workflow catalog exists without an accepted Git head",
+            ))
+        };
+    };
+    let catalog = snapshot.catalog.ok_or_else(|| {
+        ApiError::internal_message("repository workflow catalog is missing for current main")
     })?;
     catalog
-        .verify_source(&repo.record.id, &head.head_oid, repo.record.change_version)
+        .verify_source(&repo.record.id, &head.head_oid, head.change_version)
         .map_err(ApiError::internal)?;
     scope_run_config::parse_repository_workflow_catalog(&catalog).map_err(ApiError::bad_request)
 }

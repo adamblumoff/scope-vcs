@@ -384,6 +384,21 @@ async fn repository_workflow_catalog_backfill_rechecks_repository_and_live_blob_
         store
             .store_backfilled_repository_workflow_catalog(&catalog)
             .await
+            .unwrap()
+    );
+    store
+        .delete_repository_workflow_catalog_for_tests(REPO_ID)
+        .await
+        .unwrap();
+    db.execute_unprepared(&format!(
+        "UPDATE scope_git_heads SET change_version = 8 WHERE repo_id = '{REPO_ID}'"
+    ))
+    .await
+    .unwrap();
+    assert!(
+        store
+            .store_backfilled_repository_workflow_catalog(&catalog)
+            .await
             .is_err()
     );
 }
