@@ -1,6 +1,6 @@
 use super::*;
 use crate::db::{
-    entities,
+    entities, repository_workflow_catalogs_for_maintenance,
     workflow_catalogs::{apply_repository_workflow_catalog, repository_workflow_catalog},
 };
 use scope_domain::{
@@ -42,6 +42,49 @@ async fn insert_captured_catalog(db: &DatabaseConnection) {
     ))
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn maintenance_reads_catalogs_from_the_canonical_pre_migration_schema() {
+    let (target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(28))
+        .await
+        .unwrap();
+    insert_repository(db.as_ref()).await;
+    let file = RepositoryWorkflowFile::from_content(
+        "/.scope/runs/checks.yml",
+        DEFAULT_GIT_FILE_MODE,
+        b"name: checks\n".to_vec(),
+    )
+    .unwrap();
+    let catalog = RepositoryWorkflowCatalog::captured(REPO_ID, HEAD_OID, 7, vec![file]).unwrap();
+    apply_repository_workflow_catalog(db.as_ref(), &catalog)
+        .await
+        .unwrap();
+
+    let catalogs = repository_workflow_catalogs_for_maintenance(target.schema_database_url())
+        .await
+        .unwrap();
+
+    assert_eq!(catalogs.len(), 1);
+    assert_eq!(catalogs[0].repository_id(), REPO_ID);
+    let plan = migrations::plan(db.as_ref()).await.unwrap();
+    assert_eq!(plan.pending[0].name, "m0029_exact_compatible_caches");
+}
+
+#[tokio::test]
+async fn maintenance_has_no_catalogs_to_read_before_the_catalog_migration() {
+    let (target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(27))
+        .await
+        .unwrap();
+
+    let catalogs = repository_workflow_catalogs_for_maintenance(target.schema_database_url())
+        .await
+        .unwrap();
+
+    assert!(catalogs.is_empty());
+    assert!(!relation_exists(db.as_ref(), "scope_repository_workflow_catalogs").await);
 }
 
 #[tokio::test]

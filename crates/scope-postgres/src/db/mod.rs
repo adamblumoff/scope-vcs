@@ -349,6 +349,23 @@ pub async fn migration_plan(database_url: String) -> anyhow::Result<MigrationPla
     Ok(crate::migrations::plan(&db).await?)
 }
 
+pub async fn repository_workflow_catalogs_for_maintenance(
+    database_url: String,
+) -> anyhow::Result<Vec<scope_domain::runs::catalog::RepositoryWorkflowCatalog>> {
+    const CATALOG_MIGRATION: &str = "m0028_repository_workflow_catalogs";
+
+    let db = Database::connect(database_url).await?;
+    let plan = crate::migrations::plan(&db).await?;
+    if plan
+        .pending
+        .iter()
+        .any(|migration| migration.name == CATALOG_MIGRATION)
+    {
+        return Ok(Vec::new());
+    }
+    Ok(workflow_catalogs::load_repository_workflow_catalogs(&db).await?)
+}
+
 pub async fn verify_schema(database_url: String) -> anyhow::Result<()> {
     let db = Database::connect(database_url).await?;
     crate::migrations::assert_exact_state(&db).await?;

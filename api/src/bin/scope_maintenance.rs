@@ -3,7 +3,7 @@ use scope_postgres::db::{
     verify_schema, verify_writer_fence_available,
 };
 
-const USAGE: &str = "usage: scope-maintenance <plan|fence|drain-writers|apply|backfill-landing-files|backfill-workflow-catalogs|verify>";
+const USAGE: &str = "usage: scope-maintenance <plan|fence|drain-writers|validate-workflow-catalogs|apply|backfill-landing-files|backfill-workflow-catalogs|verify>";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -46,6 +46,11 @@ async fn main() -> anyhow::Result<()> {
         "drain-writers" => {
             let terminated = terminate_metadata_writer_sessions(database_url).await?;
             println!(r#"{{"terminated":{terminated}}}"#);
+        }
+        "validate-workflow-catalogs" => {
+            let validated =
+                api::validate_repository_workflow_catalogs_for_maintenance(database_url).await?;
+            println!(r#"{{"workflowCatalogsValidated":{validated}}}"#);
         }
         "verify" => {
             verify_schema(database_url).await?;

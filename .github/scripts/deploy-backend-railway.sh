@@ -522,6 +522,7 @@ if ! service_is_healthy "$api_service" || ! service_is_healthy "$worker_service"
 fi
 
 quiesce_writers
+maintenance validate-workflow-catalogs
 if ! maintenance apply; then
   # Once apply starts, an error does not prove its transaction rolled back. Fail closed unless a
   # fresh ledger read positively proves that the pre-migration state is unchanged.

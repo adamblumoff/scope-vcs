@@ -51,6 +51,10 @@ case "${1:-}" in
     touch "$FAKE_RAILWAY_STATE/writers-drained"
     echo '{"terminated":1}'
     ;;
+  validate-workflow-catalogs)
+    [[ "${FAKE_FAIL_WORKFLOW_VALIDATION:-0}" != "1" ]]
+    echo '{"workflowCatalogsValidated":1}'
+    ;;
   verify)
     [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
     echo '{"exact":true}'
@@ -307,6 +311,7 @@ run_cutover() {
   local stuck_fence="${21:-0}"
   local stale_stop_status="${22:-0}"
   local successful_revisions="${23:-}"
+  local fail_workflow_validation="${24:-0}"
   [[ -n "$successful_revisions" ]] || successful_revisions='{}'
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
@@ -335,6 +340,7 @@ run_cutover() {
     FAKE_FAIL_FIRST_PLAN="$fail_first_plan" \
     FAKE_STUCK_FENCE="$stuck_fence" \
     FAKE_STALE_STOP_STATUS="$stale_stop_status" \
+    FAKE_FAIL_WORKFLOW_VALIDATION="$fail_workflow_validation" \
     FAKE_DENY_DEPLOYMENT_ACTION_SERVICE="$deny_deployment_action_service" \
     RAILWAY_PROJECT_ID="project-test" \
     RAILWAY_API_TOKEN="token-graphql" \
@@ -405,6 +411,7 @@ assert_in_order "$test_dir/success-trace" \
   "graphql stop scope-api old-scope-api" \
   "graphql stop scope-worker old-scope-worker" \
   "$test_dir/maintenance fence" \
+  "$test_dir/maintenance validate-workflow-catalogs" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance verify" \
   "$test_dir/maintenance backfill-landing-files" \
@@ -431,7 +438,23 @@ assert_in_order "$test_dir/draining-writer-trace" \
   "$test_dir/maintenance fence" \
   "$test_dir/maintenance drain-writers" \
   "$test_dir/maintenance fence" \
+  "$test_dir/maintenance validate-workflow-catalogs" \
   "$test_dir/maintenance apply"
+
+run_cutover invalid-workflow-catalog 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 1 1 1 0 0 '{}' 1
+[[ "$(cat "$test_dir/invalid-workflow-catalog-result")" != "0" ]]
+assert_in_order "$test_dir/invalid-workflow-catalog-trace" \
+  "graphql stop scope-api old-scope-api" \
+  "graphql stop scope-worker old-scope-worker" \
+  "$test_dir/maintenance fence" \
+  "$test_dir/maintenance validate-workflow-catalogs" \
+  "graphql restart scope-worker old-scope-worker" \
+  "graphql restart scope-api old-scope-api"
+if grep -F "$test_dir/maintenance apply" "$test_dir/invalid-workflow-catalog-trace"; then
+  echo "invalid workflow catalogs must fail before migration" >&2
+  exit 1
+fi
 
 run_cutover degraded 0 0 "" 0 0 0 0 "" 0 "" "" 1 scope-worker
 [[ "$(cat "$test_dir/degraded-result")" != "0" ]]

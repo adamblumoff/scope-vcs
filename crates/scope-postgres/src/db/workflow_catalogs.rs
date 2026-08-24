@@ -8,8 +8,8 @@ use scope_domain::{
     store::{GitHead, GitPackSpan, SourceBlob, StoredRepository},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, TransactionTrait, sea_query::OnConflict,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, TransactionTrait, sea_query::OnConflict,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -93,6 +93,12 @@ where
 }
 
 impl RepositoryStore {
+    pub async fn repository_workflow_catalogs(
+        &self,
+    ) -> Result<Vec<RepositoryWorkflowCatalog>, PostgresError> {
+        load_repository_workflow_catalogs(self.db.as_ref()).await
+    }
+
     pub async fn repository_workflow_catalog(
         &self,
         repo_id: &str,
@@ -274,6 +280,29 @@ impl RepositoryStore {
             .map_err(PostgresError::internal)?;
         Ok(())
     }
+}
+
+pub(super) async fn load_repository_workflow_catalogs(
+    db: &DatabaseConnection,
+) -> Result<Vec<RepositoryWorkflowCatalog>, PostgresError> {
+    let tx = begin_metadata_read_snapshot(db).await?;
+    let headers = entities::repository_workflow_catalog::Entity::find()
+        .order_by_asc(entities::repository_workflow_catalog::Column::RepoId)
+        .all(&tx)
+        .await
+        .map_err(PostgresError::internal)?;
+    let mut catalogs = Vec::with_capacity(headers.len());
+    for header in headers {
+        let files = entities::repository_workflow_file::Entity::find()
+            .filter(entities::repository_workflow_file::Column::RepoId.eq(header.repo_id.clone()))
+            .order_by_asc(entities::repository_workflow_file::Column::Path)
+            .all(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        catalogs.push(catalog_from_rows(header, files)?);
+    }
+    tx.commit().await.map_err(PostgresError::internal)?;
+    Ok(catalogs)
 }
 
 fn catalog_header_from_domain(
