@@ -121,6 +121,13 @@ pub(crate) async fn persist_main_push_update_and_promote(
                 let persisted = PersistedReceivePackUpdate {
                     git_head: committed_git_head,
                 };
+                let workflow_catalog = workflow_catalog
+                    .rebind_source_change_version(
+                        &repo.record.id,
+                        &persisted.git_head.head_oid,
+                        persisted.git_head.change_version,
+                    )
+                    .map_err(DomainError::invariant_violation)?;
                 Ok(RepositoryMutation::with_push_trigger_input(
                     persisted,
                     push_trigger_input,

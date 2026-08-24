@@ -128,7 +128,7 @@ impl RepositoryStore {
                 )
             })?;
             catalog
-                .verify_source(&repo.record.id, &head.head_oid, repo.record.change_version)
+                .verify_source(&repo.record.id, &head.head_oid, head.change_version)
                 .map_err(PostgresError::internal)?;
         }
         save_repository_delta(&tx, &before, &repo, now_unix, generated_ids).await?;

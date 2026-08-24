@@ -203,6 +203,16 @@ async fn workflow_catalog_backfill_is_idempotent() {
     state
         .metadata
         .repositories()
+        .mutate_repository_for_tests(TEST_REPO_ID, StoredRepository::bump_change_version)
+        .await
+        .unwrap();
+    assert_eq!(
+        workflow_list_response(state.clone()).await.status(),
+        StatusCode::OK
+    );
+    state
+        .metadata
+        .repositories()
         .delete_repository_workflow_catalog_for_tests(TEST_REPO_ID)
         .await
         .unwrap();
@@ -216,6 +226,20 @@ async fn workflow_catalog_backfill_is_idempotent() {
         0
     );
     assert_eq!(workflow_list_response(state).await.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn repository_without_an_accepted_head_has_an_empty_workflow_catalog() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+
+    let response = workflow_list_response(state).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["workflows"],
+        serde_json::json!([])
+    );
 }
 
 #[tokio::test]
@@ -315,6 +339,12 @@ async fn direct_push_replaces_the_complete_workflow_catalog() {
     .unwrap();
     update.base_git_manifest_ref =
         Some(Some(current.git_head.unwrap().manifest.content_ref.clone()));
+    state
+        .metadata
+        .repositories()
+        .mutate_repository_for_tests(TEST_REPO_ID, StoredRepository::bump_change_version)
+        .await
+        .unwrap();
     persist_test_update(&state, update).await.unwrap();
 
     let response = workflow_list_response(state).await;

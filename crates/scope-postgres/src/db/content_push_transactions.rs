@@ -166,8 +166,8 @@ async fn accept_and_persist_content_update(
         git_pack_span,
         logical_commit,
     } = accepted.map_err(reviewed_update_domain_error)?;
-    workflow_catalog
-        .verify_source(&repo_id, &git_head.head_oid, change_version)
+    let workflow_catalog = workflow_catalog
+        .rebind_source_change_version(&repo_id, &git_head.head_oid, git_head.change_version)
         .map_err(PostgresError::internal)?;
 
     let persisted_change_version = i64::try_from(change_version).map_err(|_| {

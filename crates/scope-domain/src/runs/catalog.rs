@@ -319,6 +319,22 @@ impl RepositoryWorkflowCatalog {
             Err(RepositoryWorkflowCatalogError::SourceMismatch)
         }
     }
+
+    pub fn rebind_source_change_version(
+        mut self,
+        repository_id: &str,
+        source_head_oid: &str,
+        source_change_version: u64,
+    ) -> Result<Self, RepositoryWorkflowCatalogError> {
+        validate_identity(repository_id, source_head_oid, source_change_version)?;
+        if self.repository_id != repository_id
+            || self.source_head_oid != source_head_oid.to_ascii_lowercase()
+        {
+            return Err(RepositoryWorkflowCatalogError::SourceMismatch);
+        }
+        self.source_change_version = source_change_version;
+        Ok(self)
+    }
 }
 
 fn validate_identity(
@@ -396,6 +412,25 @@ mod tests {
         catalog.verify_source("repo-1", HEAD, 7).unwrap();
         assert!(matches!(
             catalog.verify_source("repo-1", HEAD, 8),
+            Err(RepositoryWorkflowCatalogError::SourceMismatch)
+        ));
+
+        let rebound = catalog
+            .rebind_source_change_version("repo-1", HEAD, 8)
+            .unwrap();
+        rebound.verify_source("repo-1", HEAD, 8).unwrap();
+        assert!(matches!(
+            rebound
+                .clone()
+                .rebind_source_change_version("other-repo", HEAD, 9),
+            Err(RepositoryWorkflowCatalogError::SourceMismatch)
+        ));
+        assert!(matches!(
+            rebound.rebind_source_change_version(
+                "repo-1",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                9,
+            ),
             Err(RepositoryWorkflowCatalogError::SourceMismatch)
         ));
     }

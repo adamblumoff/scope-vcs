@@ -1,8 +1,11 @@
-use super::{RepositoryStore, acquire_aggregate_lock, entities};
+use super::{
+    RepositoryStore, acquire_aggregate_lock, begin_metadata_read_snapshot, entities,
+    repository_from_model,
+};
 use crate::error::PostgresError;
 use scope_domain::{
     runs::catalog::{RepositoryWorkflowCatalog, RepositoryWorkflowFile},
-    store::{GitHead, GitPackSpan, SourceBlob},
+    store::{GitHead, GitPackSpan, SourceBlob, StoredRepository},
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
@@ -17,6 +20,11 @@ pub struct RepositoryWorkflowCatalogBackfillCandidate {
     pub git_head: GitHead,
     pub git_pack_spans: Vec<GitPackSpan>,
     pub workflow_blobs: Vec<(String, SourceBlob)>,
+}
+
+pub struct CurrentRepositoryWorkflowCatalog {
+    pub repository: StoredRepository,
+    pub catalog: Option<RepositoryWorkflowCatalog>,
 }
 
 pub(super) async fn apply_repository_workflow_catalog<C>(
@@ -92,6 +100,26 @@ impl RepositoryStore {
         repository_workflow_catalog(self.db.as_ref(), repo_id).await
     }
 
+    pub async fn current_repository_workflow_catalog(
+        &self,
+        repo_id: &str,
+    ) -> Result<Option<CurrentRepositoryWorkflowCatalog>, PostgresError> {
+        let tx = begin_metadata_read_snapshot(self.db.as_ref()).await?;
+        let snapshot = match entities::repository::Entity::find_by_id(repo_id)
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+        {
+            Some(row) => Some(CurrentRepositoryWorkflowCatalog {
+                repository: repository_from_model(&tx, row).await?,
+                catalog: repository_workflow_catalog(&tx, repo_id).await?,
+            }),
+            None => None,
+        };
+        tx.commit().await.map_err(PostgresError::internal)?;
+        Ok(snapshot)
+    }
+
     pub async fn repository_workflow_catalog_backfill_candidates(
         &self,
     ) -> Result<Vec<RepositoryWorkflowCatalogBackfillCandidate>, PostgresError> {
@@ -121,9 +149,7 @@ impl RepositoryStore {
             else {
                 continue;
             };
-            let source_change_version = u64::try_from(repository.change_version).map_err(|_| {
-                PostgresError::internal_message("repository change version cannot be negative")
-            })?;
+            let source_change_version = git_head.change_version;
             let git_pack_spans = entities::git_pack_span::Entity::find()
                 .filter(entities::git_pack_span::Column::RepoId.eq(&repository.id))
                 .order_by_asc(entities::git_pack_span::Column::FirstSequence)
@@ -164,14 +190,16 @@ impl RepositoryStore {
             tx.rollback().await.map_err(PostgresError::internal)?;
             return Ok(false);
         }
-        let repository = entities::repository::Entity::find_by_id(repo_id)
+        if entities::repository::Entity::find_by_id(repo_id)
             .one(&tx)
             .await
             .map_err(PostgresError::internal)?
-            .ok_or_else(|| PostgresError::not_found("repository disappeared during backfill"))?;
-        let source_change_version = u64::try_from(repository.change_version).map_err(|_| {
-            PostgresError::internal_message("repository change version cannot be negative")
-        })?;
+            .is_none()
+        {
+            return Err(PostgresError::not_found(
+                "repository disappeared during backfill",
+            ));
+        }
         let git_head = entities::git_head::Entity::find_by_id(repo_id)
             .one(&tx)
             .await
@@ -179,17 +207,12 @@ impl RepositoryStore {
             .ok_or_else(|| PostgresError::conflict("repository Git head changed during backfill"))?
             .try_into_domain()?;
         catalog
-            .verify_source(repo_id, &git_head.head_oid, source_change_version)
+            .verify_source(repo_id, &git_head.head_oid, git_head.change_version)
             .map_err(|_| {
                 PostgresError::conflict(
                     "repository workflow catalog source changed during backfill",
                 )
             })?;
-        if git_head.change_version != source_change_version {
-            return Err(PostgresError::conflict(
-                "repository workflow catalog source changed during backfill",
-            ));
-        }
         if let Some(files) = catalog.files() {
             verify_current_workflow_blobs(&tx, repo_id, files).await?;
         }
