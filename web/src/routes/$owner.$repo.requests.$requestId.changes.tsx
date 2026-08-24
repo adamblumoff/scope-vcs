@@ -3,11 +3,12 @@ import {
   loadRequestRevisionCommitFileDiffForRequest,
   loadRequestRevisionsForRequest,
 } from '@/api/requests'
-import type { RequestRevisions } from '@/api/types'
+import type { RequestParams, RequestRevisions } from '@/api/types'
 import {
   type LoadDiscussionsInput,
   loadRequestDiscussionsForRequest,
 } from '@/features/requests/request-discussion-api'
+import type { RequestDiscussionPage } from '@/features/requests/request-discussion-types'
 import { RequestChangesView } from '@/features/requests/request-changes-view'
 import type {
   RequestChangesDiscussionReferences,
@@ -35,18 +36,24 @@ const requestRoute = getRouteApi('/$owner/$repo/requests/$requestId')
 const loadChangesPage = createServerFn({ method: 'GET' })
   .validator((data: LoadRequestRevisionsInput) => data)
   .handler(async ({ data }) => {
-    const [revisions, discussionPage] = await Promise.all([
-      loadRequestRevisionsForRequest(data).catch((error: unknown) => {
-        console.error('Loading request revisions failed', error)
-        return null
-      }),
-      loadRequestDiscussionsForRequest({ ...data, limit: 100 }).catch((error: unknown) => {
-        console.error('Loading request discussion references failed', error)
-        return null
-      }),
-    ])
+    const revisions = await loadRequestRevisionsForRequest(data).catch((error: unknown) => {
+      console.error('Loading request revisions failed', error)
+      return null
+    })
+    const requestParams = {
+      owner: data.owner,
+      repo: data.repo,
+      request_id: data.request_id,
+    }
+    const discussionPage = await loadRequestDiscussionsForRequest({
+      ...requestParams,
+      limit: 100,
+    }).catch((error: unknown) => {
+      console.error('Loading request discussion references failed', error)
+      return null
+    })
     const discussionReferences = await initialDiscussionReferences(
-      data,
+      requestParams,
       revisions,
       discussionPage,
     )
@@ -154,7 +161,7 @@ function requestChangesSelectionSearch(search: unknown): RequestChangesSearch {
 }
 
 async function initialDiscussionReferences(
-  params: LoadRequestRevisionsInput,
+  params: RequestParams,
   revisions: RequestRevisions | null,
   requestPage: Awaited<ReturnType<typeof loadRequestDiscussionsForRequest>> | null,
 ): Promise<RequestChangesDiscussionReferences> {
@@ -162,19 +169,29 @@ async function initialDiscussionReferences(
     return { all: requestPage, byCommit: {} }
   }
   if (!revisions) return { all: null, byCommit: {} }
-  const pages = await Promise.all(revisions.revisions.flatMap((revision) =>
+  const queries = revisions.revisions.flatMap((revision) =>
     revision.commits.map((commit) => {
       const key = requestRevisionCommitId(revision.id, commit.oid)
-      return loadRequestDiscussionsForRequest({
-        ...params,
+      return {
         commit_oid: commit.oid,
         include_revision_anchor: commit.oid === revision.commits.at(-1)?.oid,
+        key,
         revision_id: revision.id,
-      }).catch((error: unknown) => {
-        console.error('Loading request commit discussion references failed', error)
-        return null
-      }).then((page) => [key, page] as const)
+      }
     }),
-  ))
+  )
+  const pages = await queries.reduce<Promise<Array<readonly [string, RequestDiscussionPage | null]>>>(
+    (loaded, query) => loaded.then((pages) => loadRequestDiscussionsForRequest({
+      ...params,
+      commit_oid: query.commit_oid,
+      include_revision_anchor: query.include_revision_anchor,
+      limit: 100,
+      revision_id: query.revision_id,
+    }).catch((error: unknown) => {
+      console.error('Loading request commit discussion references failed', error)
+      return null
+    }).then((page) => [...pages, [query.key, page] as const])),
+    Promise.resolve([]),
+  )
   return { all: null, byCommit: Object.fromEntries(pages) }
 }
