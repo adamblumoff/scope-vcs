@@ -153,8 +153,13 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
                 segment
             },
         };
-        let trigger = update.push_trigger_input.as_mut().unwrap();
-        trigger.head_oid = head_oid.clone();
+        update.workflow_catalog = scope_domain::runs::catalog::RepositoryWorkflowCatalog::captured(
+            TEST_REPO_ID,
+            &head_oid,
+            sequence,
+            Vec::new(),
+        )
+        .unwrap();
 
         let persisted = persist_test_update(&state, update).await.unwrap();
         assert_eq!(persisted.git_head.change_version, sequence);

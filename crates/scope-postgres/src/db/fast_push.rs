@@ -1,6 +1,7 @@
 use super::{
     GeneratedIdSource, RepositoryStore, acquire_aggregate_lock,
-    content_push_transactions::accept_and_persist_content_push, entities,
+    content_push_transactions::{RepositoryContentSnapshots, accept_and_persist_content_push},
+    entities,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use std::time::Instant;
@@ -9,6 +10,7 @@ use {
     scope_domain::{
         landing_file::RepositoryLandingFileMutation,
         reviewed_updates::ReviewedUpdateInput,
+        runs::catalog::RepositoryWorkflowCatalog,
         store::{
             MainPushMode, RepoLifecycleState, RepositoryActor, repository_push_policy_for_user_id,
         },
@@ -22,6 +24,7 @@ pub struct ApplyContentOnlyPushCommand {
     pub expected_manifest_ref: scope_domain::content_ref::ContentRef,
     pub update: ReviewedUpdateInput,
     pub landing_file_mutation: RepositoryLandingFileMutation,
+    pub workflow_catalog: RepositoryWorkflowCatalog,
     pub push_trigger_input: scope_domain::runs::trigger::PushTriggerInput,
     pub now_unix: u64,
 }
@@ -39,6 +42,7 @@ impl RepositoryStore {
             expected_manifest_ref,
             update,
             landing_file_mutation,
+            workflow_catalog,
             push_trigger_input,
             now_unix,
         } = command;
@@ -99,7 +103,10 @@ impl RepositoryStore {
             &tx,
             repo_row,
             update,
-            landing_file_mutation,
+            RepositoryContentSnapshots {
+                landing_file_mutation,
+                workflow_catalog,
+            },
             push_trigger_input,
             now_unix,
             generated_ids,

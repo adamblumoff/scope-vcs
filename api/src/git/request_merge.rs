@@ -21,6 +21,7 @@ use scope_domain::{
     repo_actions::reviewed_update_domain_error,
     requests::{Request, RequestAudience, canonical_request_ref},
     reviewed_updates::apply_request_merge_to_repo,
+    runs::catalog::RepositoryWorkflowCatalog,
     store::{RequestMergeOrigin, SourceBlob, StoredRepository},
 };
 use scope_postgres::db::ContentRefFence;
@@ -31,6 +32,7 @@ pub(crate) struct PreparedRequestMerge {
     pub(crate) prepared_request_head_oid: String,
     pub(crate) origin: RequestMergeOrigin,
     pub(crate) landing_file_mutation: RepositoryLandingFileMutation,
+    pub(crate) workflow_catalog: RepositoryWorkflowCatalog,
     pub(crate) update: ReceivePackUpdate,
     pub(crate) fence: ContentRefFence,
 }
@@ -163,6 +165,7 @@ pub(crate) async fn prepare_request_merge(
             prepared_request_head_oid: request.head_oid.clone(),
             origin,
             landing_file_mutation: update.landing_file_mutation.clone(),
+            workflow_catalog: update.workflow_catalog.clone(),
             update,
             fence,
         })

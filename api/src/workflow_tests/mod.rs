@@ -720,9 +720,13 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
             object: segment_object,
         },
         durable_objects: Vec::new(),
-        push_trigger_input: Some(
-            scope_domain::runs::trigger::PushTriggerInput::new(head_oid, Vec::new(), None).unwrap(),
-        ),
+        workflow_catalog: scope_domain::runs::catalog::RepositoryWorkflowCatalog::captured(
+            TEST_REPO_ID,
+            head_oid,
+            2,
+            Vec::new(),
+        )
+        .unwrap(),
         landing_file_mutation: scope_domain::landing_file::RepositoryLandingFileMutation::Unchanged,
         previous_config: None,
         base_config_hash: repo_config_fingerprint(&config).unwrap(),

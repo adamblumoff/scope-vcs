@@ -1,5 +1,19 @@
 use super::*;
 
+const MERGED_WORKFLOW: &str = r#"name: Merged checks
+on:
+  manual: true
+caches: []
+container:
+  image: alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+timeout: 5m
+jobs:
+  checks:
+    steps:
+      - name: Test
+        run: printf 'merged workflow\n'
+"#;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn merge_route_persists_git_content_once() {
     let (state, owner_source) = test_state_with_mergeable_request().await;
@@ -12,9 +26,11 @@ async fn merge_route_persists_git_content_once() {
         &bearer_header_for(&test_owner_id(), TEST_OWNER_EMAIL),
     );
     fs::write(owner_source.join("README.md"), "upstream public change\n").unwrap();
+    fs::create_dir_all(owner_source.join(".scope/runs")).unwrap();
+    fs::write(owner_source.join(".scope/runs/merged.yml"), MERGED_WORKFLOW).unwrap();
     run_git(
         Some(&owner_source),
-        &["add", "README.md"],
+        &["add", "."],
         "stage public main advance",
     )
     .unwrap();
@@ -127,6 +143,10 @@ async fn merge_route_persists_git_content_once() {
     assert_eq!(merged["request"]["state"], "Merged");
     assert_eq!(merged["request"]["merged_head_oid"], request_head);
     assert_ne!(merged["request"]["merged_main_oid"], request_head);
+    let merged_main_oid = merged["request"]["merged_main_oid"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(
         merged["request"]["mergeability"]["current_main_oid"],
         merged["request"]["merged_main_oid"]
@@ -162,6 +182,37 @@ async fn merge_route_persists_git_content_once() {
     assert_eq!(
         landing.content_bytes,
         b"<h1>Merged request landing page</h1>\n"
+    );
+    let workflows = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(scope_api_contract::routes::repo_run_workflows(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                ))
+                .header(
+                    AUTHORIZATION,
+                    bearer_header_for(MEMBER_SUBJECT, MEMBER_EMAIL),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(workflows.status(), StatusCode::OK);
+    let workflows = response_json(workflows).await;
+    assert_eq!(workflows["workflows"][0]["key"], "merged");
+    assert_eq!(workflows["workflows"][0]["name"], "Merged checks");
+    assert!(
+        state
+            .metadata
+            .runs()
+            .push_trigger_evaluation(TEST_REPO_ID, &merged_main_oid)
+            .await
+            .unwrap()
+            .is_none(),
+        "request merges must update the catalog without gaining push-trigger behavior"
     );
 
     let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)

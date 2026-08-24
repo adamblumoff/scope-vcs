@@ -2,8 +2,10 @@
 
 use super::{
     GeneratedIdSource, RequestStore, acquire_aggregate_lock,
-    content_push_transactions::accept_and_persist_request_merge, entities,
-    request_access::ensure_user_exists, request_rows::request_by_id,
+    content_push_transactions::{RepositoryContentSnapshots, accept_and_persist_request_merge},
+    entities,
+    request_access::ensure_user_exists,
+    request_rows::request_by_id,
     request_submission_transactions::persist_lifecycle_mutation,
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
@@ -13,6 +15,7 @@ use {
         landing_file::RepositoryLandingFileMutation,
         requests::{MergeRequestInput, RequestLifecycleMutation, merge_request},
         reviewed_updates::ReviewedUpdateInput,
+        runs::catalog::RepositoryWorkflowCatalog,
         store::{GitHead, RepoLifecycleState, RequestMergeOrigin},
     },
 };
@@ -34,6 +37,7 @@ impl RequestStore {
         expected_request_head_oid: &str,
         update: ReviewedUpdateInput,
         landing_file_mutation: RepositoryLandingFileMutation,
+        workflow_catalog: RepositoryWorkflowCatalog,
         origin: RequestMergeOrigin,
         mut input: MergeRequestInput,
         generated_ids: &dyn GeneratedIdSource,
@@ -104,7 +108,10 @@ impl RequestStore {
             &tx,
             repo_row,
             update,
-            landing_file_mutation,
+            RepositoryContentSnapshots {
+                landing_file_mutation,
+                workflow_catalog,
+            },
             origin,
             now_unix,
             generated_ids,

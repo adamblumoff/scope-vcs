@@ -201,6 +201,7 @@ pub(crate) async fn merge_request(
             &prepared.prepared_request_head_oid,
             prepared.update.into_reviewed_update(),
             prepared.landing_file_mutation,
+            prepared.workflow_catalog,
             prepared.origin,
             MergeRequestInput {
                 request_id: request.id,

@@ -1,7 +1,7 @@
 use super::repo_io::{
     FencedGitPush, GitTreeFile, describe_refs, git_changed_tree_entries, git_push_from_repo,
     git_refs, git_tree_entries_under, pushed_commit_message, queue_failed_git_objects,
-    run_git_output, run_git_output_bounded, validate_pushed_commit_range,
+    run_git_output_bounded, validate_pushed_commit_range,
 };
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
@@ -12,14 +12,15 @@ use scope_domain::landing_file::{
 use scope_domain::policy::ScopePath;
 use scope_domain::repo_config::RepoConfig;
 use scope_domain::runs::{
-    trigger::{PushTriggerInput, PushWorkflowFile},
+    catalog::{
+        MAX_REPOSITORY_WORKFLOW_FILES, MAX_WORKFLOW_DEFINITION_BYTES, RepositoryWorkflowCatalog,
+        RepositoryWorkflowFile,
+    },
     workflow::WorkflowPath,
 };
 use scope_domain::store::RepoLifecycleState;
 use scope_postgres::db::ContentRefFence;
 use std::{path::Path as FsPath, time::Instant};
-
-const MAX_PUSH_WORKFLOW_FILES: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReviewedUpdateMode {
@@ -219,12 +220,14 @@ async fn reviewed_update_from_staging_repo_mode(
         "prepared durable Git push objects"
     );
 
-    let push_trigger_input = match prepare_push_trigger_input(
+    let workflow_catalog = match capture_repository_workflow_catalog(
         staging_repo,
+        &repo.repo_id,
         &head_oid,
-        mode == ReviewedUpdateMode::RequestMerge,
+        created_push.head.change_version,
+        &created_push.head.manifest,
     ) {
-        Ok(input) => input,
+        Ok(catalog) => catalog,
         Err(error) => {
             queue_failed_git_objects(state, durable_objects).await?;
             return Err(error);
@@ -240,7 +243,7 @@ async fn reviewed_update_from_staging_repo_mode(
             git_head: created_push.head,
             git_pack_span: created_push.pack_span,
             durable_objects,
-            push_trigger_input,
+            workflow_catalog,
             landing_file_mutation,
             changes,
             previous_config: Some(repo.repo_config.clone()),
@@ -291,58 +294,77 @@ fn repository_landing_file_mutation(
         .map_err(ApiError::from)
 }
 
-fn prepare_push_trigger_input(
+fn capture_repository_workflow_catalog(
     staging_repo: &FsPath,
+    repository_id: &str,
     head_oid: &str,
-    skip: bool,
-) -> Result<Option<PushTriggerInput>, ApiError> {
-    if skip {
-        return Ok(None);
-    }
+    change_version: u64,
+    git_manifest: &scope_domain::store::SourceBlob,
+) -> Result<RepositoryWorkflowCatalog, ApiError> {
     let workflow_entries = git_tree_entries_under(staging_repo, head_oid, ".scope/runs")?;
-    let mut configuration_error = None;
-    let mut workflows = Vec::new();
-    if workflow_entries.len() > MAX_PUSH_WORKFLOW_FILES {
-        configuration_error = Some(format!(
-            "repository contains more than {MAX_PUSH_WORKFLOW_FILES} workflow definitions"
-        ));
-    } else {
-        for entry in workflow_entries {
-            let path = format!("/{}", entry.path);
-            if WorkflowPath::parse(path.clone()).is_err() {
-                configuration_error = Some(format!("invalid workflow path {path}"));
-                break;
-            }
-            if entry.size_bytes > scope_run_config::MAX_WORKFLOW_DEFINITION_BYTES {
-                configuration_error = Some(format!(
-                    "workflow {path} exceeds {} bytes",
-                    scope_run_config::MAX_WORKFLOW_DEFINITION_BYTES
-                ));
-                break;
-            }
-            let output = run_git_output(
-                Some(staging_repo),
-                &["cat-file", "blob", &entry.oid],
-                "reading push workflow definition",
-            )?;
-            if !output.status.success() || output.stdout.len() != entry.size_bytes {
-                return Err(ApiError::infrastructure_unavailable(format!(
-                    "reading push workflow {path} failed"
-                )));
-            }
-            workflows
-                .push(PushWorkflowFile::new(path, output.stdout).map_err(ApiError::bad_request)?);
-        }
+    if workflow_entries.len() > MAX_REPOSITORY_WORKFLOW_FILES {
+        return RepositoryWorkflowCatalog::rejected(
+            repository_id,
+            head_oid,
+            change_version,
+            format!(
+                "repository contains more than {MAX_REPOSITORY_WORKFLOW_FILES} workflow definitions"
+            ),
+        )
+        .map_err(ApiError::internal);
     }
-    PushTriggerInput::new(head_oid.to_string(), workflows, configuration_error)
-        .map(Some)
-        .map_err(ApiError::bad_request)
+
+    let mut workflows = Vec::with_capacity(workflow_entries.len());
+    for entry in workflow_entries {
+        let path = format!("/{}", entry.path);
+        if WorkflowPath::parse(path.clone()).is_err() {
+            return RepositoryWorkflowCatalog::rejected(
+                repository_id,
+                head_oid,
+                change_version,
+                format!("invalid workflow path {path}"),
+            )
+            .map_err(ApiError::internal);
+        }
+        if entry.size_bytes > MAX_WORKFLOW_DEFINITION_BYTES {
+            return RepositoryWorkflowCatalog::rejected(
+                repository_id,
+                head_oid,
+                change_version,
+                format!("workflow {path} exceeds {MAX_WORKFLOW_DEFINITION_BYTES} bytes"),
+            )
+            .map_err(ApiError::internal);
+        }
+        let source = git_blob_reference(
+            git_manifest,
+            entry.oid.clone(),
+            entry.mode,
+            entry.size_bytes,
+        )?;
+        let output = run_git_output_bounded(
+            Some(staging_repo),
+            &["cat-file", "blob", &entry.oid],
+            "reading repository workflow definition",
+            MAX_WORKFLOW_DEFINITION_BYTES,
+        )?;
+        if !output.status.success() || output.stdout.len() != entry.size_bytes {
+            return Err(ApiError::infrastructure_unavailable(format!(
+                "reading repository workflow {path} failed"
+            )));
+        }
+        workflows.push(
+            RepositoryWorkflowFile::from_source_blob(path, &source, output.stdout)
+                .map_err(ApiError::internal)?,
+        );
+    }
+    RepositoryWorkflowCatalog::captured(repository_id, head_oid, change_version, workflows)
+        .map_err(ApiError::internal)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::import::{run_git, validate_pushed_file_path};
+    use crate::git::import::{run_git, run_git_output, validate_pushed_file_path};
     use scope_domain::{
         content_ref::ContentRef,
         policy::ScopePath,

@@ -115,6 +115,12 @@ case "$action" in
     railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
       sh -c 'DATABASE_URL="$SCOPE_STAGING_DATABASE_PUBLIC_URL" exec "$@"' \
       scope-smoke-seed "$seed_binary"
+    workflow_backfill_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/scope-workflow-catalog-backfill.XXXXXX")"
+    SCOPE_STAGING_WORKFLOW_BACKFILL_DIR="$workflow_backfill_dir" \
+      railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
+        sh -c 'DATABASE_URL="$SCOPE_STAGING_DATABASE_PUBLIC_URL" SCOPE_DATA_DIR="$SCOPE_STAGING_WORKFLOW_BACKFILL_DIR" exec "$@"' \
+        scope-maintenance "$maintenance_binary" backfill-workflow-catalogs
+    rm -rf -- "$workflow_backfill_dir"
     unset SCOPE_STAGING_DATABASE_PUBLIC_URL
 
     bash .github/scripts/deploy-railway.sh "$cache_service" "$1"

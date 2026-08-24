@@ -3,12 +3,13 @@ use super::{
     cleanup_queue::queue_pending_source_blob_deletion_rows, entities,
     landing_files::apply_repository_landing_file_mutation,
     push_triggers::enqueue_push_main_trigger_evaluation, repository_from_model,
-    repository_rows::save_repository_delta,
+    repository_rows::save_repository_delta, workflow_catalogs::apply_repository_workflow_catalog,
 };
 use sea_orm::{EntityTrait, TransactionTrait};
 use std::{fmt, sync::Arc, time::Instant};
 use {
     crate::error::PostgresError,
+    scope_domain::runs::catalog::RepositoryWorkflowCatalog,
     scope_domain::store::{SourceBlob, StoredRepository, repo_id},
     scope_domain::{error::DomainError, landing_file::RepositoryLandingFileMutation},
 };
@@ -47,6 +48,7 @@ pub struct RepositoryMutation<R> {
     pub orphan_objects: Vec<SourceBlob>,
     pub push_trigger_input: Option<scope_domain::runs::trigger::PushTriggerInput>,
     pub landing_file_mutation: RepositoryLandingFileMutation,
+    pub workflow_catalog: Option<RepositoryWorkflowCatalog>,
 }
 
 impl<R> RepositoryMutation<R> {
@@ -56,6 +58,7 @@ impl<R> RepositoryMutation<R> {
             orphan_objects: Vec::new(),
             push_trigger_input: None,
             landing_file_mutation: RepositoryLandingFileMutation::Unchanged,
+            workflow_catalog: None,
         }
     }
 
@@ -65,6 +68,7 @@ impl<R> RepositoryMutation<R> {
             orphan_objects,
             push_trigger_input: None,
             landing_file_mutation: RepositoryLandingFileMutation::Unchanged,
+            workflow_catalog: None,
         }
     }
 
@@ -72,12 +76,14 @@ impl<R> RepositoryMutation<R> {
         result: R,
         push_trigger_input: scope_domain::runs::trigger::PushTriggerInput,
         landing_file_mutation: RepositoryLandingFileMutation,
+        workflow_catalog: RepositoryWorkflowCatalog,
     ) -> Self {
         Self {
             result,
             orphan_objects: Vec::new(),
             push_trigger_input: Some(push_trigger_input),
             landing_file_mutation,
+            workflow_catalog: Some(workflow_catalog),
         }
     }
 }
@@ -115,6 +121,16 @@ impl RepositoryStore {
         let mut repo = repository_from_model(&tx, repo).await?;
         let before = repo.clone();
         let mutation = op(&mut repo)?;
+        if let Some(catalog) = &mutation.workflow_catalog {
+            let head = repo.git_head.as_ref().ok_or_else(|| {
+                PostgresError::internal_message(
+                    "repository workflow catalog requires an accepted Git head",
+                )
+            })?;
+            catalog
+                .verify_source(&repo.record.id, &head.head_oid, repo.record.change_version)
+                .map_err(PostgresError::internal)?;
+        }
         save_repository_delta(&tx, &before, &repo, now_unix, generated_ids).await?;
         apply_repository_landing_file_mutation(
             &tx,
@@ -122,6 +138,9 @@ impl RepositoryStore {
             mutation.landing_file_mutation,
         )
         .await?;
+        if let Some(catalog) = &mutation.workflow_catalog {
+            apply_repository_workflow_catalog(&tx, catalog).await?;
+        }
         if let Some(input) = mutation.push_trigger_input {
             let head = repo.git_head.as_ref().ok_or_else(|| {
                 PostgresError::internal_message(

@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod catalog;
 pub mod job;
 mod log;
 pub mod run;

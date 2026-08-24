@@ -22,6 +22,7 @@ use crate::{error::ApiError, git::PersistedReceivePackUpdate, state::AppState};
 use scope_domain::{
     error::DomainError,
     repo_config::repo_config_fingerprint as domain_repo_config_fingerprint,
+    runs::trigger::PushTriggerInput,
     store::{MainPushMode, RepositoryActor, StoredRepository},
 };
 use scope_postgres::db::RepositoryMutation;
@@ -34,12 +35,11 @@ pub(crate) async fn persist_main_push_update_and_promote(
     prepared: PreparedReceivePackUpdate,
     author_id: &str,
 ) -> Result<PersistedReceivePackUpdate, ApiError> {
-    let PreparedReceivePackUpdate { mut update, fence } = prepared;
+    let PreparedReceivePackUpdate { update, fence } = prepared;
     let now_unix = crate::persistence::unix_now()?;
     let author_id = author_id.to_string();
-    let push_trigger_input = update.push_trigger_input.take().ok_or_else(|| {
-        ApiError::internal_message("main push is missing its pinned trigger input")
-    })?;
+    let workflow_catalog = update.workflow_catalog.clone();
+    let push_trigger_input = PushTriggerInput::from(&workflow_catalog);
 
     let content_only_candidate = update
         .previous_config
@@ -60,6 +60,7 @@ pub(crate) async fn persist_main_push_update_and_promote(
                     author_id: author_id.clone(),
                     expected_manifest_ref: expected_manifest_ref.clone(),
                     update: update.clone().into_reviewed_update(),
+                    workflow_catalog: workflow_catalog.clone(),
                     push_trigger_input: push_trigger_input.clone(),
                     landing_file_mutation: update.landing_file_mutation.clone(),
                     now_unix,
@@ -124,6 +125,7 @@ pub(crate) async fn persist_main_push_update_and_promote(
                     persisted,
                     push_trigger_input,
                     landing_file_mutation,
+                    workflow_catalog,
                 ))
             },
         )

@@ -1,7 +1,6 @@
 use crate::{
     auth::scope::require_scope_user,
     error::ApiError,
-    git::content::source_content_bytes,
     http::{
         responses::{
             RepositoryRunHistoryPageResponse, RepositoryRunWorkflowListResponse,
@@ -17,11 +16,7 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
 };
-use scope_domain::{
-    repo_control::{RepoControlPath, classify_repo_control_path},
-    runs::workflow::WorkflowRevision,
-    store::StoredRepository,
-};
+use scope_domain::{runs::workflow::WorkflowRevision, store::StoredRepository};
 use scope_postgres::db::{RunHistoryCursor, RunHistoryPageQuery};
 use serde::Deserialize;
 
@@ -118,44 +113,22 @@ async fn current_workflows(
     state: &AppState,
     repo: &StoredRepository,
 ) -> Result<Vec<WorkflowRevision>, ApiError> {
-    let state = state.clone();
-    let repo = repo.clone();
-    tokio::task::spawn_blocking(move || current_workflows_blocking(&state, &repo))
+    let catalog = state
+        .metadata
+        .repositories()
+        .repository_workflow_catalog(&repo.record.id)
         .await
-        .map_err(|error| {
-            ApiError::internal_message(format!("workflow loading task failed: {error}"))
-        })?
-}
-
-fn current_workflows_blocking(
-    state: &AppState,
-    repo: &StoredRepository,
-) -> Result<Vec<WorkflowRevision>, ApiError> {
-    let git_source = repo.git_head.as_ref().map(|head| {
-        (
-            repo.record.id.as_str(),
-            head,
-            repo.git_pack_spans.as_slice(),
-        )
-    });
-    let mut definitions = Vec::new();
-    for (path, blob) in &repo.live_files {
-        let Some(RepoControlPath::Workflow(workflow_path)) = classify_repo_control_path(path)
-        else {
-            continue;
-        };
-        definitions.push((
-            workflow_path.as_str().to_string(),
-            source_content_bytes(state, blob, git_source)?,
-        ));
-    }
-    scope_run_config::parse_workflow_set(
-        &repo.record.id,
-        definitions
-            .iter()
-            .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
-    )
-    .map_err(ApiError::bad_request)
+        .map_err(ApiError::from)?
+        .ok_or_else(|| {
+            ApiError::internal_message("repository workflow catalog is missing for current main")
+        })?;
+    let head = repo.git_head.as_ref().ok_or_else(|| {
+        ApiError::internal_message("repository workflow catalog requires an accepted Git head")
+    })?;
+    catalog
+        .verify_source(&repo.record.id, &head.head_oid, repo.record.change_version)
+        .map_err(ApiError::internal)?;
+    scope_run_config::parse_repository_workflow_catalog(&catalog).map_err(ApiError::bad_request)
 }
 
 async fn require_repository_member(
