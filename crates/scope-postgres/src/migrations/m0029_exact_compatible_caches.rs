@@ -13,7 +13,62 @@ impl MigrationName for Migration {
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager.get_connection().execute_unprepared(r#"
-            TRUNCATE TABLE scope_run_attempt_caches;
+            LOCK TABLE scope_runs, scope_workflow_revisions, scope_outbox_jobs,
+                scope_repository_workflow_catalogs, scope_object_references,
+                scope_orphan_object_jobs, scope_cache_objects, scope_cache_references,
+                scope_cache_uploads, scope_cache_deletion_queue
+                IN ACCESS EXCLUSIVE MODE;
+
+            INSERT INTO scope_orphan_object_jobs (
+                object_key, generation, sha256, git_oid, size_bytes,
+                attempts, next_run_at_unix, last_error, completed_at_unix,
+                created_at_unix, updated_at_unix
+            )
+            SELECT DISTINCT ON (refs.object_key)
+                refs.object_key, 'm0029_exact_compatible_caches',
+                runs.source#>>'{object,sha256}', runs.source#>>'{object,git_oid}',
+                (runs.source#>>'{object,size_bytes}')::bigint,
+                0, EXTRACT(EPOCH FROM clock_timestamp())::bigint,
+                NULL, NULL, 0, 0
+            FROM scope_runs runs
+            JOIN scope_object_references refs
+              ON refs.ref_kind = 'run_source'
+             AND refs.ref_id = runs.id
+             AND refs.object_key::jsonb = runs.source#>'{object,content_ref}'
+            WHERE runs.source->>'kind' = 'ephemeral-git-bundle'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM scope_object_references other_refs
+                  WHERE other_refs.object_key = refs.object_key
+                    AND NOT (
+                        other_refs.ref_kind = 'run_source'
+                        AND EXISTS (
+                            SELECT 1 FROM scope_runs other_runs
+                            WHERE other_runs.id = other_refs.ref_id
+                        )
+                    )
+              )
+            ORDER BY refs.object_key, runs.id
+            ON CONFLICT (object_key) DO NOTHING;
+            DELETE FROM scope_object_references refs
+            WHERE refs.ref_kind = 'run_source'
+              AND EXISTS (SELECT 1 FROM scope_runs runs WHERE runs.id = refs.ref_id);
+            DELETE FROM scope_object_references refs
+            WHERE refs.ref_kind = 'push_trigger_source'
+              AND EXISTS (
+                  SELECT 1 FROM scope_outbox_jobs jobs
+                  WHERE jobs.kind = 'push_main_trigger_evaluation'
+                    AND jobs.completed_at_unix IS NULL
+                    AND refs.ref_id = jobs.repo_id || ':' || jobs.repo_version::text
+              );
+            DELETE FROM scope_outbox_jobs
+            WHERE kind = 'push_main_trigger_evaluation'
+              AND completed_at_unix IS NULL;
+            TRUNCATE TABLE scope_push_trigger_evaluations,
+                scope_run_attempt_caches, scope_run_logs, scope_run_attempt_steps,
+                scope_run_attempts, scope_run_jobs, scope_runs,
+                scope_workflow_revisions, scope_repository_workflow_catalogs CASCADE;
+
             ALTER TABLE scope_run_attempt_caches
                 DROP CONSTRAINT scope_run_attempt_caches_preparation;
             ALTER TABLE scope_run_attempt_caches
@@ -24,6 +79,34 @@ impl MigrationTrait for Migration {
                         'volume-missing', 'volume-invalid', 'backing-directory-missing'
                      )))
                 );
+
+            CREATE TABLE scope_cache_orphan_uploads (
+                object_key text PRIMARY KEY,
+                repository_id text NOT NULL REFERENCES scope_repositories(id) ON DELETE CASCADE,
+                not_before_unix bigint NOT NULL,
+                attempts integer NOT NULL,
+                last_error text,
+                CONSTRAINT scope_cache_orphan_uploads_values CHECK (
+                    object_key = 'repos/' || repository_id || '/objects/sha256/' ||
+                        right(object_key, 64) AND
+                    right(object_key, 64) ~ '^[0-9a-f]{64}$' AND
+                    not_before_unix >= 0 AND attempts >= 0 AND
+                    (last_error IS NULL OR char_length(last_error) BETWEEN 1 AND 8192)
+                )
+            );
+            CREATE INDEX idx_scope_cache_orphan_uploads_due
+                ON scope_cache_orphan_uploads (not_before_unix, object_key);
+            INSERT INTO scope_cache_orphan_uploads (
+                object_key, repository_id, not_before_unix, attempts, last_error
+            )
+            SELECT uploads.object_key, uploads.repository_id,
+                   EXTRACT(EPOCH FROM clock_timestamp())::bigint, 0, NULL
+            FROM scope_cache_uploads uploads
+            WHERE NOT EXISTS (
+                SELECT 1 FROM scope_cache_objects objects
+                WHERE objects.repository_id = uploads.repository_id
+                  AND objects.checksum_sha256 = uploads.checksum_sha256
+            );
 
             DROP TABLE scope_cache_deletion_queue;
             DROP TABLE scope_cache_uploads;

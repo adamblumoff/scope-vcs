@@ -51,7 +51,7 @@ mod request_activity_migration_tests;
 mod request_submission_migration_tests;
 pub use cache_service::{
     CacheCommitResult, CacheObjectRecord, CachePrepareResult, CacheRestoreKind, CacheRestoreRecord,
-    CacheUploadRecord, PendingCacheDeletion,
+    CacheUploadRecord, PendingCacheDeletion, PendingOrphanCacheUpload,
 };
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;

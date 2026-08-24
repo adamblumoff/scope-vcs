@@ -74,3 +74,9 @@ pub struct PendingCacheDeletion {
     pub attempts: u32,
     pub eligible_after_unix: u64,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingOrphanCacheUpload {
+    pub object_key: String,
+    pub attempts: u32,
+}

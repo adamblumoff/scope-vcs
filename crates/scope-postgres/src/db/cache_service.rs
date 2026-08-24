@@ -16,7 +16,7 @@ mod types;
 use retention::{active_repository_bytes, expire_repository_references, make_repository_room};
 pub use types::{
     CacheCommitResult, CacheObjectRecord, CachePrepareResult, CacheRestoreKind, CacheRestoreRecord,
-    CacheUploadRecord, CacheUploadState, PendingCacheDeletion,
+    CacheUploadRecord, CacheUploadState, PendingCacheDeletion, PendingOrphanCacheUpload,
 };
 
 #[allow(clippy::too_many_arguments)]

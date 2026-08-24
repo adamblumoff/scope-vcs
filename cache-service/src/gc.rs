@@ -23,6 +23,23 @@ async fn reconcile(state: &AppState) -> anyhow::Result<()> {
         .checked_add(RETRY_SECONDS)
         .ok_or_else(|| anyhow::anyhow!("cache retry timestamp overflow"))?;
     let caches = state.metadata.caches();
+    for upload in caches
+        .claim_orphan_uploads(now, retry_at, BATCH_SIZE)
+        .await?
+    {
+        match delete_object(state.object_store.clone(), upload.object_key.clone()).await {
+            Ok(()) => {
+                caches
+                    .complete_orphan_upload_cleanup(&upload.object_key)
+                    .await?
+            }
+            Err(error) => {
+                caches
+                    .fail_orphan_upload_cleanup(&upload.object_key, retry_at, &error.to_string())
+                    .await?;
+            }
+        }
+    }
     caches.expire_references(now, BATCH_SIZE).await?;
     caches.expire_committed_uploads(now, BATCH_SIZE).await?;
     for upload in caches.expire_uploads(now, BATCH_SIZE).await? {

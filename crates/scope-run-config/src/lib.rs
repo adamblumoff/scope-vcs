@@ -216,6 +216,7 @@ struct RawCacheKeyInputs {
     files: Vec<String>,
     #[serde(default)]
     environment: Vec<String>,
+    source: bool,
 }
 
 fn compile_cache(cache: RawCache) -> Result<WorkflowCache, WorkflowError> {
@@ -223,8 +224,16 @@ fn compile_cache(cache: RawCache) -> Result<WorkflowCache, WorkflowError> {
         cache.name,
         cache.path,
         cache.format,
-        CacheKeyInputs::new(cache.compatibility.files, cache.compatibility.environment)?,
-        CacheKeyInputs::new(cache.exact.files, cache.exact.environment)?,
+        CacheKeyInputs::new(
+            cache.compatibility.files,
+            cache.compatibility.environment,
+            cache.compatibility.source,
+        )?,
+        CacheKeyInputs::new(
+            cache.exact.files,
+            cache.exact.environment,
+            cache.exact.source,
+        )?,
     )
     .map_err(WorkflowError::from)
 }
@@ -331,13 +340,13 @@ caches:
   - name: cargo-target
     path: /scope/cache/cargo-target
     format: v1
-    compatibility: { files: [], environment: [] }
-    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }
+    compatibility: { files: [], environment: [], source: false }
+    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }
   - name: cargo
     path: /scope/cache/cargo
     format: v1
-    compatibility: { files: [], environment: [] }
-    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }
+    compatibility: { files: [], environment: [], source: false }
+    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }
 env:
   RUSTUP_TOOLCHAIN: stable
 jobs:
@@ -387,8 +396,8 @@ on: { push: true, manual: true }
 container: { image: "rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 timeout: 1200s
 caches:
-  - { name: cargo, path: /scope/cache/cargo, format: v1, compatibility: { files: [], environment: [] }, exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] } }
-  - { name: cargo-target, path: /scope/cache/cargo-target, format: v1, compatibility: { files: [], environment: [] }, exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] } }
+  - { name: cargo, path: /scope/cache/cargo, format: v1, compatibility: { files: [], environment: [], source: false }, exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false } }
+  - { name: cargo-target, path: /scope/cache/cargo-target, format: v1, compatibility: { files: [], environment: [], source: false }, exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false } }
 env: { TEST_MODE: strict, RUSTUP_TOOLCHAIN: stable }
 jobs:
   checks:
@@ -412,8 +421,8 @@ jobs:
     fn cache_yaml_order_does_not_change_the_revision_digest() {
         let reversed =
             WORKFLOW.replace(
-                "  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }",
-                "  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }",
+                "  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [], source: false }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [], source: false }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }",
+                "  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [], source: false }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }\n  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [], source: false }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }",
             );
         let first = parse_workflow("/.scope/runs/test.yml", WORKFLOW.as_bytes())
             .unwrap()
@@ -478,7 +487,7 @@ jobs:
     #[test]
     fn caches_default_to_empty_and_reject_invalid_or_ambiguous_mounts() {
         let missing = WORKFLOW.replace(
-            "caches:\n  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n",
+            "caches:\n  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [], source: false }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [], source: false }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }\n",
             "",
         );
         assert!(
@@ -508,7 +517,7 @@ jobs:
         ));
 
         let old_list = WORKFLOW.replace(
-            "  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [] }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN] }",
+            "  - name: cargo-target\n    path: /scope/cache/cargo-target\n    format: v1\n    compatibility: { files: [], environment: [], source: false }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }\n  - name: cargo\n    path: /scope/cache/cargo\n    format: v1\n    compatibility: { files: [], environment: [], source: false }\n    exact: { files: [Cargo.lock], environment: [RUSTUP_TOOLCHAIN], source: false }",
             "  - cargo-target\n  - cargo",
         );
         assert!(matches!(
@@ -564,7 +573,7 @@ name: Graph
 on: { manual: true }
 container: { image: rust:1.90@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa }
 timeout: 20m
-caches: [{ name: cargo, path: /scope/cache/cargo, format: v1, compatibility: { files: [], environment: [] }, exact: { files: [], environment: [] } }]
+caches: [{ name: cargo, path: /scope/cache/cargo, format: v1, compatibility: { files: [], environment: [], source: false }, exact: { files: [], environment: [], source: false } }]
 env: { SHARED: workflow, WORKFLOW_ONLY: yes }
 jobs:
   backend:

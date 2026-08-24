@@ -11,7 +11,7 @@ async fn cache_service_cutover_replaces_legacy_objects_without_copying_them() {
         .await
         .unwrap();
     db.execute_unprepared(&format!(
-        "
+        r#"
         INSERT INTO scope_users (id, handle, email, email_verified)
         VALUES ('cache-user', 'cache-owner', 'cache@scope.test', TRUE);
         INSERT INTO scope_repositories (
@@ -28,7 +28,7 @@ async fn cache_service_cutover_replaces_legacy_objects_without_copying_them() {
             '{IDENTITY_DIGEST}', 'run-caches/v1/legacy/1.tar.zst',
             '{OBJECT_DIGEST}', 128, 1, TRUE, 1
         );
-        "
+        "#
     ))
     .await
     .unwrap();
@@ -115,6 +115,7 @@ async fn cache_service_schema_enforces_content_and_lifecycle_invariants() {
         "idx_scope_cache_references_access",
         "idx_scope_cache_uploads_expiry",
         "idx_scope_cache_uploads_active_identity",
+        "idx_scope_cache_orphan_uploads_due",
         "idx_scope_cache_deletion_queue_due",
     ] {
         assert!(relation_exists(db.as_ref(), index).await, "missing {index}");
@@ -138,11 +139,13 @@ async fn cache_service_schema_enforces_content_and_lifecycle_invariants() {
     assert!(
         db.execute_unprepared(&format!(
             "INSERT INTO scope_cache_uploads (
-                upload_id, repository_id, identity_digest, checksum_sha256,
+                upload_id, repository_id, identity_digest, compatibility_group_digest,
+                checksum_sha256,
                 storage_backend, object_key, size_bytes,
                 state, created_at_unix, expires_at_unix
             ) VALUES (
-                'oversized', '{REPOSITORY_ID}', repeat('e', 64), repeat('f', 64),
+                'oversized', '{REPOSITORY_ID}', repeat('e', 64), repeat('d', 64),
+                repeat('f', 64),
                 'railway-iad',
                 'repos/{REPOSITORY_ID}/objects/sha256/' || repeat('f', 64),
                 1073741825, 'active', 0, 1800
@@ -176,6 +179,7 @@ async fn cache_service_schema_enforces_content_and_lifecycle_invariants() {
         "scope_cache_objects",
         "scope_cache_references",
         "scope_cache_uploads",
+        "scope_cache_orphan_uploads",
         "scope_cache_deletion_queue",
     ] {
         let count = db
@@ -199,7 +203,7 @@ async fn exact_compatible_cutover_preserves_objects_and_queues_physical_cleanup(
         .await
         .unwrap();
     db.execute_unprepared(&format!(
-        "
+        r#"
         INSERT INTO scope_users (id, handle, email, email_verified)
         VALUES ('cache-user', 'cache-owner', 'cache@scope.test', TRUE);
         INSERT INTO scope_repositories (
@@ -233,7 +237,64 @@ async fn exact_compatible_cutover_preserves_objects_and_queues_physical_cleanup(
             'repos/{REPOSITORY_ID}/objects/sha256/' || repeat('d', 64),
             2048, NULL, 'active', 20, 1820
         );
-        "
+        INSERT INTO scope_cache_uploads (
+            upload_id, repository_id, identity_digest, checksum_sha256,
+            storage_backend, object_key, size_bytes, expected_reference_version,
+            state, created_at_unix, expires_at_unix
+        ) VALUES (
+            'committed-upload', '{REPOSITORY_ID}', repeat('e', 64), '{OBJECT_DIGEST}',
+            'railway-iad', 'repos/{REPOSITORY_ID}/objects/sha256/{OBJECT_DIGEST}',
+            1024, 1, 'committed', 20, 1820
+        );
+        INSERT INTO scope_workflow_revisions (digest, definition, created_at_unix)
+        VALUES (
+            repeat('1', 64),
+            '{{
+                "name":"Old cache workflow",
+                "triggers":{{"manual":true,"push_main":false}},
+                "jobs":[{{
+                    "id":"checks","needs":[],
+                    "container":{{"image":"alpine@sha256:{OBJECT_DIGEST}"}},
+                    "timeout_seconds":60,
+                    "caches":[{{"name":"cargo","path":"/scope/cache/cargo"}}],
+                    "environment":{{}},
+                    "steps":[{{"name":"Test","run":"true"}}]
+                }}]
+            }}'::jsonb,
+            1
+        );
+        INSERT INTO scope_runs (
+            id, idempotency_key, repo_id, workflow_path, workflow_revision_digest,
+            trigger, requested_by_user_id, source, state, cancellation_requested,
+            created_at_unix, updated_at_unix, completed_at_unix
+        ) VALUES (
+            'old-cache-run', 'old-cache-run', '{REPOSITORY_ID}', '.scope/runs/checks.yml',
+            repeat('1', 64), 'manual', 'cache-user',
+            jsonb_build_object(
+                'kind', 'ephemeral-git-bundle',
+                'object', jsonb_build_object(
+                    'content_ref', jsonb_build_object('GitBundleSha256', repeat('9', 64)),
+                    'sha256', repeat('9', 64), 'git_oid', repeat('8', 40),
+                    'git_file_mode', '100644', 'size_bytes', 32
+                )
+            ),
+            'succeeded', FALSE, 30, 31, 31
+        );
+        INSERT INTO scope_object_references (object_key, ref_kind, ref_id)
+        VALUES (
+            jsonb_build_object('GitBundleSha256', repeat('9', 64))::text,
+            'run_source', 'old-cache-run'
+        );
+        INSERT INTO scope_repository_workflow_catalogs (
+            repo_id, source_head_oid, source_change_version, configuration_error
+        ) VALUES ('{REPOSITORY_ID}', repeat('8', 40), 1, NULL);
+        INSERT INTO scope_repository_workflow_files (
+            repo_id, path, oid, size_bytes, git_file_mode, content_bytes
+        ) VALUES (
+            '{REPOSITORY_ID}', '/.scope/runs/checks.yml', repeat('7', 40),
+            18, '100644', convert_to(E'caches:\n  - cargo\n', 'UTF8')
+        );
+        "#
     ))
     .await
     .unwrap();
@@ -246,7 +307,11 @@ async fn exact_compatible_cutover_preserves_objects_and_queues_physical_cleanup(
         ("scope_cache_objects", 1_i64),
         ("scope_cache_references", 0),
         ("scope_cache_uploads", 0),
+        ("scope_cache_orphan_uploads", 1),
         ("scope_cache_deletion_queue", 1),
+        ("scope_runs", 0),
+        ("scope_workflow_revisions", 0),
+        ("scope_repository_workflow_catalogs", 0),
     ] {
         let count = db
             .query_one(Statement::from_string(
@@ -275,4 +340,60 @@ async fn exact_compatible_cutover_preserves_objects_and_queues_physical_cleanup(
         .try_get::<i64>("", "count")
         .unwrap();
     assert_eq!(obsolete_columns, 0);
+
+    let retired_source_jobs = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count FROM scope_orphan_object_jobs
+             WHERE generation = 'm0029_exact_compatible_caches'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(retired_source_jobs, 1);
+
+    let caches = crate::db::CacheStore { db: db.clone() };
+    let first_claim = caches
+        .claim_orphan_uploads(4_000_000_000, 4_000_000_300, 10)
+        .await
+        .unwrap();
+    assert_eq!(first_claim.len(), 1);
+    assert_eq!(
+        first_claim[0].object_key,
+        format!("repos/{REPOSITORY_ID}/objects/sha256/{}", "d".repeat(64))
+    );
+    caches
+        .fail_orphan_upload_cleanup(
+            &first_claim[0].object_key,
+            4_000_000_300,
+            "temporary failure",
+        )
+        .await
+        .unwrap();
+    assert!(
+        caches
+            .claim_orphan_uploads(4_000_000_299, 4_000_000_600, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let retry = caches
+        .claim_orphan_uploads(4_000_000_300, 4_000_000_600, 10)
+        .await
+        .unwrap();
+    assert_eq!(retry[0].attempts, 2);
+    caches
+        .complete_orphan_upload_cleanup(&retry[0].object_key)
+        .await
+        .unwrap();
+    assert!(
+        caches
+            .claim_orphan_uploads(4_000_001_000, 4_000_001_300, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

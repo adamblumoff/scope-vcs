@@ -53,11 +53,21 @@ pub enum CacheError {
 pub struct CacheKeyInputs {
     files: Vec<String>,
     environment: Vec<String>,
+    source: bool,
 }
 
 impl CacheKeyInputs {
-    pub fn new(mut files: Vec<String>, mut environment: Vec<String>) -> Result<Self, CacheError> {
-        if files.len().saturating_add(environment.len()) > MAX_WORKFLOW_CACHE_KEY_INPUTS {
+    pub fn new(
+        mut files: Vec<String>,
+        mut environment: Vec<String>,
+        source: bool,
+    ) -> Result<Self, CacheError> {
+        if files
+            .len()
+            .saturating_add(environment.len())
+            .saturating_add(usize::from(source))
+            > MAX_WORKFLOW_CACHE_KEY_INPUTS
+        {
             return Err(CacheError::TooManyKeyInputs);
         }
         for path in &files {
@@ -97,7 +107,11 @@ impl CacheKeyInputs {
         if let Some(duplicate) = environment.windows(2).find(|pair| pair[0] == pair[1]) {
             return Err(CacheError::DuplicateKeyInput(duplicate[0].clone()));
         }
-        Ok(Self { files, environment })
+        Ok(Self {
+            files,
+            environment,
+            source,
+        })
     }
 
     pub fn files(&self) -> &[String] {
@@ -106,6 +120,10 @@ impl CacheKeyInputs {
 
     pub fn environment(&self) -> &[String] {
         &self.environment
+    }
+
+    pub fn includes_source(&self) -> bool {
+        self.source
     }
 }
 

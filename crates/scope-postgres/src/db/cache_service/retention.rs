@@ -2,6 +2,92 @@ use super::*;
 use scope_cache_domain::{DeletionCandidate, EvictionDecision};
 
 impl CacheStore {
+    pub async fn claim_orphan_uploads(
+        &self,
+        now_unix: u64,
+        retry_at_unix: u64,
+        limit: u64,
+    ) -> Result<Vec<PendingOrphanCacheUpload>, PostgresError> {
+        let rows = self
+            .db
+            .query_all(statement(
+                "WITH due AS (
+                    SELECT object_key
+                    FROM scope_cache_orphan_uploads
+                    WHERE not_before_unix <= $1
+                    ORDER BY not_before_unix, object_key
+                    FOR UPDATE SKIP LOCKED LIMIT $2
+                 )
+                 UPDATE scope_cache_orphan_uploads orphan
+                 SET attempts = orphan.attempts + 1, not_before_unix = $3
+                 FROM due
+                 WHERE orphan.object_key = due.object_key
+                 RETURNING orphan.object_key, orphan.attempts",
+                vec![
+                    to_i64(now_unix)?.into(),
+                    to_i64(limit)?.into(),
+                    to_i64(retry_at_unix)?.into(),
+                ],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(PendingOrphanCacheUpload {
+                    object_key: row
+                        .try_get("", "object_key")
+                        .map_err(PostgresError::internal)?,
+                    attempts: u32::try_from(
+                        row.try_get::<i32>("", "attempts")
+                            .map_err(PostgresError::internal)?,
+                    )
+                    .map_err(PostgresError::internal)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn complete_orphan_upload_cleanup(
+        &self,
+        object_key: &str,
+    ) -> Result<(), PostgresError> {
+        self.db
+            .execute(statement(
+                "DELETE FROM scope_cache_orphan_uploads WHERE object_key = $1",
+                vec![object_key.into()],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        Ok(())
+    }
+
+    pub async fn fail_orphan_upload_cleanup(
+        &self,
+        object_key: &str,
+        retry_at_unix: u64,
+        error: &str,
+    ) -> Result<(), PostgresError> {
+        let error = if error.is_empty() {
+            "cache object deletion failed"
+        } else {
+            error
+        };
+        self.db
+            .execute(statement(
+                "UPDATE scope_cache_orphan_uploads
+                 SET not_before_unix = $2, last_error = left($3, 8192)
+                 WHERE object_key = $1",
+                vec![
+                    object_key.into(),
+                    to_i64(retry_at_unix)?.into(),
+                    error.into(),
+                ],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        Ok(())
+    }
+
     pub async fn expire_references(&self, now_unix: u64, limit: u64) -> Result<u64, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let rows = tx

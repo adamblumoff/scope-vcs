@@ -451,6 +451,7 @@ struct PersistedWorkflowCache {
 struct PersistedCacheKeyInputs {
     files: Vec<String>,
     environment: Vec<String>,
+    source: bool,
 }
 
 impl<'de> Deserialize<'de> for WorkflowJob {
@@ -478,8 +479,13 @@ impl<'de> Deserialize<'de> for WorkflowJob {
                     CacheKeyInputs::new(
                         cache.compatibility.files,
                         cache.compatibility.environment,
+                        cache.compatibility.source,
                     )?,
-                    CacheKeyInputs::new(cache.exact.files, cache.exact.environment)?,
+                    CacheKeyInputs::new(
+                        cache.exact.files,
+                        cache.exact.environment,
+                        cache.exact.source,
+                    )?,
                 )
             })
             .collect::<Result<Vec<_>, _>>()
@@ -541,8 +547,13 @@ impl<'de> Deserialize<'de> for CompiledWorkflow {
                             CacheKeyInputs::new(
                                 cache.compatibility.files,
                                 cache.compatibility.environment,
+                                cache.compatibility.source,
                             )?,
-                            CacheKeyInputs::new(cache.exact.files, cache.exact.environment)?,
+                            CacheKeyInputs::new(
+                                cache.exact.files,
+                                cache.exact.environment,
+                                cache.exact.source,
+                            )?,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -825,8 +836,8 @@ mod tests {
             "cargo",
             "/scope/cache/cargo",
             "v1",
-            CacheKeyInputs::new(vec![], vec!["CARGO_INCREMENTAL".to_string()]).unwrap(),
-            CacheKeyInputs::new(vec![], vec![]).unwrap(),
+            CacheKeyInputs::new(vec![], vec!["CARGO_INCREMENTAL".to_string()], false).unwrap(),
+            CacheKeyInputs::new(vec![], vec![], false).unwrap(),
         )
         .unwrap();
 

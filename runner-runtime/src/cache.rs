@@ -66,10 +66,17 @@ pub(crate) fn prepare_caches(
     let mut identities = Vec::new();
     let mut key_material = Vec::new();
     for cache in job.definition.caches() {
-        let compatibility_inputs_digest =
-            digest_inputs(cache.compatibility_inputs(), job.definition.environment())?;
-        let exact_inputs_digest =
-            digest_inputs(cache.exact_inputs(), job.definition.environment())?;
+        let started = Instant::now();
+        let compatibility_inputs_digest = digest_inputs(
+            cache.compatibility_inputs(),
+            job.definition.environment(),
+            &job.git_oid,
+        )?;
+        let exact_inputs_digest = digest_inputs(
+            cache.exact_inputs(),
+            job.definition.environment(),
+            &job.git_oid,
+        )?;
         let identity = CacheIdentity::new(
             &job.repository_id,
             namespace.clone(),
@@ -83,12 +90,12 @@ pub(crate) fn prepare_caches(
             compatibility_inputs_digest,
             exact_inputs_digest,
         });
-        identities.push(identity);
+        identities.push((identity, elapsed_ms(started)));
     }
     client.authorize_cache_keys(key_material)?;
     let mut prepared = Vec::new();
     let mut reports = Vec::new();
-    for (cache, identity) in job.definition.caches().iter().zip(identities) {
+    for (cache, (identity, key_ms)) in job.definition.caches().iter().zip(identities) {
         let started = Instant::now();
         let exact_digest = identity.exact_digest();
         let compatibility_group_digest = identity.compatibility_group_digest();
@@ -100,7 +107,7 @@ pub(crate) fn prepare_caches(
             cache_name: cache.as_str().to_string(),
             identity_digest: exact_digest.clone(),
             preparation: restore.preparation,
-            prepare_ms: elapsed_ms(started),
+            prepare_ms: key_ms.saturating_add(elapsed_ms(started)),
         });
         prepared.push(PreparedCache {
             exact_digest,
@@ -304,14 +311,16 @@ impl CacheRestore {
 fn digest_inputs(
     inputs: &CacheKeyInputs,
     environment: &std::collections::BTreeMap<String, String>,
+    git_oid: &str,
 ) -> anyhow::Result<String> {
-    digest_inputs_at(inputs, environment, Path::new("."))
+    digest_inputs_at(inputs, environment, Path::new("."), git_oid)
 }
 
 fn digest_inputs_at(
     inputs: &CacheKeyInputs,
     environment: &std::collections::BTreeMap<String, String>,
     root: &Path,
+    git_oid: &str,
 ) -> anyhow::Result<String> {
     let mut digest = Sha256::new();
     digest.update(b"scope-cache-inputs-v1");
@@ -348,6 +357,10 @@ fn digest_inputs_at(
             }
             None => update_component(&mut digest, "missing"),
         }
+    }
+    if inputs.includes_source() {
+        update_component(&mut digest, "source");
+        update_component(&mut digest, git_oid);
     }
     Ok(hex::encode(digest.finalize()))
 }
@@ -676,21 +689,30 @@ mod tests {
         let inputs = CacheKeyInputs::new(
             vec!["Cargo.lock".to_string()],
             vec!["RUSTUP_TOOLCHAIN".to_string()],
+            false,
         )
         .unwrap();
         let mut environment =
             BTreeMap::from([("RUSTUP_TOOLCHAIN".to_string(), "1.98.0".to_string())]);
-        let missing = digest_inputs_at(&inputs, &environment, root.path()).unwrap();
+        let missing = digest_inputs_at(&inputs, &environment, root.path(), "source-a").unwrap();
         fs::write(root.path().join("Cargo.lock"), []).unwrap();
-        let empty = digest_inputs_at(&inputs, &environment, root.path()).unwrap();
+        let empty = digest_inputs_at(&inputs, &environment, root.path(), "source-a").unwrap();
         fs::write(root.path().join("Cargo.lock"), b"lock").unwrap();
-        let content = digest_inputs_at(&inputs, &environment, root.path()).unwrap();
+        let content = digest_inputs_at(&inputs, &environment, root.path(), "source-a").unwrap();
         environment.insert("RUSTUP_TOOLCHAIN".to_string(), "1.99.0".to_string());
-        let environment_changed = digest_inputs_at(&inputs, &environment, root.path()).unwrap();
+        let environment_changed =
+            digest_inputs_at(&inputs, &environment, root.path(), "source-a").unwrap();
+
+        let source_inputs = CacheKeyInputs::new(vec![], vec![], true).unwrap();
+        let source_a =
+            digest_inputs_at(&source_inputs, &environment, root.path(), "source-a").unwrap();
+        let source_b =
+            digest_inputs_at(&source_inputs, &environment, root.path(), "source-b").unwrap();
 
         assert_ne!(missing, empty);
         assert_ne!(empty, content);
         assert_ne!(content, environment_changed);
+        assert_ne!(source_a, source_b);
     }
 
     #[test]
