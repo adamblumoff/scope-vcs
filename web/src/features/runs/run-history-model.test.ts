@@ -58,6 +58,7 @@ function page(
       git_oid: 'a'.repeat(40),
       id,
       state: 'queued',
+      trigger: 'push-main',
       updated_at_unix: index,
       workflow_name: 'Checks',
       workflow_path: '/.scope/runs/checks.yml',

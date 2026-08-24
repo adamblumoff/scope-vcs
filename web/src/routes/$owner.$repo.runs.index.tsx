@@ -1,4 +1,4 @@
-import type { RepoRunHistoryInput, RunActionInput } from '@/api/types'
+import type { RepoRunHistoryInput } from '@/api/types'
 import {
   RepositoryRunsPage,
 } from '@/features/runs/repository-runs-page'
@@ -6,7 +6,6 @@ import { RunsPagePending } from '@/features/runs/runs-page-pending'
 import { RunsPageError } from '@/features/runs/runs-page-error'
 import {
   loadRepoRunHistory,
-  loadRepoRunDetail,
   loadRepoRunPage,
 } from '@/routes/-run-history-actions'
 import { createFileRoute } from '@tanstack/react-router'
@@ -27,17 +26,11 @@ function RepoRunsRoute() {
       loadRepoRunHistory({ data: input, signal }),
     [],
   )
-  const loadDetail = useCallback(
-    (input: RunActionInput, signal?: AbortSignal) =>
-      loadRepoRunDetail({ data: input, signal }),
-    [],
-  )
 
   return (
     <RepositoryRunsPage
       initialResources={initialResources}
       key={`${params.owner}/${params.repo}/all/${initialResources ? 'member' : 'denied'}`}
-      loadDetail={loadDetail}
       loadHistory={loadHistory}
       params={params}
     />

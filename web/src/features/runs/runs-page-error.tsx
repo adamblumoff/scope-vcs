@@ -1,11 +1,10 @@
 import { RouteErrorContent } from '@/components/route-error-page'
-import { WorkbenchPane } from '@/components/page-header'
-import { RunsHeader } from './runs-header'
+import { WorkbenchBar, WorkbenchPane } from '@/components/page-header'
 
 export function RunsPageError({ error }: { error: unknown }) {
   return (
     <WorkbenchPane>
-      <RunsHeader />
+      <WorkbenchBar title="Runs" />
       <RouteErrorContent
         error={error}
         fallbackMessage="Unexpected runs error"
