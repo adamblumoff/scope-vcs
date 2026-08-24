@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/empty-state'
 import { GitCommit } from 'lucide-react'
 import {
   RequestChangesWorkbench,
+  type RequestChangesDiscussionReferences,
   type RequestChangesSearch,
 } from './request-changes-workbench'
 import type {
@@ -16,7 +17,7 @@ import type { RequestDiscussionPage } from './request-discussion-types'
 
 type RequestChangesViewProps = {
   audience: 'private' | 'public'
-  initialDiscussionReferences: RequestDiscussionPage | null
+  initialDiscussionReferences: RequestChangesDiscussionReferences
   loadDiff: (
     input: LoadRequestRevisionCommitInput & { path: string },
   ) => Promise<ReviewFileDiff>

@@ -3,15 +3,20 @@ import {
   loadRequestRevisionCommitFileDiffForRequest,
   loadRequestRevisionsForRequest,
 } from '@/api/requests'
+import type { RequestRevisions } from '@/api/types'
 import {
   type LoadDiscussionsInput,
   loadRequestDiscussionsForRequest,
 } from '@/features/requests/request-discussion-api'
 import { RequestChangesView } from '@/features/requests/request-changes-view'
-import type { RequestChangesSearch } from '@/features/requests/request-changes-workbench'
+import type {
+  RequestChangesDiscussionReferences,
+  RequestChangesSearch,
+} from '@/features/requests/request-changes-workbench'
 import { RequestChangesPending } from '@/features/requests/request-page-pending'
 import {
   requestChangeSelection,
+  requestRevisionCommitId,
   requestRevisionPin,
 } from '@/features/requests/request-changes-model'
 import { requestParamsForRoute } from '@/features/requests/request-route-data'
@@ -30,7 +35,7 @@ const requestRoute = getRouteApi('/$owner/$repo/requests/$requestId')
 const loadChangesPage = createServerFn({ method: 'GET' })
   .validator((data: LoadRequestRevisionsInput) => data)
   .handler(async ({ data }) => {
-    const [revisions, discussionReferences] = await Promise.all([
+    const [revisions, discussionPage] = await Promise.all([
       loadRequestRevisionsForRequest(data).catch((error: unknown) => {
         console.error('Loading request revisions failed', error)
         return null
@@ -40,6 +45,11 @@ const loadChangesPage = createServerFn({ method: 'GET' })
         return null
       }),
     ])
+    const discussionReferences = await initialDiscussionReferences(
+      data,
+      revisions,
+      discussionPage,
+    )
     return { discussionReferences, revisions }
   })
 
@@ -141,4 +151,30 @@ function requestChangesSelectionSearch(search: unknown): RequestChangesSearch {
     commit: typeof values.commit === 'string' ? values.commit : undefined,
     revision: typeof values.revision === 'string' ? values.revision : undefined,
   }
+}
+
+async function initialDiscussionReferences(
+  params: LoadRequestRevisionsInput,
+  revisions: RequestRevisions | null,
+  requestPage: Awaited<ReturnType<typeof loadRequestDiscussionsForRequest>> | null,
+): Promise<RequestChangesDiscussionReferences> {
+  if (requestPage && !requestPage.next_cursor) {
+    return { all: requestPage, byCommit: {} }
+  }
+  if (!revisions) return { all: null, byCommit: {} }
+  const pages = await Promise.all(revisions.revisions.flatMap((revision) =>
+    revision.commits.map((commit) => {
+      const key = requestRevisionCommitId(revision.id, commit.oid)
+      return loadRequestDiscussionsForRequest({
+        ...params,
+        commit_oid: commit.oid,
+        include_revision_anchor: commit.oid === revision.commits.at(-1)?.oid,
+        revision_id: revision.id,
+      }).catch((error: unknown) => {
+        console.error('Loading request commit discussion references failed', error)
+        return null
+      }).then((page) => [key, page] as const)
+    }),
+  ))
+  return { all: null, byCommit: Object.fromEntries(pages) }
 }

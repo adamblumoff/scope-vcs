@@ -43,6 +43,11 @@ export type RequestChangesSearch = {
   revision?: string
 }
 
+export type RequestChangesDiscussionReferences = {
+  all: RequestDiscussionPage | null
+  byCommit: Record<string, RequestDiscussionPage | null>
+}
+
 type DiscussionReferenceState = {
   discussions: RequestDiscussion[]
   error: string | null
@@ -63,7 +68,7 @@ export function RequestChangesWorkbench({
   search,
 }: {
   audience: ProjectionPreviewAudience
-  initialDiscussionReferences: RequestDiscussionPage | null
+  initialDiscussionReferences: RequestChangesDiscussionReferences
   loadDiff: (
     input: LoadRequestRevisionCommitInput & { path: string },
   ) => Promise<ReviewFileDiff>
@@ -87,9 +92,11 @@ export function RequestChangesWorkbench({
     search,
   })
   const discussionReferences = useRequestDiscussionReferences({
-    initialPage: initialDiscussionReferences,
+    commitOid: model.selectedCommitOid,
+    initialReferences: initialDiscussionReferences,
     loadDiscussions,
     params,
+    revision: model.selectedRevision,
   })
   const references = useMemo(
     () => discussionsForRequestCommit(
@@ -139,17 +146,26 @@ export function RequestChangesWorkbench({
 }
 
 function useRequestDiscussionReferences({
-  initialPage,
+  commitOid,
+  initialReferences,
   loadDiscussions,
   params,
+  revision,
 }: {
-  initialPage: RequestDiscussionPage | null
+  commitOid: string | null
+  initialReferences: RequestChangesDiscussionReferences
   loadDiscussions: (input: LoadDiscussionsInput) => Promise<{
     discussions: RequestDiscussion[]
     next_cursor: string | null
   }>
   params: { owner: string; repo: string; request_id: string }
+  revision: RequestRevisions['revisions'][number] | null
 }): DiscussionReferenceState {
+  const key = revision && commitOid
+    ? requestRevisionCommitId(revision.id, commitOid)
+    : null
+  const initialPage = initialReferences.all
+    ?? (key ? initialReferences.byCommit[key] ?? null : null)
   const [resource, setResource] = useState<{
     discussions: RequestDiscussion[]
     error: string | null
@@ -162,6 +178,7 @@ function useRequestDiscussionReferences({
     : discussionReferenceResource(initialPage)
   if (active !== resource) setResource(active)
   const loadPage = useCallback(async () => {
+    if (!revision || !commitOid) return
     const cursor = active.nextCursor ?? undefined
     setResource((current) => current.initialPage === initialPage ? {
       ...current,
@@ -171,8 +188,11 @@ function useRequestDiscussionReferences({
     try {
       const page = await loadDiscussions({
         ...params,
+        commit_oid: commitOid,
         cursor,
+        include_revision_anchor: commitOid === revision.commits.at(-1)?.oid,
         limit: 100,
+        revision_id: revision.id,
       })
       setResource((current) => current.initialPage === initialPage ? {
         discussions: cursor
@@ -190,7 +210,7 @@ function useRequestDiscussionReferences({
         status: 'failed',
       } : current)
     }
-  }, [active.nextCursor, initialPage, loadDiscussions, params])
+  }, [active.nextCursor, commitOid, initialPage, loadDiscussions, params, revision])
   return {
     discussions: active.discussions,
     error: active.error,
