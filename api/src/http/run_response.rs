@@ -32,6 +32,7 @@ pub(super) fn repository_run_summary(
         id: run.id.clone(),
         workflow_name: run.workflow.path().name().to_string(),
         git_oid: run.source.git_oid().to_string(),
+        trigger: run.trigger.into(),
         state: run.state.into(),
         cancellation_requested: run.cancellation_requested,
         created_at_unix: run.created_at_unix,

@@ -278,7 +278,9 @@ export type RepositoryExecutionProvider = "northflank";
 
 export type RepositoryRunState = "queued" | "dispatching" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
-export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
+export type RepositoryRunTrigger = "manual" | "push-main";
+
+export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, git_oid: string, trigger: RepositoryRunTrigger, state: RepositoryRunState, cancellation_requested: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, can_cancel: boolean, can_retry: boolean, };
 
 export type RepositoryRunJobState = "blocked" | "queued" | "dispatching" | "running" | "succeeded" | "failed" | "skipped" | "canceled" | "lost";
 

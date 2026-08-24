@@ -1,7 +1,8 @@
 use scope_domain::runs::{
     cache::{CacheColdReason, CacheFinalState, CachePreparation},
     run::{
-        AttemptState, AttemptTerminalReason, ExecutionProvider, RunJobState, RunState, StepState,
+        AttemptState, AttemptTerminalReason, ExecutionProvider, RunJobState, RunState, RunTrigger,
+        StepState,
     },
     trigger::PushTriggerEvaluationState,
     workflow::WorkflowJob,
@@ -57,12 +58,31 @@ impl From<RunState> for RepositoryRunState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
+pub enum RepositoryRunTrigger {
+    Manual,
+    PushMain,
+}
+
+impl From<RunTrigger> for RepositoryRunTrigger {
+    fn from(trigger: RunTrigger) -> Self {
+        match trigger {
+            RunTrigger::Manual => Self::Manual,
+            RunTrigger::PushMain => Self::PushMain,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RepositoryRunSummaryResponse {
     pub id: String,
     pub workflow_name: String,
     pub git_oid: String,
+    pub trigger: RepositoryRunTrigger,
     pub state: RepositoryRunState,
     pub cancellation_requested: bool,
     pub created_at_unix: u64,
