@@ -1,6 +1,8 @@
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use scope_cache_contract::SignedCacheGrantClaims;
-use scope_cache_domain::{CacheDigest, RepositoryId};
+use scope_cache_contract::{AuthorizedCache, SignedCacheGrantClaims};
+#[cfg(test)]
+use scope_cache_domain::CacheDigest;
+use scope_cache_domain::RepositoryId;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -48,7 +50,7 @@ impl CacheGrantIssuer {
         &self,
         attempt_id: String,
         repository_id: RepositoryId,
-        allowed_identity_digests: Vec<CacheDigest>,
+        allowed_caches: Vec<AuthorizedCache>,
         expires_at_unix: u64,
     ) -> anyhow::Result<String> {
         Ok(encode(
@@ -56,7 +58,7 @@ impl CacheGrantIssuer {
             &SignedCacheGrantClaims {
                 attempt_id,
                 repository_id,
-                allowed_identity_digests,
+                allowed_caches,
                 backend: self.backend.to_string(),
                 expires_at_unix,
             },
@@ -104,7 +106,10 @@ mod tests {
             .issue(
                 "attempt-1".to_string(),
                 RepositoryId::parse("repo-1").unwrap(),
-                vec![CacheDigest::parse("a".repeat(64)).unwrap()],
+                vec![AuthorizedCache {
+                    exact_identity_digest: CacheDigest::parse("a".repeat(64)).unwrap(),
+                    compatibility_group_digest: CacheDigest::parse("b".repeat(64)).unwrap(),
+                }],
                 100,
             )
             .unwrap();

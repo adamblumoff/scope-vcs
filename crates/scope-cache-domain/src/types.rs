@@ -149,8 +149,8 @@ impl CacheObject {
 pub struct CacheReference {
     repository_id: RepositoryId,
     identity_digest: CacheDigest,
+    compatibility_group_digest: CacheDigest,
     object_digest: CacheDigest,
-    version: u64,
     updated_at_unix: u64,
     expires_at_unix: u64,
 }
@@ -158,22 +158,16 @@ pub struct CacheReference {
 impl CacheReference {
     pub(crate) fn point_to(
         identity_digest: CacheDigest,
+        compatibility_group_digest: CacheDigest,
         object: &CacheObject,
-        current_reference: Option<&Self>,
         now_unix: u64,
         policy: CachePolicy,
     ) -> Result<Self, CacheDomainError> {
-        let version = current_reference.map_or(Ok(1), |reference| {
-            reference
-                .version
-                .checked_add(1)
-                .ok_or(CacheDomainError::ReferenceVersionOverflow)
-        })?;
         Ok(Self {
             repository_id: object.repository_id.clone(),
             identity_digest,
+            compatibility_group_digest,
             object_digest: object.digest.clone(),
-            version,
             updated_at_unix: now_unix,
             expires_at_unix: policy.reference_expiry(now_unix)?,
         })
@@ -190,8 +184,8 @@ impl CacheReference {
         Ok(Self {
             repository_id: self.repository_id.clone(),
             identity_digest: self.identity_digest.clone(),
+            compatibility_group_digest: self.compatibility_group_digest.clone(),
             object_digest: self.object_digest.clone(),
-            version: self.version,
             updated_at_unix: now_unix,
             expires_at_unix: policy.reference_expiry(now_unix)?,
         })
@@ -200,23 +194,20 @@ impl CacheReference {
     pub fn restore(
         repository_id: RepositoryId,
         identity_digest: CacheDigest,
+        compatibility_group_digest: CacheDigest,
         object_digest: CacheDigest,
-        version: u64,
         updated_at_unix: u64,
         expires_at_unix: u64,
         policy: CachePolicy,
     ) -> Result<Self, CacheDomainError> {
-        if version == 0 {
-            return Err(CacheDomainError::InvalidReferenceVersion);
-        }
         if policy.reference_expiry(updated_at_unix)? != expires_at_unix {
             return Err(CacheDomainError::InvalidReferenceExpiry);
         }
         Ok(Self {
             repository_id,
             identity_digest,
+            compatibility_group_digest,
             object_digest,
-            version,
             updated_at_unix,
             expires_at_unix,
         })
@@ -230,12 +221,12 @@ impl CacheReference {
         &self.identity_digest
     }
 
-    pub fn object_digest(&self) -> &CacheDigest {
-        &self.object_digest
+    pub fn compatibility_group_digest(&self) -> &CacheDigest {
+        &self.compatibility_group_digest
     }
 
-    pub fn version(&self) -> u64 {
-        self.version
+    pub fn object_digest(&self) -> &CacheDigest {
+        &self.object_digest
     }
 
     pub fn updated_at_unix(&self) -> u64 {
@@ -257,9 +248,9 @@ pub struct UploadLease {
     id: UploadLeaseId,
     repository_id: RepositoryId,
     identity_digest: CacheDigest,
+    compatibility_group_digest: CacheDigest,
     object_digest: CacheDigest,
     size_bytes: u64,
-    expected_reference_version: Option<u64>,
     issued_at_unix: u64,
     expires_at_unix: u64,
 }
@@ -268,8 +259,8 @@ impl UploadLease {
     pub(crate) fn issue(
         id: UploadLeaseId,
         identity_digest: CacheDigest,
+        compatibility_group_digest: CacheDigest,
         object: &CacheObject,
-        current_reference: Option<&CacheReference>,
         now_unix: u64,
         policy: CachePolicy,
     ) -> Result<Self, CacheDomainError> {
@@ -277,9 +268,9 @@ impl UploadLease {
             id,
             repository_id: object.repository_id.clone(),
             identity_digest,
+            compatibility_group_digest,
             object_digest: object.digest.clone(),
             size_bytes: object.size_bytes,
-            expected_reference_version: current_reference.map(CacheReference::version),
             issued_at_unix: now_unix,
             expires_at_unix: policy.upload_expiry(now_unix)?,
         })
@@ -290,17 +281,14 @@ impl UploadLease {
         id: UploadLeaseId,
         repository_id: RepositoryId,
         identity_digest: CacheDigest,
+        compatibility_group_digest: CacheDigest,
         object_digest: CacheDigest,
         size_bytes: u64,
-        expected_reference_version: Option<u64>,
         issued_at_unix: u64,
         expires_at_unix: u64,
         policy: CachePolicy,
     ) -> Result<Self, CacheDomainError> {
         policy.validate_object_size(size_bytes)?;
-        if expected_reference_version == Some(0) {
-            return Err(CacheDomainError::InvalidReferenceVersion);
-        }
         if policy.upload_expiry(issued_at_unix)? != expires_at_unix {
             return Err(CacheDomainError::InvalidUploadLeaseExpiry);
         }
@@ -308,9 +296,9 @@ impl UploadLease {
             id,
             repository_id,
             identity_digest,
+            compatibility_group_digest,
             object_digest,
             size_bytes,
-            expected_reference_version,
             issued_at_unix,
             expires_at_unix,
         })
@@ -328,16 +316,16 @@ impl UploadLease {
         &self.identity_digest
     }
 
+    pub fn compatibility_group_digest(&self) -> &CacheDigest {
+        &self.compatibility_group_digest
+    }
+
     pub fn object_digest(&self) -> &CacheDigest {
         &self.object_digest
     }
 
     pub fn size_bytes(&self) -> u64 {
         self.size_bytes
-    }
-
-    pub fn expected_reference_version(&self) -> Option<u64> {
-        self.expected_reference_version
     }
 
     pub fn issued_at_unix(&self) -> u64 {

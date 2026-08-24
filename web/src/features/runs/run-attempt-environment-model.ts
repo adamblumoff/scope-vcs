@@ -12,8 +12,8 @@ export function summarizeAttemptCaches(caches: readonly RepoRunCache[]) {
       continue
     }
     prepareMs = Math.max(prepareMs, observation.prepare_ms)
-    if (observation.preparation.kind === 'warm') warm += 1
-    else cold += 1
+    if (observation.preparation.kind === 'cold') cold += 1
+    else warm += 1
   }
   return { cold, prepareMs, unavailable, warm }
 }
@@ -40,7 +40,8 @@ export function cacheStateLabel(cache: RepoRunCache) {
 
 export function cacheStateClass(cache: RepoRunCache) {
   switch (cacheStateLabel(cache)) {
-    case 'warm':
+    case 'exact':
+    case 'compatible':
       return 'text-success'
     case 'cold':
       return 'text-warning'
@@ -52,8 +53,11 @@ export function cacheStateClass(cache: RepoRunCache) {
 export function cacheExplanation(cache: RepoRunCache) {
   const observation = cache.observation
   if (!observation) return 'Cache facts were not reported for this attempt.'
-  if (observation.preparation.kind === 'warm') {
-    return `Reusable entry found · ${observation.final_state}`
+  if (observation.preparation.kind === 'exact') {
+    return `Exact entry found · ${observation.final_state}`
+  }
+  if (observation.preparation.kind === 'compatible') {
+    return `Compatible fallback found · ${observation.final_state}`
   }
   return `${coldReasonLabel(observation.preparation.reason)} · ${observation.final_state}`
 }

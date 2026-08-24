@@ -54,6 +54,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0026_repository_landing_files",
     "m0027_run_creation_sequence",
     "m0028_repository_workflow_catalogs",
+    "m0029_exact_compatible_caches",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -254,7 +255,8 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 49);
+    assert_eq!(scope_table_count, 50);
+    assert!(relation_exists(db.as_ref(), "scope_cache_orphan_uploads").await);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);
     assert!(!relation_exists(db.as_ref(), "scope_credit_ledger_entries").await);
     let review_columns = db

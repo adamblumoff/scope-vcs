@@ -46,7 +46,9 @@ fn environment_lines(
     let mut prepare_ms = 0;
     for cache in &attempt.caches {
         match cache.observation.as_ref().map(|fact| fact.preparation) {
-            Some(RepositoryRunCachePreparation::Warm) => warm += 1,
+            Some(
+                RepositoryRunCachePreparation::Exact | RepositoryRunCachePreparation::Compatible,
+            ) => warm += 1,
             Some(RepositoryRunCachePreparation::Cold { .. }) => cold += 1,
             None => unavailable += 1,
         }
@@ -84,7 +86,8 @@ fn cache_line(cache: &RepositoryRunCacheResponse) -> String {
         return format!("        {} · not reported", cache.name);
     };
     let preparation = match observation.preparation {
-        RepositoryRunCachePreparation::Warm => "warm".to_string(),
+        RepositoryRunCachePreparation::Exact => "exact".to_string(),
+        RepositoryRunCachePreparation::Compatible => "compatible".to_string(),
         RepositoryRunCachePreparation::Cold { reason } => {
             format!("cold · {}", cold_reason_label(reason))
         }
@@ -252,7 +255,7 @@ mod tests {
                                 workflow_path: "/.scope/runs/checks.yml".to_string(),
                                 job_key: "backend".to_string(),
                                 identity_digest: "c".repeat(64),
-                                preparation: RepositoryRunCachePreparation::Warm,
+                                preparation: RepositoryRunCachePreparation::Exact,
                                 prepare_ms: 50,
                                 final_state: RepositoryRunCacheFinalState::Ready,
                                 finalize_ms: Some(4),

@@ -126,7 +126,7 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
                 .header(AUTHORIZATION, &attempt_auth)
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    serde_json::to_vec(&AttemptHeartbeatRequest {}).unwrap(),
+                    serde_json::to_vec(&AttemptHeartbeatRequest { cache_keys: vec![] }).unwrap(),
                 ))
                 .unwrap(),
         )

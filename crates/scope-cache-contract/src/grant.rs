@@ -10,19 +10,30 @@ use serde::{Deserialize, Serialize};
 pub struct SignedCacheGrantClaims {
     pub attempt_id: String,
     pub repository_id: RepositoryId,
-    pub allowed_identity_digests: Vec<CacheDigest>,
+    pub allowed_caches: Vec<AuthorizedCache>,
     pub backend: String,
     pub expires_at_unix: u64,
 }
 
 impl SignedCacheGrantClaims {
-    pub fn allows_identity(&self, identity_digest: &CacheDigest, now_unix: u64) -> bool {
+    pub fn allows_cache(
+        &self,
+        exact_identity_digest: &CacheDigest,
+        compatibility_group_digest: &CacheDigest,
+        now_unix: u64,
+    ) -> bool {
         now_unix < self.expires_at_unix
-            && self
-                .allowed_identity_digests
-                .iter()
-                .any(|allowed| allowed == identity_digest)
+            && self.allowed_caches.iter().any(|allowed| {
+                &allowed.exact_identity_digest == exact_identity_digest
+                    && &allowed.compatibility_group_digest == compatibility_group_digest
+            })
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AuthorizedCache {
+    pub exact_identity_digest: CacheDigest,
+    pub compatibility_group_digest: CacheDigest,
 }
 
 #[cfg(test)]
@@ -38,13 +49,16 @@ mod tests {
         let claims = SignedCacheGrantClaims {
             attempt_id: "attempt-1".to_string(),
             repository_id: RepositoryId::parse("repo-1").unwrap(),
-            allowed_identity_digests: vec![digest('a')],
+            allowed_caches: vec![AuthorizedCache {
+                exact_identity_digest: digest('a'),
+                compatibility_group_digest: digest('b'),
+            }],
             backend: "railway-iad".to_string(),
             expires_at_unix: 100,
         };
-        assert!(claims.allows_identity(&digest('a'), 99));
-        assert!(!claims.allows_identity(&digest('b'), 99));
-        assert!(!claims.allows_identity(&digest('a'), 100));
+        assert!(claims.allows_cache(&digest('a'), &digest('b'), 99));
+        assert!(!claims.allows_cache(&digest('a'), &digest('c'), 99));
+        assert!(!claims.allows_cache(&digest('a'), &digest('b'), 100));
 
         let encoded = serde_json::to_value(claims).unwrap();
         assert_eq!(encoded["repository_id"], "repo-1");
@@ -57,7 +71,10 @@ mod tests {
         let value = serde_json::json!({
             "attempt_id": "attempt-1",
             "repository_id": "repo-1",
-            "allowed_identity_digests": ["not-a-digest"],
+            "allowed_caches": [{
+                "exact_identity_digest": "not-a-digest",
+                "compatibility_group_digest": "b".repeat(64),
+            }],
             "backend": "railway-iad",
             "expires_at_unix": 100,
         });

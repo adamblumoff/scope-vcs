@@ -18,8 +18,44 @@ jobs:
     caches:
       - name: cargo
         path: /scope/cache/cargo
+        format: v1
+        compatibility: &cargo-cache-compatibility
+          files:
+            - rust-toolchain.toml
+          environment:
+            - RUSTUP_TOOLCHAIN
+            - CARGO_INCREMENTAL
+            - CARGO_PROFILE_DEV_DEBUG
+            - CARGO_PROFILE_TEST_DEBUG
+          source: false
+        exact: &root-cargo-cache-exact
+          files: &root-cargo-cache-files
+            - Cargo.lock
+            - Cargo.toml
+            - api/Cargo.toml
+            - cache-service/Cargo.toml
+            - crates/scope-api-contract/Cargo.toml
+            - crates/scope-cache-contract/Cargo.toml
+            - crates/scope-cache-domain/Cargo.toml
+            - crates/scope-content-lifecycle/Cargo.toml
+            - crates/scope-domain/Cargo.toml
+            - crates/scope-git-process/Cargo.toml
+            - crates/scope-git/Cargo.toml
+            - crates/scope-object-store/Cargo.toml
+            - crates/scope-postgres/Cargo.toml
+            - crates/scope-run-config/Cargo.toml
+            - runner-runtime/Cargo.toml
+            - worker/Cargo.toml
+          environment: []
+          source: false
       - name: cargo-target
         path: /scope/cache/cargo-target
+        format: v1
+        compatibility: *cargo-cache-compatibility
+        exact: &root-cargo-target-cache-exact
+          files: *root-cargo-cache-files
+          environment: []
+          source: true
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -43,8 +79,24 @@ jobs:
     caches:
       - name: cargo
         path: /scope/cache/cargo
+        format: v1
+        compatibility: *cargo-cache-compatibility
+        exact: &cli-cargo-cache-exact
+          files: &cli-cargo-cache-files
+            - cli/Cargo.lock
+            - cli/Cargo.toml
+            - crates/scope-api-contract/Cargo.toml
+            - crates/scope-domain/Cargo.toml
+          environment: []
+          source: false
       - name: cargo-target
         path: /scope/cache/cargo-target
+        format: v1
+        compatibility: *cargo-cache-compatibility
+        exact: &cli-cargo-target-cache-exact
+          files: *cli-cargo-cache-files
+          environment: []
+          source: true
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -69,8 +121,14 @@ jobs:
     caches:
       - name: cargo
         path: /scope/cache/cargo
+        format: v1
+        compatibility: *cargo-cache-compatibility
+        exact: *cli-cargo-cache-exact
       - name: cargo-target
         path: /scope/cache/cargo-target
+        format: v1
+        compatibility: *cargo-cache-compatibility
+        exact: *cli-cargo-target-cache-exact
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -90,6 +148,18 @@ jobs:
     caches:
       - name: pnpm-store
         path: /root/.local/share/pnpm/store
+        format: v1
+        compatibility: &pnpm-cache-compatibility
+          files: []
+          environment: []
+          source: false
+        exact: &pnpm-cache-exact
+          files:
+            - web/package.json
+            - web/pnpm-lock.yaml
+            - web/pnpm-workspace.yaml
+          environment: []
+          source: false
     steps:
       - name: Install dependencies
         run: (cd web && pnpm install --frozen-lockfile)
@@ -112,10 +182,19 @@ jobs:
     caches:
       - name: cargo
         path: /scope/cache/cargo
+        format: v1
+        compatibility: *cargo-cache-compatibility
+        exact: *root-cargo-cache-exact
       - name: cargo-target
         path: /scope/cache/cargo-target
+        format: v1
+        compatibility: *cargo-cache-compatibility
+        exact: *root-cargo-target-cache-exact
       - name: pnpm-store
         path: /root/.local/share/pnpm/store
+        format: v1
+        compatibility: *pnpm-cache-compatibility
+        exact: *pnpm-cache-exact
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"

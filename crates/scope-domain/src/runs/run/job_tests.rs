@@ -25,6 +25,7 @@ fn workflow() -> WorkflowRevision {
         ContainerSpec::new(format!("rust@sha256:{IMAGE_DIGEST}")).unwrap(),
         600,
         vec![],
+        Default::default(),
         vec![WorkflowStep::new("Test", "cargo test").unwrap()],
     )
     .unwrap();

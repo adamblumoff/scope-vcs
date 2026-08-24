@@ -1,34 +1,34 @@
 use crate::api::{CacheDownloadError, RuntimeClient};
 use anyhow::Context as _;
 use scope_api_contract::{
-    AttemptCacheFinalizationReport, AttemptCachePreparationReport,
+    AttemptCacheFinalizationReport, AttemptCacheKeyMaterial, AttemptCachePreparationReport,
     ReportAttemptCacheFinalizationsRequest, ReportAttemptCachePreparationsRequest, RunJobResponse,
 };
 use scope_cache_contract::{
-    CommitCacheUploadRequest, PrepareCacheUploadRequest, PrepareCacheUploadResponse,
-    RestoreCacheRequest, RestoreCacheResponse,
+    CacheRestoreSource, CommitCacheUploadRequest, PrepareCacheUploadRequest,
+    PrepareCacheUploadResponse, RestoreCacheRequest, RestoreCacheResponse,
 };
 use scope_cache_domain::{CacheDigest, MAX_CACHE_OBJECT_BYTES};
-use scope_domain::runs::{
-    cache::{
-        CacheColdReason, CacheFinalState, CacheIdentity, CacheNamespace, CachePlatform,
-        CachePreparation,
-    },
-    run::PinnedContainerImage,
+use scope_domain::runs::cache::{
+    CacheColdReason, CacheFinalState, CacheIdentity, CacheKeyInputs, CacheNamespace, CachePlatform,
+    CachePreparation,
 };
 use sha2::{Digest as _, Sha256};
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::fs::PermissionsExt as _,
+    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     time::Instant,
 };
 
+const MAX_CACHE_KEY_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
 pub(crate) struct PreparedCache {
-    digest: String,
+    exact_digest: String,
+    compatibility_group_digest: String,
     path: PathBuf,
-    restored_checksum_sha256: Option<String>,
+    exact_hit: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,37 +59,61 @@ pub(crate) fn prepare_caches(
     client: &RuntimeClient,
     job: &RunJobResponse,
 ) -> anyhow::Result<Vec<PreparedCache>> {
-    let image = PinnedContainerImage::parse(job.pinned_container_image.clone())?;
     let workflow_path =
         scope_domain::runs::workflow::WorkflowPath::parse(job.workflow_path.clone())?;
     let job_key = scope_domain::runs::workflow::WorkflowJobId::parse(job.job_key.clone())?;
     let namespace = CacheNamespace::workflow(&workflow_path, &job_key);
-    let mut prepared = Vec::new();
-    let mut reports = Vec::new();
+    let mut identities = Vec::new();
+    let mut key_material = Vec::new();
     for cache in job.definition.caches() {
         let started = Instant::now();
-        let digest = CacheIdentity::new(
+        let compatibility_inputs_digest = digest_inputs(
+            cache.compatibility_inputs(),
+            job.definition.environment(),
+            &job.git_oid,
+        )?;
+        let exact_inputs_digest = digest_inputs(
+            cache.exact_inputs(),
+            job.definition.environment(),
+            &job.git_oid,
+        )?;
+        let identity = CacheIdentity::new(
             &job.repository_id,
             namespace.clone(),
             cache.clone(),
-            &image,
             CachePlatform::LinuxAmd64,
-        )?
-        .digest();
+            &compatibility_inputs_digest,
+            &exact_inputs_digest,
+        )?;
+        key_material.push(AttemptCacheKeyMaterial {
+            cache_name: cache.as_str().to_string(),
+            compatibility_inputs_digest,
+            exact_inputs_digest,
+        });
+        identities.push((identity, elapsed_ms(started)));
+    }
+    client.authorize_cache_keys(key_material)?;
+    let mut prepared = Vec::new();
+    let mut reports = Vec::new();
+    for (cache, (identity, key_ms)) in job.definition.caches().iter().zip(identities) {
+        let started = Instant::now();
+        let exact_digest = identity.exact_digest();
+        let compatibility_group_digest = identity.compatibility_group_digest();
         let path = PathBuf::from(cache.mount_path());
         fs::create_dir_all(&path)
             .with_context(|| format!("create cache path {}", path.display()))?;
-        let restore = restore_cache(client, &digest, &path)?;
+        let restore = restore_cache(client, &exact_digest, &compatibility_group_digest, &path)?;
         reports.push(AttemptCachePreparationReport {
             cache_name: cache.as_str().to_string(),
-            identity_digest: digest.clone(),
+            identity_digest: exact_digest.clone(),
             preparation: restore.preparation,
-            prepare_ms: elapsed_ms(started),
+            prepare_ms: key_ms.saturating_add(elapsed_ms(started)),
         });
         prepared.push(PreparedCache {
-            digest,
+            exact_digest,
+            compatibility_group_digest,
             path,
-            restored_checksum_sha256: restore.restored_checksum_sha256,
+            exact_hit: restore.exact_hit,
         });
     }
     if let Err(error) =
@@ -114,13 +138,13 @@ pub(crate) fn save_caches(
             CacheFinalizationOutcome::Ready | CacheFinalizationOutcome::Unchanged
         ) {
             reports.push(AttemptCacheFinalizationReport {
-                identity_digest: cache.digest.clone(),
+                identity_digest: cache.exact_digest.clone(),
                 final_state: CacheFinalState::Ready,
                 finalize_ms: elapsed_ms(started),
             });
         }
         finalizations.push(CacheFinalization {
-            identity_digest: cache.digest.clone(),
+            identity_digest: cache.exact_digest.clone(),
             outcome,
         });
     }
@@ -135,24 +159,35 @@ pub(crate) fn save_caches(
 
 fn restore_cache(
     client: &RuntimeClient,
-    digest: &str,
+    exact_digest: &str,
+    compatibility_group_digest: &str,
     destination: &Path,
 ) -> anyhow::Result<CacheRestore> {
-    let identity_digest = CacheDigest::parse(digest.to_string())?;
-    let session = match client.restore_cache(&RestoreCacheRequest { identity_digest }) {
+    let exact_identity_digest = CacheDigest::parse(exact_digest.to_string())?;
+    let compatibility_group_digest = CacheDigest::parse(compatibility_group_digest.to_string())?;
+    let session = match client.restore_cache(&RestoreCacheRequest {
+        exact_identity_digest,
+        compatibility_group_digest,
+    }) {
         Ok(session) => session,
         Err(error) => {
-            eprintln!("runtime cache restore unavailable for {digest}: {error:#}");
+            eprintln!("runtime cache restore unavailable for {exact_digest}: {error:#}");
             return Ok(CacheRestore::cold(CacheColdReason::MetadataNotReady));
         }
     };
-    let (url, checksum, size) = match session {
+    let (source, url, checksum, size) = match session {
         RestoreCacheResponse::Hit {
+            source,
             object_digest,
             size_bytes,
             download_url,
             ..
-        } => (download_url, object_digest.as_str().to_string(), size_bytes),
+        } => (
+            source,
+            download_url,
+            object_digest.as_str().to_string(),
+            size_bytes,
+        ),
         RestoreCacheResponse::Miss => {
             return Ok(CacheRestore::cold(CacheColdReason::MetadataMissing));
         }
@@ -160,7 +195,7 @@ fn restore_cache(
     let temp_dir = match tempfile::tempdir().context("create cache download directory") {
         Ok(temp_dir) => temp_dir,
         Err(error) => {
-            eprintln!("runtime cache restore staging failed for {digest}: {error:#}");
+            eprintln!("runtime cache restore staging failed for {exact_digest}: {error:#}");
             return Ok(CacheRestore::cold(CacheColdReason::MetadataNotReady));
         }
     };
@@ -168,11 +203,11 @@ fn restore_cache(
     if let Err(error) = client.download_cache(&url, &archive, size, &checksum) {
         let reason = match error {
             CacheDownloadError::Transport(error) => {
-                eprintln!("runtime cache restore transport failed for {digest}: {error:#}");
+                eprintln!("runtime cache restore transport failed for {exact_digest}: {error:#}");
                 CacheColdReason::MetadataNotReady
             }
             CacheDownloadError::Invalid(error) => {
-                eprintln!("runtime cache restore rejected for {digest}: {error:#}");
+                eprintln!("runtime cache restore rejected for {exact_digest}: {error:#}");
                 CacheColdReason::MetadataInvalid
             }
         };
@@ -180,16 +215,22 @@ fn restore_cache(
     }
     if let Err(error) = extract_archive(&archive, destination) {
         reset_cache_directory(destination)?;
-        eprintln!("runtime cache restore was corrupt for {digest}: {error:#}");
+        eprintln!("runtime cache restore was corrupt for {exact_digest}: {error:#}");
         return Ok(CacheRestore::cold(CacheColdReason::MetadataInvalid));
     }
     Ok(CacheRestore {
-        preparation: CachePreparation::Warm,
-        restored_checksum_sha256: Some(checksum),
+        preparation: match source {
+            CacheRestoreSource::Exact => CachePreparation::Exact,
+            CacheRestoreSource::Compatible => CachePreparation::Compatible,
+        },
+        exact_hit: source == CacheRestoreSource::Exact,
     })
 }
 
 fn save_cache(client: &RuntimeClient, cache: &PreparedCache) -> CacheFinalizationOutcome {
+    if cache.exact_hit {
+        return CacheFinalizationOutcome::Unchanged;
+    }
     let temp = match tempfile::NamedTempFile::new().context("create cache upload file") {
         Ok(temp) => temp,
         Err(error) => return skipped(CacheSkipReason::ArchiveFailed, error),
@@ -201,10 +242,7 @@ fn save_cache(client: &RuntimeClient, cache: &PreparedCache) -> CacheFinalizatio
         Ok(identity) => identity,
         Err(error) => return skipped(CacheSkipReason::ArchiveFailed, error),
     };
-    if cache.restored_checksum_sha256.as_deref() == Some(checksum_sha256.as_str()) {
-        return CacheFinalizationOutcome::Unchanged;
-    }
-    let identity_digest = match CacheDigest::parse(cache.digest.clone()) {
+    let exact_identity_digest = match CacheDigest::parse(cache.exact_digest.clone()) {
         Ok(digest) => digest,
         Err(error) => return skipped(CacheSkipReason::ServiceUnavailable, error.into()),
     };
@@ -213,7 +251,13 @@ fn save_cache(client: &RuntimeClient, cache: &PreparedCache) -> CacheFinalizatio
         Err(error) => return skipped(CacheSkipReason::ArchiveFailed, error.into()),
     };
     let session = match client.prepare_cache_upload(&PrepareCacheUploadRequest {
-        identity_digest: identity_digest.clone(),
+        exact_identity_digest: exact_identity_digest.clone(),
+        compatibility_group_digest: match CacheDigest::parse(
+            cache.compatibility_group_digest.clone(),
+        ) {
+            Ok(digest) => digest,
+            Err(error) => return skipped(CacheSkipReason::ServiceUnavailable, error.into()),
+        },
         object_digest: object_digest.clone(),
         size_bytes,
     }) {
@@ -252,16 +296,128 @@ fn skipped(reason: CacheSkipReason, error: anyhow::Error) -> CacheFinalizationOu
 
 struct CacheRestore {
     preparation: CachePreparation,
-    restored_checksum_sha256: Option<String>,
+    exact_hit: bool,
 }
 
 impl CacheRestore {
     fn cold(reason: CacheColdReason) -> Self {
         Self {
             preparation: CachePreparation::Cold { reason },
-            restored_checksum_sha256: None,
+            exact_hit: false,
         }
     }
+}
+
+fn digest_inputs(
+    inputs: &CacheKeyInputs,
+    environment: &std::collections::BTreeMap<String, String>,
+    git_oid: &str,
+) -> anyhow::Result<String> {
+    digest_inputs_at(inputs, environment, Path::new("."), git_oid)
+}
+
+fn digest_inputs_at(
+    inputs: &CacheKeyInputs,
+    environment: &std::collections::BTreeMap<String, String>,
+    root: &Path,
+    git_oid: &str,
+) -> anyhow::Result<String> {
+    let mut digest = Sha256::new();
+    digest.update(b"scope-cache-inputs-v1");
+    for path in inputs.files() {
+        update_component(&mut digest, "file");
+        update_component(&mut digest, path);
+        match open_key_file(root, path)? {
+            Some((mut file, size)) => {
+                update_component(&mut digest, "present");
+                digest.update(size.to_be_bytes());
+                let mut buffer = [0_u8; 64 * 1024];
+                loop {
+                    let read = file
+                        .read(&mut buffer)
+                        .with_context(|| format!("read cache key input {path}"))?;
+                    if read == 0 {
+                        break;
+                    }
+                    digest.update(&buffer[..read]);
+                }
+            }
+            None => {
+                update_component(&mut digest, "missing");
+            }
+        }
+    }
+    for name in inputs.environment() {
+        update_component(&mut digest, "environment");
+        update_component(&mut digest, name);
+        match environment.get(name) {
+            Some(value) => {
+                update_component(&mut digest, "present");
+                update_component(&mut digest, value);
+            }
+            None => update_component(&mut digest, "missing"),
+        }
+    }
+    if inputs.includes_source() {
+        update_component(&mut digest, "source");
+        update_component(&mut digest, git_oid);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+fn open_key_file(root: &Path, relative: &str) -> anyhow::Result<Option<(fs::File, u64)>> {
+    let mut path = root.to_path_buf();
+    let mut components = Path::new(relative).components().peekable();
+    while let Some(component) = components.next() {
+        path.push(component);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspect cache key input {}", path.display()));
+            }
+        };
+        if components.peek().is_some() {
+            if !metadata.file_type().is_dir() {
+                anyhow::bail!(
+                    "cache key input {} traverses a non-directory or symlink",
+                    path.display()
+                );
+            }
+        } else if !metadata.file_type().is_file() {
+            anyhow::bail!("cache key input {} is not a regular file", path.display());
+        }
+    }
+    let metadata = fs::symlink_metadata(&path)
+        .with_context(|| format!("inspect cache key input {}", path.display()))?;
+    if metadata.len() > MAX_CACHE_KEY_FILE_BYTES {
+        anyhow::bail!(
+            "cache key input {} exceeds {MAX_CACHE_KEY_FILE_BYTES} bytes",
+            path.display()
+        );
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+        .with_context(|| format!("open cache key input {}", path.display()))?;
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() {
+        anyhow::bail!("cache key input {} is not a regular file", path.display());
+    }
+    if opened_metadata.len() > MAX_CACHE_KEY_FILE_BYTES {
+        anyhow::bail!(
+            "cache key input {} exceeds {MAX_CACHE_KEY_FILE_BYTES} bytes",
+            path.display()
+        );
+    }
+    Ok(Some((file, opened_metadata.len())))
+}
+
+fn update_component(digest: &mut Sha256, value: &str) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value.as_bytes());
 }
 
 fn reset_cache_directory(path: &Path) -> anyhow::Result<()> {
@@ -510,6 +666,71 @@ mod tests {
         assert_eq!(error.to_string(), "cache archive exceeds 4 bytes");
         assert_eq!(writer.written, 4);
         assert_eq!(MAX_CACHE_OBJECT_BYTES, 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn exact_hit_skips_archive_hash_and_upload() {
+        let cache = PreparedCache {
+            exact_digest: "a".repeat(64),
+            compatibility_group_digest: "b".repeat(64),
+            path: PathBuf::from("/path/that/does/not/exist"),
+            exact_hit: true,
+        };
+
+        assert_eq!(
+            save_cache(&RuntimeClient::disconnected_for_cache_tests(), &cache),
+            CacheFinalizationOutcome::Unchanged
+        );
+    }
+
+    #[test]
+    fn cache_input_digest_distinguishes_missing_empty_content_and_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let inputs = CacheKeyInputs::new(
+            vec!["Cargo.lock".to_string()],
+            vec!["RUSTUP_TOOLCHAIN".to_string()],
+            false,
+        )
+        .unwrap();
+        let mut environment =
+            BTreeMap::from([("RUSTUP_TOOLCHAIN".to_string(), "1.98.0".to_string())]);
+        let missing = digest_inputs_at(&inputs, &environment, root.path(), "source-a").unwrap();
+        fs::write(root.path().join("Cargo.lock"), []).unwrap();
+        let empty = digest_inputs_at(&inputs, &environment, root.path(), "source-a").unwrap();
+        fs::write(root.path().join("Cargo.lock"), b"lock").unwrap();
+        let content = digest_inputs_at(&inputs, &environment, root.path(), "source-a").unwrap();
+        environment.insert("RUSTUP_TOOLCHAIN".to_string(), "1.99.0".to_string());
+        let environment_changed =
+            digest_inputs_at(&inputs, &environment, root.path(), "source-a").unwrap();
+
+        let source_inputs = CacheKeyInputs::new(vec![], vec![], true).unwrap();
+        let source_a =
+            digest_inputs_at(&source_inputs, &environment, root.path(), "source-a").unwrap();
+        let source_b =
+            digest_inputs_at(&source_inputs, &environment, root.path(), "source-b").unwrap();
+
+        assert_ne!(missing, empty);
+        assert_ne!(empty, content);
+        assert_ne!(content, environment_changed);
+        assert_ne!(source_a, source_b);
+    }
+
+    #[test]
+    fn cache_input_hashing_rejects_symlinks_and_directories() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("outside"), b"secret").unwrap();
+        symlink("outside", root.path().join("linked")).unwrap();
+        fs::create_dir(root.path().join("directory")).unwrap();
+        fs::create_dir(root.path().join("outside-directory")).unwrap();
+        fs::write(root.path().join("outside-directory/input"), b"secret").unwrap();
+        symlink("outside-directory", root.path().join("linked-directory")).unwrap();
+        assert!(open_key_file(root.path(), "linked").is_err());
+        assert!(open_key_file(root.path(), "directory").is_err());
+        assert!(open_key_file(root.path(), "linked-directory/input").is_err());
+
+        let oversized = fs::File::create(root.path().join("oversized")).unwrap();
+        oversized.set_len(MAX_CACHE_KEY_FILE_BYTES + 1).unwrap();
+        assert!(open_key_file(root.path(), "oversized").is_err());
     }
 
     fn populate_cache(root: &Path, reverse: bool, modified_offset: Duration) {

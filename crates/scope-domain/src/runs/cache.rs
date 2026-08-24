@@ -1,7 +1,4 @@
-use super::{
-    run::PinnedContainerImage,
-    workflow::{WorkflowJobId, WorkflowPath},
-};
+use super::workflow::{WorkflowJobId, WorkflowPath};
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,7 +7,10 @@ use thiserror::Error;
 
 pub const MAX_WORKFLOW_CACHE_NAME_BYTES: usize = 64;
 pub const MAX_WORKFLOW_CACHE_PATH_BYTES: usize = 1024;
-pub const CACHE_IDENTITY_FORMAT: &str = "scope-cache-v3";
+pub const MAX_WORKFLOW_CACHE_FORMAT_BYTES: usize = 64;
+pub const MAX_WORKFLOW_CACHE_KEY_INPUTS: usize = 128;
+pub const MAX_WORKFLOW_CACHE_INPUT_PATH_BYTES: usize = 1024;
+pub const CACHE_IDENTITY_FORMAT: &str = "scope-cache-v4";
 pub const MAX_CACHE_OBSERVATION_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
 
 const RESERVED_CACHE_NAME_PREFIX: &str = "scope-";
@@ -33,16 +33,117 @@ pub enum CacheError {
         "workflow cache path must be a normalized Docker-mount-safe absolute path between 1 and {MAX_WORKFLOW_CACHE_PATH_BYTES} bytes"
     )]
     InvalidPath,
+    #[error(
+        "workflow cache format must contain between 1 and {MAX_WORKFLOW_CACHE_FORMAT_BYTES} bytes of lowercase letters, numbers, or single hyphens"
+    )]
+    InvalidFormat,
+    #[error("workflow cache key cannot contain more than {MAX_WORKFLOW_CACHE_KEY_INPUTS} inputs")]
+    TooManyKeyInputs,
+    #[error(
+        "workflow cache input path must be a normalized repository-relative path between 1 and {MAX_WORKFLOW_CACHE_INPUT_PATH_BYTES} bytes"
+    )]
+    InvalidInputPath,
+    #[error("workflow cache environment input must be a valid shell variable name")]
+    InvalidEnvironmentInput,
+    #[error("workflow cache key input {0:?} is duplicated")]
+    DuplicateKeyInput(String),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct CacheKeyInputs {
+    files: Vec<String>,
+    environment: Vec<String>,
+    source: bool,
+}
+
+impl CacheKeyInputs {
+    pub fn new(
+        mut files: Vec<String>,
+        mut environment: Vec<String>,
+        source: bool,
+    ) -> Result<Self, CacheError> {
+        if files
+            .len()
+            .saturating_add(environment.len())
+            .saturating_add(usize::from(source))
+            > MAX_WORKFLOW_CACHE_KEY_INPUTS
+        {
+            return Err(CacheError::TooManyKeyInputs);
+        }
+        for path in &files {
+            let parsed = Path::new(path);
+            if path.is_empty()
+                || path.len() > MAX_WORKFLOW_CACHE_INPUT_PATH_BYTES
+                || parsed.is_absolute()
+                || path
+                    .bytes()
+                    .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+                || path
+                    .split('/')
+                    .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+                || parsed
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_)))
+            {
+                return Err(CacheError::InvalidInputPath);
+            }
+        }
+        for name in &environment {
+            let mut bytes = name.bytes();
+            if name.is_empty()
+                || !bytes
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+                || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            {
+                return Err(CacheError::InvalidEnvironmentInput);
+            }
+        }
+        files.sort();
+        environment.sort();
+        if let Some(duplicate) = files.windows(2).find(|pair| pair[0] == pair[1]) {
+            return Err(CacheError::DuplicateKeyInput(duplicate[0].clone()));
+        }
+        if let Some(duplicate) = environment.windows(2).find(|pair| pair[0] == pair[1]) {
+            return Err(CacheError::DuplicateKeyInput(duplicate[0].clone()));
+        }
+        Ok(Self {
+            files,
+            environment,
+            source,
+        })
+    }
+
+    pub fn files(&self) -> &[String] {
+        &self.files
+    }
+
+    pub fn environment(&self) -> &[String] {
+        &self.environment
+    }
+
+    pub fn includes_source(&self) -> bool {
+        self.source
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct WorkflowCache {
     name: String,
     path: String,
+    format: String,
+    compatibility: CacheKeyInputs,
+    exact: CacheKeyInputs,
 }
 
 impl WorkflowCache {
-    pub fn new(name: impl Into<String>, path: impl Into<String>) -> Result<Self, CacheError> {
+    pub fn new(
+        name: impl Into<String>,
+        path: impl Into<String>,
+        format: impl Into<String>,
+        compatibility: CacheKeyInputs,
+        exact: CacheKeyInputs,
+    ) -> Result<Self, CacheError> {
         let name = name.into();
         validate_cache_name(&name)?;
         let path = path.into();
@@ -69,7 +170,25 @@ impl WorkflowCache {
         {
             return Err(CacheError::InvalidPath);
         }
-        Ok(Self { name, path })
+        let format = format.into();
+        if format.is_empty()
+            || format.len() > MAX_WORKFLOW_CACHE_FORMAT_BYTES
+            || format.starts_with('-')
+            || format.ends_with('-')
+            || format.contains("--")
+            || !format
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(CacheError::InvalidFormat);
+        }
+        Ok(Self {
+            name,
+            path,
+            format,
+            compatibility,
+            exact,
+        })
     }
 
     pub fn as_str(&self) -> &str {
@@ -78,6 +197,18 @@ impl WorkflowCache {
 
     pub fn mount_path(&self) -> &str {
         &self.path
+    }
+
+    pub fn format(&self) -> &str {
+        &self.format
+    }
+
+    pub fn compatibility_inputs(&self) -> &CacheKeyInputs {
+        &self.compatibility
+    }
+
+    pub fn exact_inputs(&self) -> &CacheKeyInputs {
+        &self.exact
     }
 }
 
@@ -113,7 +244,8 @@ pub enum CacheColdReason {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum CachePreparation {
-    Warm,
+    Exact,
+    Compatible,
     Cold { reason: CacheColdReason },
 }
 
@@ -330,8 +462,9 @@ pub struct CacheIdentity {
     repository_id: String,
     namespace: CacheNamespace,
     cache: WorkflowCache,
-    image_digest: String,
     platform: CachePlatform,
+    compatibility_inputs_digest: String,
+    exact_inputs_digest: String,
 }
 
 impl CacheIdentity {
@@ -339,8 +472,9 @@ impl CacheIdentity {
         repository_id: impl Into<String>,
         namespace: CacheNamespace,
         cache: WorkflowCache,
-        image: &PinnedContainerImage,
         platform: CachePlatform,
+        compatibility_inputs_digest: impl Into<String>,
+        exact_inputs_digest: impl Into<String>,
     ) -> Result<Self, DomainError> {
         let repository_id = repository_id.into();
         if repository_id.trim().is_empty() {
@@ -349,12 +483,26 @@ impl CacheIdentity {
             ));
         }
         namespace.validate()?;
+        let compatibility_inputs_digest = compatibility_inputs_digest.into();
+        let exact_inputs_digest = exact_inputs_digest.into();
+        for digest in [&compatibility_inputs_digest, &exact_inputs_digest] {
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(DomainError::invalid_input(
+                    "cache input digest must be 64 lowercase hexadecimal characters",
+                ));
+            }
+        }
         Ok(Self {
             repository_id,
             namespace,
             cache,
-            image_digest: image.digest().to_string(),
             platform,
+            compatibility_inputs_digest,
+            exact_inputs_digest,
         })
     }
 
@@ -370,25 +518,31 @@ impl CacheIdentity {
         &self.namespace
     }
 
-    pub fn image_digest(&self) -> &str {
-        &self.image_digest
-    }
-
     pub fn platform(&self) -> CachePlatform {
         self.platform
     }
 
     /// Stable, storage-agnostic key for translating this semantic identity.
-    pub fn digest(&self) -> String {
+    pub fn compatibility_group_digest(&self) -> String {
+        self.digest_with_inputs("compatibility", &self.compatibility_inputs_digest)
+    }
+
+    pub fn exact_digest(&self) -> String {
+        let group = self.compatibility_group_digest();
+        self.digest_with_inputs("exact", &format!("{group}:{}", self.exact_inputs_digest))
+    }
+
+    fn digest_with_inputs(&self, kind: &str, inputs: &str) -> String {
         let mut digest = Sha256::new();
-        let components = [CACHE_IDENTITY_FORMAT, self.repository_id.as_str()]
+        let components = [CACHE_IDENTITY_FORMAT, kind, self.repository_id.as_str()]
             .into_iter()
             .chain(self.namespace.digest_components())
             .chain([
                 self.cache.as_str(),
                 self.cache.mount_path(),
-                self.image_digest.as_str(),
+                self.cache.format(),
                 self.platform.as_str(),
+                inputs,
             ]);
         for component in components {
             digest.update(
@@ -406,14 +560,6 @@ impl CacheIdentity {
 mod tests {
     use super::*;
 
-    fn image(digest: char) -> PinnedContainerImage {
-        PinnedContainerImage::parse(format!(
-            "registry.example/scope@sha256:{}",
-            digest.to_string().repeat(64)
-        ))
-        .unwrap()
-    }
-
     fn workflow_namespace(path: &str, job: &str) -> CacheNamespace {
         CacheNamespace::workflow(
             &WorkflowPath::parse(path).unwrap(),
@@ -422,12 +568,38 @@ mod tests {
     }
 
     fn cache(name: &str) -> WorkflowCache {
-        WorkflowCache::new(name, format!("/scope/cache/{name}")).unwrap()
+        WorkflowCache::new(
+            name,
+            format!("/scope/cache/{name}"),
+            "v1",
+            CacheKeyInputs::default(),
+            CacheKeyInputs::default(),
+        )
+        .unwrap()
+    }
+
+    fn identity(
+        repository: &str,
+        path: &str,
+        job: &str,
+        cache: WorkflowCache,
+        group: char,
+        exact: char,
+    ) -> CacheIdentity {
+        CacheIdentity::new(
+            repository,
+            workflow_namespace(path, job),
+            cache,
+            CachePlatform::LinuxAmd64,
+            group.to_string().repeat(64),
+            exact.to_string().repeat(64),
+        )
+        .unwrap()
     }
 
     #[test]
     fn workflow_cache_names_and_mount_paths_are_validated() {
-        let cache = WorkflowCache::new("cargo", "/scope/cache/cargo").unwrap();
+        let cache = cache("cargo");
         assert_eq!(cache.as_str(), "cargo");
         assert_eq!(cache.mount_path(), "/scope/cache/cargo");
 
@@ -441,7 +613,14 @@ mod tests {
             "scope-internal",
         ] {
             assert!(
-                WorkflowCache::new(invalid, "/scope/cache/valid").is_err(),
+                WorkflowCache::new(
+                    invalid,
+                    "/scope/cache/valid",
+                    "v1",
+                    Default::default(),
+                    Default::default()
+                )
+                .is_err(),
                 "{invalid}"
             );
         }
@@ -459,85 +638,100 @@ mod tests {
             "/workspace/target",
             "/workspace/target/debug",
         ] {
-            assert!(WorkflowCache::new("cargo", invalid).is_err(), "{invalid}");
+            assert!(
+                WorkflowCache::new(
+                    "cargo",
+                    invalid,
+                    "v1",
+                    Default::default(),
+                    Default::default()
+                )
+                .is_err(),
+                "{invalid}"
+            );
         }
     }
 
     #[test]
     fn identity_is_partitioned_by_every_semantic_component() {
         let workflow_cache = cache("cargo");
-        let base = CacheIdentity::new(
+        let base = identity(
             "repo-1",
-            workflow_namespace("/.scope/runs/test.yml", "checks"),
+            "/.scope/runs/test.yml",
+            "checks",
             workflow_cache.clone(),
-            &image('a'),
-            CachePlatform::LinuxAmd64,
-        )
-        .unwrap();
-        let other_repo = CacheIdentity::new(
+            'a',
+            'b',
+        );
+        let other_repo = identity(
             "repo-2",
-            workflow_namespace("/.scope/runs/test.yml", "checks"),
+            "/.scope/runs/test.yml",
+            "checks",
             workflow_cache.clone(),
-            &image('a'),
-            CachePlatform::LinuxAmd64,
-        )
-        .unwrap();
-        let other_cache = CacheIdentity::new(
+            'a',
+            'b',
+        );
+        let other_cache = identity(
             "repo-1",
-            workflow_namespace("/.scope/runs/test.yml", "checks"),
+            "/.scope/runs/test.yml",
+            "checks",
             cache("cargo-target"),
-            &image('a'),
-            CachePlatform::LinuxAmd64,
-        )
-        .unwrap();
-        let other_image = CacheIdentity::new(
+            'a',
+            'b',
+        );
+        let other_workflow = identity(
             "repo-1",
-            workflow_namespace("/.scope/runs/test.yml", "checks"),
+            "/.scope/runs/release.yml",
+            "checks",
+            cache("cargo"),
+            'a',
+            'b',
+        );
+        let other_job = identity(
+            "repo-1",
+            "/.scope/runs/test.yml",
+            "release",
+            cache("cargo"),
+            'a',
+            'b',
+        );
+        let other_group = identity(
+            "repo-1",
+            "/.scope/runs/test.yml",
+            "checks",
             workflow_cache.clone(),
-            &image('b'),
-            CachePlatform::LinuxAmd64,
-        )
-        .unwrap();
-        let other_workflow = CacheIdentity::new(
+            'c',
+            'b',
+        );
+        let other_exact = identity(
             "repo-1",
-            workflow_namespace("/.scope/runs/release.yml", "checks"),
-            cache("cargo"),
-            &image('a'),
-            CachePlatform::LinuxAmd64,
-        )
-        .unwrap();
-        let other_job = CacheIdentity::new(
-            "repo-1",
-            workflow_namespace("/.scope/runs/test.yml", "release"),
-            cache("cargo"),
-            &image('a'),
-            CachePlatform::LinuxAmd64,
-        )
-        .unwrap();
-        let other_path = CacheIdentity::new(
-            "repo-1",
-            workflow_namespace("/.scope/runs/test.yml", "checks"),
-            WorkflowCache::new("cargo", "/different/cache").unwrap(),
-            &image('a'),
-            CachePlatform::LinuxAmd64,
-        )
-        .unwrap();
+            "/.scope/runs/test.yml",
+            "checks",
+            workflow_cache,
+            'a',
+            'c',
+        );
 
-        assert_eq!(base.digest(), base.digest());
-        assert_eq!(base.digest().len(), 64);
-        assert_ne!(base.digest(), other_repo.digest());
-        assert_ne!(base.digest(), other_cache.digest());
-        assert_ne!(base.digest(), other_image.digest());
-        assert_ne!(base.digest(), other_workflow.digest());
-        assert_ne!(base.digest(), other_job.digest());
-        assert_ne!(base.digest(), other_path.digest());
+        assert_eq!(base.exact_digest(), base.exact_digest());
+        assert_eq!(base.exact_digest().len(), 64);
+        assert_ne!(base.exact_digest(), other_repo.exact_digest());
+        assert_ne!(base.exact_digest(), other_cache.exact_digest());
+        assert_ne!(base.exact_digest(), other_workflow.exact_digest());
+        assert_ne!(base.exact_digest(), other_job.exact_digest());
+        assert_ne!(base.exact_digest(), other_group.exact_digest());
+        assert_ne!(base.exact_digest(), other_exact.exact_digest());
+        assert_eq!(
+            base.compatibility_group_digest(),
+            other_exact.compatibility_group_digest()
+        );
         assert!(
             CacheIdentity::new(
                 " ",
                 workflow_namespace("/.scope/runs/test.yml", "checks"),
                 cache("cargo"),
-                &image('a'),
                 CachePlatform::LinuxAmd64,
+                "a".repeat(64),
+                "b".repeat(64),
             )
             .is_err()
         );
@@ -568,7 +762,7 @@ mod tests {
                 WorkflowJobId::parse("checks").unwrap(),
                 "cargo",
                 "A".repeat(64),
-                CachePreparation::Warm,
+                CachePreparation::Exact,
                 1,
             )
             .is_err()

@@ -296,7 +296,7 @@ export type RepositoryRunTerminalReason = { "kind": "step-failed", step_index: n
 
 export type RepositoryRunCacheColdReason = "metadata-missing" | "metadata-invalid" | "metadata-not-ready" | "volume-missing" | "volume-invalid" | "backing-directory-missing";
 
-export type RepositoryRunCachePreparation = { "kind": "warm" } | { "kind": "cold", reason: RepositoryRunCacheColdReason, };
+export type RepositoryRunCachePreparation = { "kind": "exact" } | { "kind": "compatible" } | { "kind": "cold", reason: RepositoryRunCacheColdReason, };
 
 export type RepositoryRunCacheFinalState = "pending" | "ready" | "evicted";
 
