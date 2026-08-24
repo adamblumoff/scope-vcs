@@ -8,9 +8,12 @@ import type { StepLogState } from './repository-run-detail-controller'
 const FOLLOW_THRESHOLD_PX = 32
 const COPY_CONFIRMATION_MS = 1_500
 
-/** A single step's output: follows new lines while the step runs, wraps or
+/**
+ * A single step's output: follows new lines while the step runs, wraps or
  * scrolls horizontally on request, and copies the buffered text to the
- * clipboard. */
+ * clipboard. Callers key this by step so selecting a different step starts
+ * following again from a clean state.
+ */
 export function RunLogView({
   id,
   logState,
@@ -27,10 +30,6 @@ export function RunLogView({
   const [copied, setCopied] = useState(false)
   const scrollRef = useRef<HTMLPreElement>(null)
   const isRunning = step.state === 'running'
-
-  useEffect(() => {
-    setFollowing(true)
-  }, [id])
 
   useEffect(() => {
     if (!isRunning || !following) return

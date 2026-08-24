@@ -1,34 +1,12 @@
-import type { RepoParams, RepoRunHistoryPage, RepoRunWorkflowList } from '@/api/types'
+import type { RepoParams, RepoRunWorkflowList } from '@/api/types'
 import { cn } from '@/lib/utils'
 import { useNavigate } from '@tanstack/react-router'
-import { runDisplayState } from './run-formatting'
-import { type RunTone, runStatus } from './run-status'
-
-export type RunStatusFilter = 'any' | 'failed' | 'running' | 'succeeded'
-
-const STATUS_FILTER_TONE: Partial<Record<RunStatusFilter, RunTone>> = {
-  failed: 'danger',
-  running: 'running',
-  succeeded: 'success',
-}
-
-const STATUS_FILTER_OPTIONS: { label: string; value: RunStatusFilter }[] = [
-  { label: 'Any status', value: 'any' },
-  { label: 'Running', value: 'running' },
-  { label: 'Failed', value: 'failed' },
-  { label: 'Succeeded', value: 'succeeded' },
-]
+import {
+  RUN_STATUS_FILTER_OPTIONS,
+  type RunStatusFilter,
+} from './runs-filter-model'
 
 const SELECT_CLASS = 'h-8 rounded-md border border-input bg-secondary px-2 text-sm text-foreground shadow-[var(--shadow-card)] outline-none transition-colors focus-visible:border-ring focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring'
-
-export function runMatchesStatusFilter(
-  run: RepoRunHistoryPage['runs'][number],
-  filter: RunStatusFilter,
-) {
-  if (filter === 'any') return true
-  const tone = runStatus(runDisplayState(run)).tone
-  return tone === STATUS_FILTER_TONE[filter]
-}
 
 export function RunsFilterBar({
   onStatusFilterChange,
@@ -76,7 +54,7 @@ export function RunsFilterBar({
         onChange={(event) => onStatusFilterChange(event.target.value as RunStatusFilter)}
         value={statusFilter}
       >
-        {STATUS_FILTER_OPTIONS.map((option) => (
+        {RUN_STATUS_FILTER_OPTIONS.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
           </option>

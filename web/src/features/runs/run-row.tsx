@@ -27,13 +27,15 @@ export function RunRow({
       to="/$owner/$repo/runs/$runId"
     >
       <RunStatusIcon state={state} />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-        {run.workflow_name}
-      </span>
-      <span className="shrink-0 truncate font-mono text-xs text-muted-foreground">
-        #{run.git_oid.slice(0, 7)}
-        <span className="text-muted-foreground/70">
-          {' '}· {runTriggerLabel(run.trigger)}
+      <span className="min-w-0 flex-1 items-baseline gap-2 truncate sm:flex">
+        <span className="truncate text-sm font-medium">
+          {run.workflow_name}
+        </span>
+        <span className="truncate font-mono text-xs text-muted-foreground">
+          #{run.git_oid.slice(0, 7)}
+          <span className="text-muted-foreground/70">
+            {' '}· {runTriggerLabel(run.trigger)}
+          </span>
         </span>
       </span>
       <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">

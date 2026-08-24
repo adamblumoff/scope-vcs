@@ -11,7 +11,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RunHistoryList } from './run-history-list'
 import { mergeRunHistory, reloadRunHistoryPages } from './run-history-model'
 import { useRunLiveRefresh } from './run-live-refresh'
-import { type RunStatusFilter, RunsFilterBar, runMatchesStatusFilter } from './runs-filter-bar'
+import { RunsFilterBar } from './runs-filter-bar'
+import {
+  type RunStatusFilter,
+  runMatchesStatusFilter,
+} from './runs-filter-model'
 
 const HISTORY_CHANGES = ['Created', 'StatusChanged'] as const
 
