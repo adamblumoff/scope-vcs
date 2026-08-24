@@ -5,6 +5,7 @@ import { RunAttemptEnvironment } from './run-attempt-environment'
 import { RunDuration } from './run-duration'
 import { RunLogView } from './run-log-view'
 import { RunStatusIcon } from './run-status-icon'
+import { runStatus } from './run-status'
 
 /** The steps of a single job attempt: an attempt switcher only when more than
  * one attempt exists, then the attempt's environment facts and step list. */
@@ -26,6 +27,7 @@ export function RunDetailSteps({
   selection: StepSelection | null
 }) {
   const { attempts, job } = jobDetail
+  const terminalNotice = attempt ? attemptTerminalNotice(attempt) : null
   return (
     <div>
       {attempts.length > 1 ? (
@@ -37,9 +39,16 @@ export function RunDetailSteps({
       ) : null}
       {attempt ? (
         <>
-          {attempt.terminal_reason?.kind === 'runtime-setup-failed' ? (
-            <p className="border-b border-border px-1 py-4 text-sm text-muted-foreground">
-              {attempt.terminal_reason.message}
+          {terminalNotice ? (
+            <p className="flex items-center gap-2 border-b border-border px-1 py-4 text-sm">
+              <RunStatusIcon
+                state={attempt.state}
+                terminalReason={attempt.terminal_reason}
+              />
+              <span className="font-medium">{terminalNotice.label}</span>
+              {terminalNotice.message ? (
+                <span className="text-muted-foreground">{terminalNotice.message}</span>
+              ) : null}
             </p>
           ) : null}
           <RunAttemptEnvironment
@@ -78,6 +87,17 @@ export function RunDetailSteps({
       )}
     </div>
   )
+}
+
+function attemptTerminalNotice(attempt: RepoRunAttempt) {
+  const reason = attempt.terminal_reason
+  if (!reason) return null
+  const status = runStatus(attempt.state, reason)
+  if (status.label === attempt.state) return null
+  return {
+    label: status.label,
+    message: reason.kind === 'runtime-setup-failed' ? reason.message : null,
+  }
 }
 
 function AttemptSwitcher({

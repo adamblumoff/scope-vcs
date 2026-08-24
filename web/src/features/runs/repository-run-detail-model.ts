@@ -26,6 +26,11 @@ export type StepSelection = {
   stepIndex: number
 }
 
+type InitialRunView = {
+  selectedJobKey: string | null
+  selection: StepSelection | null
+}
+
 const MAX_CACHED_STEP_LOG_CHARACTERS = 512 * 1_024
 const GRAPH_DEFAULT_JOB_COUNT = 3
 
@@ -44,22 +49,28 @@ export function runCanChange(state: RepoRunState): boolean {
 }
 
 /**
- * Cold-load selection so a failed run opens on its failure with zero clicks:
- * the first failed step of the first failed job, else the step currently
- * running, else the last step of the last job, else nothing.
+ * Cold-load selection so a failed run opens on its failure with zero clicks.
+ * Failures without a failed step still open their job so setup errors and
+ * terminal attempt state are visible without pretending another step failed.
  */
-export function selectInitialStep(
+export function selectInitialView(
   jobs: readonly JobLike[],
-): StepSelection | null {
+): InitialRunView {
   const failedJob = jobs.find(({ job }) => job.state === 'failed')
   const failedAttempt = failedJob ? lastAttempt(failedJob) : null
   const failedStep = failedAttempt?.steps.find((step) => step.state === 'failed')
   if (failedJob && failedAttempt && failedStep) {
     return {
-      attemptId: failedAttempt.id,
-      jobKey: failedJob.job.key,
-      stepIndex: failedStep.index,
+      selectedJobKey: failedJob.job.key,
+      selection: {
+        attemptId: failedAttempt.id,
+        jobKey: failedJob.job.key,
+        stepIndex: failedStep.index,
+      },
     }
+  }
+  if (failedJob) {
+    return { selectedJobKey: failedJob.job.key, selection: null }
   }
 
   for (const jobDetail of jobs) {
@@ -67,9 +78,12 @@ export function selectInitialStep(
     const runningStep = attempt?.steps.find((step) => step.state === 'running')
     if (attempt && runningStep) {
       return {
-        attemptId: attempt.id,
-        jobKey: jobDetail.job.key,
-        stepIndex: runningStep.index,
+        selectedJobKey: jobDetail.job.key,
+        selection: {
+          attemptId: attempt.id,
+          jobKey: jobDetail.job.key,
+          stepIndex: runningStep.index,
+        },
       }
     }
   }
@@ -79,13 +93,16 @@ export function selectInitialStep(
   const lastStep = lastJobAttempt?.steps.at(-1)
   if (lastJob && lastJobAttempt && lastStep) {
     return {
-      attemptId: lastJobAttempt.id,
-      jobKey: lastJob.job.key,
-      stepIndex: lastStep.index,
+      selectedJobKey: lastJob.job.key,
+      selection: {
+        attemptId: lastJobAttempt.id,
+        jobKey: lastJob.job.key,
+        stepIndex: lastStep.index,
+      },
     }
   }
 
-  return null
+  return { selectedJobKey: null, selection: null }
 }
 
 /**

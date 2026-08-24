@@ -20,7 +20,7 @@ import {
   selectJob,
   selectStep,
   runCanChange,
-  selectInitialStep,
+  selectInitialView,
   type StepSelection,
 } from './repository-run-detail-model'
 import { useRunLiveRefresh, type RunRefresh } from './run-live-refresh'
@@ -63,7 +63,7 @@ const EMPTY_LOG_STATE: StepLogState = {
 }
 
 function createDetailViewState(detail: RepoRunDetail): DetailViewState {
-  const initialSelection = selectInitialStep(detail.jobs)
+  const initialView = selectInitialView(detail.jobs)
   return {
     actionError: null,
     attemptOverrides: {},
@@ -73,8 +73,8 @@ function createDetailViewState(detail: RepoRunDetail): DetailViewState {
     metadataError: null,
     pendingAction: null,
     reconciliationGeneration: null,
-    selectedJobKey: initialSelection?.jobKey ?? null,
-    selection: initialSelection,
+    selectedJobKey: initialView.selectedJobKey,
+    selection: initialView.selection,
     showGraph: defaultShowGraph(detail.jobs),
   }
 }
@@ -140,16 +140,21 @@ export function useRepositoryRunDetailController({
             generation >= current.reconciliationGeneration
           const selectionStillValid = current.selection !== null &&
             selectionExists(current.selection, nextDetail.jobs)
+          const initialView = current.manualSelection
+            ? null
+            : selectInitialView(nextDetail.jobs)
           const nextSelection = selectionStillValid
             ? current.selection
             : current.manualSelection
               ? null
-              : selectInitialStep(nextDetail.jobs)
+              : initialView?.selection ?? null
           const selectedJobKey = nextSelection
             ? nextSelection.jobKey
-            : jobExists(current.selectedJobKey, nextDetail.jobs)
-              ? current.selectedJobKey
-              : null
+            : current.manualSelection
+              ? jobExists(current.selectedJobKey, nextDetail.jobs)
+                ? current.selectedJobKey
+                : null
+              : initialView?.selectedJobKey ?? null
           return {
             ...current,
             attemptOverrides: reconcileAttemptOverrides(

@@ -8,7 +8,7 @@ import {
   reconcileAttemptOverrides,
   runCanChange,
   selectAttempt,
-  selectInitialStep,
+  selectInitialView,
   selectJob,
   selectStep,
 } from './repository-run-detail-model'
@@ -64,10 +64,50 @@ describe('repository run detail model', () => {
         state: 'running',
       }),
     ]
-    assert.deepEqual(selectInitialStep(jobs), {
-      attemptId: 'a2',
-      jobKey: 'backend',
-      stepIndex: 1,
+    assert.deepEqual(selectInitialView(jobs), {
+      selectedJobKey: 'backend',
+      selection: {
+        attemptId: 'a2',
+        jobKey: 'backend',
+        stepIndex: 1,
+      },
+    })
+  })
+
+  it('opens a failed job when the failure happened before a step ran', () => {
+    const jobs = [
+      job({
+        attempts: [{ id: 'a1', number: 1, steps: [{ index: 0, state: 'skipped' }] }],
+        key: 'build',
+        state: 'failed',
+      }),
+      job({ key: 'deploy', state: 'blocked' }),
+    ]
+    assert.deepEqual(selectInitialView(jobs), {
+      selectedJobKey: 'build',
+      selection: null,
+    })
+  })
+
+  it('opens a timed-out job without treating a canceled step as failed', () => {
+    const jobs = [
+      job({
+        attempts: [{
+          id: 'a1',
+          number: 1,
+          steps: [
+            { index: 0, state: 'canceled' },
+            { index: 1, state: 'skipped' },
+          ],
+        }],
+        key: 'test',
+        state: 'failed',
+      }),
+      job({ key: 'deploy', state: 'blocked' }),
+    ]
+    assert.deepEqual(selectInitialView(jobs), {
+      selectedJobKey: 'test',
+      selection: null,
     })
   })
 
@@ -91,10 +131,13 @@ describe('repository run detail model', () => {
         state: 'running',
       }),
     ]
-    assert.deepEqual(selectInitialStep(jobs), {
-      attemptId: 'a2',
-      jobKey: 'backend',
-      stepIndex: 1,
+    assert.deepEqual(selectInitialView(jobs), {
+      selectedJobKey: 'backend',
+      selection: {
+        attemptId: 'a2',
+        jobKey: 'backend',
+        stepIndex: 1,
+      },
     })
   })
 
@@ -118,18 +161,24 @@ describe('repository run detail model', () => {
         state: 'succeeded',
       }),
     ]
-    assert.deepEqual(selectInitialStep(jobs), {
-      attemptId: 'a2',
-      jobKey: 'backend',
-      stepIndex: 1,
+    assert.deepEqual(selectInitialView(jobs), {
+      selectedJobKey: 'backend',
+      selection: {
+        attemptId: 'a2',
+        jobKey: 'backend',
+        stepIndex: 1,
+      },
     })
   })
 
   it('selects nothing when there are no steps to show', () => {
-    assert.equal(selectInitialStep([]), null)
-    assert.equal(
-      selectInitialStep([job({ key: 'lint', state: 'queued' })]),
-      null,
+    assert.deepEqual(selectInitialView([]), {
+      selectedJobKey: null,
+      selection: null,
+    })
+    assert.deepEqual(
+      selectInitialView([job({ key: 'lint', state: 'queued' })]),
+      { selectedJobKey: null, selection: null },
     )
   })
 
