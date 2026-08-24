@@ -19,6 +19,24 @@ impl MigrationTrait for Migration {
                 scope_cache_uploads, scope_cache_deletion_queue
                 IN ACCESS EXCLUSIVE MODE;
 
+            WITH retiring_run_objects AS (
+                SELECT runs.id AS run_id, runs.source->'object' AS object
+                FROM scope_runs runs
+                WHERE runs.source->>'kind' = 'ephemeral-git-bundle'
+
+                UNION ALL
+
+                SELECT runs.id, runs.source#>'{head,manifest}'
+                FROM scope_runs runs
+                WHERE runs.source->>'kind' = 'accepted-git-head'
+
+                UNION ALL
+
+                SELECT runs.id, spans.value->'object'
+                FROM scope_runs runs
+                CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') spans(value)
+                WHERE runs.source->>'kind' = 'accepted-git-head'
+            )
             INSERT INTO scope_orphan_object_jobs (
                 object_key, generation, sha256, git_oid, size_bytes,
                 attempts, next_run_at_unix, last_error, completed_at_unix,
@@ -26,17 +44,16 @@ impl MigrationTrait for Migration {
             )
             SELECT DISTINCT ON (refs.object_key)
                 refs.object_key, 'm0029_exact_compatible_caches',
-                runs.source#>>'{object,sha256}', runs.source#>>'{object,git_oid}',
-                (runs.source#>>'{object,size_bytes}')::bigint,
+                sources.object->>'sha256', sources.object->>'git_oid',
+                (sources.object->>'size_bytes')::bigint,
                 0, EXTRACT(EPOCH FROM clock_timestamp())::bigint,
                 NULL, NULL, 0, 0
-            FROM scope_runs runs
+            FROM retiring_run_objects sources
             JOIN scope_object_references refs
               ON refs.ref_kind = 'run_source'
-             AND refs.ref_id = runs.id
-             AND refs.object_key::jsonb = runs.source#>'{object,content_ref}'
-            WHERE runs.source->>'kind' = 'ephemeral-git-bundle'
-              AND NOT EXISTS (
+             AND refs.ref_id = sources.run_id
+             AND refs.object_key::jsonb = sources.object->'content_ref'
+            WHERE NOT EXISTS (
                   SELECT 1
                   FROM scope_object_references other_refs
                   WHERE other_refs.object_key = refs.object_key
@@ -48,7 +65,7 @@ impl MigrationTrait for Migration {
                         )
                     )
               )
-            ORDER BY refs.object_key, runs.id
+            ORDER BY refs.object_key, sources.run_id
             ON CONFLICT (object_key) DO NOTHING;
             DELETE FROM scope_object_references refs
             WHERE refs.ref_kind = 'run_source'

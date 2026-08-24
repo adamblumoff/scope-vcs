@@ -285,6 +285,60 @@ async fn exact_compatible_cutover_preserves_objects_and_queues_physical_cleanup(
             jsonb_build_object('GitBundleSha256', repeat('9', 64))::text,
             'run_source', 'old-cache-run'
         );
+        INSERT INTO scope_runs (
+            id, idempotency_key, repo_id, workflow_path, workflow_revision_digest,
+            trigger, requested_by_user_id, source, state, cancellation_requested,
+            created_at_unix, updated_at_unix, completed_at_unix
+        ) VALUES (
+            'old-accepted-run', 'old-accepted-run', '{REPOSITORY_ID}',
+            '.scope/runs/checks.yml', repeat('1', 64), 'manual', 'cache-user',
+            jsonb_build_object(
+                'kind', 'accepted-git-head',
+                'repository_id', '{REPOSITORY_ID}',
+                'head', jsonb_build_object(
+                    'head_oid', repeat('6', 40),
+                    'push_sequence', 1,
+                    'change_version', 1,
+                    'manifest', jsonb_build_object(
+                        'content_ref', jsonb_build_object(
+                            'GitManifestSha256', repeat('5', 64)
+                        ),
+                        'sha256', repeat('5', 64),
+                        'git_oid', repeat('6', 40),
+                        'git_file_mode', '100644',
+                        'size_bytes', 64
+                    )
+                ),
+                'pack_spans', jsonb_build_array(jsonb_build_object(
+                    'first_sequence', 1,
+                    'last_sequence', 1,
+                    'geometric_tier', 0,
+                    'base_oid', NULL,
+                    'head_oid', repeat('6', 40),
+                    'object', jsonb_build_object(
+                        'content_ref', jsonb_build_object(
+                            'GitSegmentSha256', repeat('4', 64)
+                        ),
+                        'sha256', repeat('4', 64),
+                        'git_oid', repeat('6', 40),
+                        'git_file_mode', '100644',
+                        'size_bytes', 128
+                    )
+                )),
+                'audience', 'Private'
+            ),
+            'succeeded', FALSE, 32, 33, 33
+        );
+        INSERT INTO scope_object_references (object_key, ref_kind, ref_id)
+        VALUES
+            (
+                jsonb_build_object('GitManifestSha256', repeat('5', 64))::text,
+                'run_source', 'old-accepted-run'
+            ),
+            (
+                jsonb_build_object('GitSegmentSha256', repeat('4', 64))::text,
+                'run_source', 'old-accepted-run'
+            );
         INSERT INTO scope_repository_workflow_catalogs (
             repo_id, source_head_oid, source_change_version, configuration_error
         ) VALUES ('{REPOSITORY_ID}', repeat('8', 40), 1, NULL);
@@ -353,7 +407,7 @@ async fn exact_compatible_cutover_preserves_objects_and_queues_physical_cleanup(
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(retired_source_jobs, 1);
+    assert_eq!(retired_source_jobs, 3);
 
     let caches = crate::db::CacheStore { db: db.clone() };
     let first_claim = caches
