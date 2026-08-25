@@ -21,6 +21,7 @@ import type {
   CommitFileDiffState,
 } from '@/features/history/history-state'
 import { useCachedResource } from '@/lib/use-cached-resource'
+import { Link } from '@tanstack/react-router'
 import { GitCommit, MessageSquare } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { compactDiscussionSummary } from './request-discussion-model'
@@ -267,6 +268,7 @@ function useRequestChangesModel({
     [orderedRevisions, revisions.review_revision_id, search],
   )
   const selectedRevision = selection.revision
+  const selectedRevisionId = selectedRevision?.id ?? null
   const selectedCommitOid = selection.commit
   const selectedCommitId = selectedRevision && selectedCommitOid
     ? requestRevisionCommitId(selectedRevision.id, selectedCommitOid)
@@ -303,7 +305,7 @@ function useRequestChangesModel({
     : null
   const loadSelectedDiff = useCallback(
     async (signal: AbortSignal) => {
-      if (!selectedCommitOid || !selectedRevision || !selectedFilePath) {
+      if (!selectedCommitOid || !selectedRevisionId || !selectedFilePath) {
         throw new Error('Select a changed file.')
       }
       signal.throwIfAborted()
@@ -311,12 +313,12 @@ function useRequestChangesModel({
         ...params,
         commit_oid: selectedCommitOid,
         path: selectedFilePath,
-        revision_id: selectedRevision.id,
+        revision_id: selectedRevisionId,
       })
       signal.throwIfAborted()
       return result
     },
-    [loadDiff, params, selectedCommitOid, selectedFilePath, selectedRevision],
+    [loadDiff, params, selectedCommitOid, selectedFilePath, selectedRevisionId],
   )
   const diffResource = useCachedResource({
     fallbackError: 'Request file diff is unavailable.',
@@ -414,17 +416,24 @@ function RequestCommitContext({
           className="scope-content-enter mt-3 space-y-2"
         >
           {discussions.map((discussion) => (
-            <a
+            <Link
               className="flex min-w-0 items-center gap-2 text-foreground hover:text-brand"
-              href={discussionHref(params, discussion.id)}
+              hash={`discussion-${discussion.id}`}
               key={discussion.id}
+              params={{
+                owner: params.owner,
+                repo: params.repo,
+                requestId: params.request_id,
+              }}
+              search={{ discussion: discussion.id }}
+              to="/$owner/$repo/requests/$requestId"
             >
               <MessageSquare className="size-3.5 shrink-0" />
               <span className="truncate">{compactDiscussionSummary(discussion.body_markdown)}</span>
               <span className="ml-auto shrink-0 text-muted-foreground">
                 {discussion.status === 'Resolved' ? 'Resolved' : 'Open'}
               </span>
-            </a>
+            </Link>
           ))}
         </div>
       ) : null}
@@ -507,14 +516,6 @@ function resourceToDiffState(
     return { diff: null, error: resource.error, status: 'failed' }
   }
   return { diff: null, error: null, status: resource.status }
-}
-
-function discussionHref(
-  params: { owner: string; repo: string; request_id: string },
-  discussionId: string,
-) {
-  const search = new URLSearchParams({ discussion: discussionId })
-  return `/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/requests/${encodeURIComponent(params.request_id)}?${search}#discussion-${encodeURIComponent(discussionId)}`
 }
 
 function shortOid(oid: string) {

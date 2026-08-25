@@ -13,25 +13,12 @@ import type {
 } from '@/features/history/history-state'
 import { ArrowRight, GitCommit, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useRef } from 'react'
+import { ReviewDiffRuntimeProvider } from '../review/review-diff-runtime-provider'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 
 const EMPTY_VISIBILITY_CHANGES: HistoryEntryDetail['visibility_changes'] = []
 
-export function CommitDetailPanel({
-  commitContext,
-  commitState,
-  diffIdentity,
-  diffScrollTop,
-  fileDiffState,
-  onCloseDiff,
-  onDiffScroll,
-  onRetryCommit,
-  onRetryDiff,
-  onSelectFile,
-  selectedFilePath,
-  terminology = 'commit',
-  visibilityChanges = EMPTY_VISIBILITY_CHANGES,
-}: {
+type CommitDetailPanelProps = {
   commitContext?: ReactNode
   commitState: CommitDetailState
   diffIdentity: string | null
@@ -45,7 +32,31 @@ export function CommitDetailPanel({
   selectedFilePath: string | null
   terminology?: 'commit' | 'update'
   visibilityChanges?: HistoryEntryDetail['visibility_changes']
-}) {
+}
+
+export function CommitDetailPanel(props: CommitDetailPanelProps) {
+  return (
+    <ReviewDiffRuntimeProvider>
+      <CommitDetailPanelContent {...props} />
+    </ReviewDiffRuntimeProvider>
+  )
+}
+
+function CommitDetailPanelContent({
+  commitContext,
+  commitState,
+  diffIdentity,
+  diffScrollTop,
+  fileDiffState,
+  onCloseDiff,
+  onDiffScroll,
+  onRetryCommit,
+  onRetryDiff,
+  onSelectFile,
+  selectedFilePath,
+  terminology = 'commit',
+  visibilityChanges = EMPTY_VISIBILITY_CHANGES,
+}: CommitDetailPanelProps) {
   const fileNavigatorRef = useRef<HTMLDivElement>(null)
 
   if (commitState.status === 'loading') {

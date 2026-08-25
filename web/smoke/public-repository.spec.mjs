@@ -3,9 +3,12 @@ import { test } from 'node:test'
 import { chromium } from 'playwright'
 import {
   assertFileSelectionSkipsRevisionReload,
+  assertRequestCrossLinksStayInDocument,
   assertRequestShellPreserved,
   assertUpdateSelectionUsesInitialPayload,
 } from './request-changes-smoke.mjs'
+import { assertHistoryFirstFileStaysInRoute } from './history-navigation-smoke.mjs'
+import { assertRepositoryMarkdownUsesClientNavigation } from './repository-markdown-navigation-smoke.mjs'
 
 const baseUrl = (
   process.env.SCOPE_WEB_BASE_URL ??
@@ -409,6 +412,7 @@ test('public direct Runs access is explicit and exposes no operations', async ()
 })
 
 test('public repository history renders its seeded push as an update', async () => {
+  const diffWorkers = []
   await withPage(`${repoPath}/history`, async (page) => {
     await assertCurrentRepoSection(page, 'History')
     await assertPageHeading(page, 'History')
@@ -435,10 +439,19 @@ test('public repository history renders its seeded push as an update', async () 
     await page.waitForFunction(() => globalThis.__TSR_ROUTER__.state.status === 'idle')
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)))
     assert.equal(new URL(page.url()).searchParams.get('entry'), 'dev-public-1')
+    await assertHistoryFirstFileStaysInRoute(page, diffWorkers)
     assert.equal(
       await page.evaluate(() => document.querySelector('#main-content')?.scrollTop),
       0,
     )
+  }, {}, async (page) => {
+    page.on('worker', (worker) => diffWorkers.push(worker.url()))
+  })
+})
+
+test('repository Markdown routes relative file links without replacing the document', async () => {
+  await withPage(`/${owner}/update-demo`, async (page) => {
+    await assertRepositoryMarkdownUsesClientNavigation(page, owner)
   })
 })
 
@@ -690,23 +703,10 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       .getByText('Exactly. Keeping that decision nested', { exact: false })
       .waitFor()
 
-    const anchoredThread = page.locator(
-      '#discussion-discussion_demo_revision_jitter',
-    )
-    await anchoredThread.getByRole('link', { name: /Revision/ }).click()
-    await page.waitForURL((url) => (
-      url.pathname.endsWith('/requests/req_demo_ready/changes') &&
-      url.searchParams.get('revision') === 'event_req_demo_ready_revision_2'
-    ))
-    assert.equal(await page.getByRole('textbox').count(), 0)
-    await page
-      .getByRole('link', { name: /The bounded jitter looks right/ })
-      .click()
-    await page.waitForURL((url) => (
-      url.pathname.endsWith('/requests/req_demo_ready') &&
-      url.searchParams.get('discussion') === 'discussion_demo_revision_jitter'
-    ))
-    await page.locator('.request-discussion-thread').first().waitFor()
+    const {
+      heading: requestHeading,
+      navigation: requestNavigation,
+    } = await assertRequestCrossLinksStayInDocument(page)
 
     const requestViews = page.getByRole('navigation', { name: 'Request views' })
     const changesLink = requestViews.getByRole('link', { name: 'Changes' })
@@ -714,13 +714,6 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
       await changesLink.elementHandle(),
     )
-    const requestHeading = await page
-      .getByRole('heading', { level: 1, name: 'Add bounded retry timing' })
-      .elementHandle()
-    const requestNavigation = await requestViews.elementHandle()
-    assert(requestHeading)
-    assert(requestNavigation)
-
     const transitionServerFunctions = []
     const recordServerFunction = (request) => {
       if (request.url().includes('/_serverFn/')) {

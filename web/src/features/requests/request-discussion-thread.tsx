@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Link } from '@tanstack/react-router'
 import {
   Check,
   ChevronDown,
@@ -370,14 +371,20 @@ function RequestDiscussionAnchor({
   params: { owner: string; repo: string; request_id: string }
 }) {
   if (!anchor) return null
-  const search = new URLSearchParams({ revision: anchor.revision_id })
-  if (anchor.commit_oid) search.set('commit', anchor.commit_oid)
-  if (anchor.path) search.set('path', anchor.path)
-  const href = `/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/requests/${encodeURIComponent(params.request_id)}/changes?${search}`
   return (
-    <a
+    <Link
       className="mt-2 inline-flex max-w-full items-center gap-2 font-mono text-xs text-muted-foreground hover:text-brand"
-      href={href}
+      params={{
+        owner: params.owner,
+        repo: params.repo,
+        requestId: params.request_id,
+      }}
+      search={{
+        commit: anchor.commit_oid ?? undefined,
+        path: anchor.path ?? undefined,
+        revision: anchor.revision_id,
+      }}
+      to="/$owner/$repo/requests/$requestId/changes"
     >
       <GitCommit className="size-3.5 shrink-0" />
       <span className="truncate">
@@ -385,6 +392,6 @@ function RequestDiscussionAnchor({
         {anchor.commit_oid ? ` · ${anchor.commit_oid.slice(0, 10)}` : ''}
         {anchor.path ? ` · ${anchor.path.replace(/^\/+/, '')}` : ''}
       </span>
-    </a>
+    </Link>
   )
 }
