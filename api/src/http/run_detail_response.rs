@@ -2,8 +2,9 @@ use crate::{
     error::ApiError,
     http::responses::{
         RepositoryRunAttemptResponse, RepositoryRunCacheObservationResponse,
-        RepositoryRunCacheResponse, RepositoryRunDetailResponse, RepositoryRunJobDetailResponse,
-        RepositoryRunJobResponse, RepositoryRunStepResponse, RepositoryRunSummaryResponse,
+        RepositoryRunCacheResponse, RepositoryRunCacheSetupObservationResponse,
+        RepositoryRunDetailResponse, RepositoryRunJobDetailResponse, RepositoryRunJobResponse,
+        RepositoryRunStepResponse, RepositoryRunSummaryResponse,
     },
 };
 use scope_domain::runs::cache::{AttemptCacheObservation, WorkflowCache};
@@ -68,6 +69,12 @@ pub(super) fn build_run_detail_response(
                 started_at_unix: attempt.started_at_unix,
                 completed_at_unix: attempt.completed_at_unix,
                 terminal_reason: attempt.terminal_reason.map(Into::into),
+                cache_setup: attempt_detail.cache_setup.map(|setup| {
+                    RepositoryRunCacheSetupObservationResponse {
+                        authorization_ms: setup.authorization_ms,
+                        wall_ms: setup.wall_ms,
+                    }
+                }),
                 caches,
                 steps,
             });
@@ -148,7 +155,13 @@ fn cache_responses(
                     job_key: observation.job_key.as_str().to_string(),
                     identity_digest: observation.identity_digest,
                     preparation: observation.preparation.into(),
-                    prepare_ms: observation.prepare_ms,
+                    key_ms: observation.timing.key_ms,
+                    metadata_ms: observation.timing.metadata_ms,
+                    size_bytes: observation.timing.size_bytes,
+                    download_verify_ms: observation.timing.download_verify_ms,
+                    sync_ms: observation.timing.sync_ms,
+                    extraction_ms: observation.timing.extraction_ms,
+                    prepare_ms: observation.timing.prepare_ms,
                     final_state: observation.final_state.into(),
                     finalize_ms: observation.finalize_ms,
                 });

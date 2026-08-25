@@ -1,7 +1,7 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    cache::AttemptCacheObservation,
+    cache::{AttemptCacheObservation, AttemptCacheSetupObservation},
     job::RunJob,
     run::{MAX_RUN_ATTEMPTS, Run, RunAttempt, RunAttemptStep},
     workflow::{MAX_WORKFLOW_JOBS, WorkflowRevision},
@@ -12,6 +12,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunAttemptDetail {
     pub attempt: RunAttempt,
+    pub cache_setup: Option<AttemptCacheSetupObservation>,
     pub caches: Vec<AttemptCacheObservation>,
     pub steps: Vec<RunAttemptStep>,
 }
@@ -101,9 +102,18 @@ where
         Vec::new()
     } else {
         entities::run_attempt_cache::Entity::find()
-            .filter(entities::run_attempt_cache::Column::AttemptId.is_in(attempt_ids))
+            .filter(entities::run_attempt_cache::Column::AttemptId.is_in(attempt_ids.clone()))
             .order_by_asc(entities::run_attempt_cache::Column::AttemptId)
             .order_by_asc(entities::run_attempt_cache::Column::CacheName)
+            .all(conn)
+            .await
+            .map_err(PostgresError::internal)?
+    };
+    let cache_setup_models = if attempt_ids.is_empty() {
+        Vec::new()
+    } else {
+        entities::run_attempt_cache_setup::Entity::find()
+            .filter(entities::run_attempt_cache_setup::Column::AttemptId.is_in(attempt_ids.clone()))
             .all(conn)
             .await
             .map_err(PostgresError::internal)?
@@ -124,19 +134,33 @@ where
             .or_default()
             .push(cache.try_into_domain()?);
     }
+    let mut cache_setups_by_attempt = cache_setup_models
+        .into_iter()
+        .map(|setup| {
+            let attempt_id = setup.attempt_id.clone();
+            setup.try_into_domain().map(|setup| (attempt_id, setup))
+        })
+        .collect::<Result<HashMap<_, _>, PostgresError>>()?;
     let mut details = Vec::with_capacity(attempts.len());
     for attempt in attempts {
         let steps = steps_by_attempt.remove(&attempt.id).unwrap_or_default();
         let caches = caches_by_attempt.remove(&attempt.id).unwrap_or_default();
+        let cache_setup = cache_setups_by_attempt.remove(&attempt.id);
         let attempt = attempt.try_into_domain()?;
         attempt
             .validate_execution(&steps)
             .map_err(PostgresError::invalid_input)?;
         details.push(RunAttemptDetail {
             attempt,
+            cache_setup,
             caches,
             steps,
         });
+    }
+    if !cache_setups_by_attempt.is_empty() {
+        return Err(PostgresError::internal_message(
+            "cache setup observation does not belong to a persisted attempt",
+        ));
     }
     Ok(details)
 }

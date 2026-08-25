@@ -289,9 +289,22 @@ pub struct RepositoryRunCacheObservationResponse {
     pub job_key: String,
     pub identity_digest: String,
     pub preparation: RepositoryRunCachePreparation,
+    pub key_ms: u64,
+    pub metadata_ms: u64,
+    pub size_bytes: u64,
+    pub download_verify_ms: u64,
+    pub sync_ms: u64,
+    pub extraction_ms: u64,
     pub prepare_ms: u64,
     pub final_state: RepositoryRunCacheFinalState,
     pub finalize_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RepositoryRunCacheSetupObservationResponse {
+    pub authorization_ms: u64,
+    pub wall_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -327,6 +340,7 @@ pub struct RepositoryRunAttemptResponse {
     pub started_at_unix: Option<u64>,
     pub completed_at_unix: Option<u64>,
     pub terminal_reason: Option<RepositoryRunTerminalReason>,
+    pub cache_setup: Option<RepositoryRunCacheSetupObservationResponse>,
     pub caches: Vec<RepositoryRunCacheResponse>,
     pub steps: Vec<RepositoryRunStepResponse>,
 }
@@ -457,6 +471,8 @@ pub struct AttemptCacheFinalizationRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReportAttemptCachePreparationsRequest {
+    pub authorization_ms: u64,
+    pub wall_ms: u64,
     pub caches: Vec<AttemptCachePreparationReport>,
 }
 
@@ -465,6 +481,12 @@ pub struct AttemptCachePreparationReport {
     pub cache_name: String,
     pub identity_digest: String,
     pub preparation: CachePreparation,
+    pub key_ms: u64,
+    pub metadata_ms: u64,
+    pub size_bytes: u64,
+    pub download_verify_ms: u64,
+    pub sync_ms: u64,
+    pub extraction_ms: u64,
     pub prepare_ms: u64,
 }
 
@@ -567,12 +589,20 @@ mod tests {
     #[test]
     fn cache_observation_contract_uses_constrained_domain_values() {
         let preparation = ReportAttemptCachePreparationsRequest {
+            authorization_ms: 4,
+            wall_ms: 12,
             caches: vec![AttemptCachePreparationReport {
                 cache_name: "cargo".to_string(),
                 identity_digest: "a".repeat(64),
                 preparation: CachePreparation::Cold {
                     reason: CacheColdReason::MetadataMissing,
                 },
+                key_ms: 5,
+                metadata_ms: 7,
+                size_bytes: 0,
+                download_verify_ms: 0,
+                sync_ms: 0,
+                extraction_ms: 0,
                 prepare_ms: 12,
             }],
         };
@@ -608,6 +638,12 @@ mod tests {
                 preparation: RepositoryRunCachePreparation::Cold {
                     reason: RepositoryRunCacheColdReason::MetadataMissing,
                 },
+                key_ms: 5,
+                metadata_ms: 7,
+                size_bytes: 0,
+                download_verify_ms: 0,
+                sync_ms: 0,
+                extraction_ms: 0,
                 prepare_ms: 12,
                 final_state: RepositoryRunCacheFinalState::Ready,
                 finalize_ms: Some(8),

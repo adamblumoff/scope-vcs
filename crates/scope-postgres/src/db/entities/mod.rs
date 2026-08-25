@@ -4,7 +4,10 @@ use crate::error::PostgresError;
 use scope_domain::policy::{Policy, ScopePath, Visibility};
 use scope_domain::projection_views::{ProjectionViewFile, ProjectionViewFileContent};
 use scope_domain::runs::{
-    cache::{AttemptCacheObservation, CacheColdReason, CacheFinalState, CachePreparation},
+    cache::{
+        AttemptCacheObservation, AttemptCachePreparationTiming, AttemptCacheSetupObservation,
+        CacheColdReason, CacheFinalState, CachePreparation,
+    },
     job::RunJob,
     run::{
         AttemptState, AttemptTerminalReason, ExecutionProvider, PinnedContainerImage, Run,
@@ -104,8 +107,8 @@ pub use requests::{
     request_event, request_invitee, request_rating, request_revision,
 };
 pub use runs::{
-    push_trigger_evaluation, run, run_attempt, run_attempt_cache, run_attempt_step, run_job,
-    run_log, workflow_revision,
+    push_trigger_evaluation, run, run_attempt, run_attempt_cache, run_attempt_cache_setup,
+    run_attempt_step, run_job, run_log, workflow_revision,
 };
 
 #[cfg(test)]

@@ -53,6 +53,7 @@ export function RunDetailSteps({
           ) : null}
           <RunAttemptEnvironment
             caches={attempt.caches}
+            cacheSetup={attempt.cache_setup}
             pinnedContainerImage={job.pinned_container_image}
           />
           <div className="divide-y divide-border">

@@ -31,7 +31,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const MAX_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
@@ -41,6 +41,12 @@ const LOG_APPEND_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) enum CacheDownloadError {
     Transport(anyhow::Error),
     Invalid(anyhow::Error),
+}
+
+pub(crate) struct CacheDownloadAttempt {
+    pub(crate) outcome: Result<(), CacheDownloadError>,
+    pub(crate) download_verify_ms: u64,
+    pub(crate) sync_ms: u64,
 }
 
 #[derive(Clone)]
@@ -304,26 +310,48 @@ impl RuntimeClient {
         destination: &Path,
         expected_size: u64,
         expected_checksum: &str,
-    ) -> Result<(), CacheDownloadError> {
-        validate_cache_size(expected_size).map_err(CacheDownloadError::Invalid)?;
-        let mut response = self
-            .client
-            .get(url)
-            .send()
-            .context("download cache object")
-            .map_err(CacheDownloadError::Transport)?;
-        ensure_success(&response, "download cache object")
-            .map_err(CacheDownloadError::Transport)?;
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(destination)
-            .context("create cache archive")
-            .map_err(CacheDownloadError::Invalid)?;
-        copy_hashed(&mut response, &mut file, expected_size, expected_checksum)?;
-        file.sync_all()
+    ) -> CacheDownloadAttempt {
+        let download_started = Instant::now();
+        let download = (|| {
+            validate_cache_size(expected_size).map_err(CacheDownloadError::Invalid)?;
+            let mut response = self
+                .client
+                .get(url)
+                .send()
+                .context("download cache object")
+                .map_err(CacheDownloadError::Transport)?;
+            ensure_success(&response, "download cache object")
+                .map_err(CacheDownloadError::Transport)?;
+            let mut file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(destination)
+                .context("create cache archive")
+                .map_err(CacheDownloadError::Invalid)?;
+            copy_hashed(&mut response, &mut file, expected_size, expected_checksum)?;
+            Ok(file)
+        })();
+        let download_verify_ms = elapsed_ms(download_started);
+        let file = match download {
+            Ok(file) => file,
+            Err(error) => {
+                return CacheDownloadAttempt {
+                    outcome: Err(error),
+                    download_verify_ms,
+                    sync_ms: 0,
+                };
+            }
+        };
+        let sync_started = Instant::now();
+        let outcome = file
+            .sync_all()
             .context("sync cache archive")
-            .map_err(CacheDownloadError::Invalid)
+            .map_err(CacheDownloadError::Invalid);
+        CacheDownloadAttempt {
+            outcome,
+            download_verify_ms,
+            sync_ms: elapsed_ms(sync_started),
+        }
     }
 
     pub fn upload_cache(
@@ -642,6 +670,10 @@ fn validate_cache_size(size: u64) -> anyhow::Result<()> {
         bail!("cache exceeds {MAX_CACHE_OBJECT_BYTES} bytes");
     }
     Ok(())
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn json<T: serde::de::DeserializeOwned>(response: Response, label: &str) -> anyhow::Result<T> {

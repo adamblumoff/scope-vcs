@@ -37,13 +37,12 @@ fn environment_lines(
     pinned_image: Option<&str>,
     attempt: &RepositoryRunAttemptResponse,
 ) -> Vec<String> {
-    if attempt.caches.is_empty() && pinned_image.is_none() {
+    if attempt.caches.is_empty() && pinned_image.is_none() && attempt.cache_setup.is_none() {
         return Vec::new();
     }
     let mut warm = 0;
     let mut cold = 0;
     let mut unavailable = 0;
-    let mut prepare_ms = 0;
     for cache in &attempt.caches {
         match cache.observation.as_ref().map(|fact| fact.preparation) {
             Some(
@@ -52,13 +51,6 @@ fn environment_lines(
             Some(RepositoryRunCachePreparation::Cold { .. }) => cold += 1,
             None => unavailable += 1,
         }
-        prepare_ms = prepare_ms.max(
-            cache
-                .observation
-                .as_ref()
-                .map(|fact| fact.prepare_ms)
-                .unwrap_or_default(),
-        );
     }
     let mut summary = Vec::new();
     if warm > 0 {
@@ -70,8 +62,12 @@ fn environment_lines(
     if unavailable > 0 {
         summary.push(format!("{unavailable} not reported"));
     }
-    if warm + cold > 0 {
-        summary.push(format!("prepared {}", duration_label(prepare_ms)));
+    if let Some(cache_setup) = &attempt.cache_setup {
+        summary.push(format!(
+            "setup {} (authorization {})",
+            duration_label(cache_setup.wall_ms),
+            duration_label(cache_setup.authorization_ms),
+        ));
     }
     if let Some(image) = pinned_image {
         summary.push(image_label(image));
@@ -187,7 +183,8 @@ mod tests {
     use super::*;
     use scope_api_contract::{
         RepositoryRunAttemptState, RepositoryRunCacheObservationResponse,
-        RepositoryRunStepResponse, RepositoryRunSummaryResponse,
+        RepositoryRunCacheSetupObservationResponse, RepositoryRunStepResponse,
+        RepositoryRunSummaryResponse,
     };
 
     #[test]
@@ -227,6 +224,10 @@ mod tests {
                     started_at_unix: Some(1),
                     completed_at_unix: Some(2),
                     terminal_reason: None,
+                    cache_setup: Some(RepositoryRunCacheSetupObservationResponse {
+                        authorization_ms: 7,
+                        wall_ms: 80,
+                    }),
                     caches: vec![
                         RepositoryRunCacheResponse {
                             name: "cargo".to_string(),
@@ -238,6 +239,12 @@ mod tests {
                                 preparation: RepositoryRunCachePreparation::Cold {
                                     reason: RepositoryRunCacheColdReason::MetadataMissing,
                                 },
+                                key_ms: 2,
+                                metadata_ms: 10,
+                                size_bytes: 0,
+                                download_verify_ms: 0,
+                                sync_ms: 0,
+                                extraction_ms: 0,
                                 prepare_ms: 12,
                                 final_state: RepositoryRunCacheFinalState::Ready,
                                 finalize_ms: Some(8),
@@ -256,6 +263,12 @@ mod tests {
                                 job_key: "backend".to_string(),
                                 identity_digest: "c".repeat(64),
                                 preparation: RepositoryRunCachePreparation::Exact,
+                                key_ms: 3,
+                                metadata_ms: 4,
+                                size_bytes: 12_582_912,
+                                download_verify_ms: 20,
+                                sync_ms: 5,
+                                extraction_ms: 18,
                                 prepare_ms: 50,
                                 final_state: RepositoryRunCacheFinalState::Ready,
                                 finalize_ms: Some(4),
@@ -268,7 +281,9 @@ mod tests {
         };
 
         let output = detail_lines(&detail).join("\n");
-        assert!(output.contains("1 warm · 1 cold · 1 not reported · prepared 50ms"));
+        assert!(
+            output.contains("1 warm · 1 cold · 1 not reported · setup 80ms (authorization 7ms)")
+        );
         assert!(output.contains("no reusable entry for this identity"));
         assert!(output.contains("target · not reported"));
         assert!(!output.contains("identity changed"));

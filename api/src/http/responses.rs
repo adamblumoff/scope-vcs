@@ -15,8 +15,9 @@ use scope_api_contract::{
 };
 pub(crate) use scope_api_contract::{
     RepositoryRunAttemptResponse, RepositoryRunCacheObservationResponse,
-    RepositoryRunCacheResponse, RepositoryRunDetailResponse, RepositoryRunJobDetailResponse,
-    RepositoryRunJobResponse, RepositoryRunStepResponse, RepositoryRunSummaryResponse,
+    RepositoryRunCacheResponse, RepositoryRunCacheSetupObservationResponse,
+    RepositoryRunDetailResponse, RepositoryRunJobDetailResponse, RepositoryRunJobResponse,
+    RepositoryRunStepResponse, RepositoryRunSummaryResponse,
 };
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};

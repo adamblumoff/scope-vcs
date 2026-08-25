@@ -1,24 +1,25 @@
-import type { RepoRunCache } from '@/api/types'
+import type { RepoRunAttempt, RepoRunCache } from '@/api/types'
 
 export function summarizeAttemptCaches(caches: readonly RepoRunCache[]) {
   let warm = 0
   let cold = 0
   let unavailable = 0
-  let prepareMs = 0
   for (const cache of caches) {
     const observation = cache.observation
     if (!observation) {
       unavailable += 1
       continue
     }
-    prepareMs = Math.max(prepareMs, observation.prepare_ms)
     if (observation.preparation.kind === 'cold') cold += 1
     else warm += 1
   }
-  return { cold, prepareMs, unavailable, warm }
+  return { cold, unavailable, warm }
 }
 
-export function cacheSummaryLabel(caches: readonly RepoRunCache[]) {
+export function cacheSummaryLabel(
+  caches: readonly RepoRunCache[],
+  cacheSetup: RepoRunAttempt['cache_setup'],
+) {
   if (caches.length === 0) return 'No caches declared'
   const summary = summarizeAttemptCaches(caches)
   const parts = [
@@ -26,8 +27,9 @@ export function cacheSummaryLabel(caches: readonly RepoRunCache[]) {
     countLabel(summary.cold, 'cold'),
     countLabel(summary.unavailable, 'not reported'),
   ].filter(Boolean)
-  if (summary.warm + summary.cold > 0) {
-    parts.push(`prepared in ${formatMilliseconds(summary.prepareMs)}`)
+  if (cacheSetup) {
+    parts.push(`setup in ${formatMilliseconds(cacheSetup.wall_ms)}`)
+    parts.push(`authorized in ${formatMilliseconds(cacheSetup.authorization_ms)}`)
   }
   return parts.join(' · ')
 }
@@ -72,10 +74,23 @@ export function cacheNamespace(cache: RepoRunCache) {
 export function cacheTimingLabel(cache: RepoRunCache) {
   const observation = cache.observation
   if (!observation) return 'unavailable'
-  const prepare = `prepare ${formatMilliseconds(observation.prepare_ms)}`
+  const prepare = `total ${formatMilliseconds(observation.prepare_ms)}`
   return observation.finalize_ms === null
     ? prepare
     : `${prepare} · finalize ${formatMilliseconds(observation.finalize_ms)}`
+}
+
+export function cachePreparationDetail(cache: RepoRunCache) {
+  const observation = cache.observation
+  if (!observation) return null
+  return [
+    `${formatBytes(observation.size_bytes)} compressed`,
+    `key ${formatMilliseconds(observation.key_ms)}`,
+    `metadata ${formatMilliseconds(observation.metadata_ms)}`,
+    `download + verify ${formatMilliseconds(observation.download_verify_ms)}`,
+    `sync ${formatMilliseconds(observation.sync_ms)}`,
+    `extract ${formatMilliseconds(observation.extraction_ms)}`,
+  ].join(' · ')
 }
 
 export function pinnedImageLabel(image: string | null) {
@@ -112,4 +127,11 @@ function countLabel(count: number, label: string) {
 function formatMilliseconds(milliseconds: number) {
   if (milliseconds < 1_000) return `${milliseconds}ms`
   return `${(milliseconds / 1_000).toFixed(1)}s`
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1_024) return `${bytes} B`
+  if (bytes < 1_024 ** 2) return `${(bytes / 1_024).toFixed(1)} KiB`
+  if (bytes < 1_024 ** 3) return `${(bytes / 1_024 ** 2).toFixed(1)} MiB`
+  return `${(bytes / 1_024 ** 3).toFixed(2)} GiB`
 }
