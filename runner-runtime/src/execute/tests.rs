@@ -1,7 +1,11 @@
-use super::supervisor::{SupervisorOptions, run_steps_with_options};
-use super::{AppendLogError, AppendLogOutcome, ExecutionOutcome, ExecutionSink};
+use super::{
+    AppendLogError, AppendLogOutcome, ExecutionOutcome, ExecutionSink,
+    supervisor::{SupervisorOptions, run_steps_with_options},
+};
 use anyhow::anyhow;
-use scope_domain::runs::workflow::{ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowStep};
+use scope_domain::runs::workflow::definition::{
+    ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowStep,
+};
 use std::{
     collections::VecDeque,
     sync::{

@@ -3,16 +3,17 @@ use sea_orm::EntityTrait;
 use {
     crate::error::PostgresError,
     scope_domain::{
+        repository::access::RepositoryActor,
+        repository::{RepoLifecycleState, Repository},
         requests::{
             Request, RequestActorRole, RequestAudience, RequestPolicyDecision, RequestViewer,
             StartRequestInput, request_policy,
         },
-        store::{RepoLifecycleState, RepositoryActor, StoredRepository},
     },
 };
 
 pub(super) fn authorize_start_request(
-    repo: &StoredRepository,
+    repo: &Repository,
     mut input: StartRequestInput,
 ) -> Result<StartRequestInput, PostgresError> {
     let author_role = match repo.access_for_user_id(&input.author_user_id).actor {
@@ -34,7 +35,7 @@ pub(super) fn authorize_start_request(
 
 pub(super) async fn request_policy_for_user<C>(
     conn: &C,
-    repo: &StoredRepository,
+    repo: &Repository,
     request: &Request,
     user_id: &str,
 ) -> Result<RequestPolicyDecision, PostgresError>
@@ -65,10 +66,7 @@ where
     }
 }
 
-pub(super) async fn repo_by_id<C>(
-    conn: &C,
-    repo_id: &str,
-) -> Result<StoredRepository, PostgresError>
+pub(super) async fn repo_by_id<C>(conn: &C, repo_id: &str) -> Result<Repository, PostgresError>
 where
     C: sea_orm::ConnectionTrait,
 {
@@ -83,7 +81,7 @@ where
 pub(super) async fn lock_request_repository<C>(
     conn: &C,
     request_id: &str,
-) -> Result<(StoredRepository, Request), PostgresError>
+) -> Result<(Repository, Request), PostgresError>
 where
     C: sea_orm::ConnectionTrait,
 {

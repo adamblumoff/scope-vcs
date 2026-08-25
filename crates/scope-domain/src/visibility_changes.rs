@@ -1,6 +1,6 @@
 use super::{
+    content::SourceBlob,
     policy::{ScopePath, Visibility},
-    store::SourceBlob,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;

@@ -82,6 +82,21 @@ jobs:
       - name: Test Rust toolchain replica checker
         run: node --test .github/scripts/check-rust-toolchain-sync.test.mjs
 
+      - name: Check source-size ownership
+        run: |
+          node --test .github/scripts/check-source-size.test.mjs
+          node .github/scripts/check-source-size.mjs
+
+      - name: Install Rust for dependency metadata
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.98.0
+
+      - name: Check Rust dependency boundaries
+        run: |
+          node --test .github/scripts/check-rust-boundaries.test.mjs
+          node .github/scripts/check-rust-boundaries.mjs
+
   checks-image:
     name: Checks image
     needs: plan

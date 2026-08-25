@@ -10,14 +10,8 @@ pub(crate) use scope_api_contract::CommitFileResponse;
 use scope_api_contract::{
     DeviceLoginStatus, FileChangeKind, FirstPushTokenResponse, GitOid, GitPushTokenResponse,
     RepoInitResponse, RepoLifecycleState, RepoRequestPermissionsResponse, RepoSummaryResponse,
-    RepositoryAccessResponse, RequestActorSummaryResponse, SessionIdentity, UserResponse,
-    Visibility,
-};
-pub(crate) use scope_api_contract::{
-    RepositoryRunAttemptResponse, RepositoryRunCacheObservationResponse,
-    RepositoryRunCacheResponse, RepositoryRunCacheSetupObservationResponse,
-    RepositoryRunDetailResponse, RepositoryRunJobDetailResponse, RepositoryRunJobResponse,
-    RepositoryRunStepResponse, RepositoryRunSummaryResponse,
+    RepositoryAccessResponse, RepositoryRunSummaryResponse, RequestActorSummaryResponse,
+    SessionIdentity, UserResponse, Visibility,
 };
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
@@ -26,9 +20,11 @@ use scope_domain::history::{
     HistoryEntryVisibilityChange, HistoryView,
 };
 use scope_domain::policy::ScopePath;
-use scope_domain::store::{
-    FirstPushToken, GitPushToken, RepoLifecycleState as DomainRepoLifecycleState, RepositoryAccess,
-    RepositoryActor, StoredRepository, UserAccount,
+use scope_domain::{
+    account::UserAccount,
+    repository::access::{RepositoryAccess, RepositoryActor},
+    repository::credentials::{FirstPushToken, GitPushToken},
+    repository::{RepoLifecycleState as DomainRepoLifecycleState, Repository},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -329,7 +325,7 @@ pub(crate) struct HistoryEntryFileResponse {
 }
 
 pub(crate) fn repo_summary_for_user(
-    repo: &StoredRepository,
+    repo: &Repository,
     user_id: &str,
     open_request_count: usize,
 ) -> Option<RepoSummaryResponse> {
@@ -367,10 +363,7 @@ pub(crate) fn repo_request_permissions_response(
     }
 }
 
-pub(crate) fn repo_change_version_for_access(
-    repo: &StoredRepository,
-    access: RepositoryAccess,
-) -> u64 {
+pub(crate) fn repo_change_version_for_access(repo: &Repository, access: RepositoryAccess) -> u64 {
     if access.actor != RepositoryActor::Public {
         repo.record.change_version
     } else {
@@ -406,7 +399,7 @@ pub(crate) fn session_capabilities_response(
 }
 
 pub(crate) fn repo_init_response(
-    repo: &StoredRepository,
+    repo: &Repository,
     user_id: &str,
     api_origin: &str,
     now_unix: u64,
@@ -440,7 +433,7 @@ pub(crate) fn repo_init_response(
     })
 }
 
-fn ensure_repo_init_access(repo: &StoredRepository, user_id: &str) -> Result<(), ApiError> {
+fn ensure_repo_init_access(repo: &Repository, user_id: &str) -> Result<(), ApiError> {
     if !repo.is_owner_user(user_id) {
         return Err(ApiError::not_found(format!(
             "repo {} not found",
@@ -461,7 +454,7 @@ pub(crate) fn first_push_token_response(
     secret: Option<String>,
 ) -> FirstPushTokenResponse {
     let status = token.status_at(now_unix);
-    let secret = if status == scope_domain::store::FirstPushTokenStatus::Active {
+    let secret = if status == scope_domain::repository::credentials::FirstPushTokenStatus::Active {
         secret
     } else {
         None

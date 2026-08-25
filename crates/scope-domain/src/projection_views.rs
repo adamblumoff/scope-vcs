@@ -1,7 +1,8 @@
 use super::{
+    content::SourceBlob,
     policy::{Principal, ScopePath, Visibility},
     projection::{Projection, ProjectionViewKey, project_graph},
-    store::{SourceBlob, StoredRepository, repo_relative_scope_path},
+    repository::{Repository, repo_relative_scope_path},
 };
 use crate::error::DomainError;
 use crate::repo_control::is_repo_control_path;
@@ -79,7 +80,7 @@ pub struct ProjectionViewFileContent {
 }
 
 pub fn projection_preview(
-    repo: &StoredRepository,
+    repo: &Repository,
     audience: ProjectionAudience,
     include_private_counts: bool,
 ) -> ProjectionPreviewView {
@@ -169,7 +170,7 @@ fn projection_preview_commit_visibility(
 }
 
 pub fn projected_file_contents(
-    repo: &StoredRepository,
+    repo: &Repository,
     principal: &Principal,
 ) -> Vec<ProjectionViewFileContent> {
     let access = repo.access_for_principal(principal);
@@ -204,7 +205,7 @@ pub fn projected_file_contents(
         .collect()
 }
 
-pub fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<ProjectionViewFile> {
+pub fn projected_files(repo: &Repository, principal: &Principal) -> Vec<ProjectionViewFile> {
     projected_file_contents(repo, principal)
         .into_iter()
         .map(|content| content.file)
@@ -212,7 +213,7 @@ pub fn projected_files(repo: &StoredRepository, principal: &Principal) -> Vec<Pr
 }
 
 pub fn projected_file_content(
-    repo: &StoredRepository,
+    repo: &Repository,
     principal: &Principal,
     path: &ScopePath,
 ) -> Option<ProjectionViewFileContent> {
@@ -242,7 +243,7 @@ pub fn projected_file_content(
 }
 
 pub fn files_for_visibility_update(
-    repo: &StoredRepository,
+    repo: &Repository,
     principal: &Principal,
 ) -> Result<Vec<ProjectionViewFile>, DomainError> {
     Ok(projected_files(repo, principal))
@@ -252,10 +253,7 @@ pub fn repo_scope_path(path: &str) -> Result<ScopePath, DomainError> {
     repo_relative_scope_path(path).map_err(DomainError::invalid_input)
 }
 
-pub fn has_visible_projected_non_control_files(
-    repo: &StoredRepository,
-    principal: &Principal,
-) -> bool {
+pub fn has_visible_projected_non_control_files(repo: &Repository, principal: &Principal) -> bool {
     let projection = project_graph(
         &repo.graph,
         &repo.visibility_change_sets,
@@ -267,7 +265,7 @@ pub fn has_visible_projected_non_control_files(
 }
 
 fn projection_preview_files(
-    repo: &StoredRepository,
+    repo: &Repository,
     projection: &Projection,
 ) -> Vec<ProjectionPreviewFile> {
     projection_tree(projection)

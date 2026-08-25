@@ -6,9 +6,12 @@ use crate::{
     http::responses::*,
     push_intents::*,
     repo_access::*,
-    repo_cleanup::*,
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgetConfig, RuntimeBudgets},
     state::*,
+    use_cases::{
+        content_cleanup::*,
+        git_receive::{self as git_receive_use_case, ReceivePackAccess},
+    },
 };
 use axum::{
     body::{Body, to_bytes},
@@ -24,11 +27,16 @@ use scope_domain::policy::{Policy, ScopePath, Visibility, VisibilityRule};
 use scope_domain::projection::{
     FileChange, LogicalCommit, ProjectionViewKey, SourceGraph, project_graph,
 };
-use scope_domain::repo_config::{ConfigVisibility, RepoConfig};
-use scope_domain::store::{
-    GitPushToken, LogicalCommitOrigin, RepoLifecycleState, RepoRecord, RepoStorageCleanup,
-    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
-    StoredRepository, UserAccount,
+use scope_domain::{
+    account::UserAccount,
+    projection::LogicalCommitOrigin,
+    repo_actions::RepoStorageCleanup,
+    repo_config::{ConfigVisibility, RepoConfig},
+    repository::collaboration::{
+        RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
+    },
+    repository::credentials::GitPushToken,
+    repository::{RepoLifecycleState, RepoRecord, Repository},
 };
 use scope_object_store::{
     ContentObjectKind, MemoryObjectStore, put_content_object, put_source_blob, source_blob_bytes,
@@ -66,6 +74,7 @@ mod repo_lifecycle;
 mod repo_visibility;
 mod request_discussions;
 mod requests;
+mod run_inspection;
 mod run_resources;
 mod runtime_budgets;
 
@@ -210,7 +219,7 @@ fn test_state_with_repo() -> AppState {
     state
 }
 
-async fn replace_test_repo(state: &AppState, repo: StoredRepository) {
+async fn replace_test_repo(state: &AppState, repo: Repository) {
     state
         .metadata
         .repositories()
@@ -483,7 +492,7 @@ async fn live_file_content(state: &AppState, path: &str) -> Option<String> {
 async fn persist_test_update(
     state: &AppState,
     update: impl Into<TestReceivePackUpdate>,
-) -> Result<PersistedReceivePackUpdate, crate::error::ApiError> {
+) -> Result<scope_domain::repository::git::GitHead, crate::error::ApiError> {
     persist_and_promote_test_update(state, update, &test_owner_id()).await
 }
 
@@ -508,7 +517,7 @@ async fn persist_and_promote_test_update(
     state: &AppState,
     update: impl Into<TestReceivePackUpdate>,
     actor_id: &str,
-) -> Result<PersistedReceivePackUpdate, crate::error::ApiError> {
+) -> Result<scope_domain::repository::git::GitHead, crate::error::ApiError> {
     let prepared = match update.into() {
         TestReceivePackUpdate::Prepared(prepared) => prepared,
         TestReceivePackUpdate::Raw(update) => {
@@ -524,8 +533,31 @@ async fn persist_and_promote_test_update(
             PreparedReceivePackUpdate { update, fence }
         }
     };
-    persist_main_push_update_and_promote(state, TEST_REPO_OWNER, TEST_REPO_NAME, prepared, actor_id)
-        .await
+    git_receive_use_case::main_push::persist_main_push(
+        state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        prepared,
+        actor_id,
+    )
+    .await
+}
+
+async fn receive_pack_access(
+    state: &AppState,
+    headers: &HeaderMap,
+    owner: &str,
+    repo_name: &str,
+) -> Result<ReceivePackAccess, crate::error::ApiError> {
+    let (authorization, push_intent) = crate::git::receive_pack_credentials(state, headers).await?;
+    git_receive_use_case::authorize(
+        state,
+        owner,
+        repo_name,
+        authorization,
+        push_intent.as_deref(),
+    )
+    .await
 }
 
 async fn published_staging_repo(state: &AppState) -> PathBuf {
@@ -541,8 +573,8 @@ fn git_head_oid(repo: &FsPath) -> String {
         .to_string()
 }
 
-fn test_repo(owner_id: &str) -> StoredRepository {
-    StoredRepository {
+fn test_repo(owner_id: &str) -> Repository {
+    Repository {
         record: RepoRecord {
             id: TEST_REPO_ID.to_string(),
             owner_handle: TEST_REPO_OWNER.to_string(),
@@ -612,18 +644,18 @@ async fn apply_first_push_from_staging_repo(
     persist_test_update(state, update).await.unwrap();
 }
 
-fn source_blob(state: &AppState, content: &str) -> scope_domain::store::SourceBlob {
+fn source_blob(state: &AppState, content: &str) -> scope_domain::content::SourceBlob {
     source_blob_from_bytes(state, content.as_bytes())
 }
 
-fn source_blob_from_bytes(state: &AppState, bytes: &[u8]) -> scope_domain::store::SourceBlob {
+fn source_blob_from_bytes(state: &AppState, bytes: &[u8]) -> scope_domain::content::SourceBlob {
     put_source_blob(state.object_store.as_ref(), bytes).unwrap()
 }
 
 fn blob_content(
     state: &AppState,
-    blob: &scope_domain::store::SourceBlob,
-    repo: &StoredRepository,
+    blob: &scope_domain::content::SourceBlob,
+    repo: &Repository,
 ) -> String {
     let git_source = repo.git_head.as_ref().map(|head| {
         (
@@ -636,7 +668,7 @@ fn blob_content(
         .unwrap()
 }
 
-fn repo_with_readme(state: &AppState) -> StoredRepository {
+fn repo_with_readme(state: &AppState) -> Repository {
     let mut repo = test_repo(&test_owner_id());
     let path = ScopePath::parse("/README.md").unwrap();
     let content = source_blob(state, "hello");
@@ -669,7 +701,7 @@ fn repo_with_readme(state: &AppState) -> StoredRepository {
     repo
 }
 
-fn populate_test_live_files(repo: &mut StoredRepository) {
+fn populate_test_live_files(repo: &mut Repository) {
     repo.live_files.clear();
     for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
         match &change.new_content {
@@ -705,13 +737,13 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
         base_git_manifest_ref: None,
         author_id: test_owner_id(),
         message: "owner push".to_string(),
-        git_head: scope_domain::store::GitHead {
+        git_head: scope_domain::repository::git::GitHead {
             head_oid: "1111111111111111111111111111111111111111".to_string(),
             push_sequence: 1,
             change_version: 1,
             manifest,
         },
-        git_pack_span: scope_domain::store::GitPackSpan {
+        git_pack_span: scope_domain::repository::git::GitPackSpan {
             first_sequence: 1,
             last_sequence: 1,
             geometric_tier: 0,

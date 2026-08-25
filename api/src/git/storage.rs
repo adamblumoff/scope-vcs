@@ -12,8 +12,10 @@ use crate::{
 use axum::{body::Body, http::StatusCode, response::Response};
 use futures_util::StreamExt;
 use scope_domain::policy::Principal;
-use scope_domain::projection::{ProjectionViewKey, project_graph};
-use scope_domain::store::RepoLifecycleState;
+use scope_domain::{
+    projection::{ProjectionViewKey, project_graph},
+    repository::RepoLifecycleState,
+};
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 use std::{
@@ -38,7 +40,7 @@ pub(crate) fn receive_pack_staging_repo_path(
         ))
     })?;
     let base_dir = state.data_dir.as_ref().clone();
-    let repo_id = scope_domain::store::repo_id(owner, repo_name);
+    let repo_id = scope_domain::repository::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     let digest = hex::encode(digest);
     ensure_private_dir(&base_dir)?;
@@ -48,7 +50,7 @@ pub(crate) fn receive_pack_staging_repo_path(
 }
 
 pub(crate) fn receive_pack_staging_repo_prefix(owner: &str, repo_name: &str) -> String {
-    let repo_id = scope_domain::store::repo_id(owner, repo_name);
+    let repo_id = scope_domain::repository::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     let digest = hex::encode(digest);
     digest[..16].to_string()
@@ -88,7 +90,7 @@ pub(crate) fn delete_repo_storage(
     remove_dir_if_exists(
         &state
             .repository_engine
-            .repository_path(&scope_domain::store::repo_id(owner, repo_name)),
+            .repository_path(&scope_domain::repository::repo_id(owner, repo_name)),
     )?;
     remove_dir_if_exists(&owner_git_repo_path(state, owner, repo_name))?;
     remove_dir_if_exists(&staged_git_repo_path(state, owner, repo_name))?;

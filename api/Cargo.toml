@@ -1,10 +1,10 @@
 [package]
 name = "api"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 default-run = "api"
-license = "UNLICENSED"
-repository = "https://github.com/adamblumoff/scope-vcs"
+license.workspace = true
+repository.workspace = true
 
 [features]
 default = []
@@ -33,43 +33,44 @@ path = "tests/workflows.rs"
 required-features = ["test-support"]
 
 [dependencies]
-anyhow = "1.0.100"
-axum = "0.8.7"
-base64 = "0.22.1"
-chacha20poly1305 = "0.10.1"
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+chacha20poly1305.workspace = true
 flate2 = "1.1"
 futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
-hex = "0.4.3"
-hmac = "0.12.1"
+hex.workspace = true
+hmac.workspace = true
 http = "1.4.0"
-jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
-getrandom = "0.3.4"
+jsonwebtoken.workspace = true
+getrandom.workspace = true
 posthog-rs = { version = "0.24.0", default-features = false, features = ["async-client"] }
-reqwest = { version = "0.12.26", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.147"
-sha1 = "0.10.6"
-sha2 = "0.10.9"
-scope_postgres = { package = "scope-postgres", path = "../crates/scope-postgres" }
-scope_domain = { package = "scope-domain", path = "../crates/scope-domain" }
-scope_api_contract = { package = "scope-api-contract", path = "../crates/scope-api-contract" }
-scope_cache_contract = { package = "scope-cache-contract", path = "../crates/scope-cache-contract" }
-scope_cache_domain = { package = "scope-cache-domain", path = "../crates/scope-cache-domain" }
-scope_content_lifecycle = { package = "scope-content-lifecycle", path = "../crates/scope-content-lifecycle" }
-scope_git = { package = "scope-git", path = "../crates/scope-git" }
-scope_run_config = { package = "scope-run-config", path = "../crates/scope-run-config" }
-scope_object_store = { package = "scope-object-store", path = "../crates/scope-object-store" }
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+scope_postgres.workspace = true
+scope_domain.workspace = true
+scope_api_contract.workspace = true
+scope_cache_contract.workspace = true
+scope_cache_domain.workspace = true
+scope_content_lifecycle.workspace = true
+scope_git = { workspace = true, features = ["storage"] }
+scope_run_config.workspace = true
+scope_object_store.workspace = true
 url = "2.5.7"
-scope_git_process = { package = "scope-git-process", path = "../crates/scope-git-process" }
-time = { version = "0.3.44", features = ["formatting"] }
-tokio = { version = "1.48.0", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+scope_git_process.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
-tower-http = { version = "0.6.8", features = ["cors", "trace"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
-ts-rs = { version = "12.0.1", optional = true }
+tower-http = { workspace = true, features = ["cors"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
-scope_object_store = { package = "scope-object-store", path = "../crates/scope-object-store", features = ["test-support"] }
-scope_postgres = { package = "scope-postgres", path = "../crates/scope-postgres", features = ["test-support"] }
-tower = { version = "0.5.3", features = ["util"] }
+scope_object_store = { workspace = true, features = ["test-support"] }
+scope_postgres = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+tower = { workspace = true, features = ["util"] }

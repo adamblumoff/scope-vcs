@@ -1,6 +1,6 @@
 use super::{
     GeneratedIdKind, GeneratedIdSource, JobStore, acquire_aggregate_lock,
-    cleanup_queue::queue_pending_source_blob_deletion_rows,
+    cleanup_queue::queue::queue_pending_source_blob_deletion_rows,
     entities,
     generated_ids::generate_id,
     object_references::{delete_object_reference, insert_object_reference},
@@ -11,7 +11,9 @@ use sea_orm::{
 };
 use {
     crate::error::PostgresError,
-    scope_domain::store::{GitPackSpan, validate_git_pack_layout, validate_git_pack_span_run},
+    scope_domain::repository::git::{
+        GitPackSpan, validate_git_pack_layout, validate_git_pack_span_run,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -550,7 +552,7 @@ fn oldest_mergeable_pair_start(spans: &[GitPackSpan], minimum_spans: usize) -> O
 mod tests {
     use super::*;
     use crate::db::{MetadataStore, TestDatabaseTarget, generated_ids::test_generated_id};
-    use scope_domain::{content_ref::ContentRef, store::DEFAULT_GIT_FILE_MODE};
+    use scope_domain::{content::DEFAULT_GIT_FILE_MODE, content_ref::ContentRef};
     use sea_orm::{ActiveModelTrait, IntoActiveModel};
 
     fn span(first_sequence: u64, last_sequence: u64, geometric_tier: u32) -> GitPackSpan {
@@ -560,7 +562,7 @@ mod tests {
             geometric_tier,
             base_oid: (first_sequence > 1).then(|| format!("head-{}", first_sequence - 1)),
             head_oid: format!("head-{last_sequence}"),
-            object: scope_domain::store::SourceBlob {
+            object: scope_domain::content::SourceBlob {
                 content_ref: ContentRef::git_segment_sha256(format!(
                     "pack-{first_sequence}-{last_sequence}"
                 )),

@@ -1,7 +1,8 @@
 use crate::{error::ApiError, git::import::run_git_output, state::AppState};
 use scope_domain::{
+    content::SourceBlob,
     content_ref::ContentRef,
-    store::{GitHead, GitPackSpan, SourceBlob},
+    repository::git::{GitHead, GitPackSpan},
 };
 use scope_git::git_blob_reference as segment_git_blob_reference;
 use scope_object_store::source_blob_bytes;

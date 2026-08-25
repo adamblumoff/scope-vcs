@@ -1,4 +1,5 @@
 pub mod account;
+pub mod content;
 pub mod content_ref;
 pub mod error;
 pub mod history;
@@ -11,6 +12,7 @@ pub mod repo_collaboration;
 pub mod repo_config;
 pub mod repo_control;
 pub mod repo_visibility;
+pub mod repository;
 #[cfg(test)]
 mod request_identity_tests;
 #[cfg(test)]
@@ -24,5 +26,4 @@ pub mod requests;
 mod requests_tests;
 pub mod reviewed_updates;
 pub mod runs;
-pub mod store;
 pub mod visibility_changes;

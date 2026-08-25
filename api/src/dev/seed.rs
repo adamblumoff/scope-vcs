@@ -19,17 +19,18 @@ use workflow_files::{PUBLIC_DEMO_CHECKS_WORKFLOW, PUBLIC_DEMO_LINT_WORKFLOW};
 
 use crate::{config::DEFAULT_GIT_BRANCH, error::ApiError};
 use scope_domain::{
+    account::UserAccount,
+    content::SourceBlob,
     policy::{ScopePath, Visibility, VisibilityRule},
+    projection::LogicalCommitOrigin,
     projection::{FileChange, LogicalCommit},
+    repository::git::{GitHead, GitPackSpan},
+    repository::{RepoLifecycleState, Repository},
     requests::{
         EditRequestIdentityInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
         RequestActorRole, RequestAudience, StartRequestInput, canonical_request_ref,
         edit_request_identity, record_request_revision, record_working_request_upload,
         start_request,
-    },
-    store::{
-        GitHead, GitPackSpan, LogicalCommitOrigin, RepoLifecycleState, SourceBlob,
-        StoredRepository, UserAccount,
     },
 };
 use scope_object_store::{ContentObjectKind, ObjectStore, put_content_object, put_source_blob};
@@ -232,7 +233,7 @@ pub(crate) fn actor_account(seed_user: DevSeedUser, handle: &str) -> Option<User
 fn published_demo(
     object_store: &dyn ObjectStore,
     owner: &UserAccount,
-) -> Result<StoredRepository, ApiError> {
+) -> Result<Repository, ApiError> {
     let mut repo = repo(owner, "public-demo", Visibility::Public)?;
     let readme = blob(object_store, PUBLIC_DEMO_README_HTML)?;
     let app = blob(object_store, PUBLIC_DEMO_APP)?;
@@ -283,7 +284,7 @@ fn published_demo(
 fn update_demo(
     object_store: &dyn ObjectStore,
     owner: &UserAccount,
-) -> Result<(StoredRepository, SeedRequestGallery), ApiError> {
+) -> Result<(Repository, SeedRequestGallery), ApiError> {
     let mut repo = repo(owner, "update-demo", Visibility::Public)?;
     let initial_readme = blob(object_store, UPDATE_DEMO_INITIAL_README)?;
     let rules = blob(object_store, UPDATE_DEMO_RULES)?;
@@ -333,7 +334,7 @@ fn update_demo(
     Ok((repo, gallery))
 }
 
-fn populate_seed_live_files(repo: &mut StoredRepository) {
+fn populate_seed_live_files(repo: &mut Repository) {
     repo.live_files.clear();
     for change in repo.graph.commits.iter().flat_map(|commit| &commit.changes) {
         match &change.new_content {
@@ -504,21 +505,12 @@ fn seed_owner_request(
     Ok(())
 }
 
-fn repo(
-    owner: &UserAccount,
-    name: &str,
-    visibility: Visibility,
-) -> Result<StoredRepository, ApiError> {
-    StoredRepository::new(owner, name, visibility)
+fn repo(owner: &UserAccount, name: &str, visibility: Visibility) -> Result<Repository, ApiError> {
+    Repository::new(owner, name, visibility)
         .map_err(|error| ApiError::internal_message(error.to_string()))
 }
 
-fn commit(
-    repo: &StoredRepository,
-    id: &str,
-    message: &str,
-    changes: Vec<FileChange>,
-) -> LogicalCommit {
+fn commit(repo: &Repository, id: &str, message: &str, changes: Vec<FileChange>) -> LogicalCommit {
     LogicalCommit {
         id: id.to_string(),
         origin: LogicalCommitOrigin::CanonicalPush {

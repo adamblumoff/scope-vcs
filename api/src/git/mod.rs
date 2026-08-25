@@ -4,8 +4,7 @@ mod credentials;
 pub(crate) mod import;
 pub(crate) mod projection_repo;
 pub(crate) mod repository_engine;
-pub(crate) mod request_merge;
-mod request_ref_public_safety;
+pub(crate) mod request_ref_public_safety;
 pub(crate) mod request_refs;
 pub(crate) mod restore;
 pub(crate) mod run_source;
@@ -15,26 +14,11 @@ pub(crate) mod upload;
 pub(crate) use credentials::*;
 
 use crate::{
-    auth::scope::principal_for_user_id,
     config::*,
     error::ApiError,
-    git::{
-        import::{
-            persist_main_push_update_and_promote, receive_pack_update_from_staging_repo,
-            reviewed_update_from_staging_repo,
-        },
-        request_refs::{
-            actor_has_open_editable_request, ensure_request_receive_pack_staging_repo,
-            non_request_refs_changed, persist_request_ref_revision, receive_pack_refs,
-            request_ref_update_from_refs, seed_editable_request_refs,
-        },
-        storage::*,
-        upload::*,
-    },
-    push_intents::ValidatedPushIntent,
-    repo_access::{ensure_repo_read, find_repo},
-    repo_events::RepoChangeReason,
+    git::{storage::*, upload::*},
     state::AppState,
+    use_cases::git_receive::{self, ReceivePackAccess},
 };
 use axum::{
     Json,
@@ -47,7 +31,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flate2::read::GzDecoder;
-use scope_domain::store::{MainPushMode, RepoLifecycleState};
 use serde::Deserialize;
 use std::{
     fs,
@@ -94,21 +77,6 @@ pub(crate) struct GitInfoRefsQuery {
     pub(crate) service: Option<String>,
 }
 
-#[derive(Debug)]
-pub(crate) enum ReceivePackAccess {
-    FirstPush {
-        author_id: String,
-        push_intent: ValidatedPushIntent,
-    },
-    ReadyMember {
-        author_id: String,
-        push_intent: ValidatedPushIntent,
-    },
-    RequestContributor {
-        author_id: String,
-    },
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GitRemoteMode {
     Public,
@@ -128,11 +96,6 @@ impl GitRemoteMode {
 }
 
 const PUSH_INTENT_HEADER: &str = "x-scope-push-intent";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PersistedReceivePackUpdate {
-    pub(crate) git_head: scope_domain::store::GitHead,
-}
 
 pub(crate) fn git_error_response(error: ApiError) -> Response {
     if error.status() == StatusCode::UNAUTHORIZED {
@@ -160,21 +123,35 @@ pub(crate) async fn git_info_refs(
         Some(GIT_RECEIVE_PACK) if mode == GitRemoteMode::Public => git_error_response(
             ApiError::forbidden("public Git remote cannot receive pushes"),
         ),
-        Some(GIT_RECEIVE_PACK) => match receive_pack_access(&state, &headers, &org, &repo).await {
-            Ok(access) => {
-                let _permit = match state.runtime_budgets.try_receive_pack() {
-                    Ok(permit) => permit,
+        Some(GIT_RECEIVE_PACK) => {
+            let (authorization, push_intent) =
+                match receive_pack_credentials(&state, &headers).await {
+                    Ok(credentials) => credentials,
                     Err(error) => return git_error_response(error),
                 };
-                match handle_git_receive_pack(&state, &org, &repo, "GET", Vec::new(), None, access)
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(error) => git_error_response(error),
-                }
+            let access = match git_receive::authorize(
+                &state,
+                &org,
+                &repo,
+                authorization,
+                push_intent.as_deref(),
+            )
+            .await
+            {
+                Ok(access) => access,
+                Err(error) => return git_error_response(error),
+            };
+            let _permit = match state.runtime_budgets.try_receive_pack() {
+                Ok(permit) => permit,
+                Err(error) => return git_error_response(error),
+            };
+            match handle_git_receive_pack(&state, &org, &repo, "GET", Vec::new(), None, access)
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => git_error_response(error),
             }
-            Err(error) => git_error_response(error),
-        },
+        }
         Some(GIT_UPLOAD_PACK) => {
             let _permit = match state.runtime_budgets.try_upload_pack() {
                 Ok(permit) => permit,
@@ -223,10 +200,17 @@ pub(crate) async fn git_receive_pack(
         ));
     }
     let headers = request.headers().clone();
-    let access = match receive_pack_access(&state, &headers, &org, &repo).await {
-        Ok(access) => access,
+    let (authorization, push_intent) = match receive_pack_credentials(&state, &headers).await {
+        Ok(credentials) => credentials,
         Err(error) => return git_error_response(error),
     };
+    let access =
+        match git_receive::authorize(&state, &org, &repo, authorization, push_intent.as_deref())
+            .await
+        {
+            Ok(access) => access,
+            Err(error) => return git_error_response(error),
+        };
     let _permit = match state.runtime_budgets.try_receive_pack() {
         Ok(permit) => permit,
         Err(error) => return git_error_response(error),
@@ -392,167 +376,15 @@ pub(crate) fn decode_git_request_body(
     Ok(decoded)
 }
 
-pub(crate) async fn receive_pack_access(
+pub(crate) async fn receive_pack_credentials(
     state: &AppState,
     headers: &HeaderMap,
-    owner: &str,
-    repo_name: &str,
-) -> Result<ReceivePackAccess, ApiError> {
-    let authorization = receive_pack_authorization(state, headers).await?;
-    let push_intent_secret = optional_push_intent_from_headers(headers)?;
-
-    match authorization {
-        ReceivePackAuthorization::ScopeToken { secret } => {
-            let push_intent = required_push_intent(state, push_intent_secret.as_deref())?;
-            let repo = find_repo_after_git_scope_token(state, owner, repo_name).await?;
-            let credential = if secret.starts_with(GIT_PUSH_TOKEN_PREFIX) {
-                InitialPushCredential::GitPushToken { secret }
-            } else {
-                InitialPushCredential::FirstPushToken { secret }
-            };
-
-            if repo.is_waiting_for_first_push() {
-                authorize_initial_push_for_repo(&repo, &credential)
-                    .map_err(git_credential_error)?;
-                let author_id = repo.record.owner_user_id.clone();
-                push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
-                return Ok(ReceivePackAccess::FirstPush {
-                    author_id,
-                    push_intent,
-                });
-            }
-            match repo.record.lifecycle_state {
-                RepoLifecycleState::AwaitingFirstPush => Err(ApiError::conflict(
-                    "repo is awaiting its first push and cannot receive another push",
-                )),
-                RepoLifecycleState::Ready => match credential {
-                    InitialPushCredential::GitPushToken { secret } => {
-                        let author_id = authorize_git_write_token_for_repo(&repo, &secret)
-                            .map_err(git_credential_error)?;
-                        push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
-                        Ok(ReceivePackAccess::ReadyMember {
-                            author_id,
-                            push_intent,
-                        })
-                    }
-                    InitialPushCredential::FirstPushToken { .. } => Err(invalid_git_credentials()),
-                },
-            }
-        }
-        ReceivePackAuthorization::ScopeUser(user) => {
-            if let Some(secret) = push_intent_secret.as_deref()
-                && let Ok(push_intent) = state.validate_push_intent_secret(secret)
-                && let Some(context) = state
-                    .metadata
-                    .repositories()
-                    .git_push_context(owner, repo_name, &user.id)
-                    .await?
-                && context.lifecycle_state == RepoLifecycleState::Ready
-                && context.access.can_push
-            {
-                push_intent.ensure_repo_user(&context.repo_id, &user.id)?;
-                return Ok(ReceivePackAccess::ReadyMember {
-                    author_id: user.id,
-                    push_intent,
-                });
-            }
-            let repo = find_repo(state, owner, repo_name).await?;
-            let principal = principal_for_user_id(&repo, &user.id);
-            let push_policy = repo.push_policy_for_user_id(&user.id);
-            let author_id = user.id.clone();
-            if push_policy.mode == MainPushMode::FirstPush {
-                let push_intent = required_push_intent(state, push_intent_secret.as_deref())?;
-                push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
-                return Ok(ReceivePackAccess::FirstPush {
-                    author_id,
-                    push_intent,
-                });
-            }
-            if push_policy.mode == MainPushMode::Denied {
-                if repo.record.lifecycle_state == RepoLifecycleState::Ready
-                    && actor_can_receive_request_push(
-                        state,
-                        &repo,
-                        &principal,
-                        &author_id,
-                        push_policy.access,
-                    )
-                    .await?
-                {
-                    return Ok(ReceivePackAccess::RequestContributor { author_id });
-                }
-                return Err(ApiError::not_found(format!(
-                    "repo {owner}/{repo_name} not found"
-                )));
-            }
-            match repo.record.lifecycle_state {
-                RepoLifecycleState::AwaitingFirstPush => Err(ApiError::conflict(
-                    "repo is awaiting its first push and cannot receive another push",
-                )),
-                RepoLifecycleState::Ready => {
-                    if let Some(secret) = push_intent_secret.as_deref() {
-                        match state.validate_push_intent_secret(secret) {
-                            Ok(push_intent) => {
-                                push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
-                                return Ok(ReceivePackAccess::ReadyMember {
-                                    author_id,
-                                    push_intent,
-                                });
-                            }
-                            Err(error) => {
-                                if actor_can_receive_request_push(
-                                    state,
-                                    &repo,
-                                    &principal,
-                                    &author_id,
-                                    push_policy.access,
-                                )
-                                .await?
-                                {
-                                    return Ok(ReceivePackAccess::RequestContributor { author_id });
-                                }
-                                return Err(error);
-                            }
-                        }
-                    }
-                    if actor_can_receive_request_push(
-                        state,
-                        &repo,
-                        &principal,
-                        &author_id,
-                        push_policy.access,
-                    )
-                    .await?
-                    {
-                        Ok(ReceivePackAccess::RequestContributor { author_id })
-                    } else {
-                        Err(ApiError::forbidden("valid Scope push intent required"))
-                    }
-                }
-            }
-        }
-    }
+) -> Result<(ReceivePackAuthorization, Option<String>), ApiError> {
+    Ok((
+        receive_pack_authorization(state, headers).await?,
+        optional_push_intent_from_headers(headers)?,
+    ))
 }
-
-fn required_push_intent(
-    state: &AppState,
-    secret: Option<&str>,
-) -> Result<ValidatedPushIntent, ApiError> {
-    let secret = secret.ok_or_else(|| ApiError::forbidden("valid Scope push intent required"))?;
-    state.validate_push_intent_secret(secret)
-}
-
-async fn actor_can_receive_request_push(
-    state: &AppState,
-    repo: &scope_domain::store::StoredRepository,
-    principal: &scope_domain::policy::Principal,
-    author_id: &str,
-    access: scope_domain::store::RepositoryAccess,
-) -> Result<bool, ApiError> {
-    ensure_repo_read(state, repo, principal)?;
-    actor_has_open_editable_request(state, &repo.record.id, author_id, access).await
-}
-
 fn optional_push_intent_from_headers(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
     let Some(value) = headers.get(PUSH_INTENT_HEADER) else {
         return Ok(None);
@@ -577,16 +409,19 @@ pub(crate) async fn handle_git_receive_pack(
     content_type: Option<String>,
     access: ReceivePackAccess,
 ) -> Result<Response, ApiError> {
-    handle_git_receive_pack_body(
-        state,
-        owner,
-        repo_name,
+    let preparation = git_receive::prepare(state, owner, repo_name, access, true).await?;
+    let remote_user = preparation.access.author_id().to_string();
+    let staging_repo = TemporaryRepository::new(preparation.staging_repo);
+    let cgi = git_http_backend(
+        &staging_repo,
         method,
-        ReceivePackBody::Buffered(body),
+        "info/refs",
+        "service=git-receive-pack",
+        body,
         content_type,
-        access,
-    )
-    .await
+        &remote_user,
+    )?;
+    Ok(cgi.into_response())
 }
 
 async fn handle_git_receive_pack_body(
@@ -598,57 +433,19 @@ async fn handle_git_receive_pack_body(
     content_type: Option<String>,
     access: ReceivePackAccess,
 ) -> Result<Response, ApiError> {
-    let staging_repo = TemporaryRepository::new(match &access {
-        ReceivePackAccess::FirstPush { .. } => {
-            ensure_first_push_receive_pack_staging_repo(state, owner, repo_name)?
-        }
-        ReceivePackAccess::ReadyMember { author_id, .. } => {
-            ensure_ready_receive_pack_staging_repo(state, owner, repo_name, author_id).await?
-        }
-        ReceivePackAccess::RequestContributor { author_id } => {
-            ensure_request_receive_pack_staging_repo(state, owner, repo_name, author_id).await?
-        }
-    });
-    if let ReceivePackAccess::ReadyMember { author_id, .. } = &access
-        && let Err(error) =
-            seed_editable_request_refs(state, owner, repo_name, author_id, &staging_repo).await
-    {
-        return Err(error);
-    }
-    let remote_user = match &access {
-        ReceivePackAccess::FirstPush { author_id, .. } => author_id.as_str(),
-        ReceivePackAccess::ReadyMember { author_id, .. } => author_id.as_str(),
-        ReceivePackAccess::RequestContributor { author_id } => author_id.as_str(),
-    };
-    let main_push_author_id = remote_user.to_string();
+    let preparation = git_receive::prepare(state, owner, repo_name, access, false).await?;
+    let remote_user = preparation.access.author_id().to_string();
+    let staging_repo = TemporaryRepository::new(preparation.staging_repo.clone());
     let receive_started_at = Instant::now();
-    let refs_before_receive = if method == "POST" {
-        match receive_pack_refs(&staging_repo) {
-            Ok(refs) => Some(refs),
-            Err(error) => {
-                return Err(error);
-            }
-        }
-    } else {
-        None
-    };
     let cgi = match body {
         ReceivePackBody::Buffered(body) => git_http_backend(
             &staging_repo,
             method,
-            if method == "GET" {
-                "info/refs"
-            } else {
-                "git-receive-pack"
-            },
-            if method == "GET" {
-                "service=git-receive-pack"
-            } else {
-                ""
-            },
+            "git-receive-pack",
+            "",
             body,
             content_type,
-            remote_user,
+            &remote_user,
         )?,
         ReceivePackBody::Streaming {
             body,
@@ -661,270 +458,22 @@ async fn handle_git_receive_pack_body(
                 content_length,
                 MAX_RECEIVE_PACK_BYTES,
                 content_type,
-                remote_user,
+                &remote_user,
             )
             .await?
         }
     };
     let receive_elapsed = receive_started_at.elapsed();
-
-    if method == "POST" && cgi.status.is_success() {
-        let refs_after_receive = match receive_pack_refs(&staging_repo) {
-            Ok(refs) => refs,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-        if refs_before_receive.as_ref() == Some(&refs_after_receive) {
-            tracing::debug!(
-                owner,
-                repo = repo_name,
-                receive_ms = receive_elapsed.as_millis(),
-                "git receive-pack left refs unchanged"
-            );
-            return Ok(cgi.into_response());
-        }
-
-        let request_ref_update = match refs_before_receive
-            .as_ref()
-            .map(|refs_before| request_ref_update_from_refs(refs_before, &refs_after_receive))
-            .transpose()
-        {
-            Ok(update) => update.flatten(),
-            Err(error) => {
-                return Err(error);
-            }
-        };
-        if let Some(request_ref_update) = request_ref_update {
-            let Some(refs_before) = refs_before_receive.as_ref() else {
-                return Err(ApiError::internal_message(
-                    "missing refs before receive-pack",
-                ));
-            };
-            if non_request_refs_changed(refs_before, &refs_after_receive) {
-                return Err(ApiError::bad_request(
-                    "Scope accepts either one request ref update or one main update",
-                ));
-            }
-            let author_id = match &access {
-                ReceivePackAccess::FirstPush { .. } => {
-                    return Err(ApiError::bad_request(
-                        "request refs cannot be pushed during first push",
-                    ));
-                }
-                ReceivePackAccess::ReadyMember { author_id, .. }
-                | ReceivePackAccess::RequestContributor { author_id } => author_id,
-            };
-            persist_request_ref_revision(
-                state,
-                owner,
-                repo_name,
-                author_id,
-                &staging_repo,
-                request_ref_update,
-            )
-            .await?;
-            tracing::info!(
-                owner,
-                repo = repo_name,
-                receive_ms = receive_elapsed.as_millis(),
-                "git receive-pack request ref persisted"
-            );
-            return Ok(cgi.into_response());
-        }
-
-        if matches!(&access, ReceivePackAccess::RequestContributor { .. }) {
-            return Err(ApiError::bad_request(
-                "public contributors can only push named request branches",
-            ));
-        }
-
-        let main_push_event;
-        let repository_initialized;
-        let committed_git_head;
-        match access {
-            ReceivePackAccess::RequestContributor { .. } => {
-                return Err(ApiError::bad_request(
-                    "public contributors can only push named request branches",
-                ));
-            }
-            ReceivePackAccess::FirstPush {
-                author_id,
-                push_intent,
-            } => {
-                let import_started_at = Instant::now();
-                let mut update = match reviewed_update_from_staging_repo(
-                    state,
-                    owner,
-                    repo_name,
-                    &staging_repo,
-                    &author_id,
-                    push_intent.config.clone(),
-                )
-                .await
-                {
-                    Ok(import) => import,
-                    Err(error) => {
-                        return Err(error);
-                    }
-                };
-                let durable_objects = update.durable_objects.clone();
-                update.base_git_manifest_ref =
-                    Some(match push_intent.base_for_head(&update.head_oid) {
-                        Ok(base) => base,
-                        Err(error) => {
-                            crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
-                                state,
-                                &durable_objects,
-                            )
-                            .await;
-                            return Err(error);
-                        }
-                    });
-                update.base_config_hash = push_intent.base_config_hash;
-                let file_count = update.changes.len();
-                committed_git_head = match persist_main_push_update_and_promote(
-                    state, owner, repo_name, update, &author_id,
-                )
-                .await
-                {
-                    Ok(persisted) => persisted.git_head,
-                    Err(error) => {
-                        crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
-                            state,
-                            &durable_objects,
-                        )
-                        .await;
-                        return Err(error);
-                    }
-                };
-                main_push_event = RepoChangeReason::FirstPushApplied;
-                repository_initialized = true;
-                tracing::info!(
-                    owner,
-                    repo = repo_name,
-                    receive_ms = receive_elapsed.as_millis(),
-                    import_ms = import_started_at.elapsed().as_millis(),
-                    file_count,
-                    "git receive-pack first push applied"
-                );
-            }
-            ReceivePackAccess::ReadyMember {
-                author_id,
-                push_intent,
-            } => {
-                let import_started_at = Instant::now();
-                let mut update = match receive_pack_update_from_staging_repo(
-                    state,
-                    owner,
-                    repo_name,
-                    &staging_repo,
-                    &author_id,
-                    push_intent.config.clone(),
-                )
-                .await
-                {
-                    Ok(update) => update,
-                    Err(error) => {
-                        return Err(error);
-                    }
-                };
-                let durable_objects = update.durable_objects.clone();
-                update.base_git_manifest_ref =
-                    Some(match push_intent.base_for_head(&update.head_oid) {
-                        Ok(base) => base,
-                        Err(error) => {
-                            crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
-                                state,
-                                &durable_objects,
-                            )
-                            .await;
-                            return Err(error);
-                        }
-                    });
-                update.base_config_hash = push_intent.base_config_hash;
-                let change_count = update.changes.len();
-                committed_git_head = match persist_main_push_update_and_promote(
-                    state, owner, repo_name, update, &author_id,
-                )
-                .await
-                {
-                    Ok(persisted) => persisted.git_head,
-                    Err(error) => {
-                        crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
-                            state,
-                            &durable_objects,
-                        )
-                        .await;
-                        return Err(error);
-                    }
-                };
-                main_push_event = RepoChangeReason::PushReceived;
-                repository_initialized = false;
-                tracing::info!(
-                    owner,
-                    repo = repo_name,
-                    receive_ms = receive_elapsed.as_millis(),
-                    import_ms = import_started_at.elapsed().as_millis(),
-                    change_count,
-                    "git receive-pack ready-repository update persisted"
-                );
-            }
-        }
-        if repository_initialized {
-            state.product_analytics.capture(
-                crate::product_analytics::ProductEvent::repository_initialized(
-                    &main_push_author_id,
-                ),
-            );
-        }
-        state
-            .publish_repo_change(
-                &scope_domain::store::repo_id(owner, repo_name),
-                committed_git_head.change_version,
-                main_push_event,
-            )
-            .await;
-        match state
-            .metadata
-            .repositories()
-            .git_push_context(owner, repo_name, &main_push_author_id)
-            .await
-        {
-            Ok(Some(repo)) => {
-                let is_still_current = repo.git_head.as_ref().is_some_and(|head| {
-                    head.manifest.content_ref == committed_git_head.manifest.content_ref
-                });
-                if is_still_current {
-                    match state.repository_engine.sync_after_push(
-                        &scope_domain::store::repo_id(owner, repo_name),
-                        &staging_repo,
-                        &committed_git_head.head_oid,
-                        committed_git_head.push_sequence,
-                    ) {
-                        Ok(()) => {}
-                        Err(error) => tracing::warn!(
-                            owner,
-                            repo = repo_name,
-                            error = %error.operator_diagnostic(),
-                            "push committed but repository Git cache synchronization failed"
-                        ),
-                    }
-                }
-            }
-            Ok(None) => tracing::warn!(
-                owner,
-                repo = repo_name,
-                "push committed but repository context was unavailable"
-            ),
-            Err(error) => tracing::warn!(
-                owner,
-                repo = repo_name,
-                error = %error.message,
-                "push committed but post-commit context refresh failed"
-            ),
-        }
+    if cgi.status.is_success() {
+        git_receive::complete(
+            state,
+            owner,
+            repo_name,
+            &staging_repo,
+            preparation,
+            receive_elapsed,
+        )
+        .await?;
     }
-
     Ok(cgi.into_response())
 }

@@ -12,7 +12,9 @@ use crate::{
 };
 use axum::http::{HeaderMap, StatusCode, header::AUTHORIZATION};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use scope_domain::store::{FirstPushTokenStatus, StoredRepository, UserAccount};
+use scope_domain::account::UserAccount;
+use scope_domain::repository::Repository;
+use scope_domain::repository::credentials::FirstPushTokenStatus;
 
 #[derive(Clone, Debug)]
 pub(crate) enum InitialPushCredential {
@@ -120,7 +122,7 @@ fn basic_auth_parts(encoded: &str) -> Result<(String, String), ApiError> {
 }
 
 pub(crate) fn authorize_initial_push_for_repo(
-    repo: &StoredRepository,
+    repo: &Repository,
     credential: &InitialPushCredential,
 ) -> Result<(), ApiError> {
     if !repo.is_waiting_for_first_push() {
@@ -142,7 +144,7 @@ pub(crate) async fn find_repo_after_git_scope_token(
     state: &AppState,
     owner: &str,
     repo_name: &str,
-) -> Result<StoredRepository, ApiError> {
+) -> Result<Repository, ApiError> {
     match find_repo(state, owner, repo_name).await {
         Ok(repo) => Ok(repo),
         Err(error) if error.status() == StatusCode::NOT_FOUND => Err(invalid_git_credentials()),
@@ -163,7 +165,7 @@ pub(crate) fn git_credential_error(error: ApiError) -> ApiError {
 }
 
 pub(crate) fn authorize_first_push_token_for_repo(
-    repo: &StoredRepository,
+    repo: &Repository,
     token_secret: &str,
 ) -> Result<(), ApiError> {
     let now = unix_now()?;
@@ -188,7 +190,7 @@ pub(crate) fn authorize_first_push_token_for_repo(
 }
 
 pub(crate) fn authorize_git_push_token_for_repo(
-    repo: &StoredRepository,
+    repo: &Repository,
     secret: &str,
 ) -> Result<String, ApiError> {
     let Some(token) = repo.git_push_token.as_ref() else {
@@ -207,7 +209,7 @@ pub(crate) fn authorize_git_push_token_for_repo(
 }
 
 pub(crate) fn authorize_git_write_token_for_repo(
-    repo: &StoredRepository,
+    repo: &Repository,
     secret: &str,
 ) -> Result<String, ApiError> {
     if let Some(token) = repo.git_push_token.as_ref()

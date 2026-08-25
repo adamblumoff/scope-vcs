@@ -1,6 +1,6 @@
 use super::northflank::{NorthflankClient, StartError};
 use crate::settings::CloudExecutionSettings;
-use scope_domain::runs::run::AttemptConclusion;
+use scope_domain::runs::step::AttemptConclusion;
 use scope_postgres::db::MetadataStore;
 use sha2::{Digest as _, Sha256};
 use std::time::Duration;

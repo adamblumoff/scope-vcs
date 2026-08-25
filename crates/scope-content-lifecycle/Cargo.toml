@@ -1,12 +1,11 @@
 [package]
 name = "scope-content-lifecycle"
-version = "0.1.0"
-edition = "2024"
-license = "UNLICENSED"
-repository = "https://github.com/adamblumoff/scope-vcs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-scope_domain = { package = "scope-domain", path = "../scope-domain" }
-scope_object_store = { package = "scope-object-store", path = "../scope-object-store" }
-scope_postgres = { package = "scope-postgres", path = "../scope-postgres" }
-
+scope_domain.workspace = true
+scope_object_store.workspace = true
+scope_postgres.workspace = true

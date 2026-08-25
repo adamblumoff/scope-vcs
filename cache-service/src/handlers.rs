@@ -330,16 +330,22 @@ mod tests {
     };
     use scope_cache_domain::RepositoryId;
     use scope_domain::{
+        account::UserAccount,
         content_ref::ContentRef,
         policy::Visibility,
+        repository::{RepoLifecycleState, Repository},
         runs::{
-            run::{Run, RunSource, RunTrigger},
+            run::Run,
+            source::{RunSource, RunTrigger},
             workflow::{
-                CompiledWorkflow, ContainerSpec, WorkflowIdentity, WorkflowJob, WorkflowJobId,
-                WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
+                definition::{
+                    CompiledWorkflow, ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowStep,
+                    WorkflowTriggers,
+                },
+                identity::{WorkflowIdentity, WorkflowPath},
+                revision::WorkflowRevision,
             },
         },
-        store::{RepoLifecycleState, StoredRepository, UserAccount},
     };
     use scope_object_store::{S3ObjectStore, S3ObjectStoreSettings, S3Presigner};
     use scope_postgres::db::{CatalogFixture, MetadataStore, TestDatabaseTarget};
@@ -664,7 +670,7 @@ mod tests {
             email: "cache-service@example.com".to_string(),
             email_verified: true,
         };
-        let mut repository = StoredRepository::new(&owner, "e2e", Visibility::Private).unwrap();
+        let mut repository = Repository::new(&owner, "e2e", Visibility::Private).unwrap();
         repository.record.lifecycle_state = RepoLifecycleState::Ready;
         let repository_id = repository.record.id.clone();
         let mut catalog = CatalogFixture::default();
@@ -701,7 +707,7 @@ mod tests {
         .unwrap();
         let revision = WorkflowRevision::new(workflow.clone(), definition).unwrap();
         let source_digest = "c".repeat(64);
-        let source = RunSource::ephemeral_git_bundle(scope_domain::store::SourceBlob {
+        let source = RunSource::ephemeral_git_bundle(scope_domain::content::SourceBlob {
             content_ref: ContentRef::git_bundle_sha256(source_digest.clone()),
             sha256: source_digest,
             git_oid: "d".repeat(40),

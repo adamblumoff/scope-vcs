@@ -1,11 +1,11 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    cache::{
+    cache::observation::{
         AttemptCacheObservation, AttemptCachePreparationTiming, AttemptCacheSetupObservation,
         CacheFinalState, CachePreparation,
     },
-    workflow::WorkflowPath,
+    workflow::identity::WorkflowPath,
 };
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QuerySelect, TransactionTrait};
 

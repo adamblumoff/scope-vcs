@@ -4,8 +4,10 @@ use super::{
 };
 use crate::error::PostgresError;
 use scope_domain::{
+    content::SourceBlob,
+    repository::Repository,
+    repository::git::{GitHead, GitPackSpan},
     runs::catalog::{RepositoryWorkflowCatalog, RepositoryWorkflowFile},
-    store::{GitHead, GitPackSpan, SourceBlob, StoredRepository},
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
@@ -23,7 +25,7 @@ pub struct RepositoryWorkflowCatalogBackfillCandidate {
 }
 
 pub struct CurrentRepositoryWorkflowCatalog {
-    pub repository: StoredRepository,
+    pub repository: Repository,
     pub catalog: Option<RepositoryWorkflowCatalog>,
 }
 

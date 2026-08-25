@@ -35,7 +35,8 @@ fn pending_invite(
         id: id.to_string(),
         repo_id: TEST_REPO_ID.to_string(),
         invited_email: email.to_string(),
-        invited_email_normalized: scope_domain::store::normalize_repository_invite_email(email),
+        invited_email_normalized:
+            scope_domain::repository::collaboration::normalize_repository_invite_email(email),
         permissions: RepositoryMemberPermissions::default(),
         invited_by_user_id: test_owner_id(),
         state: RepositoryInviteState::Pending,

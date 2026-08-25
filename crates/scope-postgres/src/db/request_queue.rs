@@ -9,8 +9,8 @@ use sea_orm::{
 use {
     crate::error::PostgresError,
     scope_domain::{
+        repository::access::{RepositoryAccess, RepositoryActor},
         requests::{REQUEST_LIST_MAX_PAGE_SIZE, RequestAudience, RequestQueueSection},
-        store::{RepositoryAccess, RepositoryActor},
     },
 };
 

@@ -1,13 +1,40 @@
 use super::{
-    run::{
-        ExecutionProvider, MAX_RUN_ATTEMPTS, PinnedContainerImage, Run, RunAttempt, RunAttemptStep,
-        required, validate_sha256_hash,
+    attempt::{ExecutionProvider, MAX_RUN_ATTEMPTS, RunAttempt},
+    image::PinnedContainerImage,
+    run::{Run, RunState},
+    step::RunAttemptStep,
+    validation::{required, validate_sha256_hash},
+    workflow::{
+        definition::{WorkflowJob, WorkflowJobId},
+        revision::WorkflowRevision,
     },
-    state::{RunJobState, RunState},
-    workflow::{WorkflowJob, WorkflowJobId, WorkflowRevision},
 };
 use crate::error::DomainError;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunJobState {
+    Blocked,
+    Queued,
+    Dispatching,
+    Running,
+    Succeeded,
+    Failed,
+    Skipped,
+    Canceled,
+    Lost,
+}
+
+impl RunJobState {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Skipped | Self::Canceled | Self::Lost
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunJob {
@@ -117,7 +144,7 @@ impl RunJob {
             runtime_version: required("runtime version", runtime_version.into())?,
             token_hash,
             token_expires_at_unix: lease_expires_at_unix,
-            state: super::state::AttemptState::Dispatching,
+            state: super::attempt::AttemptState::Dispatching,
             lease_expires_at_unix,
             last_heartbeat_at_unix: now_unix,
             created_at_unix: now_unix,

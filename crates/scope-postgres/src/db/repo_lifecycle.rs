@@ -1,9 +1,9 @@
 use super::{
     GeneratedIdSource, RepositoryStore, acquire_aggregate_lock,
-    cleanup_queue::queue_pending_source_blob_deletion_rows,
     cleanup_queue::{
-        claim_pending_repo_storage_cleanup, complete_claimed_repo_storage_cleanup,
-        pending_repo_storage_cleanup_exists,
+        claim::claim_pending_repo_storage_cleanup,
+        completion::complete_claimed_repo_storage_cleanup,
+        queue::{pending_repo_storage_cleanup_exists, queue_pending_source_blob_deletion_rows},
     },
     entities,
     object_references::delete_repository_object_references,
@@ -15,10 +15,12 @@ use super::{
 };
 use crate::error::PostgresError;
 use scope_domain::{
+    content::SourceBlob,
     policy::Visibility,
     repo_actions::{create_repo as create_repo_command, delete_repo as delete_repo_command},
+    repository::credentials::{FirstPushToken, GitPushToken},
+    repository::{Repository, repo_id},
     requests::Request,
-    store::{FirstPushToken, GitPushToken, SourceBlob, StoredRepository, repo_id},
 };
 use sea_orm::sea_query::Query;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
@@ -53,7 +55,7 @@ impl RepositoryStore {
         command: CreateRepositoryCommand,
         generated_ids: &dyn GeneratedIdSource,
         cleanup_pending_storage: F,
-    ) -> Result<StoredRepository, RepositoryCreationError<E>>
+    ) -> Result<Repository, RepositoryCreationError<E>>
     where
         F: FnOnce(&str, &str) -> Result<(), E> + Send + 'static,
         E: Send + 'static,
@@ -289,7 +291,11 @@ fn request_git_snapshots_for_repo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_domain::store::{FirstPushToken, GitPushToken, RepoStorageCleanup, UserAccount};
+    use scope_domain::{
+        account::UserAccount,
+        repo_actions::RepoStorageCleanup,
+        repository::credentials::{FirstPushToken, GitPushToken},
+    };
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
     use std::sync::{
         Arc,
@@ -332,7 +338,7 @@ mod tests {
             },
         );
         store.admin().seed_catalog_for_tests(catalog).unwrap();
-        super::super::cleanup_queue::queue_pending_repo_storage_cleanup_row(
+        super::super::cleanup_queue::queue::queue_pending_repo_storage_cleanup_row(
             store.db.as_ref(),
             RepoStorageCleanup {
                 owner_handle: "owner".to_string(),
@@ -421,7 +427,7 @@ mod tests {
     async fn expired_creation_cleanup_claim_cannot_commit_after_worker_reclaims_it() {
         let target = super::super::TestDatabaseTarget::required().unwrap();
         let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
-        super::super::cleanup_queue::queue_pending_repo_storage_cleanup_row(
+        super::super::cleanup_queue::queue::queue_pending_repo_storage_cleanup_row(
             store.db.as_ref(),
             RepoStorageCleanup {
                 owner_handle: "owner".to_string(),

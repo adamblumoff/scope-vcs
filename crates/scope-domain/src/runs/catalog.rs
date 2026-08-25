@@ -1,7 +1,7 @@
-use super::workflow::{WorkflowError, WorkflowPath};
+use super::workflow::{error::WorkflowError, identity::WorkflowPath};
 use crate::{
+    content::{SourceBlob, is_supported_git_file_mode},
     content_ref::ContentRef,
-    store::{SourceBlob, is_supported_git_file_mode},
 };
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
@@ -376,7 +376,7 @@ fn source_blob_identity_matches(blob: &SourceBlob) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::DEFAULT_GIT_FILE_MODE;
+    use crate::content::DEFAULT_GIT_FILE_MODE;
 
     const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 

@@ -1,7 +1,9 @@
 use super::{AuthStore, acquire_aggregate_lock, auth::load_user_by_id, entities};
 use crate::error::PostgresError;
-use scope_domain::account::{ExternalIdentity, handles::is_reserved_handle};
-use scope_domain::store::UserAccount;
+use scope_domain::{
+    account::UserAccount,
+    account::{ExternalIdentity, handles::is_reserved_handle},
+};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
     TransactionTrait,

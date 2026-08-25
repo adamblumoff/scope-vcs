@@ -23,7 +23,7 @@ pub mod repository {
     impl ActiveModelBehavior for ActiveModel {}
 
     impl Model {
-        pub fn from_domain(repo: &StoredRepository) -> Result<Self, PostgresError> {
+        pub fn from_domain(repo: &Repository) -> Result<Self, PostgresError> {
             Ok(Self {
                 id: repo.record.id.clone(),
                 owner_handle: repo.record.owner_handle.clone(),
@@ -45,9 +45,9 @@ pub mod repository {
             members: Vec<RepositoryMember>,
             invitations: Vec<RepositoryInvite>,
             history: crate::db::history_rows::RepositoryHistory,
-        ) -> Result<StoredRepository, PostgresError> {
+        ) -> Result<Repository, PostgresError> {
             let lifecycle_state = decode_enum::<RepoLifecycleState>(self.publication_state)?;
-            Ok(StoredRepository {
+            Ok(Repository {
                 record: RepoRecord {
                     id: self.id.clone(),
                     owner_handle: self.owner_handle,

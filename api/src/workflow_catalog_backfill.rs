@@ -4,7 +4,7 @@ use scope_domain::runs::{
         MAX_REPOSITORY_WORKFLOW_FILES, MAX_WORKFLOW_DEFINITION_BYTES, RepositoryWorkflowCatalog,
         RepositoryWorkflowFile,
     },
-    workflow::WorkflowPath,
+    workflow::identity::WorkflowPath,
 };
 
 pub async fn validate_repository_workflow_catalogs_for_maintenance(

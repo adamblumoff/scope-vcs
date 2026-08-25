@@ -153,7 +153,7 @@ pub(crate) async fn create_dev_cli_session(
 
 async fn mint_cli_session(
     state: &AppState,
-    user: &scope_domain::store::UserAccount,
+    user: &scope_domain::account::UserAccount,
 ) -> Result<Json<CliSessionTokenResponse>, ApiError> {
     let now_unix = unix_now()?;
     let auth = CliAuthService::new(state.metadata.auth());

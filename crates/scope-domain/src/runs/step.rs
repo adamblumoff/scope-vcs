@@ -1,12 +1,33 @@
 use super::{
-    job::RunJob,
-    run::{Run, RunAttempt},
-    state::{AttemptState, RunJobState, StepState},
+    attempt::{AttemptState, RunAttempt},
+    job::{RunJob, RunJobState},
+    run::Run,
 };
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_RUN_SETUP_FAILURE_MESSAGE_BYTES: usize = 2 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StepState {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+    Lost,
+    Skipped,
+}
+
+impl StepState {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Canceled | Self::Lost | Self::Skipped
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttemptConclusion {

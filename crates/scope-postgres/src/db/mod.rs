@@ -25,8 +25,7 @@ pub use cli_auth_results::{
     NewCliSession, StartBrowserLoginCommand, StartDeviceLoginCommand,
 };
 mod cache_service;
-mod cleanup_queue;
-pub use cleanup_queue::SourceBlobCleanupDecision;
+pub mod cleanup_queue;
 #[cfg(test)]
 mod cleanup_queue_tests;
 mod clerk_users;
@@ -142,7 +141,10 @@ pub use repo_mutation::{RepositoryMutation, RepositoryMutationError};
 pub use repo_reads::{RepoLiveFileWithLandingContent, RepoSummaryRead};
 use repository_rows::load_repository_facts;
 use scope_domain::content_ref::ContentRef;
-use scope_domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, repo_id};
+use scope_domain::{
+    repository::collaboration::{RepositoryInvite, RepositoryMember},
+    repository::{Repository, repo_id},
+};
 use sea_orm::{
     AccessMode, ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection,
     DatabaseTransaction, EntityTrait, IsolationLevel, QueryFilter, QueryOrder,
@@ -285,7 +287,7 @@ impl RepositoryStore {
         &self,
         owner: &str,
         name: &str,
-    ) -> Result<Option<StoredRepository>, PostgresError> {
+    ) -> Result<Option<Repository>, PostgresError> {
         let id = repo_id(owner, name);
         let tx = begin_metadata_read_snapshot(self.db.as_ref()).await?;
         let repo = match entities::repository::Entity::find_by_id(id)
@@ -487,7 +489,7 @@ pub(super) async fn begin_metadata_read_snapshot(
 async fn repositories_from_models<C>(
     conn: &C,
     repositories: Vec<entities::repository::Model>,
-) -> Result<Vec<StoredRepository>, PostgresError>
+) -> Result<Vec<Repository>, PostgresError>
 where
     C: ConnectionTrait,
 {
@@ -563,7 +565,7 @@ where
 async fn repository_from_model<C>(
     conn: &C,
     repository: entities::repository::Model,
-) -> Result<StoredRepository, PostgresError>
+) -> Result<Repository, PostgresError>
 where
     C: ConnectionTrait,
 {

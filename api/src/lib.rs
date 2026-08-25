@@ -19,7 +19,6 @@ pub(crate) mod persistence_ids;
 pub(crate) mod product_analytics;
 pub(crate) mod push_intents;
 pub(crate) mod repo_access;
-pub(crate) mod repo_cleanup;
 pub(crate) mod repo_events;
 pub(crate) mod run_recovery;
 pub(crate) mod run_retention;
@@ -27,6 +26,7 @@ pub(crate) mod runtime_budgets;
 #[cfg(feature = "smoke-seed")]
 pub mod smoke_seed;
 pub(crate) mod telemetry;
+pub(crate) mod use_cases;
 mod workflow_catalog_backfill;
 
 #[cfg(any(test, feature = "test-support"))]

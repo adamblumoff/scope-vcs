@@ -5,8 +5,8 @@ use super::{
 };
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    job::reconcile_run,
-    run::{ExecutionProvider, RunJobState},
+    attempt::ExecutionProvider,
+    job::{RunJobState, reconcile_run},
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel, Statement, TransactionTrait,

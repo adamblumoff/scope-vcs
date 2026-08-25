@@ -1,6 +1,15 @@
 use scope_domain::{
     account::SessionIdentity as DomainSessionIdentity,
+    account::UserAccount,
+    history::FileChangeKind as DomainFileChangeKind,
     policy::Visibility as DomainVisibility,
+    repository::RepoLifecycleState as DomainRepoLifecycleState,
+    repository::access::RepositoryActor as DomainRepositoryActor,
+    repository::collaboration::{
+        RepositoryInviteState as DomainRepositoryInviteState,
+        RepositoryMemberPermissions as DomainRepositoryMemberPermissions,
+    },
+    repository::credentials::FirstPushTokenStatus as DomainFirstPushTokenStatus,
     requests::{
         RequestActorRole as DomainRequestActorRole, RequestAudience as DomainRequestAudience,
         RequestDiscussionStatus as DomainRequestDiscussionStatus,
@@ -9,12 +18,6 @@ use scope_domain::{
         RequestIdentityAuditFact as DomainRequestIdentityAuditFact,
         RequestMergeabilityStatus as DomainRequestMergeabilityStatus,
         RequestQueueSection as DomainRequestQueueSection, RequestState as DomainRequestState,
-    },
-    store::{
-        FileChangeKind as DomainFileChangeKind, FirstPushTokenStatus as DomainFirstPushTokenStatus,
-        RepoLifecycleState as DomainRepoLifecycleState, RepositoryActor as DomainRepositoryActor,
-        RepositoryInviteState as DomainRepositoryInviteState,
-        RepositoryMemberPermissions as DomainRepositoryMemberPermissions, UserAccount,
     },
 };
 use serde::{Deserialize, Serialize};

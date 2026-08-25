@@ -1,13 +1,13 @@
 [package]
 name = "scope-cache-contract"
-version = "0.1.0"
-edition = "2024"
-license = "UNLICENSED"
-repository = "https://github.com/adamblumoff/scope-vcs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-scope_cache_domain = { package = "scope-cache-domain", path = "../scope-cache-domain" }
-serde = { version = "1.0.228", features = ["derive"] }
+scope_cache_domain.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
-serde_json = "1.0.147"
+serde_json.workspace = true

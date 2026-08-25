@@ -1,6 +1,6 @@
 use super::{
+    content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
     requests::*,
-    store::{DEFAULT_GIT_FILE_MODE, SourceBlob},
 };
 use std::collections::BTreeMap;
 

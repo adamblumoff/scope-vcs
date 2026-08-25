@@ -13,8 +13,8 @@ use scope_api_contract::{
     RequestRatingsResponse,
 };
 use scope_domain::{
+    account::UserAccount,
     requests::{CreateRequestRatingInput, RequestRating, eligible_rating_subject_user_id},
-    store::UserAccount,
 };
 use std::collections::BTreeMap;
 

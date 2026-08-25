@@ -19,7 +19,7 @@ const LOCK_RETRY: Duration = Duration::from_millis(10);
 const STALE_LOCK_AFTER_SECS: u64 = 30 * 60;
 static STALE_LOCK_REMOVAL: Mutex<()> = Mutex::new(());
 
-pub(super) struct GitLockFile {
+pub(crate) struct GitLockFile {
     path: PathBuf,
 }
 
@@ -29,7 +29,7 @@ impl Drop for GitLockFile {
     }
 }
 
-pub(super) fn acquire_request_ref_update_lock(
+pub(crate) fn acquire_request_ref_update_lock(
     state: &AppState,
     owner: &str,
     repo_name: &str,

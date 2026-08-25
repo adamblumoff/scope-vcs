@@ -288,7 +288,7 @@ async fn assert_private_history_push_rejected(history: PrivacyHistory, source_la
     assert_request_branch_unchanged(&state).await;
 }
 
-fn privacy_repo(state: &AppState, history: PrivacyHistory) -> StoredRepository {
+fn privacy_repo(state: &AppState, history: PrivacyHistory) -> Repository {
     let mut repo = test_repo(&test_owner_id());
     repo.graph.commits = match history {
         PrivacyHistory::Mixed => vec![history_commit(

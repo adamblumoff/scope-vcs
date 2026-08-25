@@ -32,7 +32,7 @@ The default smoke profile tests 1 MiB of compressible and random content with ei
 SCOPE_PHYSICS_PROFILE=standard node bench/git-physics.mjs
 ```
 
-The full profile includes the plan's 1 GiB, 10 GiB, 1,000-commit, and 100,000-commit boundaries. It needs substantial temporary disk and can run for hours:
+The full profile includes 1 GiB, 10 GiB, 1,000-commit, and 100,000-commit boundaries. It needs substantial temporary disk and can run for hours:
 
 ```bash
 SCOPE_PHYSICS_PROFILE=full \

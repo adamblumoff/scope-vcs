@@ -8,7 +8,7 @@ use scope_domain::{
         ProjectionPreviewFile, ProjectionPreviewSummary, ProjectionViewFile, projection_preview,
         repo_scope_path as domain_repo_scope_path,
     },
-    store::StoredRepository,
+    repository::Repository,
 };
 use serde::{Deserialize, Serialize};
 
@@ -115,7 +115,7 @@ pub(crate) struct RepoFileContentResponse {
 }
 
 pub(crate) fn projection_preview_response(
-    repo: &StoredRepository,
+    repo: &Repository,
     audience: ProjectionPreviewAudience,
     source: ProjectionPreviewSource,
     include_private_counts: bool,

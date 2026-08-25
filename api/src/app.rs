@@ -137,7 +137,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(routes::REPO_RUN_CANCEL, post(http::runs::cancel_run))
         .route(routes::REPO_RUN_RETRY, post(http::runs::retry_run))
-        .route(routes::REPO_RUN_EVENTS, get(http::runs::run_events))
+        .route(routes::REPO_RUN_EVENTS, get(http::run_events::run_events))
         .route(
             routes::REPO_PUSH_TRIGGER_EVALUATION,
             get(http::runs::get_push_trigger_evaluation),

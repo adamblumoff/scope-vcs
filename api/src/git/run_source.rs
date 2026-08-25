@@ -4,18 +4,24 @@ use crate::{
     persistence::ensure_private_dir,
     state::AppState,
 };
-use scope_domain::runs::run::RunSource;
+use scope_domain::runs::source::RunSource;
+use scope_domain::runs::workflow::identity::WorkflowPath;
 use scope_git::DEFAULT_GIT_BRANCH;
 use scope_object_store::source_blob_bytes_bounded;
 use sha2::{Digest as _, Sha256};
 use std::{
-    fs,
+    fs::{self, File, OpenOptions},
+    io::Read as _,
+    os::unix::{fs::DirBuilderExt as _, fs::OpenOptionsExt as _, process::CommandExt as _},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
+    thread,
+    time::{Duration, Instant},
 };
 
 static RUN_SOURCE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
+const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) struct MaterializedRunSource {
     pub(crate) bytes: Vec<u8>,
@@ -96,11 +102,215 @@ impl Drop for TemporaryRunSourceRepository {
     }
 }
 
+pub(crate) fn inspect_manual_run_bundle(
+    root: &Path,
+    bytes: &[u8],
+    git_oid: &str,
+    workflow_name: &str,
+) -> Result<scope_run_config::ParsedWorkflow, ApiError> {
+    let yml = WorkflowPath::parse(format!("/.scope/runs/{workflow_name}.yml"))
+        .map_err(ApiError::bad_request)?;
+    let yaml = WorkflowPath::parse(format!("/.scope/runs/{workflow_name}.yaml"))
+        .map_err(ApiError::bad_request)?;
+    let temp = ManualRunInspection::new(root)?;
+    let bundle = temp.path.join("source.bundle");
+    let bare = temp.path.join("source.git");
+    write_private_file(&bundle, bytes)?;
+    let mut clone = Command::new("git");
+    clone
+        .args(["clone", "--bare", "--no-local"])
+        .arg(&bundle)
+        .arg(&bare)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if !run_git_with_timeout(&mut clone, "Git bundle clone")? {
+        return Err(ApiError::bad_request("invalid Git bundle"));
+    }
+    let mut commit = Command::new("git");
+    commit
+        .arg("--git-dir")
+        .arg(&bare)
+        .args(["cat-file", "-e", &format!("{git_oid}^{{commit}}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if !run_git_with_timeout(&mut commit, "Git commit inspection")? {
+        return Err(ApiError::bad_request(
+            "requested Git commit is not present in the bundle",
+        ));
+    }
+    let yml_bytes = git_blob(
+        &bare,
+        git_oid,
+        yml.as_str().trim_start_matches('/'),
+        &temp.path.join("workflow-yml"),
+    )?;
+    let yaml_bytes = git_blob(
+        &bare,
+        git_oid,
+        yaml.as_str().trim_start_matches('/'),
+        &temp.path.join("workflow-yaml"),
+    )?;
+    let (path, workflow_bytes) = match (yml_bytes, yaml_bytes) {
+        (Some(_), Some(_)) => {
+            return Err(ApiError::bad_request(format!(
+                "workflow {workflow_name:?} is defined by both .yml and .yaml"
+            )));
+        }
+        (Some(bytes), None) => (yml, bytes),
+        (None, Some(bytes)) => (yaml, bytes),
+        (None, None) => {
+            return Err(ApiError::not_found(format!(
+                "workflow {workflow_name:?} was not found at commit {git_oid}"
+            )));
+        }
+    };
+    scope_run_config::parse_workflow(path.as_str(), &workflow_bytes).map_err(ApiError::bad_request)
+}
+
+fn git_blob(
+    bare: &Path,
+    git_oid: &str,
+    path: &str,
+    output_prefix: &Path,
+) -> Result<Option<Vec<u8>>, ApiError> {
+    let object = format!("{git_oid}:{path}");
+    let size_path = output_prefix.with_extension("size");
+    let size_file = create_private_file(&size_path)?;
+    let mut size = Command::new("git");
+    size.arg("--git-dir")
+        .arg(bare)
+        .args(["cat-file", "-s", &object])
+        .stdout(Stdio::from(size_file))
+        .stderr(Stdio::null());
+    if !run_git_with_timeout(&mut size, "Git workflow size inspection")? {
+        return Ok(None);
+    }
+    let size_text = read_bounded_file(&size_path, 64)?;
+    let size = std::str::from_utf8(&size_text)
+        .map_err(|_| ApiError::bad_request("Git reported an invalid workflow size"))?
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| ApiError::bad_request("Git reported an invalid workflow size"))?;
+    if size > scope_run_config::MAX_WORKFLOW_DEFINITION_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "workflow definition exceeds {} bytes",
+            scope_run_config::MAX_WORKFLOW_DEFINITION_BYTES
+        )));
+    }
+
+    let blob_path = output_prefix.with_extension("blob");
+    let blob_file = create_private_file(&blob_path)?;
+    let mut blob = Command::new("git");
+    blob.arg("--git-dir")
+        .arg(bare)
+        .args(["cat-file", "blob", &object])
+        .stdout(Stdio::from(blob_file))
+        .stderr(Stdio::null());
+    if !run_git_with_timeout(&mut blob, "Git workflow read")? {
+        return Err(ApiError::bad_request(
+            "workflow changed while inspecting the Git bundle",
+        ));
+    }
+    let bytes = read_bounded_file(&blob_path, scope_run_config::MAX_WORKFLOW_DEFINITION_BYTES)?;
+    if bytes.len() != size {
+        return Err(ApiError::bad_request(
+            "Git workflow size changed while inspecting the bundle",
+        ));
+    }
+    Ok(Some(bytes))
+}
+
+fn run_git_with_timeout(command: &mut Command, operation: &str) -> Result<bool, ApiError> {
+    command.process_group(0);
+    let mut child = command.spawn().map_err(ApiError::internal)?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().map_err(ApiError::internal)? {
+            return Ok(status.success());
+        }
+        if started.elapsed() >= GIT_INSPECTION_TIMEOUT {
+            let _ = Command::new("kill")
+                .args(["-KILL", "--"])
+                .arg(format!("-{}", child.id()))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ApiError::bad_request(format!("{operation} timed out")));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), ApiError> {
+    let mut file = create_private_file(path)?;
+    std::io::Write::write_all(&mut file, bytes).map_err(ApiError::internal)
+}
+
+fn create_private_file(path: &Path) -> Result<File, ApiError> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(ApiError::internal)
+}
+
+fn read_bounded_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ApiError> {
+    let file = File::open(path).map_err(ApiError::internal)?;
+    let length = file.metadata().map_err(ApiError::internal)?.len();
+    if length > max_bytes as u64 {
+        return Err(ApiError::bad_request(format!(
+            "Git command output exceeds {max_bytes} bytes"
+        )));
+    }
+    let mut bytes = Vec::with_capacity(length as usize);
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(ApiError::internal)?;
+    if bytes.len() > max_bytes {
+        return Err(ApiError::bad_request(format!(
+            "Git command output exceeds {max_bytes} bytes"
+        )));
+    }
+    Ok(bytes)
+}
+
+struct ManualRunInspection {
+    path: PathBuf,
+}
+
+impl ManualRunInspection {
+    fn new(root: &Path) -> Result<Self, ApiError> {
+        fs::create_dir_all(root).map_err(ApiError::internal)?;
+        for _ in 0..8 {
+            let path = root.join(crate::persistence_ids::generate_prefixed_id("inspect_")?);
+            match fs::DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(ApiError::internal(error)),
+            }
+        }
+        Err(ApiError::internal_message(
+            "could not allocate run bundle inspection directory",
+        ))
+    }
+}
+
+impl Drop for ManualRunInspection {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::import::{git_push_from_repo, run_git};
-    use scope_domain::{projection::ProjectionViewKey, runs::run::RunSource, store::GitHead};
+    use crate::git::import::{git_push_from_repo, run_git, run_git_output};
+    use scope_domain::{
+        projection::ProjectionViewKey, repository::git::GitHead, runs::source::RunSource,
+    };
 
     #[tokio::test]
     async fn accepted_git_head_materializes_a_non_durable_bundle_at_run_start() {
@@ -170,5 +380,83 @@ mod tests {
             .unwrap();
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains(&pushed.stored.head.head_oid));
+    }
+
+    #[test]
+    fn manual_bundle_inspection_reads_the_requested_workflow_at_the_pinned_commit() {
+        let state = AppState::test_state();
+        let source = tempfile::tempdir().unwrap();
+        run_git(
+            None,
+            &["init", "-b", "main", source.path().to_str().unwrap()],
+            "initialize manual run source",
+        )
+        .unwrap();
+        run_git(
+            Some(source.path()),
+            &["config", "user.email", "scope@test.invalid"],
+            "configure source repository email",
+        )
+        .unwrap();
+        run_git(
+            Some(source.path()),
+            &["config", "user.name", "Scope test"],
+            "configure source repository name",
+        )
+        .unwrap();
+        fs::create_dir_all(source.path().join(".scope/runs")).unwrap();
+        fs::write(
+            source.path().join(".scope/runs/checks.yml"),
+            format!(
+                "name: Checks\non:\n  manual: true\ncaches: []\ncontainer:\n  image: alpine@sha256:{}\ntimeout: 5m\njobs:\n  checks:\n    steps:\n      - name: Test\n        run: 'true'\n",
+                "a".repeat(64)
+            ),
+        )
+        .unwrap();
+        run_git(
+            Some(source.path()),
+            &["add", "."],
+            "stage manual run source",
+        )
+        .unwrap();
+        run_git(
+            Some(source.path()),
+            &["commit", "-m", "manual run source"],
+            "commit manual run source",
+        )
+        .unwrap();
+        let git_oid = String::from_utf8(
+            run_git_output(
+                Some(source.path()),
+                &["rev-parse", "HEAD"],
+                "read manual run commit",
+            )
+            .unwrap()
+            .stdout,
+        )
+        .unwrap();
+        let git_oid = git_oid.trim();
+        let bundle_path = source.path().join("source.bundle");
+        run_git(
+            Some(source.path()),
+            &["bundle", "create", bundle_path.to_str().unwrap(), "HEAD"],
+            "create manual run bundle",
+        )
+        .unwrap();
+
+        let parsed = inspect_manual_run_bundle(
+            &state.data_dir.join("manual-run-inspection-test"),
+            &fs::read(bundle_path).unwrap(),
+            git_oid,
+            "checks",
+        )
+        .unwrap();
+        let revision = parsed.into_revision("owner/repo").unwrap();
+
+        assert!(revision.definition().triggers().manual());
+        assert_eq!(
+            revision.workflow().path().as_str(),
+            "/.scope/runs/checks.yml"
+        );
     }
 }

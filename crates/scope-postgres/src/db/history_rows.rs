@@ -1,7 +1,7 @@
 use super::entities;
 use super::object_references::insert_object_reference;
 use crate::error::PostgresError;
-use scope_domain::store::SourceBlob;
+use scope_domain::content::SourceBlob;
 use scope_domain::{
     policy::ScopePath,
     projection::{FileChange, LogicalCommit, SourceGraph},

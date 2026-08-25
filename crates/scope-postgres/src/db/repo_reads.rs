@@ -23,10 +23,9 @@ use {
             projected_file_content as domain_projected_file_content,
             projected_files as domain_projected_files,
         },
-        store::{
-            RepoLifecycleState, RepositoryAccess, RepositoryActor, RepositoryMemberPermissions,
-            StoredRepository, repo_id, repository_access_for_user_id,
-        },
+        repository::access::{RepositoryAccess, RepositoryActor, repository_access_for_user_id},
+        repository::collaboration::RepositoryMemberPermissions,
+        repository::{RepoLifecycleState, Repository, repo_id},
     },
 };
 
@@ -400,10 +399,7 @@ where
     Ok(permissions)
 }
 
-async fn hydrate_repo_from_row_id<C>(
-    conn: &C,
-    repo_id: &str,
-) -> Result<StoredRepository, PostgresError>
+async fn hydrate_repo_from_row_id<C>(conn: &C, repo_id: &str) -> Result<Repository, PostgresError>
 where
     C: ConnectionTrait,
 {

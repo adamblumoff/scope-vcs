@@ -1,6 +1,6 @@
 use super::{RunStore, StoredRunLog, entities};
 use crate::error::PostgresError;
-use scope_domain::runs::run::RunLogChunk;
+use scope_domain::runs::log::RunLogChunk;
 use sea_orm::{
     ActiveValue::NotSet, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
     TransactionTrait,

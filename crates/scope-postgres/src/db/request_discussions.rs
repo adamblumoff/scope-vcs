@@ -16,6 +16,7 @@ use sea_orm::TransactionTrait;
 use std::{collections::BTreeMap, sync::Arc};
 use {
     crate::error::PostgresError,
+    scope_domain::account::UserAccount,
     scope_domain::requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionMutation,
         CreateRequestDiscussionReplyInput, CreateRequestDiscussionReplyMutation,
@@ -26,7 +27,6 @@ use {
         mark_request_discussion_read, reopen_and_reply_to_request_discussion,
         reopen_request_discussion, resolve_request_discussion,
     },
-    scope_domain::store::UserAccount,
 };
 
 #[derive(Clone, Debug)]

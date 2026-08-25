@@ -10,7 +10,7 @@ use super::{
 };
 use crate::error::PostgresError;
 use scope_domain::{
-    account::SessionIdentity, account::cli_auth as cli_auth_rules, store::UserAccount,
+    account::SessionIdentity, account::UserAccount, account::cli_auth as cli_auth_rules,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,

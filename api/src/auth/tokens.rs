@@ -3,7 +3,7 @@ use crate::{
     error::ApiError,
     persistence::unix_now,
 };
-use scope_domain::store::{FirstPushToken, GitPushToken};
+use scope_domain::repository::credentials::{FirstPushToken, GitPushToken};
 use sha2::{Digest, Sha256};
 
 const TOKEN_BYTES: usize = 32;

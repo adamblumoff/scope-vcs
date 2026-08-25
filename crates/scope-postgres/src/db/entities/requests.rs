@@ -4,7 +4,7 @@ use scope_domain::requests::{
     RequestDiscussionReadState, RequestDiscussionReply, RequestDiscussionStatus, RequestEvent,
     RequestEventKind, RequestEventPayload, RequestInvitee, RequestRating, RequestRevision,
 };
-use scope_domain::{policy::ScopePath, store::SourceBlob};
+use scope_domain::{content::SourceBlob, policy::ScopePath};
 
 pub mod request {
     use super::*;

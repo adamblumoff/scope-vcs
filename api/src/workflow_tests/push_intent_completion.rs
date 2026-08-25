@@ -237,7 +237,7 @@ async fn incremental_git_pack_layout_restores_after_cache_loss() {
     .await
     .unwrap();
     let snapshot = update.git_head.manifest.clone();
-    persist_main_push_update_and_promote(
+    git_receive_use_case::main_push::persist_main_push(
         &state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
@@ -297,9 +297,9 @@ async fn content_push_rejects_stale_reviewed_config() {
         .metadata
         .repositories()
         .mutate_repository_for_tests(TEST_REPO_ID, |repo| {
-            scope_domain::reviewed_updates::apply_reviewed_config_to_repo(
+            scope_domain::reviewed_updates::config::apply_reviewed_config_to_repo(
                 repo,
-                scope_domain::reviewed_updates::ReviewedConfigUpdateInput {
+                scope_domain::reviewed_updates::config::ReviewedConfigUpdateInput {
                     author_id: test_owner_id(),
                     config: newer_config.clone(),
                 },
@@ -309,7 +309,7 @@ async fn content_push_rejects_stale_reviewed_config() {
         .await
         .unwrap();
 
-    let error = persist_main_push_update_and_promote(
+    let error = git_receive_use_case::main_push::persist_main_push(
         &state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,

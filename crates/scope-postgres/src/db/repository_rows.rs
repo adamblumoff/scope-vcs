@@ -16,7 +16,9 @@ use sea_orm::{
 use std::collections::BTreeMap;
 use {
     crate::error::PostgresError,
-    scope_domain::store::{FirstPushToken, GitHead, GitPackSpan, GitPushToken, StoredRepository},
+    scope_domain::repository::Repository,
+    scope_domain::repository::credentials::{FirstPushToken, GitPushToken},
+    scope_domain::repository::git::{GitHead, GitPackSpan},
 };
 
 #[derive(Default)]
@@ -40,7 +42,7 @@ impl RepositoryFactRows {
 
 pub async fn insert_repository<C>(
     conn: &C,
-    repo: &StoredRepository,
+    repo: &Repository,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<(), PostgresError>
@@ -69,8 +71,8 @@ where
 
 pub async fn save_repository_delta<C>(
     conn: &C,
-    before: &StoredRepository,
-    after: &StoredRepository,
+    before: &Repository,
+    after: &Repository,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,
 ) -> Result<(), PostgresError>
@@ -141,10 +143,7 @@ where
     Ok(())
 }
 
-async fn insert_repository_fact_rows<C>(
-    conn: &C,
-    repo: &StoredRepository,
-) -> Result<(), PostgresError>
+async fn insert_repository_fact_rows<C>(conn: &C, repo: &Repository) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
 {
@@ -192,8 +191,8 @@ where
 
 async fn save_repository_fact_delta<C>(
     conn: &C,
-    before: &StoredRepository,
-    after: &StoredRepository,
+    before: &Repository,
+    after: &Repository,
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
@@ -294,10 +293,7 @@ where
     Ok(())
 }
 
-async fn insert_repository_relations<C>(
-    conn: &C,
-    repo: &StoredRepository,
-) -> Result<(), PostgresError>
+async fn insert_repository_relations<C>(conn: &C, repo: &Repository) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
 {
@@ -322,8 +318,8 @@ where
 
 async fn save_repository_relation_delta<C>(
     conn: &C,
-    before: &StoredRepository,
-    after: &StoredRepository,
+    before: &Repository,
+    after: &Repository,
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,

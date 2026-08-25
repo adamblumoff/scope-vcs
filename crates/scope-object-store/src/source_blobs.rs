@@ -4,8 +4,8 @@ use sha2::Sha256;
 use {
     crate::ObjectStoreError,
     scope_domain::{
+        content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
         content_ref::ContentRef,
-        store::{DEFAULT_GIT_FILE_MODE, SourceBlob},
     },
 };
 

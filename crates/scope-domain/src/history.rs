@@ -1,13 +1,24 @@
 use super::{
+    content::SourceBlob,
     policy::{ScopePath, Visibility},
-    projection::{ProjectedCommit, Projection, ProjectionViewKey, SourceGraph, project_graph},
-    store::{FileChangeKind, LogicalCommitOrigin, SourceBlob},
+    projection::{
+        LogicalCommitOrigin, ProjectedCommit, Projection, ProjectionViewKey, SourceGraph,
+        project_graph,
+    },
     visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 const HISTORY_GENERATION_VERSION: &str = "v4";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryView {

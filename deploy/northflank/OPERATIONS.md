@@ -74,22 +74,17 @@ per-repository LRU budget, seven-day sliding reference TTL, 30-minute upload lea
 deletion grace, and reconciliation. Do not add a bucket lifecycle policy that can delete referenced
 objects independently of this metadata.
 
-## Rollout and rollback
+## Provisioning proof and recovery
 
-The `m0021_cache_service_cutover` maintenance migration creates the cache-service schema and drops
-`scope_run_cache_objects`. It intentionally does not copy disposable pre-alpha cache state. Confirm
-there are no active attempts, take a database snapshot, stop API/worker/cache-service writers, and
-run the existing maintenance deployment workflow. After the new API, cache service, and runner
-image are deployed, delete every legacy object under `run-caches/v1/`. This migration is not
-reversible in place.
-
-Start with `SCOPE_CLOUD_RUNS_MAX_CONCURRENCY=1`, run one manual canary, cancel one canary, and run a
-cache workflow twice. Verify a Northflank external run ID appears in the run detail, the second cache
+After provisioning Northflank or changing its execution or cache configuration, start with
+`SCOPE_CLOUD_RUNS_MAX_CONCURRENCY=1`. Run one manual canary, cancel one canary, and run a cache
+workflow twice. Verify a Northflank external run ID appears in the run detail, the second cache
 preparation is warm, and an unchanged third run sends zero PUT bytes. Temporarily deny the cache
 service and bucket in separate canaries; both runs must finish cold rather than fail. Raise the limit
-only after those checks pass. To stop new spend without rolling back schema or code, set concurrency
-to one and disable cloud runs on the worker; queued runs remain durable until execution is
-re-enabled.
+only after those checks pass.
+
+To stop new spend without changing schema or rolling back code, set concurrency to one and disable
+cloud runs on the worker. Queued runs remain durable until execution is re-enabled.
 
 ## Cost controls
 

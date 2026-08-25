@@ -1,13 +1,14 @@
 use crate::{
     auth::scope::{optional_scope_user, principal_for_scope_user, require_scope_user},
     error::ApiError,
-    git::{request_merge::prepare_request_merge, request_refs::delete_request_ref_from_store},
+    git::request_refs::delete_request_ref_from_store,
     http::responses::*,
     persistence::unix_now,
     product_analytics::{ProductEvent, RequestCloseOutcome},
     repo_access::{ensure_repo_read, find_repo},
     repo_events::RepoChangeReason,
     state::AppState,
+    use_cases::request_merge::{self, MergeRequestCommand, MergeRequestResult},
 };
 use axum::{
     Json,
@@ -23,13 +24,14 @@ use scope_api_contract::{
 };
 use scope_domain::{
     projection::{ProjectionViewKey, project_graph},
+    repository::Repository,
+    repository::access::{RepositoryAccess, RepositoryActor},
     requests::{
-        CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput, MergeRequestInput,
+        CloseRequestInput, CloseRequestMutation, EditRequestIdentityInput,
         REQUEST_LIST_DEFAULT_PAGE_SIZE, REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestAudience,
         RequestViewer, StartRequestInput, SubmitRequestInput, canonical_request_ref,
         request_actor_role, request_mergeability, request_policy,
     },
-    store::{RepositoryAccess, RepositoryActor, StoredRepository},
 };
 use serde::Deserialize;
 
@@ -173,84 +175,38 @@ pub(crate) async fn merge_request(
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
 ) -> Result<Json<RequestMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let analytics_event =
-        ProductEvent::request_merged(&user.id, request.audience, request_actor_role(access));
-    if !request_policy(&request, RequestViewer::new(access, Some(&user.id), false))
-        .permissions
-        .can_merge
-    {
-        if matches!(access.actor, RepositoryActor::Public) {
-            return Err(ApiError::forbidden("repo maintainer required"));
-        }
-        return Err(ApiError::conflict("request cannot be merged"));
-    }
-    let prepared =
-        prepare_request_merge(&state, &owner, &repo_name, &user.id, &repo, &request).await?;
-    let durable_objects = prepared.durable_objects().to_vec();
-    let fence = prepared.fence;
-    let mutation = match state
-        .metadata
-        .requests()
-        .merge_request_content(
-            &owner,
-            &repo_name,
-            &prepared.expected_manifest_ref,
-            prepared.expected_repo_change_version,
-            &prepared.prepared_request_head_oid,
-            prepared.update.into_reviewed_update(),
-            prepared.landing_file_mutation,
-            prepared.workflow_catalog,
-            prepared.origin,
-            MergeRequestInput {
-                request_id: request.id,
-                actor_user_id: user.id.clone(),
-                actor_is_maintainer: false,
-                merged_head_oid: String::new(),
-                merged_main_oid: String::new(),
-                merged_event_id: random_id("event_request_merged")?,
-                now_unix: unix_now()?,
-            },
-            &crate::persistence_ids::generate_persistence_id,
-        )
-        .await
-    {
-        Ok(mutation) => mutation,
-        Err(error) => {
-            crate::repo_cleanup::best_effort_cleanup_rollback_source_blobs(
-                &state,
-                &durable_objects,
-            )
-            .await;
-            fence.release().await;
-            return Err(error.into());
-        }
-    };
-    fence.release().await;
-    state.product_analytics.capture(analytics_event);
-    state
-        .publish_repo_change(
-            &repo.record.id,
-            mutation.git_head.change_version,
-            RepoChangeReason::RequestMerged,
-        )
-        .await;
-    let committed_repo = find_repo(&state, &owner, &repo_name).await?;
-    lifecycle_response(
+    let result = request_merge::merge_request(
         &state,
-        &committed_repo,
-        access,
-        &user.id,
-        mutation.request.request,
-        RepoChangeReason::RequestMerged,
+        MergeRequestCommand {
+            owner,
+            repo_name,
+            request_id,
+            actor_user_id: user.id,
+        },
     )
-    .await
+    .await?;
+    merge_response(&state, result).await
+}
+
+async fn merge_response(
+    state: &AppState,
+    result: MergeRequestResult,
+) -> Result<Json<RequestMutationResponse>, ApiError> {
+    let current_main_oid = committed_main_oid_for_access(&result.repo, result.access)?;
+    let request = request_response_for_viewer(
+        state,
+        result.request,
+        result.access,
+        current_main_oid,
+        Some(&result.actor_user_id),
+    )
+    .await?;
+    Ok(Json(RequestMutationResponse { request }))
 }
 
 async fn lifecycle_response(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     viewer_user_id: &str,
     request: Request,
@@ -272,7 +228,7 @@ async fn lifecycle_response(
 }
 
 fn committed_main_oid_for_access(
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
 ) -> Result<Option<String>, ApiError> {
     if access.actor != RepositoryActor::Public
@@ -559,7 +515,7 @@ pub(crate) async fn leave_request(
 
 async fn invitee_mutation_response(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     viewer_user_id: &str,
     request_id: String,
@@ -600,7 +556,7 @@ pub(crate) async fn repo_and_access(
     headers: &HeaderMap,
     owner: &str,
     repo_name: &str,
-) -> Result<(StoredRepository, RepositoryAccess, Option<String>), ApiError> {
+) -> Result<(Repository, RepositoryAccess, Option<String>), ApiError> {
     let repo = find_repo(state, owner, repo_name).await?;
     let user = optional_scope_user(state, headers).await?;
     let principal = user
@@ -614,7 +570,7 @@ pub(crate) async fn repo_and_access(
 
 pub(crate) async fn visible_request(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     viewer_user_id: Option<&str>,
     request_id: &str,
@@ -714,7 +670,7 @@ async fn request_response_for_viewer(
 
 pub(crate) async fn current_main_oid_for_access(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
 ) -> Result<Option<String>, ApiError> {
     if access.actor != RepositoryActor::Public
@@ -733,7 +689,7 @@ pub(crate) async fn current_main_oid_for_access(
 
 pub(crate) async fn current_main_oid_for_audience(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     audience: RequestAudience,
 ) -> Result<Option<String>, ApiError> {
     if audience == RequestAudience::Private

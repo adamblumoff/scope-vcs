@@ -11,14 +11,14 @@ use scope_domain::landing_file::{
 };
 use scope_domain::policy::ScopePath;
 use scope_domain::repo_config::RepoConfig;
+use scope_domain::repository::RepoLifecycleState;
 use scope_domain::runs::{
     catalog::{
         MAX_REPOSITORY_WORKFLOW_FILES, MAX_WORKFLOW_DEFINITION_BYTES, RepositoryWorkflowCatalog,
         RepositoryWorkflowFile,
     },
-    workflow::WorkflowPath,
+    workflow::identity::WorkflowPath,
 };
-use scope_domain::store::RepoLifecycleState;
 use scope_postgres::db::ContentRefFence;
 use std::{path::Path as FsPath, time::Instant};
 
@@ -257,7 +257,7 @@ async fn reviewed_update_from_staging_repo_mode(
 fn repository_landing_file_mutation(
     staging_repo: &FsPath,
     pushed_entries: &[(ScopePath, Option<GitTreeFile>)],
-    git_manifest: &scope_domain::store::SourceBlob,
+    git_manifest: &scope_domain::content::SourceBlob,
 ) -> Result<RepositoryLandingFileMutation, ApiError> {
     let Some((_, entry)) = pushed_entries
         .iter()
@@ -299,7 +299,7 @@ fn capture_repository_workflow_catalog(
     repository_id: &str,
     head_oid: &str,
     change_version: u64,
-    git_manifest: &scope_domain::store::SourceBlob,
+    git_manifest: &scope_domain::content::SourceBlob,
 ) -> Result<RepositoryWorkflowCatalog, ApiError> {
     let workflow_entries = git_tree_entries_under(staging_repo, head_oid, ".scope/runs")?;
     if workflow_entries.len() > MAX_REPOSITORY_WORKFLOW_FILES {
@@ -366,9 +366,9 @@ mod tests {
     use super::*;
     use crate::git::import::{run_git, run_git_output, validate_pushed_file_path};
     use scope_domain::{
+        content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
         content_ref::ContentRef,
         policy::ScopePath,
-        store::{DEFAULT_GIT_FILE_MODE, SourceBlob},
     };
     use std::{
         fs,

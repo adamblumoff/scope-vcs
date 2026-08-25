@@ -1,6 +1,6 @@
 use super::{DispatchClaim, RunStore};
 use crate::error::PostgresError;
-use scope_domain::runs::run::StepConclusion;
+use scope_domain::runs::step::StepConclusion;
 
 impl RunStore {
     pub async fn start_attempt_step(

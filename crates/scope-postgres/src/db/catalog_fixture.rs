@@ -1,19 +1,22 @@
 //! Aggregate-shaped fixture data used only by Postgres tests and local development seeding.
 
 use scope_domain::{
+    account::UserAccount,
+    content::SourceBlob,
     policy::Visibility,
+    repo_actions::RepoStorageCleanup,
+    repository::{CatalogError, Repository, repo_id},
     requests::{
         Request, RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply,
         RequestEvent, RequestRevision,
     },
-    store::{CatalogError, RepoStorageCleanup, SourceBlob, StoredRepository, UserAccount, repo_id},
 };
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default)]
 pub struct CatalogFixture {
     pub users: BTreeMap<String, UserAccount>,
-    pub repositories: BTreeMap<String, StoredRepository>,
+    pub repositories: BTreeMap<String, Repository>,
     pub requests: BTreeMap<String, Request>,
     pub request_revisions: BTreeMap<String, RequestRevision>,
     pub request_discussions: BTreeMap<String, RequestDiscussion>,
@@ -25,11 +28,11 @@ pub struct CatalogFixture {
 }
 
 impl CatalogFixture {
-    pub fn repository(&self, owner: &str, name: &str) -> Option<&StoredRepository> {
+    pub fn repository(&self, owner: &str, name: &str) -> Option<&Repository> {
         self.repositories.get(&repo_id(owner, name))
     }
 
-    pub fn repositories_for_user(&self, user_id: &str) -> Vec<&StoredRepository> {
+    pub fn repositories_for_user(&self, user_id: &str) -> Vec<&Repository> {
         self.repositories
             .values()
             .filter(|repo| {
@@ -44,8 +47,8 @@ impl CatalogFixture {
         owner: &UserAccount,
         name: &str,
         default_visibility: Visibility,
-    ) -> Result<&StoredRepository, CatalogError> {
-        let repository = StoredRepository::new(owner, name, default_visibility)?;
+    ) -> Result<&Repository, CatalogError> {
+        let repository = Repository::new(owner, name, default_visibility)?;
         let id = repository.record.id.clone();
         self.repositories.insert(id.clone(), repository);
         Ok(self.repositories.get(&id).expect("repository was inserted"))

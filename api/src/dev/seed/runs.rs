@@ -1,15 +1,26 @@
 use crate::error::ApiError;
 use scope_domain::{
+    content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
     content_ref::ContentRef,
+    repository::repo_id,
     runs::{
-        cache::{CacheFinalState, CacheKeyInputs, CachePreparation, WorkflowCache},
-        run::{AttemptConclusion, Run, RunLogChunk, RunSource, RunTrigger, StepConclusion},
+        cache::{
+            definition::{CacheKeyInputs, WorkflowCache},
+            observation::{CacheFinalState, CachePreparation},
+        },
+        log::RunLogChunk,
+        run::Run,
+        source::{RunSource, RunTrigger},
+        step::{AttemptConclusion, StepConclusion},
         workflow::{
-            CompiledWorkflow, ContainerSpec, WorkflowIdentity, WorkflowJob, WorkflowJobId,
-            WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
+            definition::{
+                CompiledWorkflow, ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowStep,
+                WorkflowTriggers,
+            },
+            identity::{WorkflowIdentity, WorkflowPath},
+            revision::WorkflowRevision,
         },
     },
-    store::{DEFAULT_GIT_FILE_MODE, SourceBlob, repo_id},
 };
 use scope_postgres::db::{
     AttemptCacheFinalizationCommand, AttemptCachePreparationCommand, MetadataStore, RunStore,

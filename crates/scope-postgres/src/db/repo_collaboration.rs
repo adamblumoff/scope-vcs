@@ -4,15 +4,17 @@ use super::{
 };
 use crate::error::PostgresError;
 use scope_domain::{
+    account::UserAccount,
     repo_collaboration::{
         AcceptRepositoryInviteOutcome, CreateRepositoryInviteCommand, accept_repository_invite,
         create_or_refresh_repository_invite, remove_repository_member, revoke_repository_invite,
         update_repository_member_permissions,
     },
-    store::{
-        RepositoryInvite, RepositoryMember, RepositoryMemberPermissions, StoredRepository,
-        UserAccount, normalize_repository_invite_email, repo_id,
+    repository::collaboration::{
+        RepositoryInvite, RepositoryMember, RepositoryMemberPermissions,
+        normalize_repository_invite_email,
     },
+    repository::{Repository, repo_id},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use std::{collections::BTreeMap, sync::Arc};
@@ -42,7 +44,7 @@ impl RepositoryStore {
         &self,
         owner: &str,
         name: &str,
-    ) -> Result<Option<(StoredRepository, BTreeMap<String, UserAccount>)>, PostgresError> {
+    ) -> Result<Option<(Repository, BTreeMap<String, UserAccount>)>, PostgresError> {
         let Some(row) = entities::repository::Entity::find_by_id(repo_id(owner, name))
             .one(self.db.as_ref())
             .await
@@ -209,7 +211,7 @@ impl RepositoryStore {
     pub async fn repository_invite_by_token_hash(
         &self,
         token_hash: &str,
-    ) -> Result<(scope_domain::store::StoredRepository, RepositoryInvite), PostgresError> {
+    ) -> Result<(scope_domain::repository::Repository, RepositoryInvite), PostgresError> {
         let invite = entities::repository_invite::Entity::find()
             .filter(entities::repository_invite::Column::TokenHash.eq(token_hash.to_string()))
             .one(self.db.as_ref())
@@ -233,7 +235,7 @@ impl RepositoryStore {
         user: UserAccount,
         now_unix: u64,
         generated_ids: &dyn GeneratedIdSource,
-    ) -> Result<(scope_domain::store::StoredRepository, RepositoryMember), PostgresError> {
+    ) -> Result<(scope_domain::repository::Repository, RepositoryMember), PostgresError> {
         let token_hash = token_hash.to_string();
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
@@ -283,7 +285,7 @@ async fn mutate_repository_collaboration<T, F>(
 ) -> Result<T, PostgresError>
 where
     T: Send + 'static,
-    F: FnOnce(&mut StoredRepository) -> Result<T, PostgresError> + Send + 'static,
+    F: FnOnce(&mut Repository) -> Result<T, PostgresError> + Send + 'static,
 {
     let repo_id = repo_id(owner, name);
     let owner = owner.to_string();

@@ -7,11 +7,11 @@ use sea_orm::{
 };
 use {
     crate::error::PostgresError,
+    scope_domain::repository::access::RepositoryAccess,
     scope_domain::requests::{
         REQUEST_LIST_MAX_PAGE_SIZE, Request, RequestActorRole, RequestAudience, RequestEvent,
         RequestListPredicate, RequestState, request_list_predicate,
     },
-    scope_domain::store::RepositoryAccess,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -70,8 +70,8 @@ pub mod outbox_job {
             id: String,
             job_kind: &str,
             repo_id: &str,
-            head: &scope_domain::store::GitHead,
-            pack_spans: &[scope_domain::store::GitPackSpan],
+            head: &scope_domain::repository::git::GitHead,
+            pack_spans: &[scope_domain::repository::git::GitPackSpan],
             input: &scope_domain::runs::trigger::PushTriggerInput,
             now: u64,
         ) -> Result<Self, PostgresError> {
@@ -180,7 +180,8 @@ pub mod repo_storage_cleanup_job {
             generation: String,
             now_unix: u64,
         ) -> Result<Self, PostgresError> {
-            let repo_id = scope_domain::store::repo_id(&cleanup.owner_handle, &cleanup.repo_name);
+            let repo_id =
+                scope_domain::repository::repo_id(&cleanup.owner_handle, &cleanup.repo_name);
             let now_unix = u64_to_i64(now_unix, "cleanup creation time")?;
             Ok(Self {
                 repo_id,

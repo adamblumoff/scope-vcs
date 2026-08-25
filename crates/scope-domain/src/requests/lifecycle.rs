@@ -4,7 +4,7 @@ use super::{
     RequestState, advance_request_activity, ensure_event_id_available, request_identity_audit_fact,
     validate_body_size, validate_required_id,
 };
-use crate::{error::DomainError, store::SourceBlob};
+use crate::{content::SourceBlob, error::DomainError};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]

@@ -1,10 +1,12 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    cache::{AttemptCacheObservation, AttemptCacheSetupObservation},
+    attempt::{MAX_RUN_ATTEMPTS, RunAttempt},
+    cache::observation::{AttemptCacheObservation, AttemptCacheSetupObservation},
     job::RunJob,
-    run::{MAX_RUN_ATTEMPTS, Run, RunAttempt, RunAttemptStep},
-    workflow::{MAX_WORKFLOW_JOBS, WorkflowRevision},
+    run::Run,
+    step::RunAttemptStep,
+    workflow::{definition::MAX_WORKFLOW_JOBS, revision::WorkflowRevision},
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use std::collections::HashMap;

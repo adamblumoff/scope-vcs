@@ -9,8 +9,8 @@ use sea_orm::{DatabaseTransaction, TransactionTrait};
 use {
     crate::error::PostgresError,
     scope_domain::{
+        repository::Repository,
         requests::{Request, RequestLifecycleMutation, SubmitRequestInput, submit_request},
-        store::StoredRepository,
     },
 };
 
@@ -39,7 +39,7 @@ async fn lock_submission_context(
     tx: &DatabaseTransaction,
     actor_user_id: &str,
     request_id: &str,
-) -> Result<(StoredRepository, Request), PostgresError> {
+) -> Result<(Repository, Request), PostgresError> {
     let (repo, request) = lock_request_repository(tx, request_id).await?;
     ensure_user_exists(tx, actor_user_id).await?;
     Ok((repo, request))

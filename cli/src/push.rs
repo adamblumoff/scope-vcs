@@ -20,8 +20,8 @@ use crate::{
     review::{ensure_review_terminal_available, run_push_review},
 };
 use anyhow::bail;
+use scope_api_contract::PushTriggerEvaluationState;
 use scope_domain::repo_config::repo_config_fingerprint;
-use scope_domain::runs::trigger::PushTriggerEvaluationState;
 use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},

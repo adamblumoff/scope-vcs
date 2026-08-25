@@ -4,7 +4,7 @@ use super::{
     process::StepProcess,
 };
 use anyhow::Context as _;
-use scope_domain::runs::workflow::WorkflowJob;
+use scope_domain::runs::workflow::definition::WorkflowJob;
 use std::{path::Path, sync::Arc, thread, time::Duration, time::Instant};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);

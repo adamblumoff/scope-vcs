@@ -2,7 +2,7 @@ mod image;
 
 pub use image::{ImageContextPath, ImageContextPathError};
 
-use crate::{policy::ScopePath, runs::workflow::WorkflowPath};
+use crate::{policy::ScopePath, runs::workflow::identity::WorkflowPath};
 
 pub const REPO_CONTROL_ROOT: &str = "/.scope";
 pub const REPO_CONTROL_PREFIX: &str = "/.scope/";

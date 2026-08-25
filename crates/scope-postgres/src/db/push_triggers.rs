@@ -1,6 +1,6 @@
 use super::{
     GeneratedIdKind, GeneratedIdSource, RunStore,
-    cleanup_queue::queue_pending_source_blob_deletion_rows,
+    cleanup_queue::queue::queue_pending_source_blob_deletion_rows,
     entities,
     generated_ids::generate_id,
     object_references::{delete_object_reference, insert_object_reference},
@@ -10,13 +10,14 @@ use super::{
 use crate::error::PostgresError;
 use scope_domain::{
     projection::ProjectionViewKey,
+    repository::git::{GitHead, GitPackSpan},
     runs::{
-        run::{Run, RunSource, RunTrigger},
+        run::Run,
+        source::{RunSource, RunTrigger},
         trigger::{
             PushTriggerCheck, PushTriggerEvaluation, PushTriggerEvaluationState, PushTriggerInput,
         },
     },
-    store::{GitHead, GitPackSpan},
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait,
@@ -381,10 +382,11 @@ mod tests {
     use super::*;
     use crate::db::MetadataStore;
     use scope_domain::{
+        account::UserAccount,
+        content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
         content_ref::ContentRef,
         policy::Visibility,
         runs::trigger::PushWorkflowFile,
-        store::{DEFAULT_GIT_FILE_MODE, SourceBlob, UserAccount},
     };
 
     #[tokio::test]
@@ -706,13 +708,15 @@ jobs:
         assert!(!protected.is_empty());
         assert!(protected.iter().all(|job| {
             job.next_run_at_unix
-                >= i64::try_from(now() + crate::db::cleanup_queue::SOURCE_BLOB_DELETE_GRACE_SECONDS)
-                    .unwrap()
+                >= i64::try_from(
+                    now() + crate::db::cleanup_queue::queue::SOURCE_BLOB_DELETE_GRACE_SECONDS,
+                )
+                .unwrap()
         }));
         let cleanup = store
             .cleanup()
             .source_blob_cleanup_batch(
-                now() + crate::db::cleanup_queue::SOURCE_BLOB_DELETE_GRACE_SECONDS + 1,
+                now() + crate::db::cleanup_queue::queue::SOURCE_BLOB_DELETE_GRACE_SECONDS + 1,
                 &crate::db::generated_ids::test_generated_id,
             )
             .await
@@ -776,7 +780,7 @@ jobs:
         let cleanup = store
             .cleanup()
             .source_blob_cleanup_batch(
-                now() + crate::db::cleanup_queue::SOURCE_BLOB_DELETE_GRACE_SECONDS + 1,
+                now() + crate::db::cleanup_queue::queue::SOURCE_BLOB_DELETE_GRACE_SECONDS + 1,
                 &crate::db::generated_ids::test_generated_id,
             )
             .await

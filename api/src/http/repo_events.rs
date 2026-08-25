@@ -12,8 +12,10 @@ use axum::{
 };
 use futures_util::stream;
 use scope_domain::{
+    account::UserAccount,
+    repository::access::RepositoryActor,
+    repository::repo_id,
     requests::{RequestViewer, request_policy},
-    store::{RepositoryActor, UserAccount, repo_id},
 };
 use std::{convert::Infallible, time::Duration};
 use tokio_stream::{Stream, StreamExt, once, wrappers::BroadcastStream};
@@ -153,14 +155,14 @@ async fn stream_event_for_user(
 
 fn ensure_repo_events_allowed(
     state: &AppState,
-    repo: &scope_domain::store::StoredRepository,
+    repo: &scope_domain::repository::Repository,
     principal: &scope_domain::policy::Principal,
 ) -> Result<(), ApiError> {
     ensure_repo_read(state, repo, principal)
 }
 
 fn event_for_principal(
-    repo: &scope_domain::store::StoredRepository,
+    repo: &scope_domain::repository::Repository,
     principal: &scope_domain::policy::Principal,
     event: RepoChangeEvent,
 ) -> Option<RepoChangeEvent> {

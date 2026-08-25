@@ -5,7 +5,8 @@ use crate::{
     runtime_budgets::RuntimeBudgets,
     state::AppState,
 };
-use scope_domain::store::{GitHead, SourceBlob, is_supported_git_file_mode};
+use scope_domain::content::{SourceBlob, is_supported_git_file_mode};
+use scope_domain::repository::git::GitHead;
 use scope_domain::{
     policy::ScopePath,
     repo_control::{RepoControlPath, classify_repo_control_path},
@@ -553,7 +554,7 @@ pub(crate) fn run_git_output_bounded(
 }
 
 pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {
-    let repo_id = scope_domain::store::repo_id(owner, repo_name);
+    let repo_id = scope_domain::repository::repo_id(owner, repo_name);
     let digest = Sha256::digest(repo_id.as_bytes());
     format!("repo-{digest:x}")
 }

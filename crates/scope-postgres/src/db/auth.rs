@@ -5,7 +5,7 @@ use super::{
     entities,
 };
 use crate::error::PostgresError;
-use scope_domain::{account::cli_auth as cli_auth_rules, store::UserAccount};
+use scope_domain::{account::UserAccount, account::cli_auth as cli_auth_rules};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,
     TransactionTrait, sea_query::Expr,

@@ -22,14 +22,15 @@ use axum::{
     http::HeaderMap,
 };
 use scope_api_contract::{
-    CommitFileResponse, GitOid, RequestDiscussionAnchor as RequestDiscussionAnchorRequest,
-    RequestRevisionCommitResponse, RequestRevisionInspectionState, RequestRevisionListResponse,
-    RequestRevisionResponse,
+    CommitFileResponse, GitOid, RequestRevisionCommitResponse, RequestRevisionInspectionState,
+    RequestRevisionListResponse, RequestRevisionResponse,
 };
 use scope_domain::{
+    history::FileChangeKind,
     policy::ScopePath,
-    requests::{Request, RequestDiscussionAnchor, RequestRevision, select_request_review_revision},
-    store::{FileChangeKind, RepositoryAccess, StoredRepository},
+    repository::Repository,
+    repository::access::RepositoryAccess,
+    requests::{Request, RequestRevision, select_request_review_revision},
 };
 use serde::Deserialize;
 use std::path::Path as FsPath;
@@ -278,62 +279,9 @@ pub(crate) async fn get_request_revision_commit_file_diff(
     }))
 }
 
-pub(crate) async fn validate_request_discussion_anchor(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-    repo: &StoredRepository,
-    access: RepositoryAccess,
-    request: &Request,
-    anchor: RequestDiscussionAnchorRequest,
-) -> Result<RequestDiscussionAnchor, ApiError> {
-    if anchor.path.is_some() && anchor.commit_oid.is_none() {
-        return Err(ApiError::bad_request(
-            "request discussion path requires a commit",
-        ));
-    }
-    let revision = state
-        .metadata
-        .requests()
-        .request_revision(&request.id, &anchor.revision_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("request revision not found"))?;
-    let path = anchor
-        .path
-        .map(|path| normalized_scope_path(&path))
-        .transpose()?;
-    let commit_oid = anchor.commit_oid.map(canonical_commit_oid).transpose()?;
-    if let Some(commit_oid) = commit_oid.as_deref() {
-        let inspected = with_request_revision_store_repo(
-            state,
-            owner,
-            repo_name,
-            request,
-            &revision,
-            |raw_repo| request_revision_commit_files(raw_repo, repo, access, &revision, commit_oid),
-        )?;
-        if let Some(path) = path.as_ref()
-            && !inspected
-                .commit
-                .files
-                .iter()
-                .any(|file| file.path == path.as_str().trim_start_matches('/'))
-        {
-            return Err(ApiError::bad_request(
-                "request discussion path is not changed by the selected commit",
-            ));
-        }
-    }
-    Ok(RequestDiscussionAnchor {
-        revision_id: revision.id,
-        commit_oid,
-        path,
-    })
-}
-
 fn request_revision_commits(
     raw_repo: &FsPath,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     revision: &RequestRevision,
     selected_commit: Option<&str>,
@@ -492,7 +440,7 @@ struct VisibleRequestChanges {
 
 fn request_changes_from_repo_with_visibility(
     raw_repo: &FsPath,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     old_head_oid: &str,
     new_head_oid: &str,

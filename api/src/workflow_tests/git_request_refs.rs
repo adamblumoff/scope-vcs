@@ -28,7 +28,7 @@ mod review;
 
 use http::public_get_json;
 async fn assert_restored_request_head(state: &AppState, expected: &str) -> PathBuf {
-    let staging = crate::git::request_refs::ensure_request_receive_pack_staging_repo(
+    let staging = crate::use_cases::git_receive::request_ref::prepare_request_staging_repo(
         state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
@@ -63,9 +63,8 @@ async fn test_state_with_request() -> AppState {
     state
 }
 
-async fn test_state_with_mergeable_request() -> (AppState, TempGitRepo) {
-    let (state, source, _head) =
-        super::push_intent_completion::published_git_fixture("request-merge-state").await;
+async fn test_state_with_mergeable_request(label: &str) -> (AppState, TempGitRepo) {
+    let (state, source, _head) = super::push_intent_completion::published_git_fixture(label).await;
     state
         .metadata
         .auth()

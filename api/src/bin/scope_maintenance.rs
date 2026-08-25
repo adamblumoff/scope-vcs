@@ -3,15 +3,33 @@ use scope_postgres::db::{
     verify_schema, verify_writer_fence_available,
 };
 
-const USAGE: &str = "usage: scope-maintenance <plan|fence|drain-writers|validate-workflow-catalogs|apply|backfill-landing-files|backfill-workflow-catalogs|verify>";
+const USAGE: &str = r#"usage: scope-maintenance <command>
+
+commands:
+  plan                        print the pending migration plan as JSON (read-only)
+  verify                      require the exact migration ledger (read-only)
+  fence                       probe the exclusive writer fence (read-only)
+  drain-writers               terminate sessions holding the shared writer fence
+  validate-workflow-catalogs  validate pre-migration workflow inputs
+  apply                       apply all pending migrations behind the writer fence
+  backfill-landing-files      idempotently rebuild repository landing-file metadata
+  backfill-workflow-catalogs  idempotently rebuild repository workflow catalogs
+  help                        show this help
+
+Production cutovers are owned by the backend deployment workflow. If apply may
+have committed and recovery cannot prove the old ledger is unchanged, keep API
+and worker writers closed and rerun the same revision to finish forward."#;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let command = std::env::args()
-        .nth(1)
-        .ok_or_else(|| anyhow::anyhow!(USAGE))?;
-    if std::env::args().nth(2).is_some() {
+    let mut args = std::env::args().skip(1);
+    let command = args.next().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+    if args.next().is_some() {
         anyhow::bail!(USAGE);
+    }
+    if matches!(command.as_str(), "help" | "-h" | "--help") {
+        println!("{USAGE}");
+        return Ok(());
     }
     let database_url = maintenance_database_url()?;
 

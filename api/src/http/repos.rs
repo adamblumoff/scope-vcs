@@ -24,17 +24,21 @@ use scope_api_contract::{
     CreatePushIntentRequest, CreatePushIntentResponse, CreateRepoRequest, CreateRepoResponse,
     OwnerProfileResponse, RepoConfigResponse, RepoSummaryResponse,
 };
-use scope_domain::landing_file::{MAX_REPOSITORY_LANDING_FILE_BYTES, REPOSITORY_LANDING_FILE_PATH};
-use scope_domain::repo_actions::reviewed_update_domain_error;
 use scope_domain::repo_config::{
     is_repo_config_fingerprint, repo_config_fingerprint as domain_repo_config_fingerprint,
 };
-use scope_domain::requests::{Request, RequestViewer, request_policy};
-use scope_domain::reviewed_updates::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo};
-use scope_domain::store::{RepositoryAccess, RepositoryActor};
 use scope_domain::{
     error::DomainError,
     policy::{ScopePath, Visibility},
+};
+use scope_domain::{
+    landing_file::{MAX_REPOSITORY_LANDING_FILE_BYTES, REPOSITORY_LANDING_FILE_PATH},
+    repo_actions::reviewed_update_domain_error,
+};
+use scope_domain::{
+    repository::access::{RepositoryAccess, RepositoryActor},
+    requests::{Request, RequestViewer, request_policy},
+    reviewed_updates::config::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo},
 };
 use scope_postgres::db::{RepoSummaryRead, RepositoryMutation};
 
@@ -161,7 +165,8 @@ pub(crate) async fn delete_repo(
         .publish_repo_change(&repo_id, delete_version, RepoChangeReason::RepoDeleted)
         .await;
 
-    crate::repo_cleanup::best_effort_drain_pending_repo_storage_deletions(&state).await;
+    crate::use_cases::content_cleanup::best_effort_drain_pending_repo_storage_deletions(&state)
+        .await;
     Ok(Json(DeleteRepoResponse {
         id: repo_id,
         deleted: true,
@@ -212,7 +217,7 @@ pub(crate) async fn create_push_intent(
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
     let access = repo.access;
 
-    if repo.lifecycle_state == scope_domain::store::RepoLifecycleState::AwaitingFirstPush {
+    if repo.lifecycle_state == scope_domain::repository::RepoLifecycleState::AwaitingFirstPush {
         if access.actor != RepositoryActor::Owner {
             return Err(ApiError::not_found(format!(
                 "repo {owner}/{repo_name} not found"

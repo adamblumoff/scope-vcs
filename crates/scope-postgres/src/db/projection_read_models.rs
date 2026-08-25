@@ -18,7 +18,8 @@ use {
             projected_files as domain_projected_files,
         },
         repo_control::{REPO_CONTROL_PREFIX, REPO_CONTROL_ROOT},
-        store::{RepositoryAccess, RepositoryActor, StoredRepository},
+        repository::Repository,
+        repository::access::{RepositoryAccess, RepositoryActor},
     },
 };
 
@@ -40,7 +41,7 @@ pub(super) enum ProjectionFileLookup {
 
 pub async fn save_live_projection_read_models<C>(
     conn: &C,
-    repo: &StoredRepository,
+    repo: &Repository,
     rebuilt_at_unix: u64,
 ) -> Result<(), PostgresError>
 where
@@ -272,7 +273,7 @@ where
 
 async fn load_live_projection_files<C>(
     conn: &C,
-    repo: &StoredRepository,
+    repo: &Repository,
     principal: &Principal,
 ) -> Result<Option<Vec<ProjectionViewFile>>, PostgresError>
 where
@@ -289,7 +290,7 @@ where
 }
 
 fn projected_files_for_audience(
-    repo: &StoredRepository,
+    repo: &Repository,
     audience: ProjectionAudience,
 ) -> Vec<ProjectionViewFileContent> {
     let principal = match audience {
@@ -311,7 +312,7 @@ fn projection_view_key(audience: ProjectionAudience) -> ProjectionViewKey {
     }
 }
 
-fn live_projection_audience(repo: &StoredRepository, principal: &Principal) -> ProjectionAudience {
+fn live_projection_audience(repo: &Repository, principal: &Principal) -> ProjectionAudience {
     live_projection_audience_for_access(repo.access_for_principal(principal))
 }
 
@@ -326,7 +327,7 @@ fn live_projection_audience_for_access(access: RepositoryAccess) -> ProjectionAu
 impl RepositoryStore {
     pub async fn live_projection_head_oid(
         &self,
-        repo: &StoredRepository,
+        repo: &Repository,
         view_key: ProjectionViewKey,
     ) -> Result<Option<String>, PostgresError> {
         let audience = match view_key {
@@ -359,7 +360,7 @@ impl RepositoryStore {
 
     pub async fn live_projection_files(
         &self,
-        repo: &StoredRepository,
+        repo: &Repository,
         principal: &Principal,
     ) -> Result<Vec<ProjectionViewFile>, PostgresError> {
         let db = Arc::clone(&self.db);
