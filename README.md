@@ -1,50 +1,66 @@
 # Scope
 
-## Take back control of your open-source project.
+Scope is a pre-alpha source-control platform built around permissioned repository
+projections. Maintainers keep one repository, choose which files are public, and
+share only that public projection with outside contributors.
 
-Scope is a new source-control platform for maintainers who want more control
-over how their projects are shared, developed, and governed.
+Each repository carries trusted `.scope/RULES.md` guidance. Contributor changes
+cannot modify protected `.scope` paths. Contribution requests move through a
+small Draft, Open, Closed, and Merged lifecycle: drafts stay private to their
+participants, and submission places work in the maintainer queue without making
+the request immutable.
 
-Open source should not mean giving up control of your code, your contributors,
-or your attention. Scope is exploring a different model: one where maintainers
-can open their projects on their own terms.
+Scope does not use staking, credits, or automated qualification to rank or admit
+requests. Verified participants can rate one another after a request closes or
+merges, but ratings do not grant permissions or control submission.
 
-## One project, without the all-or-nothing repository
+## Repository map
 
-Today, opening a repository usually means opening all of it. The alternative is
-often a maze of public and private repositories that drift apart.
+- `api/` owns HTTP delivery, authentication, server-sent events, and application
+  composition.
+- `worker/` owns durable background work, cloud execution, cleanup, and Git
+  compaction.
+- `cache-service/` serves workflow-cache metadata and signed object transfers.
+- `runner-runtime/` executes isolated workflow jobs.
+- `cli/` is the independently built and released command-line client.
+- `web/` contains the browser application and generated API contract.
+- `crates/` contains domain code, wire contracts, and infrastructure adapters.
+- `dev/` contains the supported local-development and check entrypoints.
+- `bench/` contains storage and deployed-system benchmarks.
 
-Scope's vision is one project that can present different views to different
-audiences. Maintainers, partners, and public contributors can work from the
-same source without everyone receiving the same access.
+## Local development
 
-That means maintainers could:
+Copy the environment templates and add a matching Clerk development key pair to
+`web/.env.local`:
 
-- choose which parts of a project are public
-- collaborate without exposing the entire codebase
-- set clear rules for how contributions enter the project
-- use signals such as contributor staking to protect maintainer attention and
-  disincentivize low-effort, mass-produced contributions
-- keep ownership of the project independent of any single hosting provider
+```bash
+cp .env.example .env.local
+cp web/.env.example web/.env.local
+./dev/scope-dev doctor
+./dev/scope-dev up
+```
 
-## Open collaboration, on the maintainer's terms
+The local web app runs at `http://localhost:3000`; the API runs at
+`http://localhost:8080`. Run `./dev/scope-dev --help` for setup requirements,
+commands, safety checks, and state locations.
 
-We believe open-source infrastructure should give maintainers more agency, not
-less. Scope aims to make meaningful outside collaboration possible while
-preserving control over visibility, access, governance, and attention.
+## Checks
 
-The growing influx of slop contributions on GitHub consumes maintainer time
-without meaningfully improving their projects. Scope is exploring incentives
-that reward serious contributions and make low-effort submissions costly to
-produce at scale.
+Run the complete non-browser check suite from the repository root:
 
-The long-term goal is not to remain another layer on top of GitHub. We want
-Scope to become an independent home for source code and the communities that
-build around it.
+```bash
+./dev/check
+```
 
-## Work in progress
+Use `./dev/check --help` to run one check group. Browser smoke requires the local
+stack and Clerk development credentials:
 
-Scope is an early, experimental project. The product and its ideas are still
-taking shape in public.
+```bash
+./dev/check smoke
+```
 
-When updates stop happening here on GitHub, you'll know Scope is ready.
+Benchmark methodology is documented in [`bench/README.md`](bench/README.md).
+Current technical ownership is documented in
+[`docs/architecture.md`](docs/architecture.md).
+Production migration recovery is documented in
+[`docs/maintenance-cutovers.md`](docs/maintenance-cutovers.md).

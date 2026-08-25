@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "production": [
+    {
+      "path": "api/src/git/cache.rs",
+      "owner": "repository Git materialization cache",
+      "reason": "Materialization coordination, leases, pruning, and their concurrency and eviction tests define one cache lifecycle."
+    },
+    {
+      "path": "api/src/git/request_ref_public_safety.rs",
+      "owner": "public request-ref safety",
+      "reason": "Commit reachability, path disclosure checks, and adversarial fixtures jointly enforce one public-request invariant."
+    },
+    {
+      "path": "api/src/git/storage.rs",
+      "owner": "local Git repository process adapter",
+      "reason": "Repository paths, receive hooks, process-group lifetime, and CGI parsing are the local Git execution boundary."
+    },
+    {
+      "path": "api/src/http/request_discussions.rs",
+      "owner": "request discussion HTTP delivery",
+      "reason": "Discussion queries and mutations share visibility projection, cursor, anchor, and response mapping rules."
+    },
+    {
+      "path": "api/src/http/requests.rs",
+      "owner": "request HTTP delivery",
+      "reason": "Request list, lifecycle, identity, and participant endpoints share request lookup, visibility, and response projection."
+    },
+    {
+      "path": "cache-service/src/handlers.rs",
+      "owner": "workflow cache HTTP delivery",
+      "reason": "Restore and upload handlers share grant authorization, lease timing, signed-transfer behavior, and focused endpoint tests."
+    },
+    {
+      "path": "cli/src/agent_context.rs",
+      "owner": "repository agent context",
+      "reason": "Agent-file discovery, trusted-rule synchronization, push validation, and adapter fixtures define one CLI behavior."
+    },
+    {
+      "path": "cli/src/api/requests.rs",
+      "owner": "CLI request API client",
+      "reason": "Typed request and discussion calls share URL construction, authenticated execution, decoding, and client tests."
+    },
+    {
+      "path": "cli/src/git_repo.rs",
+      "owner": "CLI Git workspace adapter",
+      "reason": "Workspace discovery, revision and path queries, authenticated Git commands, and output parsing form one adapter."
+    },
+    {
+      "path": "cli/src/request.rs",
+      "owner": "CLI request command group",
+      "reason": "Request start, push, status, discussion, and close flows share branch state and user-facing command semantics."
+    },
+    {
+      "path": "crates/scope-domain/src/requests/discussions.rs",
+      "owner": "request discussion aggregate",
+      "reason": "Discussion creation, replies, transitions, read state, validation, and transition tests enforce one aggregate."
+    },
+    {
+      "path": "crates/scope-git/src/projection_identity.rs",
+      "owner": "Git projection identity",
+      "reason": "Tree construction, native-range validation, deterministic object identity, and identity fixtures are one algorithm."
+    },
+    {
+      "path": "crates/scope-object-store/src/s3.rs",
+      "owner": "S3 object-store adapter",
+      "reason": "Configuration, SigV4 signing, HTTP transfer, presigning, and provider-level fixtures form one adapter."
+    },
+    {
+      "path": "crates/scope-postgres/src/db/cache_service.rs",
+      "owner": "workflow cache persistence",
+      "reason": "Object, upload, reference, deletion, and repository-budget operations share one locked cache metadata model."
+    },
+    {
+      "path": "crates/scope-postgres/src/db/git_compaction.rs",
+      "owner": "Git compaction persistence",
+      "reason": "Scheduling, claiming, replacement validation, completion, retry state, and transaction tests form one durable workflow."
+    },
+    {
+      "path": "crates/scope-postgres/src/db/outbox.rs",
+      "owner": "projection read-model outbox",
+      "reason": "Enqueue, claim, execute, lease, retry, completion, pruning, and queue tests implement one durable outbox."
+    },
+    {
+      "path": "crates/scope-postgres/src/db/push_triggers.rs",
+      "owner": "push-trigger evaluation persistence",
+      "reason": "Durable evaluation input, trigger selection, atomic run enqueue, source release, and workflow tests form one job."
+    },
+    {
+      "path": "crates/scope-run-config/src/lib.rs",
+      "owner": "workflow configuration compiler",
+      "reason": "YAML decoding, validation, domain compilation, repository catalog parsing, and grammar fixtures define one compiler."
+    }
+  ]
+}

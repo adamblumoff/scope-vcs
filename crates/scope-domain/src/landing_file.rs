@@ -1,7 +1,7 @@
 use crate::{
+    content::{SourceBlob, is_supported_git_file_mode},
     content_ref::ContentRef,
     error::DomainError,
-    store::{SourceBlob, is_supported_git_file_mode},
 };
 use sha2::{Digest, Sha256};
 
@@ -116,7 +116,7 @@ pub enum RepositoryLandingFileMutation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::DEFAULT_GIT_FILE_MODE;
+    use crate::content::DEFAULT_GIT_FILE_MODE;
 
     fn git_blob(bytes: &[u8]) -> SourceBlob {
         SourceBlob {

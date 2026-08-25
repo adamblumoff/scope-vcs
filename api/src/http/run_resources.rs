@@ -16,7 +16,7 @@ use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
 };
-use scope_domain::{runs::workflow::WorkflowRevision, store::StoredRepository};
+use scope_domain::{repository::Repository, runs::workflow::revision::WorkflowRevision};
 use scope_postgres::db::{RunHistoryCursor, RunHistoryPageQuery};
 use serde::Deserialize;
 
@@ -111,7 +111,7 @@ pub(crate) async fn get_repository_run_history(
 
 async fn current_workflows(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
 ) -> Result<Vec<WorkflowRevision>, ApiError> {
     let snapshot = state
         .metadata
@@ -146,7 +146,7 @@ async fn require_repository_member(
     headers: &HeaderMap,
     owner: &str,
     repo_name: &str,
-) -> Result<StoredRepository, ApiError> {
+) -> Result<Repository, ApiError> {
     let user = require_scope_user(state, headers).await?;
     let repo = find_repo(state, owner, repo_name).await?;
     if !repo.is_maintainer_user_id(&user.id) {

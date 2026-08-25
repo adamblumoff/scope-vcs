@@ -9,7 +9,9 @@ use {
     scope_domain::{
         projection::SourceGraph,
         repo_config::RepoConfig,
-        store::{GitHead, GitPackSpan, RepoLifecycleState, RepositoryAccess, repo_id},
+        repository::access::RepositoryAccess,
+        repository::git::{GitHead, GitPackSpan},
+        repository::{RepoLifecycleState, repo_id},
     },
 };
 

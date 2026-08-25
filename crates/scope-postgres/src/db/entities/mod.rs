@@ -1,27 +1,41 @@
-use crate::db::projection_encoding::{LIVE_PROJECTION_SOURCE, ProjectionAudience};
-use crate::db::{decode_json, encode_json};
-use crate::error::PostgresError;
-use scope_domain::policy::{Policy, ScopePath, Visibility};
-use scope_domain::projection_views::{ProjectionViewFile, ProjectionViewFileContent};
+use crate::{
+    db::projection_encoding::{LIVE_PROJECTION_SOURCE, ProjectionAudience},
+    db::{decode_json, encode_json},
+    error::PostgresError,
+};
 use scope_domain::runs::{
-    cache::{
+    attempt::{AttemptState, ExecutionProvider, RunAttempt},
+    cache::observation::{
         AttemptCacheObservation, AttemptCachePreparationTiming, AttemptCacheSetupObservation,
         CacheColdReason, CacheFinalState, CachePreparation,
     },
-    job::RunJob,
-    run::{
-        AttemptState, AttemptTerminalReason, ExecutionProvider, PinnedContainerImage, Run,
-        RunAttempt, RunAttemptStep, RunJobState, RunLogChunk, RunSource, RunState, RunTrigger,
-        StepState,
-    },
+    image::PinnedContainerImage,
+    job::{RunJob, RunJobState},
+    log::RunLogChunk,
+    run::{Run, RunState},
+    source::{RunSource, RunTrigger},
+    step::{AttemptTerminalReason, RunAttemptStep, StepState},
     trigger::PushTriggerEvaluation,
-    workflow::{CompiledWorkflow, WorkflowIdentity, WorkflowJobId, WorkflowPath, WorkflowRevision},
+    workflow::{
+        definition::{CompiledWorkflow, WorkflowJobId},
+        identity::{WorkflowIdentity, WorkflowPath},
+        revision::WorkflowRevision,
+    },
 };
-use scope_domain::store::{
-    DEFAULT_GIT_FILE_MODE, FirstPushToken, GitHead, GitPackSpan, GitPushToken, RepoLifecycleState,
-    RepoRecord, RepoStorageCleanup, RepositoryInvite, RepositoryInviteState, RepositoryMember,
-    RepositoryMemberPermissions, SourceBlob, StoredRepository, UserAccount,
-    is_supported_git_file_mode,
+use scope_domain::{
+    account::UserAccount,
+    content::{DEFAULT_GIT_FILE_MODE, SourceBlob, is_supported_git_file_mode},
+    repo_actions::RepoStorageCleanup,
+    repository::collaboration::{
+        RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
+    },
+    repository::credentials::{FirstPushToken, GitPushToken},
+    repository::git::{GitHead, GitPackSpan},
+    repository::{RepoLifecycleState, RepoRecord, Repository},
+};
+use scope_domain::{
+    policy::{Policy, ScopePath, Visibility},
+    projection_views::{ProjectionViewFile, ProjectionViewFileContent},
 };
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};

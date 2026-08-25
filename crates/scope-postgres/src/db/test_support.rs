@@ -1,6 +1,8 @@
 use super::{
     AdminStore, CatalogFixture, acquire_aggregate_lock,
-    cleanup_queue::{save_pending_repo_storage_deletions, save_pending_source_blob_deletions},
+    cleanup_queue::queue::{
+        save_pending_repo_storage_deletions, save_pending_source_blob_deletions,
+    },
     entities,
     repository_rows::insert_repository,
     request_discussion_rows::{insert_discussion, insert_reply, save_read_state},
@@ -11,7 +13,7 @@ use super::{
 #[cfg(any(test, feature = "test-support"))]
 use super::{
     AuthStore, CleanupStore, MetadataStore, RepositoryStore, RequestStore,
-    cleanup_queue::{
+    cleanup_queue::queue::{
         load_pending_repo_storage_deletions, load_pending_source_blob_deletions,
         queue_pending_repo_storage_cleanup_row_at,
     },
@@ -21,8 +23,9 @@ use super::{
 };
 #[cfg(any(test, feature = "test-support"))]
 use scope_domain::{
+    content::SourceBlob,
+    repo_actions::RepoStorageCleanup,
     requests::{Request, RequestEvent},
-    store::{RepoStorageCleanup, SourceBlob},
 };
 use sea_orm::{ActiveModelTrait, ConnectionTrait, IntoActiveModel, TransactionTrait};
 #[cfg(any(test, feature = "test-support"))]
@@ -38,8 +41,7 @@ use std::{
 use {
     crate::error::PostgresError,
     scope_domain::{
-        runs::catalog::RepositoryWorkflowCatalog,
-        store::{StoredRepository, UserAccount},
+        account::UserAccount, repository::Repository, runs::catalog::RepositoryWorkflowCatalog,
     },
 };
 
@@ -219,7 +221,7 @@ impl AuthStore {
 impl RepositoryStore {
     pub async fn replace_repository_for_tests(
         &self,
-        repo: StoredRepository,
+        repo: Repository,
     ) -> Result<(), PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         ensure_repository_users_for_tests(&tx, &repo).await?;
@@ -256,7 +258,7 @@ impl RepositoryStore {
     pub async fn mutate_repository_for_tests(
         &self,
         repo_id: &str,
-        op: impl FnOnce(&mut scope_domain::store::StoredRepository),
+        op: impl FnOnce(&mut scope_domain::repository::Repository),
     ) -> Result<(), PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         acquire_aggregate_lock(&tx, "repository", repo_id).await?;
@@ -300,7 +302,7 @@ impl RepositoryStore {
     pub async fn repository_for_tests(
         &self,
         repo_id: &str,
-    ) -> Result<Option<StoredRepository>, PostgresError> {
+    ) -> Result<Option<Repository>, PostgresError> {
         let row = entities::repository::Entity::find_by_id(repo_id.to_string())
             .one(self.db.as_ref())
             .await
@@ -373,7 +375,7 @@ impl RequestStore {
 #[cfg(any(test, feature = "test-support"))]
 async fn ensure_repository_users_for_tests<C>(
     conn: &C,
-    repo: &StoredRepository,
+    repo: &Repository,
 ) -> Result<(), PostgresError>
 where
     C: sea_orm::ConnectionTrait,
@@ -535,7 +537,7 @@ async fn seed_catalog_rows(
 
 async fn seed_empty_repository_workflow_catalog(
     tx: &sea_orm::DatabaseTransaction,
-    repo: &StoredRepository,
+    repo: &Repository,
 ) -> Result<(), PostgresError> {
     let Some(head) = &repo.git_head else {
         return Ok(());

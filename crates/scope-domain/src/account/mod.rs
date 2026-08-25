@@ -1,8 +1,15 @@
 pub mod cli_auth;
 pub mod handles;
 
-use crate::store::UserAccount;
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserAccount {
+    pub id: String,
+    pub handle: String,
+    pub email: String,
+    pub email_verified: bool,
+}
 
 /// The authenticated account facts exposed to a signed-in session.
 #[derive(Clone, Debug, PartialEq, Eq)]

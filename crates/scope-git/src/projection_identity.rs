@@ -1,7 +1,7 @@
 use crate::{GitTreePath, GitTreePathError};
 use scope_domain::{
+    content::is_supported_git_file_mode,
     projection::{Projection, ProjectionMaterialization},
-    store::is_supported_git_file_mode,
 };
 use sha1::{Digest, Sha1};
 use std::{
@@ -345,10 +345,10 @@ fn git_tree_name_cmp(
 mod tests {
     use super::*;
     use scope_domain::{
+        content::SourceBlob,
         content_ref::ContentRef,
         policy::{ScopePath, Visibility},
         projection::{ProjectedChange, ProjectedCommit, ProjectionViewKey},
-        store::SourceBlob,
     };
     use std::{
         fs,

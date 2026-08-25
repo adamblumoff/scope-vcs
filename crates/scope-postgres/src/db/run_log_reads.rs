@@ -1,6 +1,6 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
-use scope_domain::runs::{run::RunLogChunk, workflow::WorkflowJobId};
+use scope_domain::runs::{log::RunLogChunk, workflow::definition::WorkflowJobId};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter,
     QueryOrder, QuerySelect, Statement,

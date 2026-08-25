@@ -1,6 +1,6 @@
 use super::tokens::{random_token, token_hash};
 use crate::{config::CLI_SESSION_TOKEN_PREFIX, error::ApiError};
-use scope_domain::{account::SessionIdentity, store::UserAccount};
+use scope_domain::{account::SessionIdentity, account::UserAccount};
 use scope_postgres::db::{
     AuthStore, CreateCliExchangeGrantCommand, DeviceLoginPoll as PersistedDeviceLoginPoll,
     NewCliSession, StartBrowserLoginCommand, StartDeviceLoginCommand,

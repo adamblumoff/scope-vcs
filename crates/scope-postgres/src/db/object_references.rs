@@ -1,6 +1,6 @@
 use super::entities;
 use crate::error::PostgresError;
-use scope_domain::{content_ref::ContentRef, store::SourceBlob};
+use scope_domain::{content::SourceBlob, content_ref::ContentRef};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
 };
@@ -134,7 +134,7 @@ where
 mod tests {
     use super::*;
     use crate::db::{MetadataStore, TestDatabaseTarget};
-    use scope_domain::store::DEFAULT_GIT_FILE_MODE;
+    use scope_domain::content::DEFAULT_GIT_FILE_MODE;
 
     #[tokio::test]
     async fn repository_deletion_preserves_shared_content_references_owned_by_another_repo() {

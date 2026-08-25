@@ -1,6 +1,6 @@
 use super::{
     GeneratedIdSource, RequestStore, acquire_aggregate_lock,
-    cleanup_queue::queue_pending_source_blob_deletion_rows,
+    cleanup_queue::queue::queue_pending_source_blob_deletion_rows,
     object_references::delete_object_reference,
     request_access::{
         authorize_start_request, ensure_user_exists, lock_request_repository, repo_by_id,

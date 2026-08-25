@@ -218,7 +218,8 @@ impl Drop for TemporaryGitRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_domain::store::{DEFAULT_GIT_FILE_MODE, GitPackSpan};
+    use scope_domain::content::DEFAULT_GIT_FILE_MODE;
+    use scope_domain::repository::git::GitPackSpan;
     use scope_git_process::ProcessError;
     use scope_object_store::{ContentObjectKind, MemoryObjectStore, put_content_object};
 

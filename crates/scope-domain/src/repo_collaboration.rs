@@ -1,6 +1,10 @@
-use super::store::{
-    RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
-    StoredRepository, UserAccount, normalize_repository_invite_email,
+use super::{
+    account::UserAccount,
+    repository::Repository,
+    repository::collaboration::{
+        RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
+        normalize_repository_invite_email,
+    },
 };
 use crate::error::DomainError;
 
@@ -22,7 +26,7 @@ pub struct CreateRepositoryInviteCommand<'a> {
 }
 
 pub fn create_or_refresh_repository_invite(
-    repo: &mut StoredRepository,
+    repo: &mut Repository,
     command: CreateRepositoryInviteCommand<'_>,
 ) -> Result<RepositoryInvite, DomainError> {
     ensure_can_manage_members(repo, &command.owner.id)?;
@@ -75,7 +79,7 @@ pub fn create_or_refresh_repository_invite(
 }
 
 pub fn accept_repository_invite(
-    repo: &mut StoredRepository,
+    repo: &mut Repository,
     user: &UserAccount,
     token_hash: &str,
     now_unix: u64,
@@ -123,7 +127,7 @@ pub fn accept_repository_invite(
 }
 
 pub fn revoke_repository_invite(
-    repo: &mut StoredRepository,
+    repo: &mut Repository,
     owner_user_id: &str,
     invite_id: &str,
     now_unix: u64,
@@ -149,7 +153,7 @@ pub fn revoke_repository_invite(
 }
 
 pub fn update_repository_member_permissions(
-    repo: &mut StoredRepository,
+    repo: &mut Repository,
     owner_user_id: &str,
     member_user_id: &str,
     permissions: RepositoryMemberPermissions,
@@ -169,7 +173,7 @@ pub fn update_repository_member_permissions(
 }
 
 pub fn remove_repository_member(
-    repo: &mut StoredRepository,
+    repo: &mut Repository,
     owner_user_id: &str,
     member_user_id: &str,
 ) -> Result<RepositoryMember, DomainError> {
@@ -184,10 +188,7 @@ pub fn remove_repository_member(
     Ok(removed)
 }
 
-pub fn ensure_can_manage_members(
-    repo: &StoredRepository,
-    user_id: &str,
-) -> Result<(), DomainError> {
+pub fn ensure_can_manage_members(repo: &Repository, user_id: &str) -> Result<(), DomainError> {
     if repo.access_for_user_id(user_id).can_manage_members {
         Ok(())
     } else if repo.is_owner_user(user_id) {
@@ -209,7 +210,7 @@ fn validate_invite_email(email: &str) -> Result<String, DomainError> {
     Ok(normalized)
 }
 
-fn sort_members(repo: &mut StoredRepository) {
+fn sort_members(repo: &mut Repository) {
     repo.members.sort_by(|left, right| {
         left.user_id
             .cmp(&right.user_id)
@@ -217,7 +218,7 @@ fn sort_members(repo: &mut StoredRepository) {
     });
 }
 
-fn sort_invitations(repo: &mut StoredRepository) {
+fn sort_invitations(repo: &mut Repository) {
     repo.invitations.sort_by(|left, right| {
         left.invited_email_normalized
             .cmp(&right.invited_email_normalized)

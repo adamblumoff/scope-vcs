@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
 
-async fn mutate_repo(state: &AppState, configure: impl FnOnce(&mut StoredRepository)) {
+async fn mutate_repo(state: &AppState, configure: impl FnOnce(&mut Repository)) {
     state
         .metadata
         .repositories()
@@ -30,8 +30,8 @@ fn commit(
 fn change(
     visibility: Visibility,
     path: &str,
-    old: Option<scope_domain::store::SourceBlob>,
-    new: Option<scope_domain::store::SourceBlob>,
+    old: Option<scope_domain::content::SourceBlob>,
+    new: Option<scope_domain::content::SourceBlob>,
 ) -> FileChange {
     FileChange {
         visibility,
@@ -41,7 +41,7 @@ fn change(
     }
 }
 
-fn set_private(repo: &mut StoredRepository, public_path: Option<&str>) {
+fn set_private(repo: &mut Repository, public_path: Option<&str>) {
     repo.repo_config = repo_config(Visibility::Private);
     repo.policy = Policy::new(Visibility::Private);
     if let Some(path) = public_path {
@@ -51,7 +51,7 @@ fn set_private(repo: &mut StoredRepository, public_path: Option<&str>) {
     }
 }
 
-fn add_mixed_commit(state: &AppState, repo: &mut StoredRepository) {
+fn add_mixed_commit(state: &AppState, repo: &mut Repository) {
     repo.graph.commits.push(commit(
         "rv1",
         None,

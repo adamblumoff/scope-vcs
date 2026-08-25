@@ -1,5 +1,5 @@
 use anyhow::{Context as _, anyhow};
-use scope_domain::runs::workflow::WorkflowJob;
+use scope_domain::runs::workflow::definition::WorkflowJob;
 use std::{
     os::unix::process::CommandExt as _,
     path::Path,

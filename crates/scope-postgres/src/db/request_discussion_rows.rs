@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use {
     crate::error::PostgresError,
     scope_domain::{
+        account::UserAccount,
         requests::{RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply},
-        store::UserAccount,
     },
 };
 

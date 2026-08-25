@@ -1,11 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+usage: ./dev/scope-dev [command]
+
+Supported local-development entrypoint.
+
+commands:
+  doctor  validate required tools, local environment, and Clerk development keys
+  up      migrate and seed Postgres, then start API, worker, and web processes
+  down    stop processes started by this script
+  status  show owned process and HTTP readiness state (default)
+  reset   stop owned processes and remove .scope/dev and .tmp/local-dev
+  bench   run the short deployed-system benchmark against the running local API
+  help    show this help
+
+required configuration:
+  .env.local       DATABASE_URL, SCOPE_DEV_USER_EMAIL, optional SCOPE_DEV_USER_HANDLE
+  web/.env.local   VITE_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY using matching
+                   Clerk development keys
+
+local services:
+  web  http://localhost:3000
+  API  http://localhost:8080
+
+The local API uses filesystem object storage under .scope/dev. Startup strips
+inherited Railway and bucket variables and rejects production-looking Clerk or
+database settings. reset refuses to remove data outside this repository.
+
+After `up`, run `./dev/check smoke` for the anonymous browser smoke suite. See
+bench/README.md for benchmark controls beyond the short local defaults.
+EOF
+}
+
 COMMAND="${1:-status}"
 case "$COMMAND" in
   bench|doctor|up|down|status|reset) ;;
+  help|-h|--help)
+    usage
+    exit 0
+    ;;
   *)
-    echo "usage: $0 [bench|doctor|up|down|status|reset]" >&2
+    usage >&2
     exit 2
     ;;
 esac

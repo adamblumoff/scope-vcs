@@ -85,6 +85,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "tempfile",
  "time",
  "tokio",
  "tokio-stream",
@@ -2736,7 +2737,6 @@ name = "scope-domain"
 version = "0.1.0"
 dependencies = [
  "hex",
- "scope-cache-domain",
  "serde",
  "serde_json",
  "sha1",

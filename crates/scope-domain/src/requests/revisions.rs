@@ -1,5 +1,5 @@
 use super::{Request, RequestEvent};
-use crate::{error::DomainError, store::SourceBlob};
+use crate::{content::SourceBlob, error::DomainError};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

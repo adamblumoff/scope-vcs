@@ -6,7 +6,7 @@ use crate::error::PostgresError;
 use scope_domain::{
     policy::{ScopePath, Visibility},
     repo_actions::set_visibility,
-    store::{StoredRepository, repo_id},
+    repository::{Repository, repo_id},
 };
 use sea_orm::{EntityTrait, TransactionTrait};
 use std::sync::Arc;
@@ -25,7 +25,7 @@ impl RepositoryStore {
         &self,
         command: UpdateRepoFileVisibilityCommand,
         generated_ids: &dyn GeneratedIdSource,
-    ) -> Result<StoredRepository, PostgresError> {
+    ) -> Result<Repository, PostgresError> {
         let UpdateRepoFileVisibilityCommand {
             owner,
             name,

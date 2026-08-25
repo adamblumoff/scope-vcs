@@ -80,7 +80,7 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         scope_domain::content_ref::ContentRef::git_manifest_sha256(base_manifest.sha256.clone());
     let base_head_oid = "0000000000000000000000000000000000000001".to_string();
     base_manifest.git_oid = base_head_oid.clone();
-    let base_segment = scope_domain::store::GitPackSpan {
+    let base_segment = scope_domain::repository::git::GitPackSpan {
         first_sequence: 1,
         last_sequence: 1,
         geometric_tier: 0,
@@ -93,7 +93,7 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
             segment
         },
     };
-    repo.git_head = Some(scope_domain::store::GitHead {
+    repo.git_head = Some(scope_domain::repository::git::GitHead {
         head_oid: base_head_oid.clone(),
         push_sequence: 1,
         change_version: repo.record.change_version,
@@ -133,13 +133,13 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         update.previous_config = Some(update.config.clone());
         update.base_git_manifest_ref = Some(Some(previous_manifest_ref));
         update.head_oid = head_oid.clone();
-        update.git_head = scope_domain::store::GitHead {
+        update.git_head = scope_domain::repository::git::GitHead {
             head_oid: head_oid.clone(),
             push_sequence: sequence,
             change_version: sequence,
             manifest: manifest.clone(),
         };
-        update.git_pack_span = scope_domain::store::GitPackSpan {
+        update.git_pack_span = scope_domain::repository::git::GitPackSpan {
             first_sequence: sequence,
             last_sequence: sequence,
             geometric_tier: 0,
@@ -162,7 +162,7 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         .unwrap();
 
         let persisted = persist_test_update(&state, update).await.unwrap();
-        assert_eq!(persisted.git_head.change_version, sequence);
+        assert_eq!(persisted.change_version, sequence);
         let stored = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
             .await
             .unwrap();
@@ -304,7 +304,7 @@ async fn push_only_member_can_apply_content_without_visibility_changes() {
     .await
     .unwrap();
 
-    assert!(!persisted.git_head.head_oid.is_empty());
+    assert!(!persisted.head_oid.is_empty());
     assert_eq!(
         live_file_content(&state, "/README.md").await.as_deref(),
         Some("hello\nextra line")
@@ -383,7 +383,7 @@ async fn applying_push_does_not_delete_previous_snapshot_inline() {
     update.git_pack_span.base_oid = Some(old_snapshot.git_oid.clone());
     let new_key = scope_object_store::object_key(&update.git_head.manifest);
     let mut repo = repo_with_readme(&state);
-    repo.git_head = Some(scope_domain::store::GitHead {
+    repo.git_head = Some(scope_domain::repository::git::GitHead {
         head_oid: old_snapshot.git_oid.clone(),
         push_sequence: 1,
         change_version: 1,
@@ -392,21 +392,22 @@ async fn applying_push_does_not_delete_previous_snapshot_inline() {
     let mut old_pack = source_blob(&state, "old live Git pack");
     old_pack.content_ref =
         scope_domain::content_ref::ContentRef::git_segment_sha256(old_pack.sha256.clone());
-    repo.git_pack_spans.push(scope_domain::store::GitPackSpan {
-        first_sequence: 1,
-        last_sequence: 1,
-        geometric_tier: 0,
-        base_oid: None,
-        head_oid: repo.git_head.as_ref().unwrap().head_oid.clone(),
-        object: old_pack,
-    });
+    repo.git_pack_spans
+        .push(scope_domain::repository::git::GitPackSpan {
+            first_sequence: 1,
+            last_sequence: 1,
+            geometric_tier: 0,
+            base_oid: None,
+            head_oid: repo.git_head.as_ref().unwrap().head_oid.clone(),
+            object: old_pack,
+        });
     replace_test_repo(&state, repo).await;
 
     let persisted = persist_and_promote_test_update(&state, update, &test_owner_id())
         .await
         .unwrap();
 
-    assert!(!persisted.git_head.head_oid.is_empty());
+    assert!(!persisted.head_oid.is_empty());
     let store = &state.test_object_store;
     assert!(store.contains_key(&old_key));
     assert!(store.contains_key(&new_key));

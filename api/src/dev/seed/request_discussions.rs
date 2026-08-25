@@ -1,10 +1,12 @@
 use crate::error::ApiError;
 use scope_domain::{
+    account::UserAccount,
+    repository::Repository,
+    repository::collaboration::{RepositoryMember, RepositoryMemberPermissions},
     requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput, RequestDiscussionAnchor,
         RequestDiscussionStatus,
     },
-    store::{RepositoryMember, RepositoryMemberPermissions, StoredRepository, UserAccount},
 };
 use scope_postgres::db::MetadataStore;
 
@@ -49,7 +51,7 @@ pub(super) fn collaborators() -> [UserAccount; 2] {
     ]
 }
 
-pub(super) fn add_maintainer(repo: &mut StoredRepository) {
+pub(super) fn add_maintainer(repo: &mut Repository) {
     repo.members.push(RepositoryMember {
         repo_id: repo.record.id.clone(),
         user_id: MAINTAINER_ID.to_string(),

@@ -13,8 +13,8 @@ pub use snapshot::{
 };
 pub use tree_path::{GitTreePath, GitTreePathError};
 
+use scope_domain::content::SourceBlob;
 use scope_domain::content_ref::ContentRef;
-use scope_domain::store::SourceBlob;
 #[cfg(feature = "storage")]
 use scope_object_store::ObjectStoreError;
 use serde::{Deserialize, Serialize};
@@ -143,7 +143,7 @@ pub fn git_blob_reference(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_domain::store::DEFAULT_GIT_FILE_MODE;
+    use scope_domain::content::DEFAULT_GIT_FILE_MODE;
 
     fn manifest(sha256: &str) -> SourceBlob {
         SourceBlob {

@@ -192,6 +192,39 @@ async fn public_git_remote_cannot_receive_pack() {
 }
 
 #[tokio::test]
+async fn receive_pack_advertisement_prepares_without_persisting_first_push() {
+    let (state, secret) = test_state_with_first_push_token().await;
+    let intent = create_test_push_intent(&state, &test_owner_id(), TEST_PUSH_HEAD_OID).await;
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/git/permissioned/owner/repo/info/refs?service=git-receive-pack")
+                .header(
+                    AUTHORIZATION,
+                    format!("Basic {}", BASE64.encode(format!("scope:{secret}"))),
+                )
+                .header("x-scope-push-intent", intent)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let repo = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.record.lifecycle_state,
+        RepoLifecycleState::AwaitingFirstPush
+    );
+    assert!(repo.first_push_token.is_some());
+    assert!(repo.git_head.is_none());
+    assert!(repo.graph.commits.is_empty());
+}
+
+#[tokio::test]
 async fn published_receive_pack_accepts_member_scope_session() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);

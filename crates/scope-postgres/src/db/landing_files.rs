@@ -1,11 +1,12 @@
 use super::{RepositoryStore, acquire_aggregate_lock, entities};
 use crate::error::PostgresError;
 use scope_domain::{
+    content::SourceBlob,
     landing_file::{
         MAX_REPOSITORY_LANDING_FILE_BYTES, REPOSITORY_LANDING_FILE_PATH, RepositoryLandingFile,
         RepositoryLandingFileMutation,
     },
-    store::{GitHead, GitPackSpan, SourceBlob},
+    repository::git::{GitHead, GitPackSpan},
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,

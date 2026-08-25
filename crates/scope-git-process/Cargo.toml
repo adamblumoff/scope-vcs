@@ -1,10 +1,10 @@
 [package]
 name = "scope-git-process"
-version = "0.1.0"
-edition = "2024"
-license = "UNLICENSED"
-repository = "https://github.com/adamblumoff/scope-vcs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-libc = "0.2"
-thiserror = "2.0.18"
+libc.workspace = true
+thiserror.workspace = true

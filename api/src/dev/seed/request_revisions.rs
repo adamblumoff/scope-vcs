@@ -3,7 +3,7 @@ use super::{
     store_seed_bundle,
 };
 use crate::error::ApiError;
-use scope_domain::store::SourceBlob;
+use scope_domain::content::SourceBlob;
 use scope_object_store::ObjectStore;
 use std::path::Path;
 

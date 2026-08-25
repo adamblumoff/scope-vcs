@@ -1,6 +1,8 @@
 use crate::db::entities;
-use crate::db::{MetadataStore, SourceBlobCleanupDecision, TestDatabaseTarget};
-use scope_domain::store::{DEFAULT_GIT_FILE_MODE, SourceBlob};
+use crate::db::{
+    MetadataStore, TestDatabaseTarget, cleanup_queue::types::SourceBlobCleanupDecision,
+};
+use scope_domain::content::{DEFAULT_GIT_FILE_MODE, SourceBlob};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
 use std::time::Duration;
 

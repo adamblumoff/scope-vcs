@@ -52,9 +52,15 @@
         ".github/deployment-services.json",
         ".github/scripts/plan-production-deployment.mjs",
         ".github/scripts/plan-production-deployment.test.mjs",
+        ".github/scripts/check-rust-boundaries.mjs",
+        ".github/scripts/check-rust-boundaries.test.mjs",
+        ".github/scripts/check-source-size.mjs",
+        ".github/scripts/check-source-size.test.mjs",
+        ".github/source-size-audit.json",
         ".github/scripts/production-deployment-progress.mjs",
         ".github/scripts/production-deployment-progress.test.mjs",
-        ".github/workflows/scope-production-deploy.yml"
+        ".github/workflows/scope-production-deploy.yml",
+        "dev/check"
       ],
       "prefixes": []
     },

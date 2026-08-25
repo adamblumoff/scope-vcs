@@ -1,6 +1,6 @@
 use crate::{
-    persistence::unix_now, repo_cleanup::drain_pending_source_blob_deletions_report,
-    state::AppState,
+    persistence::unix_now, state::AppState,
+    use_cases::content_cleanup::drain_pending_source_blob_deletions_report,
 };
 use std::time::Duration;
 

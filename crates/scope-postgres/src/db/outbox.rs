@@ -551,7 +551,7 @@ fn unix_timestamp_i64(now_unix: u64) -> Result<i64, PostgresError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_domain::{policy::Visibility, store::UserAccount};
+    use scope_domain::{account::UserAccount, policy::Visibility};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]

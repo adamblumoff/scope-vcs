@@ -25,9 +25,12 @@ use axum::{
 use scope_domain::policy::Principal;
 #[cfg(test)]
 use scope_domain::projection::Projection;
-use scope_domain::projection::{ProjectionViewKey, project_graph};
-use scope_domain::requests::{Request, RequestViewer, canonical_request_ref, request_policy};
-use scope_domain::store::{RepoLifecycleState, RepositoryActor};
+use scope_domain::{
+    projection::{ProjectionViewKey, project_graph},
+    repository::RepoLifecycleState,
+    repository::access::RepositoryActor,
+    requests::{Request, RequestViewer, canonical_request_ref, request_policy},
+};
 use scope_git_process::{
     ProcessLimits, STDERR_DIAGNOSTIC_BYTES, run as run_process, truncated_stderr,
 };
@@ -323,7 +326,7 @@ async fn git_read_principal_for_request(
     mode: GitRemoteMode,
 ) -> Result<
     (
-        scope_domain::store::StoredRepository,
+        scope_domain::repository::Repository,
         Principal,
         Option<String>,
     ),
@@ -344,7 +347,7 @@ async fn git_read_principal_for_request(
 }
 
 fn unpublished_git_read_error(
-    repo: &scope_domain::store::StoredRepository,
+    repo: &scope_domain::repository::Repository,
     owner: &str,
     repo_name: &str,
     principal: &Principal,

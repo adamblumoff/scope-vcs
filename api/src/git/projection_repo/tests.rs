@@ -1,9 +1,9 @@
 use super::*;
 use scope_domain::{
+    content::SourceBlob,
     content_ref::ContentRef,
     policy::{ScopePath, Visibility},
     projection::{ProjectedChange, ProjectedCommit, ProjectionViewKey},
-    store::SourceBlob,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 

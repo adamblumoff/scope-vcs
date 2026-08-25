@@ -1,5 +1,6 @@
 use crate::git_repo::{CompactionPackMetrics, build_compacted_pack};
-use scope_domain::store::{GitPackSpan, SourceBlob};
+use scope_domain::content::SourceBlob;
+use scope_domain::repository::git::GitPackSpan;
 use scope_git::{GitStorageLimits, prepare_compacted_git_pack};
 use scope_git_process::ProcessError;
 use scope_object_store::{ObjectStore, object_key};

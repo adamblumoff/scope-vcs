@@ -5,13 +5,12 @@ use crate::{
     state::AppState,
 };
 use scope_domain::{
-    policy::Principal,
-    store::{RepositoryActor, StoredRepository},
+    policy::Principal, repository::Repository, repository::access::RepositoryActor,
 };
 
 pub(crate) fn ensure_projection_preview_access(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     requester: &Principal,
     audience: ProjectionPreviewAudience,
     source: ProjectionPreviewSource,
@@ -36,8 +35,8 @@ pub(crate) fn ensure_projection_preview_access(
 }
 
 pub(crate) fn projection_preview_repo(
-    repo: &StoredRepository,
+    repo: &Repository,
     _source: ProjectionPreviewSource,
-) -> Result<StoredRepository, ApiError> {
+) -> Result<Repository, ApiError> {
     Ok(repo.clone())
 }

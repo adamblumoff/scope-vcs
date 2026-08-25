@@ -3,8 +3,10 @@ use scope_api_contract::{
     RequestListItemResponse, RequestMergeabilityResponse, RequestPermissionsResponse,
     RequestSummaryResponse,
 };
-use scope_domain::requests::{Request, RequestEvent, request_list_mergeability};
-use scope_domain::store::RepositoryAccess;
+use scope_domain::{
+    repository::access::RepositoryAccess,
+    requests::{Request, RequestEvent, request_list_mergeability},
+};
 use scope_postgres::db::RequestListRow;
 
 pub(crate) fn request_summary_response(

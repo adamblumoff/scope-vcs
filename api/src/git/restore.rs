@@ -4,7 +4,10 @@ use crate::{
     git::{import::run_git, upload::git_process_output_with_timeout},
     state::AppState,
 };
-use scope_domain::store::{GitHead, GitPackSpan, SourceBlob, validate_git_pack_layout};
+use scope_domain::{
+    content::SourceBlob,
+    repository::git::{GitHead, GitPackSpan, validate_git_pack_layout},
+};
 use scope_object_store::source_blob_bytes;
 use std::{fs, path::Path, process::Command, time::Instant};
 

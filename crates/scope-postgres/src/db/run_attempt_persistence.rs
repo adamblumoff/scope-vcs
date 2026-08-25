@@ -1,9 +1,6 @@
 use super::entities;
 use crate::error::PostgresError;
-use scope_domain::runs::{
-    job::RunJob,
-    run::{Run, RunAttempt, RunAttemptStep},
-};
+use scope_domain::runs::{attempt::RunAttempt, job::RunJob, run::Run, step::RunAttemptStep};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter,
     QueryOrder, QuerySelect,

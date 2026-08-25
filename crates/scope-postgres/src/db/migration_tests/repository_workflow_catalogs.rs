@@ -4,9 +4,9 @@ use crate::db::{
     workflow_catalogs::{apply_repository_workflow_catalog, repository_workflow_catalog},
 };
 use scope_domain::{
+    content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
     content_ref::ContentRef,
     runs::catalog::{RepositoryWorkflowCatalog, RepositoryWorkflowFile},
-    store::{DEFAULT_GIT_FILE_MODE, SourceBlob},
 };
 use sea_orm::{ConnectionTrait, EntityTrait, IntoActiveModel};
 

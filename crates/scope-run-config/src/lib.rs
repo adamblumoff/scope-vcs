@@ -1,9 +1,14 @@
 use scope_domain::runs::{
-    cache::{CacheKeyInputs, WorkflowCache},
+    cache::definition::{CacheKeyInputs, WorkflowCache},
     catalog::RepositoryWorkflowCatalog,
     workflow::{
-        CompiledWorkflow, ContainerSpec, WorkflowError, WorkflowIdentity, WorkflowJob,
-        WorkflowJobId, WorkflowPath, WorkflowRevision, WorkflowStep, WorkflowTriggers,
+        definition::{
+            CompiledWorkflow, ContainerSpec, WorkflowJob, WorkflowJobId, WorkflowStep,
+            WorkflowTriggers,
+        },
+        error::WorkflowError,
+        identity::{WorkflowIdentity, WorkflowPath},
+        revision::WorkflowRevision,
     },
 };
 use serde::{Deserialize, Deserializer, de::MapAccess, de::Visitor};
@@ -663,8 +668,8 @@ jobs:
     #[test]
     fn repository_catalog_uses_the_existing_workflow_parser() {
         use scope_domain::{
+            content::DEFAULT_GIT_FILE_MODE,
             runs::catalog::{RepositoryWorkflowCatalog, RepositoryWorkflowFile},
-            store::DEFAULT_GIT_FILE_MODE,
         };
 
         let file = RepositoryWorkflowFile::from_content(

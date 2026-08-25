@@ -2,15 +2,19 @@ use crate::{
     auth::clerk::bearer_token,
     config::SCOPE_OPERATOR_TOKEN_ENV,
     error::ApiError,
-    repo_cleanup::{CleanupDrainReport, drain_pending_cleanup},
     state::AppState,
+    use_cases::content_cleanup::{
+        self, CleanupDrainReport, RepoStorageCleanupDrainReport, RepoStorageCleanupFailure,
+        SourceBlobCleanupDrainReport, SourceBlobCleanupFailure,
+    },
 };
 use axum::{
     Json,
     extract::State,
     http::{HeaderMap, StatusCode},
 };
-use scope_domain::store::{RepoStorageCleanup, SourceBlob};
+use scope_domain::content::SourceBlob;
+use scope_domain::repo_actions::RepoStorageCleanup;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -54,7 +58,46 @@ struct SourceBlobCleanupResponse {
 #[derive(Debug, Serialize)]
 pub(crate) struct CleanupDrainResponse {
     status: &'static str,
-    report: CleanupDrainReport,
+    report: CleanupDrainReportResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct CleanupDrainReportResponse {
+    repo_storage: RepoStorageCleanupDrainReportResponse,
+    source_blobs: SourceBlobCleanupDrainReportResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct RepoStorageCleanupDrainReportResponse {
+    attempted: usize,
+    deleted: usize,
+    retained: usize,
+    failed: Vec<RepoStorageCleanupFailureResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct RepoStorageCleanupFailureResponse {
+    owner_handle: String,
+    repo_name: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceBlobCleanupDrainReportResponse {
+    attempted: usize,
+    deleted: usize,
+    retained: usize,
+    skipped_referenced: usize,
+    failed_object_deletes: Vec<SourceBlobCleanupFailureResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceBlobCleanupFailureResponse {
+    object_key: String,
+    sha256: String,
+    git_oid: String,
+    size_bytes: u64,
+    error: String,
 }
 
 pub(crate) async fn get_cleanup_status(
@@ -70,7 +113,7 @@ pub(crate) async fn drain_cleanup(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<CleanupDrainResponse>), ApiError> {
     ensure_operator(&state, &headers)?;
-    let report = drain_pending_cleanup(&state).await?;
+    let report = content_cleanup::drain_pending_cleanup(&state).await?;
     let has_failures = report.has_failures();
     Ok((
         if has_failures {
@@ -80,22 +123,84 @@ pub(crate) async fn drain_cleanup(
         },
         Json(CleanupDrainResponse {
             status: if has_failures { "failed" } else { "drained" },
-            report,
+            report: CleanupDrainReportResponse::from_report(report),
         }),
     ))
 }
 
 async fn cleanup_status(state: &AppState) -> Result<AdminCleanupStatusResponse, ApiError> {
-    let (repo_storage, source_blob_deletes) =
-        state.metadata.cleanup().pending_cleanup_queues().await?;
-    let source_blob_deletes = SourceBlobCleanupQueueResponse::from_blobs(&source_blob_deletes);
+    let status = content_cleanup::cleanup_status(state).await?;
+    let source_blob_deletes =
+        SourceBlobCleanupQueueResponse::from_blobs(&status.source_blob_deletes);
     Ok(AdminCleanupStatusResponse {
         pending_cleanup: PendingCleanupResponse {
-            repo_storage: RepoStorageCleanupQueueResponse::from_cleanups(&repo_storage),
+            repo_storage: RepoStorageCleanupQueueResponse::from_cleanups(&status.repo_storage),
             source_blob_deletes: source_blob_deletes.clone(),
         },
         failed_object_deletes: source_blob_deletes,
     })
+}
+
+impl CleanupDrainReportResponse {
+    fn from_report(report: CleanupDrainReport) -> Self {
+        Self {
+            repo_storage: RepoStorageCleanupDrainReportResponse::from_report(report.repo_storage),
+            source_blobs: SourceBlobCleanupDrainReportResponse::from_report(report.source_blobs),
+        }
+    }
+}
+
+impl RepoStorageCleanupDrainReportResponse {
+    fn from_report(report: RepoStorageCleanupDrainReport) -> Self {
+        Self {
+            attempted: report.attempted,
+            deleted: report.deleted,
+            retained: report.retained,
+            failed: report
+                .failed
+                .into_iter()
+                .map(RepoStorageCleanupFailureResponse::from_failure)
+                .collect(),
+        }
+    }
+}
+
+impl RepoStorageCleanupFailureResponse {
+    fn from_failure(failure: RepoStorageCleanupFailure) -> Self {
+        Self {
+            owner_handle: failure.owner_handle,
+            repo_name: failure.repo_name,
+            error: failure.error,
+        }
+    }
+}
+
+impl SourceBlobCleanupDrainReportResponse {
+    fn from_report(report: SourceBlobCleanupDrainReport) -> Self {
+        Self {
+            attempted: report.attempted,
+            deleted: report.deleted,
+            retained: report.retained,
+            skipped_referenced: report.skipped_referenced,
+            failed_object_deletes: report
+                .failed_object_deletes
+                .into_iter()
+                .map(SourceBlobCleanupFailureResponse::from_failure)
+                .collect(),
+        }
+    }
+}
+
+impl SourceBlobCleanupFailureResponse {
+    fn from_failure(failure: SourceBlobCleanupFailure) -> Self {
+        Self {
+            object_key: failure.object_key,
+            sha256: failure.sha256,
+            git_oid: failure.git_oid,
+            size_bytes: failure.size_bytes,
+            error: failure.error,
+        }
+    }
 }
 
 impl RepoStorageCleanupQueueResponse {

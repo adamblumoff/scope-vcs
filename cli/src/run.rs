@@ -11,9 +11,8 @@ use crate::{
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{
-    CliSuccessEnvelope, CreateManualRunQuery, RepositoryRunDetailResponse, RunResponse,
+    CliSuccessEnvelope, CreateManualRunQuery, RepositoryRunDetailResponse, RunResponse, RunState,
 };
-use scope_domain::runs::run::RunState;
 use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
 
 const MAX_PARTIAL_JOB_LINE_BYTES: usize = 8 * 1_024;
@@ -232,7 +231,9 @@ fn watch_run(
                             print_job_lines(line_buffers.push(&log.job_key, &log.text));
                         }
                     }
-                    RunStreamEvent::Status(run) if run.state.is_terminal() => terminal = Some(run),
+                    RunStreamEvent::Status(run) if is_terminal_state(run.state) => {
+                        terminal = Some(run)
+                    }
                     RunStreamEvent::Status(_) => {}
                 }
                 Ok(terminal.is_none())
@@ -446,6 +447,13 @@ fn state_label(state: RunState) -> &'static str {
         RunState::Canceled => "canceled",
         RunState::Lost => "lost",
     }
+}
+
+fn is_terminal_state(state: RunState) -> bool {
+    matches!(
+        state,
+        RunState::Succeeded | RunState::Failed | RunState::Canceled | RunState::Lost
+    )
 }
 
 fn short_oid(oid: &str) -> &str {

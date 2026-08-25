@@ -232,7 +232,7 @@ fn request_state(catalog: &scope_postgres::db::CatalogFixture, request_id: &str)
 
 fn assert_repository_file(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     label: &str,
     path: &str,
     expected: &str,

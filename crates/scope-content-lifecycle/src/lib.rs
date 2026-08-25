@@ -1,7 +1,7 @@
-use scope_domain::store::SourceBlob;
+use scope_domain::content::SourceBlob;
 use scope_object_store::{ObjectStore, ObjectStoreError, object_key};
 use scope_postgres::{
-    db::{GeneratedIdSource, MetadataStore, SourceBlobCleanupDecision},
+    db::{GeneratedIdSource, MetadataStore, cleanup_queue::types::SourceBlobCleanupDecision},
     error::PostgresError,
 };
 use std::collections::BTreeMap;

@@ -1,5 +1,8 @@
 use crate::{GitSnapshotManifest, GitStorageError, GitStorageLimits};
-use scope_domain::store::{GitHead, GitPackSpan, SourceBlob};
+use scope_domain::{
+    content::SourceBlob,
+    repository::git::{GitHead, GitPackSpan},
+};
 use scope_object_store::{
     ContentObjectKind, ObjectStore, content_object_for_bytes, ensure_object_size, object_key,
 };
@@ -195,7 +198,7 @@ fn prepare_git_push_objects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scope_domain::store::DEFAULT_GIT_FILE_MODE;
+    use scope_domain::content::DEFAULT_GIT_FILE_MODE;
     use scope_object_store::MemoryObjectStore;
 
     fn stored_blob(sha256: &str) -> SourceBlob {

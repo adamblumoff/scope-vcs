@@ -1,15 +1,18 @@
 use crate::config::DEFAULT_GIT_BRANCH;
 use scope_domain::landing_file::RepositoryLandingFileMutation;
-use scope_domain::reviewed_updates::{
+use scope_domain::repo_config::RepoConfig;
+use scope_domain::reviewed_updates::content::{
     ReviewedContentChange, ReviewedUpdateInput, apply_reviewed_update_to_repo,
 };
 use scope_domain::runs::catalog::RepositoryWorkflowCatalog;
-use scope_domain::store::{GitHead, GitPackSpan, SourceBlob, StoredRepository};
+use scope_domain::{
+    content::SourceBlob,
+    repository::Repository,
+    repository::git::{GitHead, GitPackSpan},
+};
 use scope_domain::{
     error::DomainError, policy::ScopePath, repo_actions::reviewed_update_domain_error,
 };
-use scope_domain::{repo_config::RepoConfig, repo_control::is_private_control_path};
-use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReceivePackFileChange {
@@ -49,8 +52,8 @@ pub(crate) struct ReceivePackUpdate {
     pub(crate) config: RepoConfig,
 }
 
-pub(super) fn apply_receive_pack_update(
-    repo: &mut StoredRepository,
+pub(crate) fn apply_receive_pack_update(
+    repo: &mut Repository,
     update: ReceivePackUpdate,
 ) -> Result<(), DomainError> {
     ensure_default_branch(&update.branch)?;
@@ -78,35 +81,4 @@ impl ReceivePackUpdate {
             config: self.config,
         }
     }
-}
-
-pub(super) fn receive_pack_update_changes_visibility(
-    repo: &StoredRepository,
-    previous_config: Option<&RepoConfig>,
-    update: &ReceivePackUpdate,
-) -> bool {
-    if let Some(previous_config) = previous_config {
-        return previous_config != &update.config;
-    }
-
-    if update.config.visibility.default_visibility()
-        != repo.repo_config.visibility.default_visibility()
-    {
-        return true;
-    }
-    if !update.config.visibility.rules.is_empty() || !update.config.history.rewrites.is_empty() {
-        return true;
-    }
-
-    let mut paths = repo.live_tree().into_keys().collect::<BTreeSet<_>>();
-    for change in &update.changes {
-        if change.content.is_some() {
-            paths.insert(change.path.clone());
-        }
-    }
-
-    paths.into_iter().any(|path| {
-        !is_private_control_path(&path)
-            && repo.policy.effective_visibility(&path) != update.config.visibility_for_path(&path)
-    })
 }

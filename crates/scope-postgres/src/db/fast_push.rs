@@ -9,11 +9,13 @@ use {
     crate::error::PostgresError,
     scope_domain::{
         landing_file::RepositoryLandingFileMutation,
-        reviewed_updates::ReviewedUpdateInput,
-        runs::catalog::RepositoryWorkflowCatalog,
-        store::{
-            MainPushMode, RepoLifecycleState, RepositoryActor, repository_push_policy_for_user_id,
+        repo_config::RepoConfig,
+        repository::RepoLifecycleState,
+        repository::access::repository_push_policy_for_user_id,
+        reviewed_updates::content::{
+            ReviewedUpdateAuthorization, ReviewedUpdateInput, authorize_reviewed_update,
         },
+        runs::catalog::RepositoryWorkflowCatalog,
     },
 };
 
@@ -34,7 +36,7 @@ impl RepositoryStore {
         &self,
         command: ApplyContentOnlyPushCommand,
         generated_ids: &dyn GeneratedIdSource,
-    ) -> Result<Option<scope_domain::store::GitHead>, PostgresError> {
+    ) -> Result<Option<scope_domain::repository::git::GitHead>, PostgresError> {
         let ApplyContentOnlyPushCommand {
             owner,
             name,
@@ -46,7 +48,7 @@ impl RepositoryStore {
             push_trigger_input,
             now_unix,
         } = command;
-        let repo_id = scope_domain::store::repo_id(&owner, &name);
+        let repo_id = scope_domain::repository::repo_id(&owner, &name);
         let transaction_started = Instant::now();
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let lock_started = Instant::now();
@@ -91,14 +93,14 @@ impl RepositoryStore {
             member_permissions,
             &author_id,
         );
-        if push_policy.mode != MainPushMode::Ready {
-            let message = if push_policy.access.actor == RepositoryActor::Public {
-                "repo membership required"
-            } else {
-                "push permission required"
-            };
-            return Err(PostgresError::permission_denied(message));
-        }
+        let current_config: RepoConfig = serde_json::from_value(repo_row.repo_config.clone())
+            .map_err(PostgresError::internal)?;
+        authorize_reviewed_update(ReviewedUpdateAuthorization {
+            access: push_policy.access,
+            push_mode: push_policy.mode,
+            current_config: &current_config,
+            proposed_config: &update.config,
+        })?;
         let git_head = accept_and_persist_content_push(
             &tx,
             repo_row,

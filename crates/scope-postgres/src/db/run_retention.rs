@@ -1,8 +1,9 @@
 use super::{
-    GeneratedIdSource, RunStore, cleanup_queue::queue_pending_source_blob_deletion_rows, entities,
+    GeneratedIdSource, RunStore, cleanup_queue::queue::queue_pending_source_blob_deletion_rows,
+    entities,
 };
 use crate::error::PostgresError;
-use scope_domain::store::SourceBlob;
+use scope_domain::content::SourceBlob;
 use sea_orm::{
     ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
     sea_query::Query,

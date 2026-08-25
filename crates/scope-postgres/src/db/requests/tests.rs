@@ -1,13 +1,15 @@
 use super::super::MetadataStore;
 use super::*;
 use scope_domain::{
+    account::UserAccount,
+    content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
     policy::Visibility,
+    repository::{RepoLifecycleState, Repository},
     requests::{
         CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
         RecordRequestRevisionInput, ReopenAndReplyToRequestDiscussionInput, RequestActorRole,
         RequestAudience, RequestDiscussionAnchor, RequestDiscussionStatus, RequestState,
     },
-    store::{DEFAULT_GIT_FILE_MODE, RepoLifecycleState, SourceBlob, StoredRepository, UserAccount},
 };
 
 #[tokio::test]
@@ -699,7 +701,7 @@ fn catalog_with_repo() -> crate::db::CatalogFixture {
         email: "public@example.com".to_string(),
         email_verified: true,
     };
-    let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+    let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
 
     let mut catalog = crate::db::CatalogFixture::default();

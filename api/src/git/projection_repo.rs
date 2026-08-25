@@ -10,9 +10,9 @@ use crate::{
     state::AppState,
 };
 use scope_domain::{
+    content::is_supported_git_file_mode,
     content_ref::ContentRef,
     projection::{Projection, ProjectionMaterialization},
-    store::is_supported_git_file_mode,
 };
 use scope_git::GitTreePath;
 use sha1::{Digest, Sha1};
@@ -43,7 +43,7 @@ fn projection_bare_repo_with_loader(
     cache_root: &FsPath,
     projection: &Projection,
     native_source_repo: Option<&FsPath>,
-    load_content: impl Fn(&scope_domain::store::SourceBlob) -> Result<Vec<u8>, ApiError>,
+    load_content: impl Fn(&scope_domain::content::SourceBlob) -> Result<Vec<u8>, ApiError>,
 ) -> Result<PathBuf, ApiError> {
     let cache_key = projection_cache_key(projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
@@ -396,8 +396,8 @@ pub(crate) fn projection_bare_repo_for_state(
     state: &AppState,
     repository_id: &str,
     projection: &Projection,
-    git_head: Option<&scope_domain::store::GitHead>,
-    git_pack_spans: &[scope_domain::store::GitPackSpan],
+    git_head: Option<&scope_domain::repository::git::GitHead>,
+    git_pack_spans: &[scope_domain::repository::git::GitPackSpan],
 ) -> Result<GitRepoHandle, ApiError> {
     let cache_root = state.repository_engine.cache_root().to_path_buf();
     let cache_key = projection_cache_key(projection);
@@ -441,7 +441,7 @@ pub(crate) fn verify_projection_materialization(
     state: &AppState,
     projection: &Projection,
     native_source_repo: &FsPath,
-    _git_manifest: &scope_domain::store::SourceBlob,
+    _git_manifest: &scope_domain::content::SourceBlob,
 ) -> Result<(), ApiError> {
     let cache_root = state.repository_engine.cache_root().to_path_buf();
     let attempt = PROJECTION_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);

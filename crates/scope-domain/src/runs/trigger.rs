@@ -1,6 +1,6 @@
 use super::{
     catalog::RepositoryWorkflowCatalog,
-    workflow::{WorkflowError, WorkflowPath},
+    workflow::{error::WorkflowError, identity::WorkflowPath},
 };
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
@@ -207,8 +207,8 @@ impl PushTriggerEvaluation {
 mod tests {
     use super::*;
     use crate::{
+        content::DEFAULT_GIT_FILE_MODE,
         runs::catalog::{RepositoryWorkflowCatalog, RepositoryWorkflowFile},
-        store::DEFAULT_GIT_FILE_MODE,
     };
 
     const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

@@ -1,14 +1,13 @@
 use crate::{
     auth::scope::require_scope_user,
     error::ApiError,
-    http::{
-        request_review::{RequestRevisionCommitVisibility, validate_request_discussion_anchor},
-        requests::*,
-        responses::*,
-    },
-    persistence::unix_now,
-    product_analytics::ProductEvent,
+    http::{request_review::RequestRevisionCommitVisibility, requests::*, responses::*},
     state::AppState,
+    use_cases::request_discussion_mutation::{
+        self, CreateDiscussionCommand, CreateReplyCommand, DiscussionAnchorInput,
+        DiscussionMutationResult, DiscussionTransition, MarkDiscussionReadCommand,
+        ReopenAndReplyCommand, ReplyMutationResult, TransitionDiscussionCommand,
+    },
 };
 use axum::{
     Json,
@@ -23,11 +22,7 @@ use scope_api_contract::{
     RequestDiscussionRepliesPageResponse, RequestDiscussionReplyMutationResponse,
     RequestDiscussionReplyResponse, RequestDiscussionSummaryResponse,
 };
-use scope_domain::requests::{
-    CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
-    MarkRequestDiscussionReadInput, REQUEST_ACTIVITY_PAGE_MAX_EVENTS,
-    ReopenAndReplyToRequestDiscussionInput, RequestViewer, request_actor_role, request_policy,
-};
+use scope_domain::requests::{REQUEST_ACTIVITY_PAGE_MAX_EVENTS, RequestViewer, request_policy};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -160,62 +155,24 @@ pub(crate) async fn create_discussion(
     Json(input): Json<CreateRequestDiscussionRequest>,
 ) -> Result<Json<RequestDiscussionMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let actor_user_id = user.id.clone();
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let anchor = match input.anchor {
-        Some(anchor) => Some(
-            validate_request_discussion_anchor(
-                &state, &owner, &repo_name, &repo, access, &request, anchor,
-            )
-            .await?,
-        ),
-        None => None,
-    };
-    let mutation = state
-        .metadata
-        .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
-            request_id: request.id.clone(),
-            id: random_id("discussion")?,
-            actor_user_id: actor_user_id.clone(),
-            actor_can_participate: false,
+    let result = request_discussion_mutation::create_discussion(
+        &state,
+        CreateDiscussionCommand {
+            owner,
+            repo_name,
+            request_id,
+            actor_user_id: user.id,
             client_discussion_id: input.client_discussion_id,
             body_markdown: input.body_markdown,
-            anchor,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    if mutation.created {
-        state
-            .product_analytics
-            .capture(ProductEvent::discussion_created(
-                &actor_user_id,
-                request.audience,
-                request_actor_role(access),
-                mutation.discussion.anchor.is_some(),
-            ));
-    }
-    let through_position = mutation.discussion.last_activity_position;
-    let discussion_id = mutation.discussion.id.clone();
-    let projection = DiscussionProjection {
-        state: &state,
-        owner: &owner,
-        repo_name: &repo_name,
-        request: &request,
-        repo: &repo,
-        access,
-    };
-    let discussion = load_one_summary(&projection, &discussion_id, Some(&actor_user_id)).await?;
-    state
-        .publish_request_timeline_change(
-            &repo.record.id,
-            request.id,
-            discussion_id,
-            through_position,
-            request.audience,
-        )
-        .await;
+            anchor: input.anchor.map(|anchor| DiscussionAnchorInput {
+                revision_id: anchor.revision_id,
+                commit_oid: anchor.commit_oid,
+                path: anchor.path,
+            }),
+        },
+    )
+    .await?;
+    let discussion = mutation_discussion_response(result)?;
     Ok(Json(RequestDiscussionMutationResponse { discussion }))
 }
 
@@ -274,39 +231,21 @@ pub(crate) async fn create_reply(
     Json(input): Json<CreateRequestDiscussionReplyRequest>,
 ) -> Result<Json<RequestDiscussionReplyMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let actor_user_id = user.id.clone();
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let mutation = state
-        .metadata
-        .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
-            request_id: request.id.clone(),
-            discussion_id: discussion_id.clone(),
-            id: random_id("discussion_reply")?,
-            actor_user_id: actor_user_id.clone(),
-            actor_can_participate: false,
+    let result = request_discussion_mutation::create_reply(
+        &state,
+        CreateReplyCommand {
+            owner,
+            repo_name,
+            request_id,
+            discussion_id,
+            actor_user_id: user.id,
             client_reply_id: input.client_reply_id,
             body_markdown: input.body_markdown,
             reply_to_reply_id: input.reply_to_reply_id,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    let projection = DiscussionProjection {
-        state: &state,
-        owner: &owner,
-        repo_name: &repo_name,
-        request: &request,
-        repo: &repo,
-        access,
-    };
-    reply_mutation_response(
-        &projection,
-        mutation.discussion.id,
-        mutation.reply,
-        &actor_user_id,
+        },
     )
-    .await
+    .await?;
+    Ok(Json(reply_mutation_response(result)?))
 }
 
 pub(crate) async fn resolve_discussion(
@@ -321,7 +260,7 @@ pub(crate) async fn resolve_discussion(
         repo_name,
         request_id,
         discussion_id,
-        true,
+        DiscussionTransition::Resolve,
     )
     .await
 }
@@ -338,7 +277,7 @@ pub(crate) async fn reopen_discussion(
         repo_name,
         request_id,
         discussion_id,
-        false,
+        DiscussionTransition::Reopen,
     )
     .await
 }
@@ -350,42 +289,21 @@ pub(crate) async fn reopen_and_reply(
     Json(input): Json<ReopenAndReplyRequest>,
 ) -> Result<Json<RequestDiscussionReplyMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let actor_user_id = user.id.clone();
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let mutation = state
-        .metadata
-        .requests()
-        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
-            request_id: request.id.clone(),
-            discussion_id: discussion_id.clone(),
-            reply_id: random_id("discussion_reply")?,
-            actor_user_id: actor_user_id.clone(),
-            actor_is_maintainer: false,
-            actor_can_transition: false,
-            actor_can_participate: false,
-            event_id: random_id("event_request_discussion_reopened")?,
+    let result = request_discussion_mutation::reopen_and_reply(
+        &state,
+        ReopenAndReplyCommand {
+            owner,
+            repo_name,
+            request_id,
+            discussion_id,
+            actor_user_id: user.id,
             client_reply_id: input.client_reply_id,
             body_markdown: input.body_markdown,
             reply_to_reply_id: input.reply_to_reply_id,
-            now_unix: unix_now()?,
-        })
-        .await?;
-    let projection = DiscussionProjection {
-        state: &state,
-        owner: &owner,
-        repo_name: &repo_name,
-        request: &request,
-        repo: &repo,
-        access,
-    };
-    reply_mutation_response(
-        &projection,
-        mutation.discussion.id,
-        mutation.reply,
-        &actor_user_id,
+        },
     )
-    .await
+    .await?;
+    Ok(Json(reply_mutation_response(result)?))
 }
 
 pub(crate) async fn mark_read(
@@ -395,21 +313,20 @@ pub(crate) async fn mark_read(
     Json(input): Json<MarkRequestDiscussionReadRequest>,
 ) -> Result<Json<RequestDiscussionReadResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    ensure_discussion_in_request(&state, &request_id, &discussion_id).await?;
-    let state = state
-        .metadata
-        .requests()
-        .mark_request_discussion_read(MarkRequestDiscussionReadInput {
+    let result = request_discussion_mutation::mark_read(
+        &state,
+        MarkDiscussionReadCommand {
+            owner,
+            repo_name,
+            request_id,
             discussion_id,
-            user_id: user.id,
+            actor_user_id: user.id,
             through_position: input.through_position,
-            now_unix: unix_now()?,
-        })
-        .await?;
+        },
+    )
+    .await?;
     Ok(Json(RequestDiscussionReadResponse {
-        read_through_position: state.read_through_position,
+        read_through_position: result.read_through_position,
     }))
 }
 
@@ -548,123 +465,41 @@ async fn transition_discussion(
     repo_name: String,
     request_id: String,
     discussion_id: String,
-    resolve: bool,
+    transition: DiscussionTransition,
 ) -> Result<Json<RequestDiscussionMutationResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let actor_user_id = user.id.clone();
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
-    let discussion = if resolve {
-        state
-            .metadata
-            .requests()
-            .resolve_request_discussion(
-                request.id.clone(),
-                discussion_id.clone(),
-                actor_user_id.clone(),
-                random_id("event_request_discussion_resolved")?,
-                unix_now()?,
-            )
-            .await?
-    } else {
-        state
-            .metadata
-            .requests()
-            .reopen_request_discussion(
-                request.id.clone(),
-                discussion_id.clone(),
-                actor_user_id.clone(),
-                random_id("event_request_discussion_reopened")?,
-                unix_now()?,
-            )
-            .await?
-    };
-    if resolve {
-        state
-            .product_analytics
-            .capture(ProductEvent::discussion_resolved(
-                &actor_user_id,
-                request.audience,
-                request_actor_role(access),
-            ));
-    }
-    let through_position = discussion.last_activity_position;
-    let projection = DiscussionProjection {
-        state: &state,
-        owner: &owner,
-        repo_name: &repo_name,
-        request: &request,
-        repo: &repo,
-        access,
-    };
-    let discussion = load_one_summary(&projection, &discussion_id, Some(&actor_user_id)).await?;
-    state
-        .publish_request_timeline_change(
-            &repo.record.id,
-            request.id,
+    let result = request_discussion_mutation::transition_discussion(
+        &state,
+        TransitionDiscussionCommand {
+            owner,
+            repo_name,
+            request_id,
             discussion_id,
-            through_position,
-            request.audience,
-        )
-        .await;
+            actor_user_id: user.id,
+            transition,
+        },
+    )
+    .await?;
+    let discussion = mutation_discussion_response(result)?;
     Ok(Json(RequestDiscussionMutationResponse { discussion }))
 }
 
-async fn reply_mutation_response(
-    projection: &DiscussionProjection<'_>,
-    discussion_id: String,
-    reply: scope_domain::requests::RequestDiscussionReply,
-    actor_user_id: &str,
-) -> Result<Json<RequestDiscussionReplyMutationResponse>, ApiError> {
-    let discussion = load_one_summary(projection, &discussion_id, Some(actor_user_id)).await?;
-    let users = projection
-        .state
-        .metadata
-        .requests()
-        .users_by_ids([reply.author_user_id.clone()])
-        .await?;
-    let child_reply_count = projection
-        .state
-        .metadata
-        .requests()
-        .request_discussion_reply_child_count(&reply.id)
-        .await?;
-    let response = reply_response(reply.clone(), child_reply_count, &users)?;
-    projection
-        .state
-        .publish_request_timeline_change(
-            &projection.repo.record.id,
-            projection.request.id.clone(),
-            discussion_id,
-            reply.position,
-            projection.request.audience,
-        )
-        .await;
-    Ok(Json(RequestDiscussionReplyMutationResponse {
-        discussion,
-        reply: response,
-    }))
+fn mutation_discussion_response(
+    result: DiscussionMutationResult,
+) -> Result<RequestDiscussionSummaryResponse, ApiError> {
+    let anchor = discussion_anchor_response(
+        result.discussion.discussion.anchor.clone(),
+        &result.visible_anchor_commits,
+    );
+    discussion_summary(result.discussion, &result.users, anchor)
 }
 
-async fn load_one_summary(
-    projection: &DiscussionProjection<'_>,
-    discussion_id: &str,
-    viewer_user_id: Option<&str>,
-) -> Result<RequestDiscussionSummaryResponse, ApiError> {
-    let (model, users) = projection
-        .state
-        .metadata
-        .requests()
-        .request_discussion(&projection.request.id, discussion_id, viewer_user_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("request discussion not found"))?;
-    let visibility = discussion_anchor_visibility(
-        projection,
-        std::iter::once(model.discussion.anchor.as_ref()),
-    )
-    .await;
-    let anchor = discussion_anchor_response(model.discussion.anchor.clone(), &visibility);
-    discussion_summary(model, &users, anchor)
+fn reply_mutation_response(
+    result: ReplyMutationResult,
+) -> Result<RequestDiscussionReplyMutationResponse, ApiError> {
+    let discussion = mutation_discussion_response(result.discussion)?;
+    let reply = reply_response(result.reply, result.child_reply_count, &result.reply_users)?;
+    Ok(RequestDiscussionReplyMutationResponse { discussion, reply })
 }
 
 async fn ensure_discussion_in_request(
@@ -683,7 +518,7 @@ async fn ensure_discussion_in_request(
 
 fn discussion_summary(
     model: scope_postgres::db::RequestDiscussionReadModel,
-    users: &BTreeMap<String, scope_domain::store::UserAccount>,
+    users: &BTreeMap<String, scope_domain::account::UserAccount>,
     anchor: Option<RequestDiscussionAnchor>,
 ) -> Result<RequestDiscussionSummaryResponse, ApiError> {
     Ok(RequestDiscussionSummaryResponse {
@@ -719,14 +554,14 @@ struct DiscussionProjection<'a> {
     owner: &'a str,
     repo_name: &'a str,
     request: &'a scope_domain::requests::Request,
-    repo: &'a scope_domain::store::StoredRepository,
-    access: scope_domain::store::RepositoryAccess,
+    repo: &'a scope_domain::repository::Repository,
+    access: scope_domain::repository::access::RepositoryAccess,
 }
 
 async fn discussion_summaries(
     projection: &DiscussionProjection<'_>,
     models: Vec<scope_postgres::db::RequestDiscussionReadModel>,
-    users: &BTreeMap<String, scope_domain::store::UserAccount>,
+    users: &BTreeMap<String, scope_domain::account::UserAccount>,
 ) -> Result<Vec<RequestDiscussionSummaryResponse>, ApiError> {
     let visibility = discussion_anchor_visibility(
         projection,
@@ -809,7 +644,7 @@ fn project_discussion_anchor(
 fn reply_response(
     reply: scope_domain::requests::RequestDiscussionReply,
     child_reply_count: u64,
-    users: &BTreeMap<String, scope_domain::store::UserAccount>,
+    users: &BTreeMap<String, scope_domain::account::UserAccount>,
 ) -> Result<RequestDiscussionReplyResponse, ApiError> {
     Ok(RequestDiscussionReplyResponse {
         id: reply.id,
@@ -826,7 +661,7 @@ fn reply_response(
 
 fn reply_read_response(
     model: scope_postgres::db::RequestDiscussionReplyReadModel,
-    users: &BTreeMap<String, scope_domain::store::UserAccount>,
+    users: &BTreeMap<String, scope_domain::account::UserAccount>,
 ) -> Result<RequestDiscussionReplyResponse, ApiError> {
     reply_response(model.reply, model.child_reply_count, users)
 }

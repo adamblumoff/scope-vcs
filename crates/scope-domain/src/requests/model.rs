@@ -1,4 +1,4 @@
-use crate::{error::DomainError, store::SourceBlob};
+use crate::{content::SourceBlob, error::DomainError};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

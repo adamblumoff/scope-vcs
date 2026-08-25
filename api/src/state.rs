@@ -10,9 +10,9 @@ use crate::{
     persistence::ensure_private_dir,
     product_analytics::ProductAnalytics,
     push_intents::push_intent_signing_key,
-    repo_cleanup::best_effort_drain_pending_repo_storage_deletions,
     repo_events::RepoChangeBus,
     runtime_budgets::{BudgetedObjectStore, RuntimeBudgets},
+    use_cases::content_cleanup::best_effort_drain_pending_repo_storage_deletions,
 };
 use scope_object_store::{EncryptedObjectStore, ObjectStore};
 use scope_postgres::db::MetadataStore;

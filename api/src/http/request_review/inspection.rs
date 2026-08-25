@@ -6,7 +6,7 @@ const MAX_REQUEST_COMMIT_METADATA_BYTES: usize = 64 * 1024;
 
 pub(super) fn request_revision_commit_files(
     raw_repo: &FsPath,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     revision: &RequestRevision,
     commit_oid: &str,
@@ -27,7 +27,7 @@ pub(super) struct InspectedRequestCommitFiles {
 
 fn request_commit_is_visible_to(
     raw_repo: &FsPath,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     commit_oid: &str,
 ) -> Result<bool, ApiError> {
@@ -40,7 +40,7 @@ pub(crate) struct RequestRevisionCommitVisibility<'a> {
     state: &'a AppState,
     owner: &'a str,
     repo_name: &'a str,
-    repo: &'a StoredRepository,
+    repo: &'a Repository,
     access: RepositoryAccess,
     request: &'a Request,
 }
@@ -50,7 +50,7 @@ impl<'a> RequestRevisionCommitVisibility<'a> {
         state: &'a AppState,
         owner: &'a str,
         repo_name: &'a str,
-        repo: &'a StoredRepository,
+        repo: &'a Repository,
         access: RepositoryAccess,
         request: &'a Request,
     ) -> Self {
@@ -132,7 +132,7 @@ impl<'a> RequestRevisionCommitVisibility<'a> {
 
 pub(super) fn inspect_request_commit(
     raw_repo: &FsPath,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     commit_oid: &str,
 ) -> Result<InspectedRequestCommit, ApiError> {
@@ -200,7 +200,7 @@ fn request_commit_identity(
 
 fn request_commit_changes(
     raw_repo: &FsPath,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
     parent_oids: &[String],
     commit_oid: &str,

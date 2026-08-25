@@ -10,12 +10,12 @@ use std::collections::BTreeMap;
 use {
     crate::error::PostgresError,
     scope_domain::{
+        account::UserAccount,
         requests::{
             AddRequestInviteeInput, LeaveRequestInput, RemoveRequestInviteeInput, RequestInvitee,
             add_request_invitee as add_invitee, leave_request,
             remove_request_invitee as remove_invitee,
         },
-        store::UserAccount,
     },
 };
 
@@ -325,9 +325,10 @@ mod tests {
     use crate::db::{MetadataStore, TestDatabaseTarget};
     use crate::error::PostgresErrorKind;
     use scope_domain::{
+        account::UserAccount,
         policy::Visibility,
+        repository::{RepoLifecycleState, Repository},
         requests::{RequestActorRole, RequestAudience, StartRequestInput},
-        store::{RepoLifecycleState, StoredRepository, UserAccount},
     };
     use std::sync::Arc;
     use tokio::sync::Barrier;
@@ -539,7 +540,7 @@ mod tests {
     fn catalog(target_count: usize) -> crate::db::CatalogFixture {
         let owner = user("user_owner", "owner");
         let author = user("user_author", "author");
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
         repo.record.lifecycle_state = RepoLifecycleState::Ready;
         let mut catalog = crate::db::CatalogFixture::default();
         catalog.users.insert(owner.id.clone(), owner);

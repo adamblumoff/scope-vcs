@@ -1,9 +1,10 @@
-use super::run::validate_sha256_hash;
+use super::validation::validate_sha256_hash;
 use crate::{
+    content::SourceBlob,
     content_ref::ContentRef,
     error::DomainError,
     projection::ProjectionViewKey,
-    store::{GitHead, GitPackSpan, SourceBlob, validate_git_pack_layout},
+    repository::git::{GitHead, GitPackSpan, validate_git_pack_layout},
 };
 use serde::{Deserialize, Serialize};
 
@@ -175,7 +176,7 @@ fn validate_git_oid(label: &str, git_oid: &str) -> Result<(), DomainError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::DEFAULT_GIT_FILE_MODE;
+    use crate::content::DEFAULT_GIT_FILE_MODE;
 
     #[test]
     fn accepted_git_head_pins_the_exact_pack_layout() {

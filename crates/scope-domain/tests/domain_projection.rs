@@ -1,21 +1,25 @@
 use scope_domain::{
+    account::UserAccount,
+    content::SourceBlob,
     policy::{Policy, ScopePath, Visibility, VisibilityRule},
     projection::{
         FileChange, LogicalCommit, ProjectionMaterialization, ProjectionViewKey, SourceGraph,
         project_graph,
     },
+    projection::{LogicalCommitOrigin, NativePublicCommit},
     repo_config::{
         ConfigVisibility, HistoryRewriteAction, HistoryRewriteRequest, RepoConfig,
         RepoConfigVisibilityRule,
     },
+    repository::updates::RequestMergeOrigin,
+    repository::{RepoLifecycleState, Repository},
     reviewed_updates::{
-        ContentPushState, ReviewedConfigUpdateInput, ReviewedContentChange, ReviewedUpdateError,
-        ReviewedUpdateInput, accept_content_push, accept_request_merge,
-        apply_reviewed_config_to_repo, apply_reviewed_update_to_repo,
-    },
-    store::{
-        LogicalCommitOrigin, NativePublicCommit, RepoLifecycleState, RequestMergeOrigin,
-        SourceBlob, StoredRepository, UserAccount,
+        config::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo},
+        content::{
+            ContentPushState, ReviewedContentChange, ReviewedUpdateInput, accept_content_push,
+            accept_request_merge, apply_reviewed_update_to_repo,
+        },
+        error::ReviewedUpdateError,
     },
     visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
@@ -157,14 +161,14 @@ fn project_timeline(
     project_public(&policy, &graph, &events)
 }
 
-fn published_test_repo(default_visibility: Visibility) -> StoredRepository {
+fn published_test_repo(default_visibility: Visibility) -> Repository {
     let owner = UserAccount {
         id: "owner".to_string(),
         handle: "owner".to_string(),
         email: "owner@example.com".to_string(),
         email_verified: true,
     };
-    let mut repo = StoredRepository::new(&owner, "repo", default_visibility).unwrap();
+    let mut repo = Repository::new(&owner, "repo", default_visibility).unwrap();
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
     let rules_path = path("/.scope/RULES.md");
     repo.live_files.insert(rules_path.clone(), blob(""));
@@ -174,7 +178,7 @@ fn published_test_repo(default_visibility: Visibility) -> StoredRepository {
     repo
 }
 
-fn published_repo_with_public_file(message: &str, path: &str, content: &str) -> StoredRepository {
+fn published_repo_with_public_file(message: &str, path: &str, content: &str) -> Repository {
     let mut repo = published_test_repo(Visibility::Public);
     let content = blob(content);
     repo.graph.commits.push(commit(
@@ -212,7 +216,7 @@ fn config(
 }
 
 fn project_repo(
-    repo: &StoredRepository,
+    repo: &Repository,
     view_key: ProjectionViewKey,
 ) -> scope_domain::projection::Projection {
     project_graph(&repo.graph, &repo.visibility_change_sets, view_key)
@@ -226,7 +230,7 @@ fn reviewed_change(path_value: &str, content: Option<&str>) -> ReviewedContentCh
 }
 
 fn apply_update(
-    repo: &mut StoredRepository,
+    repo: &mut Repository,
     message: &str,
     changes: Vec<ReviewedContentChange>,
     previous_config: Option<RepoConfig>,
@@ -243,7 +247,7 @@ fn apply_update(
 }
 
 fn apply_update_with_head(
-    repo: &mut StoredRepository,
+    repo: &mut Repository,
     head_oid: &str,
     message: &str,
     changes: Vec<ReviewedContentChange>,
@@ -274,13 +278,13 @@ fn reviewed_update(
         branch: "main".to_string(),
         author_id: "owner".to_string(),
         message: message.to_string(),
-        git_head: scope_domain::store::GitHead {
+        git_head: scope_domain::repository::git::GitHead {
             head_oid: head_oid.to_string(),
             push_sequence: 1,
             change_version: 1,
             manifest,
         },
-        git_pack_span: scope_domain::store::GitPackSpan {
+        git_pack_span: scope_domain::repository::git::GitPackSpan {
             first_sequence: 1,
             last_sequence: 1,
             geometric_tier: 0,

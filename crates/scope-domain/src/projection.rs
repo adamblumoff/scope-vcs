@@ -1,11 +1,39 @@
 use super::{
+    content::SourceBlob,
     policy::{ScopePath, Visibility},
     repo_control::{is_private_control_path, is_repo_control_path},
-    store::{LogicalCommitOrigin, RepositoryAccess, RepositoryActor, SourceBlob},
+    repository::access::{RepositoryAccess, RepositoryActor},
     visibility_changes::{VisibilityChange, VisibilityChangeSet},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativePublicCommit {
+    pub oid: String,
+    pub parent_oids: Vec<String>,
+    pub tree_oid: String,
+    pub changed_paths: Vec<ScopePath>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogicalCommitOrigin {
+    CanonicalPush {
+        source_head_oid: String,
+    },
+    PrivateRequestMerge {
+        request_id: String,
+        request_head_oid: String,
+    },
+    PublicRequestMerge {
+        request_id: String,
+        public_base_oid: String,
+        public_parent_oids: Vec<String>,
+        request_head_oid: String,
+        commits: Vec<NativePublicCommit>,
+        preserve_public_commits: bool,
+    },
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileChange {

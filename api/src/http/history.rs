@@ -22,7 +22,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use scope_domain::{
     history::{HistoryEntry, HistoryEntryFile, HistoryView, history_view_from_projection},
     projection::{ProjectionViewKey, project_graph},
-    store::StoredRepository,
+    repository::Repository,
 };
 use serde::{Deserialize, Serialize};
 
@@ -109,7 +109,7 @@ async fn repo_and_audience(
     owner: &str,
     repo_name: &str,
     requested_audience: Option<ProjectionPreviewAudience>,
-) -> Result<(StoredRepository, ProjectionPreviewAudience), ApiError> {
+) -> Result<(Repository, ProjectionPreviewAudience), ApiError> {
     let repo = find_repo(state, owner, repo_name).await?;
     let user = optional_scope_user(state, headers).await?;
     let requester = principal_for_scope_user(&repo, user.as_ref());
@@ -139,7 +139,7 @@ fn history_view_key(audience: ProjectionPreviewAudience) -> ProjectionViewKey {
 }
 
 fn history_view_for_repo(
-    repo: &StoredRepository,
+    repo: &Repository,
     audience: ProjectionPreviewAudience,
 ) -> Result<HistoryView, ApiError> {
     let projection = project_graph(
@@ -226,7 +226,7 @@ fn history_entry_for_id<'a>(
 
 fn history_entry_file_diff_response(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     file: &HistoryEntryFile,
 ) -> Result<ReviewFileDiffResponse, ApiError> {
     review_file_diff_response_for_blobs(

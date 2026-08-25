@@ -1,6 +1,6 @@
 use super::*;
 
-fn history_repo(commits: Vec<LogicalCommit>, public_path: Option<&str>) -> StoredRepository {
+fn history_repo(commits: Vec<LogicalCommit>, public_path: Option<&str>) -> Repository {
     let mut repo = test_repo(&test_owner_id());
     repo.repo_config = repo_config(Visibility::Private);
     repo.policy = Policy::new(Visibility::Private);
@@ -33,8 +33,8 @@ fn history_commit(
 fn history_change(
     path: &str,
     visibility: Visibility,
-    old: Option<scope_domain::store::SourceBlob>,
-    new: Option<scope_domain::store::SourceBlob>,
+    old: Option<scope_domain::content::SourceBlob>,
+    new: Option<scope_domain::content::SourceBlob>,
 ) -> FileChange {
     FileChange {
         path: ScopePath::parse(path).unwrap(),
@@ -473,7 +473,7 @@ async fn public_history_generation_tracks_visible_history() {
     assert_ne!(first_generation, second_generation);
 }
 
-fn paged_history_repo(state: &AppState, count: usize) -> StoredRepository {
+fn paged_history_repo(state: &AppState, count: usize) -> Repository {
     let mut previous = None;
     let commits = (1..=count)
         .map(|index| {

@@ -9,9 +9,10 @@ use crate::{
 };
 use scope_domain::{
     policy::{ScopePath, Visibility},
+    projection::NativePublicCommit,
     projection::{ProjectionViewKey, project_graph},
     repo_control::is_public_request_protected_path,
-    store::{NativePublicCommit, StoredRepository},
+    repository::Repository,
 };
 use std::{collections::BTreeSet, path::Path as FsPath};
 
@@ -25,7 +26,7 @@ pub(crate) struct ValidatedPublicRequestRange {
 }
 
 pub(super) fn ensure_public_request_ref_is_public_safe(
-    repo: &StoredRepository,
+    repo: &Repository,
     state: &AppState,
     staging_repo: &FsPath,
     new_head_oid: &str,
@@ -42,7 +43,7 @@ pub(super) fn ensure_public_request_ref_is_public_safe(
 }
 
 pub(crate) fn validate_public_request_merge_range(
-    repo: &StoredRepository,
+    repo: &Repository,
     state: &AppState,
     staging_repo: &FsPath,
     request_head_oid: &str,
@@ -159,7 +160,7 @@ fn git_revision_is_ancestor(
 }
 
 fn fetch_current_public_projection(
-    repo: &StoredRepository,
+    repo: &Repository,
     state: &AppState,
     staging_repo: &FsPath,
 ) -> Result<(String, BTreeSet<String>), ApiError> {
@@ -319,7 +320,7 @@ fn git_text(staging_repo: &FsPath, args: &[&str], context: &str) -> Result<Strin
 }
 
 fn ensure_public_request_commit_paths(
-    repo: &StoredRepository,
+    repo: &Repository,
     public_visible_paths: &BTreeSet<String>,
     staging_repo: &FsPath,
     commit_oid: &str,
@@ -384,7 +385,7 @@ fn public_request_changed_paths(
 }
 
 fn ensure_public_request_path(
-    repo: &StoredRepository,
+    repo: &Repository,
     public_visible_paths: &BTreeSet<String>,
     path: &str,
 ) -> Result<ScopePath, ApiError> {
@@ -417,7 +418,7 @@ fn ensure_public_request_path(
     }
 }
 
-fn repo_path_has_private_history(repo: &StoredRepository, scope_path: &ScopePath) -> bool {
+fn repo_path_has_private_history(repo: &Repository, scope_path: &ScopePath) -> bool {
     repo.graph
         .commits
         .iter()

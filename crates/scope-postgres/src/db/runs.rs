@@ -8,9 +8,11 @@ use super::{
 };
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    attempt::RunAttempt,
     job::{RunJob, create_run_jobs, reconcile_run, request_run_cancellation, retry_run},
-    run::{AttemptConclusion, Run, RunAttempt, RunAttemptStep},
-    workflow::WorkflowRevision,
+    run::Run,
+    step::{AttemptConclusion, RunAttemptStep},
+    workflow::revision::WorkflowRevision,
 };
 use sea_orm::{
     ColumnTrait, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,

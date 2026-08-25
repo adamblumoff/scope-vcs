@@ -11,8 +11,9 @@ use crate::{
 };
 use axum::http::HeaderMap;
 use scope_domain::{
+    account::UserAccount,
     policy::{Principal, PrincipalKind},
-    store::{StoredRepository, UserAccount},
+    repository::Repository,
 };
 
 pub(crate) async fn optional_scope_user(
@@ -102,17 +103,14 @@ async fn resolve_clerk_scope_user(
     }
 }
 
-pub(crate) fn principal_for_scope_user(
-    repo: &StoredRepository,
-    user: Option<&UserAccount>,
-) -> Principal {
+pub(crate) fn principal_for_scope_user(repo: &Repository, user: Option<&UserAccount>) -> Principal {
     let Some(user) = user else {
         return Principal::public();
     };
     principal_for_user_id(repo, &user.id)
 }
 
-pub(crate) fn principal_for_user_id(repo: &StoredRepository, user_id: &str) -> Principal {
+pub(crate) fn principal_for_user_id(repo: &Repository, user_id: &str) -> Principal {
     if repo.is_owner_user(user_id) || repo.member_for_user(user_id).is_some() {
         Principal {
             id: user_id.to_string(),

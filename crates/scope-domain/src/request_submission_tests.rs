@@ -1,5 +1,5 @@
 use super::requests::*;
-use crate::store::{DEFAULT_GIT_FILE_MODE, SourceBlob};
+use crate::content::{DEFAULT_GIT_FILE_MODE, SourceBlob};
 use std::collections::BTreeMap;
 
 #[test]

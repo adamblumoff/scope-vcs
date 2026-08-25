@@ -1,6 +1,10 @@
 use super::RepoSummaryResponse;
 use scope_api_contract::{RepositoryInviteState, RepositoryMemberPermissions};
-use scope_domain::store::{RepositoryInvite, RepositoryMember, StoredRepository, UserAccount};
+use scope_domain::{
+    account::UserAccount,
+    repository::Repository,
+    repository::collaboration::{RepositoryInvite, RepositoryMember},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -70,7 +74,7 @@ pub(crate) struct AcceptRepositoryInviteResponse {
 }
 
 pub(crate) fn repository_collaboration_response(
-    repo: &StoredRepository,
+    repo: &Repository,
     users: &std::collections::BTreeMap<String, UserAccount>,
 ) -> RepositoryCollaborationResponse {
     let mut members = repo

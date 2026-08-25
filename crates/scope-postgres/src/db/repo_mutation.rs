@@ -1,6 +1,6 @@
 use super::{
     GeneratedIdSource, RepositoryStore, acquire_aggregate_lock,
-    cleanup_queue::queue_pending_source_blob_deletion_rows, entities,
+    cleanup_queue::queue::queue_pending_source_blob_deletion_rows, entities,
     landing_files::apply_repository_landing_file_mutation,
     push_triggers::enqueue_push_main_trigger_evaluation, repository_from_model,
     repository_rows::save_repository_delta, workflow_catalogs::apply_repository_workflow_catalog,
@@ -9,8 +9,9 @@ use sea_orm::{EntityTrait, TransactionTrait};
 use std::{fmt, sync::Arc, time::Instant};
 use {
     crate::error::PostgresError,
+    scope_domain::content::SourceBlob,
+    scope_domain::repository::{Repository, repo_id},
     scope_domain::runs::catalog::RepositoryWorkflowCatalog,
-    scope_domain::store::{SourceBlob, StoredRepository, repo_id},
     scope_domain::{error::DomainError, landing_file::RepositoryLandingFileMutation},
 };
 
@@ -99,9 +100,7 @@ impl RepositoryStore {
     ) -> Result<R, RepositoryMutationError>
     where
         R: Send + 'static,
-        F: FnOnce(&mut StoredRepository) -> Result<RepositoryMutation<R>, DomainError>
-            + Send
-            + 'static,
+        F: FnOnce(&mut Repository) -> Result<RepositoryMutation<R>, DomainError> + Send + 'static,
     {
         let repo_id = repo_id(owner, name);
         let owner = owner.to_string();

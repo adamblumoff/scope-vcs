@@ -211,7 +211,7 @@ async fn workflow_catalog_backfill_is_idempotent() {
     state
         .metadata
         .repositories()
-        .mutate_repository_for_tests(TEST_REPO_ID, StoredRepository::bump_change_version)
+        .mutate_repository_for_tests(TEST_REPO_ID, Repository::bump_change_version)
         .await
         .unwrap();
     assert_eq!(
@@ -370,7 +370,7 @@ async fn direct_push_replaces_the_complete_workflow_catalog() {
     state
         .metadata
         .repositories()
-        .mutate_repository_for_tests(TEST_REPO_ID, StoredRepository::bump_change_version)
+        .mutate_repository_for_tests(TEST_REPO_ID, Repository::bump_change_version)
         .await
         .unwrap();
     persist_test_update(&state, update).await.unwrap();

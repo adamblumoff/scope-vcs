@@ -1,8 +1,10 @@
 use super::{DispatchClaim, RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
+    attempt::RunAttempt,
     job::{RunJob, reconcile_run},
-    run::{Run, RunAttempt, RunAttemptStep},
+    run::Run,
+    step::RunAttemptStep,
 };
 use sea_orm::{EntityTrait, QuerySelect, TransactionTrait};
 

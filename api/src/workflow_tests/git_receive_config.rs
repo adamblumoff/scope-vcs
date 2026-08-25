@@ -15,7 +15,7 @@ fn config_with_rules(default: Visibility, rules: &[(&str, ConfigVisibility)]) ->
     config
 }
 
-async fn install_push_only_repo(state: &AppState, mut repo: StoredRepository) {
+async fn install_push_only_repo(state: &AppState, mut repo: Repository) {
     repo.members.push(test_repository_member(
         TEST_REPO_ID,
         PUSH_ONLY_MEMBER_ID,
@@ -28,7 +28,7 @@ async fn push_as_push_only_member(
     state: &AppState,
     changes: Vec<(&str, Option<&str>)>,
     config: RepoConfig,
-) -> Result<PersistedReceivePackUpdate, crate::error::ApiError> {
+) -> Result<scope_domain::repository::git::GitHead, crate::error::ApiError> {
     let mut update = receive_pack_update(state, changes);
     update.base_config_hash = repo_config_fingerprint(
         &find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
@@ -43,7 +43,7 @@ async fn rejected_config_push(
     state: &AppState,
     changes: Vec<(&str, Option<&str>)>,
     config: RepoConfig,
-) -> StoredRepository {
+) -> Repository {
     let error = push_as_push_only_member(state, changes, config)
         .await
         .unwrap_err();

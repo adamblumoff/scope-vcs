@@ -1,8 +1,8 @@
 use super::*;
 use crate::db::landing_files::{apply_repository_landing_file_mutation, repository_landing_file};
 use scope_domain::{
+    content::DEFAULT_GIT_FILE_MODE,
     landing_file::{RepositoryLandingFile, RepositoryLandingFileMutation},
-    store::DEFAULT_GIT_FILE_MODE,
 };
 use sea_orm::ConnectionTrait;
 use sha2::{Digest as _, Sha256};

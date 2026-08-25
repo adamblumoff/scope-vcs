@@ -13,7 +13,7 @@ use crate::{
     },
     state::AppState,
 };
-use scope_domain::store::{GitHead, GitPackSpan, validate_git_pack_layout};
+use scope_domain::repository::git::{GitHead, GitPackSpan, validate_git_pack_layout};
 use std::{
     fs,
     path::{Path, PathBuf},

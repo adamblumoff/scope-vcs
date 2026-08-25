@@ -1,9 +1,9 @@
 [package]
 name = "scope-postgres"
-version = "0.1.0"
-edition = "2024"
-license = "UNLICENSED"
-repository = "https://github.com/adamblumoff/scope-vcs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 default = []
@@ -12,19 +12,19 @@ smoke-seed = []
 test-support = []
 
 [dependencies]
-anyhow = "1.0.100"
-hex = "0.4.3"
+anyhow.workspace = true
+hex.workspace = true
 sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "mock", "runtime-tokio-rustls", "sqlx-postgres", "with-chrono", "with-json"] }
 sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio-rustls", "sqlx-postgres"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.147"
-sha2 = "0.10.9"
-scope_domain = { package = "scope-domain", path = "../scope-domain" }
-scope_cache_domain = { package = "scope-cache-domain", path = "../scope-cache-domain" }
-scope_git = { package = "scope-git", path = "../scope-git", default-features = false }
-scope_run_config = { package = "scope-run-config", path = "../scope-run-config" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+scope_domain.workspace = true
+scope_cache_domain.workspace = true
+scope_git.workspace = true
+scope_run_config.workspace = true
 sqlx = { version = "0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
-thiserror = "2.0.18"
-time = { version = "0.3.44", features = ["formatting"] }
-tokio = { version = "1.48.0", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
-tracing = "0.1.44"
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tracing.workspace = true

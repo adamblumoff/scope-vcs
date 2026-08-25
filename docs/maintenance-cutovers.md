@@ -1,51 +1,44 @@
-# Maintenance migration cutovers
+# Maintenance migration recovery
 
 Migration impact is declared once in `crates/scope-postgres/src/migrations/mod.rs`.
-Use `Online` only when the old and new runtime contracts can safely overlap.
-Renames, removals, rewrites, protocol resets, and changed invariants require
+Use `Online` only when old and new runtime contracts can overlap safely. Renames,
+removals, rewrites, protocol resets, and changed invariants require
 `MaintenanceRequired`. Do not add dual readers or writers to avoid a cutover.
 
-Production migration ownership belongs to the backend deployment job. For a
-maintenance-required plan it:
+The production backend deployment workflow owns the cutover procedure. It checks
+the migration plan, validates the Railway target, closes the API and worker,
+acquires the database writer fence, applies migrations, verifies the exact
+ledger, runs the current idempotent backfills, and deploys worker and API builds
+from the same revision. Keep exact command ordering and the active backfill list
+in `.github/scripts/deploy-backend-railway.sh`, where the deployment tests can
+exercise them.
 
-1. Records the API and worker replica counts from Railway's current service
-   configuration. A first deployment uses the explicit replica counts from the
-   workflow because Railway has no deployment-derived replica metadata yet.
-2. Stops the exact active API deployment through Railway's deployment API,
-   then stops the exact active worker deployment, reading back zero running
-   replicas for each.
-3. Runs `scope-maintenance apply` once. The command also refuses unless it can
-   acquire the database's exclusive writer fence.
-4. Verifies the exact migration ledger while traffic remains closed, then runs
-   `scope-maintenance backfill-landing-files` with the API service's object-store
-   configuration. The command is idempotent and verifies each row against the
-   current live-file metadata before it commits.
-5. Uploads and health-checks the worker from the checked-out revision, then
-    uploads and health-checks the API from that same revision.
+## Recovery rule
 
-`backfill-landing-files` and its deploy hook are temporary m0026 cutover code. Remove both after production has completed the migration and a rerun reports zero rows to backfill.
+The successful migration transaction is the point of no return. If `apply`
+fails, the workflow reads the ledger again. It restarts the stopped release only
+when that read proves the pre-migration ledger is unchanged.
 
-The successful migration transaction is the point of no return. After a failed
-apply command, the workflow redeploys the exact stopped worker and API deployment
-IDs only when a fresh ledger read proves that the pre-migration state is unchanged.
-A committed or unreadable/otherwise indeterminate ledger leaves both writer
-services closed and must be recovered by rerunning the same revision to finish
-the forward deployment. Never restore an old API or worker unless rollback is
-positively proven.
+If the ledger is exact for the new binary, unreadable, or otherwise
+indeterminate, the workflow keeps both writers closed. Rerun the same revision
+to finish the forward deployment. Never restart an old API or worker unless the
+fresh ledger read proves that the migration did not commit.
 
-The database fence is the final concurrency boundary, not Railway's replica
-readback. Every API and worker database connection holds the shared side of the
-fence for its session. A deployment that races the shutdown either makes the
-maintenance command refuse before migration, or blocks while the exclusive
-fence is held. Runtime startup verifies the exact schema before opening its
-writer pool, so an old binary cannot begin writing after a committed migration.
+The database fence is the final concurrency boundary, not Railway replica
+readback. Every API and worker database connection holds the shared side for its
+session. A writer racing shutdown either makes maintenance refuse or drains
+before the exclusive fence is acquired. Runtime startup verifies the exact
+schema before opening its writer pool, so an old binary cannot start writing
+after a committed migration.
 
-The maintenance command supports read-only inspection:
+## Read-only inspection
 
 ```text
 scope-maintenance plan
 scope-maintenance verify
 ```
 
-Both emit JSON. `verify` succeeds only when the database ledger exactly matches
-the binary; it rejects both missing and unknown migration versions.
+Both commands emit JSON. `verify` succeeds only when the database ledger exactly
+matches the binary. Run `scope-maintenance --help` for the current maintenance
+and backfill commands. Production cutovers should use the deployment workflow,
+not a hand-written command sequence.

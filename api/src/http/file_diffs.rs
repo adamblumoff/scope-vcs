@@ -4,7 +4,11 @@ use crate::{
     http::responses::{ReviewFileContentResponse, ReviewFileDiffResponse},
     state::AppState,
 };
-use scope_domain::store::{FileChangeKind, GitHead, GitPackSpan, SourceBlob};
+use scope_domain::history::FileChangeKind;
+use scope_domain::{
+    content::SourceBlob,
+    repository::git::{GitHead, GitPackSpan},
+};
 
 pub(crate) const MAX_RENDERED_TEXT_BYTES: usize = 1024 * 1024;
 

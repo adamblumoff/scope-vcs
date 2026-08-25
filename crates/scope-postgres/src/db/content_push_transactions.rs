@@ -23,13 +23,14 @@ use {
         repo_actions::reviewed_update_domain_error,
         repo_config::RepoConfig,
         repo_control::REPO_RULES_PATH,
-        reviewed_updates::{
+        repository::git::GitHead,
+        repository::updates::RequestMergeOrigin,
+        reviewed_updates::content::{
             AcceptedContentPush, ContentPushState, ReviewedUpdateInput, accept_content_push,
             accept_request_merge,
         },
         runs::catalog::RepositoryWorkflowCatalog,
         runs::trigger::PushTriggerInput,
-        store::{GitHead, RequestMergeOrigin},
     },
 };
 

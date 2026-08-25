@@ -16,11 +16,11 @@ use axum::{
     http::HeaderMap,
 };
 use scope_domain::{
+    account::UserAccount,
+    repository::Repository,
+    repository::access::RepositoryAccess,
+    repository::collaboration::{RepositoryInvite, RepositoryInviteState, RepositoryMember},
     requests::{Request, RequestViewer, request_policy},
-    store::{
-        RepositoryAccess, RepositoryInvite, RepositoryInviteState, RepositoryMember,
-        StoredRepository, UserAccount,
-    },
 };
 
 pub(crate) async fn list_repository_collaboration(
@@ -288,7 +288,7 @@ async fn publish_collaboration_change(
 
 fn ensure_collaboration_owner_access(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     user_id: &str,
 ) -> Result<(), ApiError> {
     let principal = principal_for_user_id(repo, user_id);
@@ -312,7 +312,7 @@ fn ensure_invite_can_be_used(invite: &RepositoryInvite, now_unix: u64) -> Result
 
 async fn open_request_count_for_access(
     state: &AppState,
-    repo: &StoredRepository,
+    repo: &Repository,
     access: RepositoryAccess,
 ) -> Result<usize, ApiError> {
     Ok(state

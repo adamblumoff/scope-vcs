@@ -1,14 +1,23 @@
 use super::{
+    account::UserAccount,
+    content::SourceBlob,
     policy::{ScopePath, Visibility, VisibilityRule},
     repo_config::repo_config_from_policy,
-    reviewed_updates::ReviewedUpdateError,
-    store::{
-        CatalogError, FirstPushToken, GitPushToken, RepoLifecycleState, RepoStorageCleanup,
-        SourceBlob, StoredRepository, UserAccount,
+    repository::{
+        CatalogError, RepoLifecycleState, Repository,
+        credentials::{FirstPushToken, GitPushToken},
     },
+    reviewed_updates::error::ReviewedUpdateError,
 };
 use crate::error::DomainError;
 use crate::visibility_changes::{VisibilityChange, VisibilityChangeSet, visibility_change_set_id};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoStorageCleanup {
+    pub owner_handle: String,
+    pub repo_name: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RepoEffect {
@@ -61,14 +70,14 @@ impl<T> RepoMutation<T> {
     }
 }
 
-pub fn ensure_repo_owner(repo: &StoredRepository, user_id: &str) -> Result<(), DomainError> {
+pub fn ensure_repo_owner(repo: &Repository, user_id: &str) -> Result<(), DomainError> {
     if !repo.is_owner_user(user_id) {
         return Err(DomainError::forbidden("owner role required"));
     }
     Ok(())
 }
 
-pub fn ensure_repo_member(repo: &StoredRepository, user_id: &str) -> Result<(), DomainError> {
+pub fn ensure_repo_member(repo: &Repository, user_id: &str) -> Result<(), DomainError> {
     if repo.is_owner_user(user_id) || repo.member_for_user(user_id).is_some() {
         Ok(())
     } else {
@@ -77,7 +86,7 @@ pub fn ensure_repo_member(repo: &StoredRepository, user_id: &str) -> Result<(), 
 }
 
 pub fn ensure_can_change_file_visibility(
-    repo: &StoredRepository,
+    repo: &Repository,
     user_id: &str,
 ) -> Result<(), DomainError> {
     if repo.access_for_user_id(user_id).can_change_file_visibility {
@@ -90,7 +99,7 @@ pub fn ensure_can_change_file_visibility(
 }
 
 pub fn ensure_repo_delete_owner(
-    repo: &StoredRepository,
+    repo: &Repository,
     user_id: &str,
     owner: &str,
     name: &str,
@@ -130,15 +139,15 @@ pub fn create_repo(
     default_visibility: Visibility,
     first_push_token: FirstPushToken,
     git_push_token: GitPushToken,
-) -> Result<RepoMutation<StoredRepository>, DomainError> {
-    let mut repo = StoredRepository::new(owner, name, default_visibility).map_err(catalog_error)?;
+) -> Result<RepoMutation<Repository>, DomainError> {
+    let mut repo = Repository::new(owner, name, default_visibility).map_err(catalog_error)?;
     repo.first_push_token = Some(secretless_first_push_token(first_push_token));
     repo.git_push_token = Some(git_push_token);
     Ok(RepoMutation::new(repo))
 }
 
 pub fn set_visibility(
-    repo: &mut StoredRepository,
+    repo: &mut Repository,
     user_id: &str,
     update_paths: &[ScopePath],
     visibility: Visibility,
@@ -209,7 +218,7 @@ pub fn set_visibility(
 }
 
 pub fn delete_repo(
-    repo: &StoredRepository,
+    repo: &Repository,
     user_id: &str,
     owner: &str,
     name: &str,
@@ -228,14 +237,16 @@ pub fn delete_repo(
 mod tests {
     use super::*;
     use crate::{
+        account::UserAccount,
+        content::DEFAULT_GIT_FILE_MODE,
         policy::{ScopePath, Visibility},
-        store::{DEFAULT_GIT_FILE_MODE, GitHead, UserAccount},
+        repository::git::GitHead,
     };
 
     #[test]
     fn deleting_repo_returns_storage_and_source_blob_cleanup_effects() {
         let owner = test_owner();
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Private).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Private).unwrap();
         let snapshot = source_blob("live-snapshot");
         repo.git_head = Some(GitHead {
             head_oid: snapshot.git_oid.clone(),
@@ -264,7 +275,7 @@ mod tests {
     #[test]
     fn direct_visibility_update_mirrors_repo_config() {
         let owner = test_owner();
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
         let path = ScopePath::parse("/README.md").unwrap();
 
         set_visibility(
@@ -285,7 +296,7 @@ mod tests {
     #[test]
     fn direct_visibility_update_omits_scope_managed_policy_rules_from_config() {
         let owner = test_owner();
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
         let rules_path = ScopePath::parse("/.scope/RULES.md").unwrap();
         repo.policy
             .add_rule(VisibilityRule::public(rules_path))
@@ -316,7 +327,7 @@ mod tests {
     #[test]
     fn direct_bulk_visibility_update_records_one_change_set() {
         let owner = test_owner();
-        let mut repo = StoredRepository::new(&owner, "repo", Visibility::Public).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
         repo.record.lifecycle_state = RepoLifecycleState::Ready;
         let first = ScopePath::parse("/one.md").unwrap();
         let second = ScopePath::parse("/two.md").unwrap();
@@ -324,7 +335,7 @@ mod tests {
         repo.live_files.insert(second.clone(), source_blob("two"));
         repo.graph.commits.push(crate::projection::LogicalCommit {
             id: "rv1".into(),
-            origin: crate::store::LogicalCommitOrigin::CanonicalPush {
+            origin: crate::projection::LogicalCommitOrigin::CanonicalPush {
                 source_head_oid: "head-1".into(),
             },
             author_id: owner.id.clone(),

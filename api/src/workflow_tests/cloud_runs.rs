@@ -56,6 +56,8 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
         .await
         .unwrap();
     assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    let run_id = created["id"].as_str().unwrap().to_string();
 
     let offer = state
         .metadata
@@ -182,6 +184,7 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
     assert_eq!(response_json(completed_step).await["state"], "running");
 
     let completed_attempt = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -213,6 +216,43 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
             .await
             .unwrap()
     );
+
+    let retried = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(scope_api_contract::routes::repo_run_retry(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &run_id,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retried.status(), StatusCode::OK);
+    assert_eq!(response_json(retried).await["state"], "queued");
+
+    let canceled = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(scope_api_contract::routes::repo_run_cancel(
+                    TEST_REPO_OWNER,
+                    TEST_REPO_NAME,
+                    &run_id,
+                ))
+                .header(AUTHORIZATION, bearer_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(canceled.status(), StatusCode::OK);
+    assert_eq!(response_json(canceled).await["state"], "canceled");
 }
 
 fn cache_grant_claims(token: &str) -> SignedCacheGrantClaims {

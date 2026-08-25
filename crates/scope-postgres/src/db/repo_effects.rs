@@ -1,6 +1,6 @@
 use super::{
     GeneratedIdSource,
-    cleanup_queue::{
+    cleanup_queue::queue::{
         queue_pending_repo_storage_cleanup_row, queue_pending_source_blob_deletion_rows,
     },
     repository_rows::save_repository_delta,
@@ -10,14 +10,14 @@ use {
     crate::error::PostgresError,
     scope_domain::{
         repo_actions::{RepoEffect, RepoEffects},
-        store::StoredRepository,
+        repository::Repository,
     },
 };
 
 pub async fn save_repo_mutation<C>(
     conn: &C,
-    before: &StoredRepository,
-    repo: &StoredRepository,
+    before: &Repository,
+    repo: &Repository,
     effects: &RepoEffects,
     now_unix: u64,
     generated_ids: &dyn GeneratedIdSource,

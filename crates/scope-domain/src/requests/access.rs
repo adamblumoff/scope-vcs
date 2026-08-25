@@ -1,5 +1,5 @@
 use super::{Request, RequestActorRole, RequestAudience, RequestState};
-use crate::store::{RepositoryAccess, RepositoryActor};
+use crate::repository::access::{RepositoryAccess, RepositoryActor};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
