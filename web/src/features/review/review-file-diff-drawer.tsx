@@ -6,12 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { parseDiffFromFile, type FileDiffMetadata } from '@pierre/diffs'
-import {
-  FileDiff,
-  WorkerPoolContextProvider,
-  type WorkerInitializationRenderOptions,
-  type WorkerPoolOptions,
-} from '@pierre/diffs/react'
+import { FileDiff } from '@pierre/diffs/react'
 import { useThemeType } from '@/lib/use-theme-type'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useLayoutEffect, useMemo, useRef } from 'react'
@@ -30,8 +25,6 @@ const PIERRE_DIFF_OPTIONS = {
   lineDiffType: 'word',
   overflow: 'wrap',
 } as const
-
-const PIERRE_WORKER_HIGHLIGHTER_OPTIONS = {} satisfies WorkerInitializationRenderOptions
 
 export function ReviewFileDiffDrawer({
   cacheKey,
@@ -72,7 +65,6 @@ export function ReviewFileDiffDrawer({
     () => ({ ...PIERRE_DIFF_OPTIONS, themeType }),
     [themeType],
   )
-  const workerPoolOptions = useMemo(createPierreWorkerPoolOptions, [])
   const displayName = displayPath(diff?.path ?? selectedPath ?? '')
   const scrollRef = useRef<HTMLDivElement>(null)
   const restoredScrollKeyRef = useRef<string | null>(null)
@@ -152,11 +144,7 @@ export function ReviewFileDiffDrawer({
             <BinaryDiffState sides={contentSides.binary} />
           ) : fileDiff && fileDiff.hunks.length > 0 ? (
             <div className="review-diff-viewer scope-content-enter">
-              <PierreFileDiff
-                fileDiff={fileDiff}
-                options={diffOptions}
-                workerPoolOptions={workerPoolOptions}
-              />
+              <FileDiff fileDiff={fileDiff} options={diffOptions} />
             </div>
           ) : (
             <PanelState>
@@ -189,59 +177,6 @@ function DiffSkeleton() {
       ))}
     </div>
   )
-}
-
-function PierreFileDiff({
-  fileDiff,
-  options,
-  workerPoolOptions,
-}: {
-  fileDiff: FileDiffMetadata
-  options: typeof PIERRE_DIFF_OPTIONS & { themeType: 'dark' | 'light' }
-  workerPoolOptions: WorkerPoolOptions | null
-}) {
-  const renderer = (
-    <FileDiff
-      disableWorkerPool={!workerPoolOptions}
-      fileDiff={fileDiff}
-      options={options}
-    />
-  )
-
-  if (!workerPoolOptions) {
-    return renderer
-  }
-
-  return (
-    <WorkerPoolContextProvider
-      highlighterOptions={PIERRE_WORKER_HIGHLIGHTER_OPTIONS}
-      poolOptions={workerPoolOptions}
-    >
-      {renderer}
-    </WorkerPoolContextProvider>
-  )
-}
-
-function createPierreWorkerPoolOptions(): WorkerPoolOptions | null {
-  if (typeof Worker === 'undefined') {
-    return null
-  }
-
-  return {
-    poolSize: pierreWorkerPoolSize(),
-    workerFactory: () =>
-      new Worker(
-        new URL('@pierre/diffs/worker/worker-portable.js', import.meta.url),
-        { type: 'module' },
-      ),
-  }
-}
-
-function pierreWorkerPoolSize() {
-  if (typeof navigator === 'undefined' || !navigator.hardwareConcurrency) {
-    return 2
-  }
-  return Math.min(4, Math.max(1, navigator.hardwareConcurrency))
 }
 
 function diffMetadataForReviewFile(diff: ReviewFileDiff): FileDiffMetadata | null {

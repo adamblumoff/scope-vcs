@@ -1,24 +1,20 @@
 import { cn } from '@/lib/utils'
 import type { ComponentProps } from 'react'
 import Markdown from 'react-markdown'
+import { MarkdownLink } from './markdown-link'
 
 export const compactMarkdownComponents = {
   a: ({ children, className, href, ...props }: ComponentProps<'a'>) =>
-    href ? (
-      <a
-        className={cn(
-          'font-medium text-foreground underline decoration-border-strong underline-offset-4 hover:decoration-foreground',
-          className,
-        )}
-        href={href}
-        rel="noreferrer"
-        {...props}
-      >
-        {children}
-      </a>
-    ) : (
-      <span className={className}>{children}</span>
-    ),
+    <MarkdownLink
+      className={cn(
+        'font-medium text-foreground underline decoration-border-strong underline-offset-4 hover:decoration-foreground',
+        className,
+      )}
+      href={href}
+      {...props}
+    >
+      {children}
+    </MarkdownLink>,
   blockquote: ({ className, ...props }: ComponentProps<'blockquote'>) => (
     <blockquote
       className={cn(

@@ -218,8 +218,7 @@ function useHistoryPageModel({ initialPage, params, search }: HistoryPageProps) 
       ? { diff: null, error: 'This file is not part of the selected update.', status: 'failed' }
       : resourceToDiffState(diffResource)
 
-  const replaceHistorySearch = useCallback((
-    nextAudience: ProjectionPreviewAudience,
+  const replaceHistorySelection = useCallback((
     nextEntryId: string | null,
     nextPath: string | null = null,
   ) => {
@@ -227,11 +226,11 @@ function useHistoryPageModel({ initialPage, params, search }: HistoryPageProps) 
       params,
       replace: true,
       resetScroll: false,
-      search: {
-        audience: nextAudience,
+      search: (current) => ({
+        ...current,
         entry: nextEntryId ?? undefined,
         path: nextPath ?? undefined,
-      },
+      }),
       to: '/$owner/$repo/history',
     })
   }, [navigate, params])
@@ -254,23 +253,28 @@ function useHistoryPageModel({ initialPage, params, search }: HistoryPageProps) 
   }, [audience, loaded.next_cursor, loadingOlder, params.owner, params.repo])
 
   const closeDiff = useCallback(
-    () => replaceHistorySearch(audience, selectedEntryId),
-    [audience, replaceHistorySearch, selectedEntryId],
+    () => replaceHistorySelection(selectedEntryId),
+    [replaceHistorySelection, selectedEntryId],
   )
   const selectAudience = useCallback(
-    (nextAudience: ProjectionPreviewAudience) =>
-      replaceHistorySearch(nextAudience, null),
-    [replaceHistorySearch],
+    (nextAudience: ProjectionPreviewAudience) => navigate({
+      params,
+      replace: true,
+      resetScroll: false,
+      search: { audience: nextAudience },
+      to: '/$owner/$repo/history',
+    }),
+    [navigate, params],
   )
   const selectEntry = useCallback(
     (entry: HistoryEntrySummary) =>
-      replaceHistorySearch(audience, entry.source_id),
-    [audience, replaceHistorySearch],
+      replaceHistorySelection(entry.source_id),
+    [replaceHistorySelection],
   )
   const selectFile = useCallback(
     (file: CommitFile) =>
-      replaceHistorySearch(audience, selectedEntryId, file.path),
-    [audience, replaceHistorySearch, selectedEntryId],
+      replaceHistorySelection(selectedEntryId, file.path),
+    [replaceHistorySelection, selectedEntryId],
   )
   const saveDiffScroll = useCallback(
     (scrollTop: number) => writeHistoryDiffScroll(diffIdentity, scrollTop),

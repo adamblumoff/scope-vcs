@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils'
 import type { ComponentProps } from 'react'
 import rehypeSlug from 'rehype-slug'
+import { MarkdownLink } from './markdown-link'
 import { SafeMarkdown } from './safe-markdown'
 import {
   REPOSITORY_MARKDOWN_HEADING_PREFIX,
@@ -36,21 +37,16 @@ export function RepositoryMarkdownRenderer({
 
 const markdownComponents = {
   a: ({ children, className, href, ...props }: ComponentProps<'a'>) =>
-    href ? (
-      <a
-        className={cn(
-          'font-medium text-foreground underline decoration-[var(--platinum)]/70 underline-offset-4 hover:decoration-[var(--platinum-bright)]',
-          className,
-        )}
-        href={href}
-        rel="noreferrer"
-        {...props}
-      >
-        {children}
-      </a>
-    ) : (
-      <span className={className}>{children}</span>
-    ),
+    <MarkdownLink
+      className={cn(
+        'font-medium text-foreground underline decoration-[var(--platinum)]/70 underline-offset-4 hover:decoration-[var(--platinum-bright)]',
+        className,
+      )}
+      href={href}
+      {...props}
+    >
+      {children}
+    </MarkdownLink>,
   blockquote: ({ className, ...props }: ComponentProps<'blockquote'>) => (
     <blockquote
       className={cn(

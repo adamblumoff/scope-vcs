@@ -1,5 +1,50 @@
 import assert from 'node:assert/strict'
 
+export async function assertRequestCrossLinksStayInDocument(page) {
+  const requestViews = page.getByRole('navigation', { name: 'Request views' })
+  const heading = await page
+    .getByRole('heading', { level: 1, name: 'Add bounded retry timing' })
+    .elementHandle()
+  const navigation = await requestViews.elementHandle()
+  assert(heading)
+  assert(navigation)
+  const documentSentinel = 'scope-request-cross-navigation'
+  await page.evaluate((sentinel) => {
+    window.__scopeRequestDocument = sentinel
+  }, documentSentinel)
+
+  const anchoredThread = page.locator(
+    '#discussion-discussion_demo_revision_jitter',
+  )
+  await anchoredThread.getByRole('link', { name: /Revision/ }).click()
+  await page.waitForURL((url) => (
+    url.pathname.endsWith('/requests/req_demo_ready/changes') &&
+    url.searchParams.get('revision') === 'event_req_demo_ready_revision_2'
+  ))
+  await assertRequestDocumentAndShell(page, { documentSentinel, heading, navigation })
+  assert.equal(await page.getByRole('textbox').count(), 0)
+
+  await page
+    .getByRole('link', { name: /The bounded jitter looks right/ })
+    .click()
+  await page.waitForURL((url) => (
+    url.pathname.endsWith('/requests/req_demo_ready') &&
+    url.searchParams.get('discussion') === 'discussion_demo_revision_jitter' &&
+    url.hash === '#discussion-discussion_demo_revision_jitter'
+  ))
+  await page.locator('.request-discussion-thread').first().waitFor()
+  await assertRequestDocumentAndShell(page, { documentSentinel, heading, navigation })
+  return { heading, navigation }
+}
+
+async function assertRequestDocumentAndShell(page, shell) {
+  assert.equal(
+    await page.evaluate(() => window.__scopeRequestDocument),
+    shell.documentSentinel,
+  )
+  await assertRequestShellPreserved(page, shell)
+}
+
 export async function assertFileSelectionSkipsRevisionReload(page, fileName, path) {
   await page.locator('[data-slot="pending-surface"]').waitFor({ state: 'detached' })
   const fileNavigator = page.getByLabel('Commit file navigator')

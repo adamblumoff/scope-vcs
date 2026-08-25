@@ -167,8 +167,7 @@ const PUBLIC_DEMO_APP: &str =
     "export function greet(name: string) {\n  return `hello ${name}`\n}\n";
 const PUBLIC_DEMO_PLAN: &str =
     "# Internal Plan\n\nPrivate content stays out of public projections.\n";
-const UPDATE_DEMO_INITIAL_README: &str =
-    "# Update Demo\n\nThis repository has a clean published baseline.\n";
+const UPDATE_DEMO_INITIAL_README: &str = "# Update Demo\n\nThis repository has a clean published baseline.\n\n[Read the release guide](docs/release.md).\n";
 const UPDATE_DEMO_RULES: &str = "";
 const UPDATE_DEMO_RELEASE_GUIDE: &str =
     "# Release flow\n\nDocument the release before publishing the next version.\n";
