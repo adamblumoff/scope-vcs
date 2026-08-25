@@ -144,7 +144,11 @@ export function ReviewFileDiffDrawer({
             <BinaryDiffState sides={contentSides.binary} />
           ) : fileDiff && fileDiff.hunks.length > 0 ? (
             <div className="review-diff-viewer scope-content-enter">
-              <FileDiff fileDiff={fileDiff} options={diffOptions} />
+              <FileDiff
+                disableWorkerPool={typeof Worker === 'undefined'}
+                fileDiff={fileDiff}
+                options={diffOptions}
+              />
             </div>
           ) : (
             <PanelState>
