@@ -10,8 +10,8 @@ use crate::{
         },
         requests::{repo_and_access, visible_request},
         responses::{
-            CommitFileResponse, RequestFileDiffRequest, RequestRevisionCommitFilesResponse,
-            ReviewFileContentResponse, ReviewFileDiffResponse, request_actor_summary_response,
+            RequestFileDiffRequest, ReviewFileContentResponse, ReviewFileDiffResponse,
+            request_actor_summary_response,
         },
     },
     state::AppState,
@@ -22,7 +22,7 @@ use axum::{
     http::HeaderMap,
 };
 use scope_api_contract::{
-    GitOid, RequestDiscussionAnchor as RequestDiscussionAnchorRequest,
+    CommitFileResponse, GitOid, RequestDiscussionAnchor as RequestDiscussionAnchorRequest,
     RequestRevisionCommitResponse, RequestRevisionInspectionState, RequestRevisionListResponse,
     RequestRevisionResponse,
 };
@@ -42,6 +42,7 @@ use inspection::{inspect_request_commit, request_revision_commit_files};
 const MAX_LISTED_REQUEST_REVISIONS: usize = 50;
 const MAX_LISTED_COMMITS_PER_REVISION: usize = 100;
 const MAX_LISTED_REQUEST_COMMITS: usize = 100;
+const MAX_LISTED_REQUEST_FILES: usize = 10_000;
 const MAX_IMPORTED_REQUEST_REVISIONS: usize = 5;
 const MAX_IMPORTED_REQUEST_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -110,8 +111,8 @@ pub(crate) async fn list_request_revisions(
     for index in processing_order {
         let revision = &revisions[index];
         let commit_limit = work_budget.claim_revision(revision.git_snapshot.size_bytes);
-        let (commits, inspection, commits_inspected) = if let Some(commit_limit) = commit_limit {
-            let commits = with_request_revision_store_repo(
+        let (commits, inspection) = if let Some(commit_limit) = commit_limit {
+            let inspected = with_request_revision_store_repo(
                 &state,
                 &owner,
                 &repo_name,
@@ -127,14 +128,15 @@ pub(crate) async fn list_request_revisions(
                             .then_some(selected_commit.as_deref())
                             .flatten(),
                         commit_limit,
+                        work_budget.remaining_files,
                     )
                 },
             )?;
-            (commits.visible, commits.inspection, commits.inspected)
+            work_budget.record_inspected(inspected.inspected, inspected.files_listed);
+            (inspected.visible, inspected.inspection)
         } else {
-            (Vec::new(), RequestRevisionInspectionState::Unavailable, 0)
+            (Vec::new(), RequestRevisionInspectionState::Unavailable)
         };
-        work_budget.record_inspected(commits_inspected);
         let (old_head_oid, new_head_oid) = if access.can_read_private_files {
             (
                 Some(revision.old_head_oid.clone()),
@@ -173,6 +175,7 @@ pub(crate) async fn list_request_revisions(
 
 struct RequestRevisionListWorkBudget {
     remaining_commits: usize,
+    remaining_files: usize,
     remaining_revisions: usize,
     remaining_snapshot_bytes: u64,
 }
@@ -181,6 +184,7 @@ impl RequestRevisionListWorkBudget {
     fn new() -> Self {
         Self {
             remaining_commits: MAX_LISTED_REQUEST_COMMITS,
+            remaining_files: MAX_LISTED_REQUEST_FILES,
             remaining_revisions: MAX_IMPORTED_REQUEST_REVISIONS,
             remaining_snapshot_bytes: MAX_IMPORTED_REQUEST_SNAPSHOT_BYTES,
         }
@@ -189,6 +193,7 @@ impl RequestRevisionListWorkBudget {
     fn claim_revision(&mut self, snapshot_bytes: u64) -> Option<usize> {
         let commit_limit = self.remaining_commits.min(MAX_LISTED_COMMITS_PER_REVISION);
         if commit_limit == 0
+            || self.remaining_files == 0
             || self.remaining_revisions == 0
             || snapshot_bytes > self.remaining_snapshot_bytes
         {
@@ -199,53 +204,10 @@ impl RequestRevisionListWorkBudget {
         Some(commit_limit)
     }
 
-    fn record_inspected(&mut self, commits: usize) {
+    fn record_inspected(&mut self, commits: usize, files: usize) {
         self.remaining_commits = self.remaining_commits.saturating_sub(commits);
+        self.remaining_files = self.remaining_files.saturating_sub(files);
     }
-}
-
-pub(crate) async fn get_request_revision_commit(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((owner, repo_name, request_id, revision_id, commit_oid)): Path<(
-        String,
-        String,
-        String,
-        String,
-        String,
-    )>,
-) -> Result<Json<RequestRevisionCommitFilesResponse>, ApiError> {
-    let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(
-        &state,
-        &repo,
-        access,
-        viewer_user_id.as_deref(),
-        &request_id,
-    )
-    .await?;
-    let revision = state
-        .metadata
-        .requests()
-        .request_revision(&request.id, &revision_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("request revision not found"))?;
-    let commit_oid = canonical_commit_oid(commit_oid)?;
-    let inspected = with_request_revision_store_repo(
-        &state,
-        &owner,
-        &repo_name,
-        &request,
-        &revision,
-        |raw_repo| request_revision_commit_files(raw_repo, &repo, access, &revision, &commit_oid),
-    )?;
-    Ok(Json(RequestRevisionCommitFilesResponse {
-        revision_id: revision.id,
-        inspection: inspected.inspection,
-        commit: inspected.commit,
-        files: inspected.files,
-    }))
 }
 
 pub(crate) async fn get_request_revision_commit_file_diff(
@@ -288,6 +250,7 @@ pub(crate) async fn get_request_revision_commit_file_diff(
             let inspected =
                 request_revision_commit_files(raw_repo, &repo, access, &revision, &commit_oid)?;
             let file = inspected
+                .commit
                 .files
                 .into_iter()
                 .find(|file| file.path == path)
@@ -351,6 +314,7 @@ pub(crate) async fn validate_request_discussion_anchor(
         )?;
         if let Some(path) = path.as_ref()
             && !inspected
+                .commit
                 .files
                 .iter()
                 .any(|file| file.path == path.as_str().trim_start_matches('/'))
@@ -374,6 +338,7 @@ fn request_revision_commits(
     revision: &RequestRevision,
     selected_commit: Option<&str>,
     limit: usize,
+    file_limit: usize,
 ) -> Result<InspectedRequestCommits, ApiError> {
     let mut commit_oids = request_revision_commit_oids(raw_repo, revision, limit)?;
     let mut inspection_incomplete = commit_oids.len() > limit;
@@ -391,19 +356,35 @@ fn request_revision_commits(
         commit_oids.insert(0, selected_commit.to_string());
     }
     let inspected = commit_oids.len();
+    let mut inspection_order = (0..commit_oids.len()).rev().collect::<Vec<_>>();
+    if let Some(selected_commit) = selected_commit
+        && let Some(selected_index) = commit_oids.iter().position(|oid| oid == selected_commit)
+    {
+        inspection_order.retain(|index| *index != selected_index);
+        inspection_order.insert(0, selected_index);
+    }
+    let mut remaining_files = file_limit;
     let mut visible = Vec::new();
+    let mut file_budget_incomplete = false;
     let mut metadata_incomplete = false;
-    for commit_oid in commit_oids {
-        let commit = inspect_request_commit(raw_repo, repo, access, &commit_oid)?;
+    for index in inspection_order {
+        let commit = inspect_request_commit(raw_repo, repo, access, &commit_oids[index])?;
         metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
         if let Some(summary) = commit.commit {
-            visible.push(summary);
+            if summary.files.len() > remaining_files {
+                file_budget_incomplete = true;
+                continue;
+            }
+            remaining_files -= summary.files.len();
+            visible.push((index, summary));
         }
     }
+    visible.sort_by_key(|(index, _)| *index);
     Ok(InspectedRequestCommits {
-        visible,
+        visible: visible.into_iter().map(|(_, commit)| commit).collect(),
         inspected,
-        inspection: if inspection_incomplete || metadata_incomplete {
+        files_listed: file_limit - remaining_files,
+        inspection: if inspection_incomplete || file_budget_incomplete || metadata_incomplete {
             RequestRevisionInspectionState::Incomplete
         } else {
             RequestRevisionInspectionState::Complete
@@ -414,6 +395,7 @@ fn request_revision_commits(
 struct InspectedRequestCommits {
     visible: Vec<RequestRevisionCommitResponse>,
     inspected: usize,
+    files_listed: usize,
     inspection: RequestRevisionInspectionState,
 }
 
@@ -664,7 +646,7 @@ mod tests {
         let mut count_budget = RequestRevisionListWorkBudget::new();
         for _ in 0..MAX_IMPORTED_REQUEST_REVISIONS {
             assert!(count_budget.claim_revision(1).is_some());
-            count_budget.record_inspected(1);
+            count_budget.record_inspected(1, 0);
         }
         assert_eq!(count_budget.claim_revision(1), None);
 
@@ -677,7 +659,11 @@ mod tests {
         assert_eq!(byte_budget.claim_revision(1), None);
 
         let mut commit_budget = RequestRevisionListWorkBudget::new();
-        commit_budget.record_inspected(usize::MAX);
+        commit_budget.record_inspected(usize::MAX, 0);
         assert_eq!(commit_budget.claim_revision(1), None);
+
+        let mut file_budget = RequestRevisionListWorkBudget::new();
+        file_budget.record_inspected(0, usize::MAX);
+        assert_eq!(file_budget.claim_revision(1), None);
     }
 }

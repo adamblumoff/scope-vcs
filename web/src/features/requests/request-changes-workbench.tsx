@@ -3,7 +3,6 @@ import type {
   CommitFile,
   CommitSummary,
   ProjectionPreviewAudience,
-  RequestRevisionCommitFiles,
   RequestRevisions,
   ReviewFileDiff,
 } from '@/api/types'
@@ -11,13 +10,9 @@ import type { LoadRequestRevisionCommitInput } from '@/api/requests'
 import { PendingSurface } from '@/components/pending-surface'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
-  historyCommitCacheKey,
   historyDiffCacheKey,
-  peekHistoryCommitCache,
   peekHistoryDiffCache,
-  readHistoryCommitCache,
   readHistoryDiffCache,
-  writeHistoryCommitCache,
   writeHistoryDiffCache,
 } from '@/features/history/history-resource-cache'
 import { HistoryWorkbench } from '@/features/history/history-workbench'
@@ -37,12 +32,20 @@ import {
   requestChangeSelection,
   requestRevisionCommitId,
 } from './request-changes-model'
-import type { RequestDiscussion } from './request-discussion-types'
+import type {
+  RequestDiscussion,
+  RequestDiscussionPage,
+} from './request-discussion-types'
 
 export type RequestChangesSearch = {
   commit?: string
   path?: string
   revision?: string
+}
+
+export type RequestChangesDiscussionReferences = {
+  all: RequestDiscussionPage | null
+  byCommit: Record<string, RequestDiscussionPage | null>
 }
 
 type DiscussionReferenceState = {
@@ -55,7 +58,7 @@ type DiscussionReferenceState = {
 
 export function RequestChangesWorkbench({
   audience,
-  loadCommit,
+  initialDiscussionReferences,
   loadDiff,
   loadDiscussions,
   onSearchChange,
@@ -65,9 +68,7 @@ export function RequestChangesWorkbench({
   search,
 }: {
   audience: ProjectionPreviewAudience
-  loadCommit: (
-    input: LoadRequestRevisionCommitInput,
-  ) => Promise<RequestRevisionCommitFiles>
+  initialDiscussionReferences: RequestChangesDiscussionReferences
   loadDiff: (
     input: LoadRequestRevisionCommitInput & { path: string },
   ) => Promise<ReviewFileDiff>
@@ -83,7 +84,6 @@ export function RequestChangesWorkbench({
 }) {
   const model = useRequestChangesModel({
     audience,
-    loadCommit,
     loadDiff,
     onSearchChange,
     params,
@@ -93,6 +93,7 @@ export function RequestChangesWorkbench({
   })
   const discussionReferences = useRequestDiscussionReferences({
     commitOid: model.selectedCommitOid,
+    initialReferences: initialDiscussionReferences,
     loadDiscussions,
     params,
     revision: model.selectedRevision,
@@ -146,11 +147,13 @@ export function RequestChangesWorkbench({
 
 function useRequestDiscussionReferences({
   commitOid,
+  initialReferences,
   loadDiscussions,
   params,
   revision,
 }: {
   commitOid: string | null
+  initialReferences: RequestChangesDiscussionReferences
   loadDiscussions: (input: LoadDiscussionsInput) => Promise<{
     discussions: RequestDiscussion[]
     next_cursor: string | null
@@ -158,105 +161,81 @@ function useRequestDiscussionReferences({
   params: { owner: string; repo: string; request_id: string }
   revision: RequestRevisions['revisions'][number] | null
 }): DiscussionReferenceState {
-  const key = revision && commitOid ? `${revision.id}:${commitOid}` : null
-  const loadFirstPage = useCallback(async (signal: AbortSignal) => {
-    if (!key || !revision || !commitOid) {
-      throw new Error('Select a request commit.')
-    }
-    signal.throwIfAborted()
-    const page = await loadDiscussions({
-      ...params,
-      commit_oid: commitOid,
-      include_revision_anchor: commitOid === revision.commits.at(-1)?.oid,
-      revision_id: revision.id,
-    })
-    signal.throwIfAborted()
-    return page
-  }, [commitOid, key, loadDiscussions, params, revision])
-  const firstPage = useCachedResource({
-    fallbackError: 'Discussion references are unavailable.',
-    identity: key,
-    load: loadFirstPage,
-    peek: emptyDiscussionReferenceCache,
-    read: emptyDiscussionReferenceCache,
-    write: discardDiscussionReferencePage,
-  })
-  const [additional, setAdditional] = useState<{
+  const key = revision && commitOid
+    ? requestRevisionCommitId(revision.id, commitOid)
+    : null
+  const initialPage = initialReferences.all
+    ?? (key ? initialReferences.byCommit[key] ?? null : null)
+  const [resource, setResource] = useState<{
     discussions: RequestDiscussion[]
     error: string | null
-    key: string | null
+    initialPage: RequestDiscussionPage | null
     nextCursor: string | null
     status: 'failed' | 'loaded' | 'loading'
-  }>({ discussions: [], error: null, key: null, nextCursor: null, status: 'loaded' })
-  const additionalMatches = additional.key === key
-  const activeAdditional = additionalMatches
-    ? additional
-    : { discussions: [], error: null, key, nextCursor: null, status: 'loaded' as const }
-  const nextCursor = additionalMatches
-    ? activeAdditional.nextCursor
-    : firstPage.value?.next_cursor ?? null
-  const loadNextPage = useCallback(async () => {
-    if (!key || !revision || !commitOid || !nextCursor) return
-    setAdditional((current) => ({
-      discussions: current.key === key ? current.discussions : [],
+  }>(() => discussionReferenceResource(initialPage))
+  const active = resource.initialPage === initialPage
+    ? resource
+    : discussionReferenceResource(initialPage)
+  if (active !== resource) setResource(active)
+  const loadPage = useCallback(async () => {
+    if (!revision || !commitOid) return
+    const cursor = active.nextCursor ?? undefined
+    setResource((current) => current.initialPage === initialPage ? {
+      ...current,
       error: null,
-      key,
-      nextCursor,
       status: 'loading',
-    }))
+    } : current)
     try {
       const page = await loadDiscussions({
         ...params,
         commit_oid: commitOid,
-        cursor: nextCursor,
+        cursor,
         include_revision_anchor: commitOid === revision.commits.at(-1)?.oid,
+        limit: 100,
         revision_id: revision.id,
       })
-      setAdditional((current) => current.key === key ? {
-        discussions: [...current.discussions, ...page.discussions],
+      setResource((current) => current.initialPage === initialPage ? {
+        discussions: cursor
+          ? [...current.discussions, ...page.discussions]
+          : page.discussions,
         error: null,
-        key,
+        initialPage,
         nextCursor: page.next_cursor,
         status: 'loaded',
       } : current)
     } catch (error) {
-      setAdditional((current) => current.key === key ? {
+      setResource((current) => current.initialPage === initialPage ? {
         ...current,
         error: error instanceof Error ? error.message : 'Discussion references are unavailable.',
         status: 'failed',
       } : current)
     }
-  }, [commitOid, key, loadDiscussions, nextCursor, params, revision])
-  const firstDiscussions = firstPage.value?.discussions ?? []
-  const status = firstPage.status === 'failed' || activeAdditional.status === 'failed'
-    ? 'failed'
-    : firstPage.status === 'loading' || activeAdditional.status === 'loading'
-      ? 'loading'
-      : 'loaded'
+  }, [active.nextCursor, commitOid, initialPage, loadDiscussions, params, revision])
   return {
-    discussions: [...firstDiscussions, ...activeAdditional.discussions],
-    error: firstPage.error ?? activeAdditional.error,
-    loadMore: nextCursor && status !== 'loading'
-      ? () => void loadNextPage()
+    discussions: active.discussions,
+    error: active.error,
+    loadMore: active.nextCursor && active.status === 'loaded'
+      ? () => void loadPage()
       : undefined,
-    retry: firstPage.status === 'failed'
-      ? firstPage.retry
-      : activeAdditional.status === 'failed'
-        ? () => void loadNextPage()
+    retry: active.status === 'failed'
+      ? () => void loadPage()
       : undefined,
-    status,
+    status: active.status,
   }
 }
 
-function emptyDiscussionReferenceCache() {
-  return null
+function discussionReferenceResource(initialPage: RequestDiscussionPage | null) {
+  return {
+    discussions: initialPage?.discussions ?? [],
+    error: initialPage ? null : 'Discussion references are unavailable.',
+    initialPage,
+    nextCursor: initialPage?.next_cursor ?? null,
+    status: initialPage ? 'loaded' as const : 'failed' as const,
+  }
 }
-
-function discardDiscussionReferencePage() {}
 
 function useRequestChangesModel({
   audience,
-  loadCommit,
   loadDiff,
   onSearchChange,
   params,
@@ -265,9 +244,6 @@ function useRequestChangesModel({
   search,
 }: {
   audience: ProjectionPreviewAudience
-  loadCommit: (
-    input: LoadRequestRevisionCommitInput,
-  ) => Promise<RequestRevisionCommitFiles>
   loadDiff: (
     input: LoadRequestRevisionCommitInput & { path: string },
   ) => Promise<ReviewFileDiff>
@@ -297,40 +273,18 @@ function useRequestChangesModel({
     : null
   const generation = `${orderedRevisions.at(-1)?.position ?? 0}`
   const viewKey = `request:${params.request_id}:${selectedRevision?.id ?? 'none'}`
-  const commitIdentity = selectedCommitId && selectedRevision
-    ? historyCommitCacheKey({
+  const selectedCommitSummary = selectedRevision?.commits.find(
+    ({ oid }) => oid === selectedCommitOid,
+  ) ?? null
+  const selectedCommit = selectedRevision && selectedCommitSummary
+    ? commitDetail(
+        selectedRevision.id,
+        selectedCommitSummary,
         audience,
-        commit: selectedCommitId,
-        generation,
         repoId,
-        viewKey,
-      })
+        params.request_id,
+      )
     : null
-  const loadSelectedCommit = useCallback(
-    async (signal: AbortSignal) => {
-      if (!selectedCommitOid || !selectedRevision) {
-        throw new Error('Select a request commit.')
-      }
-      signal.throwIfAborted()
-      const result = await loadCommit({
-        ...params,
-        commit_oid: selectedCommitOid,
-        revision_id: selectedRevision.id,
-      })
-      signal.throwIfAborted()
-      return commitDetail(result, audience, repoId, params.request_id)
-    },
-    [audience, loadCommit, params, repoId, selectedCommitOid, selectedRevision],
-  )
-  const commitResource = useCachedResource({
-    fallbackError: 'Request commit is unavailable.',
-    identity: commitIdentity,
-    load: loadSelectedCommit,
-    peek: peekHistoryCommitCache,
-    read: readHistoryCommitCache,
-    write: writeHistoryCommitCache,
-  })
-  const selectedCommit = commitResource.value
   const selectedFilePath = search.path ?? null
   const selectedFile = selectedCommit?.files.find(
     ({ path }) => path === selectedFilePath,
@@ -374,7 +328,9 @@ function useRequestChangesModel({
   })
   const commitState: CommitDetailState = selection.error
     ? { commit: null, error: selection.error, status: 'failed' }
-    : resourceToCommitState(commitResource)
+    : selectedCommit
+      ? { commit: selectedCommit, error: null, status: 'loaded' }
+      : { commit: null, error: null, status: 'idle' }
   const fileDiffState: CommitFileDiffState =
     selectedFilePath && selectedCommit && !selectedFile
       ? { diff: null, error: 'This file is not part of the selected commit.', status: 'failed' }
@@ -398,7 +354,7 @@ function useRequestChangesModel({
     commitState,
     diffIdentity,
     fileDiffState,
-    retryCommit: selection.error ? undefined : commitResource.retry,
+    retryCommit: undefined,
     retryDiff: selectedFilePath && selectedCommit && !selectedFile
       ? undefined
       : diffResource.retry,
@@ -518,38 +474,27 @@ function RequestCommitContext({
 }
 
 function commitDetail(
-  result: RequestRevisionCommitFiles,
+  revisionId: string,
+  commit: RequestRevisions['revisions'][number]['commits'][number],
   audience: ProjectionPreviewAudience,
   repoId: string,
   requestId: string,
 ): CommitDetail {
   return {
     audience,
-    author: result.commit.author,
-    change_count: result.files.length,
-    files: result.files.map((file) => ({
+    author: commit.author,
+    change_count: commit.files.length,
+    files: commit.files.map((file) => ({
       ...file,
       path: `/${file.path.replace(/^\/+/, '')}`,
     })),
-    logical_commit_id: result.commit.oid,
-    message: result.commit.message,
-    parent_projected_id: result.commit.parent_oids[0] ?? null,
-    projected_id: requestRevisionCommitId(result.revision_id, result.commit.oid),
+    logical_commit_id: commit.oid,
+    message: commit.message,
+    parent_projected_id: commit.parent_oids[0] ?? null,
+    projected_id: requestRevisionCommitId(revisionId, commit.oid),
     repo_id: repoId,
-    view_key: `request:${requestId}:${result.revision_id}`,
+    view_key: `request:${requestId}:${revisionId}`,
   }
-}
-
-function resourceToCommitState(
-  resource: ReturnType<typeof useCachedResource<CommitDetail>>,
-): CommitDetailState {
-  if (resource.status === 'loaded') {
-    return { commit: resource.value, error: null, status: 'loaded' }
-  }
-  if (resource.status === 'failed') {
-    return { commit: null, error: resource.error, status: 'failed' }
-  }
-  return { commit: null, error: null, status: resource.status }
 }
 
 function resourceToDiffState(

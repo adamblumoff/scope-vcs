@@ -110,7 +110,6 @@ pub(crate) fn export_api_types(output_path: &Path) {
         declaration::<HistoryEntryRequest>(&ts_config),
         declaration::<HistoryEntryFileDiffRequest>(&ts_config),
         declaration::<RequestFileDiffRequest>(&ts_config),
-        declaration::<RequestRevisionCommitFilesResponse>(&ts_config),
         declaration::<ReviewFileContentResponse>(&ts_config),
         declaration::<ReviewFileDiffResponse>(&ts_config),
         declaration::<HistoryPageResponse>(&ts_config),
@@ -239,10 +238,6 @@ fn api_route_template_declarations() -> String {
         ("repoFiles", routes::REPO_FILES),
         ("repoFileContent", routes::REPO_FILE_CONTENT),
         ("repoRequestRevisions", routes::REPO_REQUEST_REVISIONS),
-        (
-            "repoRequestRevisionCommit",
-            routes::REPO_REQUEST_REVISION_COMMIT,
-        ),
         (
             "repoRequestRevisionCommitFileDiff",
             routes::REPO_REQUEST_REVISION_COMMIT_FILE_DIFF,

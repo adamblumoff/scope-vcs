@@ -146,8 +146,6 @@ export type HistoryEntryFileDiffRequest = { audience: ProjectionPreviewAudience 
 
 export type RequestFileDiffRequest = { path: string, };
 
-export type RequestRevisionCommitFilesResponse = { revision_id: string, inspection: RequestRevisionInspectionState, commit: RequestRevisionCommitResponse, files: Array<CommitFileResponse>, };
-
 export type ReviewFileContentResponse = { "kind": "text", text: string, } | { "kind": "binary", oid: string, size_bytes: number, };
 
 export type ReviewFileDiffResponse = { path: string, kind: FileChangeKind, old_mode: string | null, new_mode: string | null, old_content: ReviewFileContentResponse | null, new_content: ReviewFileContentResponse | null, };
@@ -232,7 +230,7 @@ export type RequestDiscussionSummaryResponse = { id: string, request_id: string,
 
 export type RequestDiscussionAnchor = { revision_id: string, commit_oid: string | null, path: string | null, };
 
-export type RequestRevisionCommitResponse = { oid: string, parent_oids: Array<string>, author: string | null, authored_at_unix: number, message: string, change_count: number, };
+export type RequestRevisionCommitResponse = { oid: string, parent_oids: Array<string>, author: string | null, authored_at_unix: number, message: string, change_count: number, files: Array<CommitFileResponse>, };
 
 export type RequestRevisionInspectionState = "Complete" | "Incomplete" | "Unavailable";
 
@@ -350,7 +348,6 @@ export const ApiRouteTemplates = {
   repoFiles: "/v1/repos/{owner}/{repo}/files",
   repoFileContent: "/v1/repos/{owner}/{repo}/files/content",
   repoRequestRevisions: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes",
-  repoRequestRevisionCommit: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{revision_id}/commits/{commit_oid}",
   repoRequestRevisionCommitFileDiff: "/v1/repos/{owner}/{repo}/requests/{request_id}/changes/{revision_id}/commits/{commit_oid}/file-diff",
   repoRequestDiscussions: "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline",
   repoRequestDiscussionChanges: "/v1/repos/{owner}/{repo}/requests/{request_id}/timeline/changes",

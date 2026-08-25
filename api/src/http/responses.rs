@@ -5,11 +5,13 @@ mod requests;
 pub(crate) use projections::*;
 pub(crate) use repo_collaboration::*;
 pub(crate) use requests::*;
+#[cfg(feature = "type-export")]
+pub(crate) use scope_api_contract::CommitFileResponse;
 use scope_api_contract::{
     DeviceLoginStatus, FileChangeKind, FirstPushTokenResponse, GitOid, GitPushTokenResponse,
     RepoInitResponse, RepoLifecycleState, RepoRequestPermissionsResponse, RepoSummaryResponse,
-    RepositoryAccessResponse, RequestActorSummaryResponse, RequestRevisionCommitResponse,
-    SessionIdentity, UserResponse, Visibility,
+    RepositoryAccessResponse, RequestActorSummaryResponse, SessionIdentity, UserResponse,
+    Visibility,
 };
 pub(crate) use scope_api_contract::{
     RepositoryRunAttemptResponse, RepositoryRunCacheObservationResponse,
@@ -220,15 +222,6 @@ pub(crate) struct RequestFileDiffRequest {
     pub(crate) path: String,
 }
 
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct RequestRevisionCommitFilesResponse {
-    pub(crate) revision_id: String,
-    pub(crate) inspection: scope_api_contract::RequestRevisionInspectionState,
-    pub(crate) commit: RequestRevisionCommitResponse,
-    pub(crate) files: Vec<CommitFileResponse>,
-}
-
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct RepoFileContentRequest {
@@ -325,18 +318,6 @@ pub(crate) struct HistoryVisibilityChangeResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
 pub(crate) struct HistoryEntryFileResponse {
-    pub(crate) path: String,
-    pub(crate) kind: FileChangeKind,
-    pub(crate) old_mode: Option<String>,
-    pub(crate) new_mode: Option<String>,
-    pub(crate) old_oid: Option<String>,
-    pub(crate) new_oid: Option<String>,
-    pub(crate) visibility: Visibility,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
-pub(crate) struct CommitFileResponse {
     pub(crate) path: String,
     pub(crate) kind: FileChangeKind,
     pub(crate) old_mode: Option<String>,

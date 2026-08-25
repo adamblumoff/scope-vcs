@@ -18,17 +18,11 @@ pub(super) fn request_revision_commit_files(
     let commit = inspected
         .commit
         .ok_or_else(|| ApiError::not_found("request revision commit not found"))?;
-    Ok(InspectedRequestCommitFiles {
-        commit,
-        files: inspected.files,
-        inspection: inspected.inspection,
-    })
+    Ok(InspectedRequestCommitFiles { commit })
 }
 
 pub(super) struct InspectedRequestCommitFiles {
     pub(super) commit: RequestRevisionCommitResponse,
-    pub(super) files: Vec<CommitFileResponse>,
-    pub(super) inspection: RequestRevisionInspectionState,
 }
 
 fn request_commit_is_visible_to(
@@ -148,7 +142,6 @@ pub(super) fn inspect_request_commit(
     if changes.hidden {
         return Ok(InspectedRequestCommit {
             commit: None,
-            files: Vec::new(),
             inspection: RequestRevisionInspectionState::Complete,
         });
     }
@@ -165,8 +158,8 @@ pub(super) fn inspect_request_commit(
             authored_at_unix: identity.authored_at_unix,
             message: metadata.message,
             change_count: changes.files.len(),
+            files: changes.files,
         }),
-        files: changes.files,
         inspection: if metadata.complete {
             RequestRevisionInspectionState::Complete
         } else {
@@ -177,7 +170,6 @@ pub(super) fn inspect_request_commit(
 
 pub(super) struct InspectedRequestCommit {
     pub(super) commit: Option<RequestRevisionCommitResponse>,
-    pub(super) files: Vec<CommitFileResponse>,
     pub(super) inspection: RequestRevisionInspectionState,
 }
 

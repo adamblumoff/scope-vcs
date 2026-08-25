@@ -296,6 +296,7 @@ async fn draft_push_records_revision_activity_without_touching_main() {
             .is_empty()
     );
     assert_eq!(latest["commits"][0]["change_count"], 2);
+    assert_eq!(latest["commits"][0]["files"].as_array().unwrap().len(), 2);
     assert!(latest["commits"][0]["authored_at_unix"].as_u64().unwrap() > 0);
 
     let revision_id = latest["id"].as_str().unwrap();
@@ -324,45 +325,8 @@ async fn draft_push_records_revision_activity_without_touching_main() {
         .unwrap();
     assert_eq!(abbreviated_anchor.status(), StatusCode::BAD_REQUEST);
 
-    let missing_commit = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .uri(format!(
-                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/changes/{revision_id}/commits/0000000000000000000000000000000000000000"
-                ))
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-                )
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(missing_commit.status(), StatusCode::NOT_FOUND);
-
-    let commit = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .uri(format!(
-                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/changes/{revision_id}/commits/{commit_oid}"
-                ))
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-                )
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(commit.status(), StatusCode::OK);
-    let commit = response_json(commit).await;
-    assert_eq!(commit["inspection"], "Complete");
     assert!(
-        commit["files"]
+        latest["commits"][0]["files"]
             .as_array()
             .unwrap()
             .iter()
@@ -522,24 +486,6 @@ async fn draft_push_records_revision_activity_without_touching_main() {
         redacted_discussion["discussions"][0]["anchor"]["path"],
         serde_json::Value::Null
     );
-    let hidden_commit = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .uri(format!(
-                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/changes/{revision_id}/commits/{commit_oid}"
-                ))
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-                )
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(hidden_commit.status(), StatusCode::NOT_FOUND);
-
     let revision = state
         .metadata
         .requests()

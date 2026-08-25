@@ -19,6 +19,7 @@ export type LoadDiscussionsInput = RequestParams & {
   cursor?: string
   discussion_id?: string
   include_revision_anchor?: boolean
+  limit?: number
   revision_id?: string
 }
 
@@ -59,7 +60,7 @@ export async function loadRequestDiscussionsForRequest(
       cursor: data.cursor,
       discussion: data.discussion_id,
       include_revision_anchor: data.include_revision_anchor ? 'true' : undefined,
-      limit: '25',
+      limit: (data.limit ?? 25).toString(),
       revision: data.revision_id,
     })}`,
     { auth: 'optional' },

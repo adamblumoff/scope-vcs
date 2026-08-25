@@ -48,29 +48,7 @@ async fn oversized_commit_metadata_remains_identifiable_and_inspectable() {
     assert_eq!(latest["commits"][0]["oid"], commit_oid);
     assert_eq!(latest["commits"][0]["author"], serde_json::Value::Null);
     assert_eq!(latest["commits"][0]["message"], "");
-
-    let revision_id = latest["id"].as_str().unwrap();
-    let commit = app
-        .clone()
-        .oneshot(
-            axum::http::Request::builder()
-                .uri(format!(
-                    "/v1/repos/{TEST_REPO_OWNER}/{TEST_REPO_NAME}/requests/{REQUEST_ID}/changes/{revision_id}/commits/{commit_oid}"
-                ))
-                .header(
-                    AUTHORIZATION,
-                    bearer_header_for(PUBLIC_SUBJECT, PUBLIC_EMAIL),
-                )
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(commit.status(), StatusCode::OK);
-    let commit = response_json(commit).await;
-    assert_eq!(commit["inspection"], "Incomplete");
-    assert_eq!(commit["commit"]["oid"], commit_oid);
-    assert_eq!(commit["files"][0]["path"], "oversized.txt");
+    assert_eq!(latest["commits"][0]["files"][0]["path"], "oversized.txt");
 
     let missing_revision = app
         .oneshot(

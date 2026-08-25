@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { chromium } from 'playwright'
+import {
+  assertFileSelectionSkipsRevisionReload,
+  assertRequestShellPreserved,
+  assertUpdateSelectionUsesInitialPayload,
+} from './request-changes-smoke.mjs'
 
 const baseUrl = (
   process.env.SCOPE_WEB_BASE_URL ??
@@ -738,6 +743,8 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       heading: requestHeading,
       navigation: requestNavigation,
     })
+    await assertFileSelectionSkipsRevisionReload(page, 'retry.ts', '/src/retry.ts')
+    await assertUpdateSelectionUsesInitialPayload(page)
     await page.getByRole('navigation', { name: 'Request views' })
       .getByRole('link', { name: 'Discussion' })
       .click()
@@ -970,18 +977,6 @@ async function assertPassiveSkeleton(page, selector) {
       return visibleLoadingText
     }),
     [],
-  )
-}
-
-async function assertRequestShellPreserved(page, shell) {
-  assert.equal(
-    await page.evaluate(
-      ({ heading, navigation }) =>
-        heading === document.querySelector('h1') &&
-        navigation === document.querySelector('nav[aria-label="Request views"]'),
-      shell,
-    ),
-    true,
   )
 }
 

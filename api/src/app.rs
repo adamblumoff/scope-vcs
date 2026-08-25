@@ -193,10 +193,6 @@ pub fn router(state: AppState) -> Router {
             get(http::request_review::list_request_revisions),
         )
         .route(
-            routes::REPO_REQUEST_REVISION_COMMIT,
-            get(http::request_review::get_request_revision_commit),
-        )
-        .route(
             routes::REPO_REQUEST_REVISION_COMMIT_FILE_DIFF,
             get(http::request_review::get_request_revision_commit_file_diff),
         )
