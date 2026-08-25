@@ -123,6 +123,8 @@ pub(crate) async fn report_cache_preparations(
         .report_attempt_cache_preparations(
             &attempt_id,
             &token_hash,
+            input.authorization_ms,
+            input.wall_ms,
             input
                 .caches
                 .into_iter()
@@ -130,6 +132,12 @@ pub(crate) async fn report_cache_preparations(
                     cache_name: cache.cache_name,
                     identity_digest: cache.identity_digest,
                     preparation: cache.preparation,
+                    key_ms: cache.key_ms,
+                    metadata_ms: cache.metadata_ms,
+                    size_bytes: cache.size_bytes,
+                    download_verify_ms: cache.download_verify_ms,
+                    sync_ms: cache.sync_ms,
+                    extraction_ms: cache.extraction_ms,
                     prepare_ms: cache.prepare_ms,
                 })
                 .collect(),

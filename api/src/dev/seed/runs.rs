@@ -2,6 +2,7 @@ use crate::error::ApiError;
 use scope_domain::{
     content_ref::ContentRef,
     runs::{
+        cache::{CacheFinalState, CacheKeyInputs, CachePreparation, WorkflowCache},
         run::{AttemptConclusion, Run, RunLogChunk, RunSource, RunTrigger, StepConclusion},
         workflow::{
             CompiledWorkflow, ContainerSpec, WorkflowIdentity, WorkflowJob, WorkflowJobId,
@@ -10,7 +11,9 @@ use scope_domain::{
     },
     store::{DEFAULT_GIT_FILE_MODE, SourceBlob, repo_id},
 };
-use scope_postgres::db::{MetadataStore, RunStore};
+use scope_postgres::db::{
+    AttemptCacheFinalizationCommand, AttemptCachePreparationCommand, MetadataStore, RunStore,
+};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
@@ -132,7 +135,7 @@ fn checks_workflow_revision(repo_id: &str) -> Result<WorkflowRevision, ApiError>
         vec![],
         container.clone(),
         600,
-        vec![],
+        vec![seed_cache()?],
         BTreeMap::new(),
         vec![step("Build", "cargo build --workspace")?],
     )
@@ -208,6 +211,19 @@ fn seed_container() -> Result<ContainerSpec, ApiError> {
         "ghcr.io/scope/dev-seed-ci@sha256:{}",
         fake_digest("scope-dev-seed-container-image")
     ))
+    .map_err(ApiError::internal)
+}
+
+fn seed_cache() -> Result<WorkflowCache, ApiError> {
+    WorkflowCache::new(
+        "cargo",
+        "/root/.cache/cargo",
+        "cargo-v1",
+        CacheKeyInputs::new(vec!["Cargo.lock".to_string()], vec![], false)
+            .map_err(ApiError::internal)?,
+        CacheKeyInputs::new(vec!["Cargo.lock".to_string()], vec![], true)
+            .map_err(ApiError::internal)?,
+    )
     .map_err(ApiError::internal)
 }
 
@@ -661,16 +677,51 @@ async fn run_job(
     let attempt = attempt_id(run_id, job_key, attempt_number);
     let token = attempt_token(run_id, job_key, attempt_number);
     *clock += 1;
-    runs.dispatch_job(
-        run_id,
-        job_key,
-        &attempt,
-        &token,
-        RUNTIME_VERSION,
-        *clock,
-        *clock + DEFAULT_LEASE_SECONDS,
-    )
-    .await?;
+    let claim = runs
+        .dispatch_job(
+            run_id,
+            job_key,
+            &attempt,
+            &token,
+            RUNTIME_VERSION,
+            *clock,
+            *clock + DEFAULT_LEASE_SECONDS,
+        )
+        .await?;
+
+    let (cache_identity_digests, cache_reports): (Vec<_>, Vec<_>) = claim
+        .workflow_revision
+        .definition()
+        .job(&claim.job.key)
+        .ok_or_else(|| {
+            ApiError::internal(std::io::Error::other(
+                "seeded run job definition is missing",
+            ))
+        })?
+        .caches()
+        .iter()
+        .map(|cache| {
+            let identity_digest = fake_digest(&format!("cache:{attempt}:{}", cache.as_str()));
+            (
+                identity_digest.clone(),
+                AttemptCachePreparationCommand {
+                    cache_name: cache.as_str().to_string(),
+                    identity_digest,
+                    preparation: CachePreparation::Exact,
+                    key_ms: 3,
+                    metadata_ms: 8,
+                    size_bytes: 12 * 1024 * 1024,
+                    download_verify_ms: 84,
+                    sync_ms: 7,
+                    extraction_ms: 103,
+                    prepare_ms: 205,
+                },
+            )
+        })
+        .unzip();
+    *clock += 1;
+    runs.report_attempt_cache_preparations(&attempt, &token, 21, 236, cache_reports, *clock)
+        .await?;
 
     let mut sequence = 1u64;
     for (index, plan) in steps.iter().enumerate() {
@@ -720,6 +771,23 @@ async fn run_job(
             }
             None => return Ok(()),
         }
+    }
+    if !cache_identity_digests.is_empty() {
+        *clock += 1;
+        runs.report_attempt_cache_finalizations(
+            &attempt,
+            &token,
+            cache_identity_digests
+                .into_iter()
+                .map(|identity_digest| AttemptCacheFinalizationCommand {
+                    identity_digest,
+                    final_state: CacheFinalState::Ready,
+                    finalize_ms: 41,
+                })
+                .collect(),
+            *clock,
+        )
+        .await?;
     }
     *clock += 1;
     runs.complete_attempt(
@@ -865,5 +933,21 @@ mod tests {
             .find(|entry| entry.run.id == "run_dev_seed_running-chain")
             .expect("running chain run is seeded");
         assert_eq!(running.jobs.len(), 3);
+
+        let detail = metadata
+            .runs()
+            .run_detail(&running.run.id)
+            .await
+            .unwrap()
+            .expect("running chain detail is seeded");
+        let build_attempt = detail
+            .attempts
+            .iter()
+            .find(|attempt| attempt.attempt.job_key.as_str() == "build")
+            .expect("build attempt is seeded");
+        assert_eq!(build_attempt.cache_setup.as_ref().unwrap().wall_ms, 236);
+        assert_eq!(build_attempt.caches.len(), 1);
+        assert_eq!(build_attempt.caches[0].timing.sync_ms, 7);
+        assert_eq!(build_attempt.caches[0].timing.prepare_ms, 205);
     }
 }

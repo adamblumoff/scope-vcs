@@ -298,13 +298,15 @@ export type RepositoryRunCachePreparation = { "kind": "exact" } | { "kind": "com
 
 export type RepositoryRunCacheFinalState = "pending" | "ready" | "evicted";
 
-export type RepositoryRunCacheObservationResponse = { workflow_path: string, job_key: string, identity_digest: string, preparation: RepositoryRunCachePreparation, prepare_ms: number, final_state: RepositoryRunCacheFinalState, finalize_ms: number | null, };
+export type RepositoryRunCacheObservationResponse = { workflow_path: string, job_key: string, identity_digest: string, preparation: RepositoryRunCachePreparation, key_ms: number, metadata_ms: number, size_bytes: number, download_verify_ms: number, sync_ms: number, extraction_ms: number, prepare_ms: number, final_state: RepositoryRunCacheFinalState, finalize_ms: number | null, };
+
+export type RepositoryRunCacheSetupObservationResponse = { authorization_ms: number, wall_ms: number, };
 
 export type RepositoryRunCacheResponse = { name: string, path: string, observation: RepositoryRunCacheObservationResponse | null, };
 
 export type RepositoryRunStepResponse = { index: number, name: string, command: string, state: RepositoryRunStepState, started_at_unix: number | null, completed_at_unix: number | null, exit_code: number | null, };
 
-export type RepositoryRunAttemptResponse = { id: string, number: number, execution_provider: RepositoryExecutionProvider, external_run_id: string | null, runtime_version: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, caches: Array<RepositoryRunCacheResponse>, steps: Array<RepositoryRunStepResponse>, };
+export type RepositoryRunAttemptResponse = { id: string, number: number, execution_provider: RepositoryExecutionProvider, external_run_id: string | null, runtime_version: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, cache_setup: RepositoryRunCacheSetupObservationResponse | null, caches: Array<RepositoryRunCacheResponse>, steps: Array<RepositoryRunStepResponse>, };
 
 export type RepositoryRunWorkflowResponse = { key: string, name: string, path: string, manual: boolean, push_main: boolean, job_count: number, };
 

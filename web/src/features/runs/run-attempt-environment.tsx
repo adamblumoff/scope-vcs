@@ -1,7 +1,8 @@
-import type { RepoRunCache } from '@/api/types'
+import type { RepoRunAttempt, RepoRunCache } from '@/api/types'
 import {
   cacheExplanation,
   cacheNamespace,
+  cachePreparationDetail,
   cacheStateClass,
   cacheStateLabel,
   cacheSummaryLabel,
@@ -11,9 +12,11 @@ import {
 
 export function RunAttemptEnvironment({
   caches,
+  cacheSetup,
   pinnedContainerImage,
 }: {
   caches: readonly RepoRunCache[]
+  cacheSetup: RepoRunAttempt['cache_setup']
   pinnedContainerImage: string | null
 }) {
   return (
@@ -21,7 +24,7 @@ export function RunAttemptEnvironment({
       <div className="grid gap-1 px-3 py-3 text-xs sm:grid-cols-[7rem_minmax(0,1fr)_auto] sm:items-baseline sm:gap-3">
         <strong className="text-sm font-medium">Environment</strong>
         <span className="text-muted-foreground">
-          {cacheSummaryLabel(caches)}
+          {cacheSummaryLabel(caches, cacheSetup)}
         </span>
         <code
           className="text-[11px] text-muted-foreground"
@@ -34,6 +37,7 @@ export function RunAttemptEnvironment({
         <div className="divide-y divide-border/70 border-t border-border/70">
           {caches.map((cache) => {
             const state = cacheStateLabel(cache)
+            const preparationDetail = cachePreparationDetail(cache)
             return (
               <div
                 className="grid gap-x-3 gap-y-1 px-3 py-2.5 text-xs sm:grid-cols-[7rem_6rem_minmax(0,1fr)_auto] sm:items-baseline"
@@ -47,6 +51,11 @@ export function RunAttemptEnvironment({
                 </span>
                 <span className="min-w-0">
                   <span className="block">{cacheExplanation(cache)}</span>
+                  {preparationDetail ? (
+                    <span className="block text-[11px] text-muted-foreground">
+                      {preparationDetail}
+                    </span>
+                  ) : null}
                   <code className="block truncate text-[10px] text-muted-foreground">
                     {cacheNamespace(cache)}
                   </code>

@@ -442,6 +442,12 @@ pub mod run_attempt_cache {
         pub cache_name: String,
         pub preparation: String,
         pub cold_reason: Option<String>,
+        pub key_ms: i64,
+        pub metadata_ms: i64,
+        pub size_bytes: i64,
+        pub download_verify_ms: i64,
+        pub sync_ms: i64,
+        pub extraction_ms: i64,
         pub prepare_ms: i64,
         pub final_state: String,
         pub finalize_ms: Option<i64>,
@@ -469,7 +475,22 @@ pub mod run_attempt_cache {
                 cache_name: observation.cache_name.clone(),
                 preparation,
                 cold_reason,
-                prepare_ms: u64_to_i64(observation.prepare_ms, "cache preparation duration")?,
+                key_ms: u64_to_i64(observation.timing.key_ms, "cache key duration")?,
+                metadata_ms: u64_to_i64(observation.timing.metadata_ms, "cache metadata duration")?,
+                size_bytes: u64_to_i64(observation.timing.size_bytes, "cache compressed size")?,
+                download_verify_ms: u64_to_i64(
+                    observation.timing.download_verify_ms,
+                    "cache download and verification duration",
+                )?,
+                sync_ms: u64_to_i64(observation.timing.sync_ms, "cache sync duration")?,
+                extraction_ms: u64_to_i64(
+                    observation.timing.extraction_ms,
+                    "cache extraction duration",
+                )?,
+                prepare_ms: u64_to_i64(
+                    observation.timing.prepare_ms,
+                    "cache preparation duration",
+                )?,
                 final_state: encode_enum(observation.final_state)?,
                 finalize_ms: observation
                     .finalize_ms
@@ -498,11 +519,65 @@ pub mod run_attempt_cache {
                 self.cache_name,
                 self.identity_digest,
                 preparation,
-                i64_to_u64(self.prepare_ms, "cache preparation duration")?,
+                AttemptCachePreparationTiming::new(
+                    i64_to_u64(self.key_ms, "cache key duration")?,
+                    i64_to_u64(self.metadata_ms, "cache metadata duration")?,
+                    i64_to_u64(self.size_bytes, "cache compressed size")?,
+                    i64_to_u64(
+                        self.download_verify_ms,
+                        "cache download and verification duration",
+                    )?,
+                    i64_to_u64(self.sync_ms, "cache sync duration")?,
+                    i64_to_u64(self.extraction_ms, "cache extraction duration")?,
+                    i64_to_u64(self.prepare_ms, "cache preparation duration")?,
+                )
+                .map_err(PostgresError::invalid_input)?,
                 decode_enum::<CacheFinalState>(self.final_state)?,
                 self.finalize_ms
                     .map(|value| i64_to_u64(value, "cache finalization duration"))
                     .transpose()?,
+            )
+            .map_err(PostgresError::invalid_input)
+        }
+    }
+}
+
+pub mod run_attempt_cache_setup {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "scope_run_attempt_cache_setups")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub attempt_id: String,
+        pub authorization_ms: i64,
+        pub wall_ms: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    impl Model {
+        pub fn from_domain(
+            observation: &AttemptCacheSetupObservation,
+        ) -> Result<Self, PostgresError> {
+            Ok(Self {
+                attempt_id: observation.attempt_id.clone(),
+                authorization_ms: u64_to_i64(
+                    observation.authorization_ms,
+                    "cache authorization duration",
+                )?,
+                wall_ms: u64_to_i64(observation.wall_ms, "cache setup wall duration")?,
+            })
+        }
+
+        pub fn try_into_domain(self) -> Result<AttemptCacheSetupObservation, PostgresError> {
+            AttemptCacheSetupObservation::new(
+                self.attempt_id,
+                i64_to_u64(self.authorization_ms, "cache authorization duration")?,
+                i64_to_u64(self.wall_ms, "cache setup wall duration")?,
             )
             .map_err(PostgresError::invalid_input)
         }

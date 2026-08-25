@@ -1,7 +1,10 @@
 use super::{RunStore, entities};
 use crate::error::PostgresError;
 use scope_domain::runs::{
-    cache::{AttemptCacheObservation, CacheFinalState, CachePreparation},
+    cache::{
+        AttemptCacheObservation, AttemptCachePreparationTiming, AttemptCacheSetupObservation,
+        CacheFinalState, CachePreparation,
+    },
     workflow::WorkflowPath,
 };
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QuerySelect, TransactionTrait};
@@ -11,6 +14,12 @@ pub struct AttemptCachePreparationCommand {
     pub cache_name: String,
     pub identity_digest: String,
     pub preparation: CachePreparation,
+    pub key_ms: u64,
+    pub metadata_ms: u64,
+    pub size_bytes: u64,
+    pub download_verify_ms: u64,
+    pub sync_ms: u64,
+    pub extraction_ms: u64,
     pub prepare_ms: u64,
 }
 
@@ -26,12 +35,36 @@ impl RunStore {
         &self,
         attempt_id: &str,
         token_hash: &str,
+        authorization_ms: u64,
+        wall_ms: u64,
         reports: Vec<AttemptCachePreparationCommand>,
         now_unix: u64,
     ) -> Result<Option<super::DispatchClaim>, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         let claim = authenticated_attempt(&tx, attempt_id, token_hash, now_unix).await?;
-        let mut changed = false;
+        let setup = AttemptCacheSetupObservation::new(attempt_id, authorization_ms, wall_ms)
+            .map_err(PostgresError::from)?;
+        let existing_setup =
+            entities::run_attempt_cache_setup::Entity::find_by_id(attempt_id.to_string())
+                .lock_exclusive()
+                .one(&tx)
+                .await
+                .map_err(PostgresError::internal)?;
+        let mut changed = if let Some(existing) = existing_setup {
+            if existing.try_into_domain()? != setup {
+                return Err(PostgresError::conflict(
+                    "cache setup was already reported with different facts",
+                ));
+            }
+            false
+        } else {
+            entities::run_attempt_cache_setup::Model::from_domain(&setup)?
+                .into_active_model()
+                .insert(&tx)
+                .await
+                .map_err(PostgresError::internal)?;
+            true
+        };
         let workflow_path = WorkflowPath::parse(claim.run.workflow.path().as_str().to_string())
             .map_err(PostgresError::invalid_input)?;
         let job_definition = claim
@@ -62,7 +95,16 @@ impl RunStore {
                 report.cache_name,
                 report.identity_digest,
                 report.preparation,
-                report.prepare_ms,
+                AttemptCachePreparationTiming::new(
+                    report.key_ms,
+                    report.metadata_ms,
+                    report.size_bytes,
+                    report.download_verify_ms,
+                    report.sync_ms,
+                    report.extraction_ms,
+                    report.prepare_ms,
+                )
+                .map_err(PostgresError::from)?,
             )
             .map_err(PostgresError::from)?;
             let existing = entities::run_attempt_cache::Entity::find_by_id((

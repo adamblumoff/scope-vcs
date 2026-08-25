@@ -1,5 +1,6 @@
 use super::workflow::{WorkflowJobId, WorkflowPath};
 use crate::error::DomainError;
+use scope_cache_domain::MAX_CACHE_OBJECT_BYTES;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Component, Path};
@@ -257,6 +258,100 @@ pub enum CacheFinalState {
     Evicted,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttemptCacheSetupObservation {
+    pub attempt_id: String,
+    pub authorization_ms: u64,
+    pub wall_ms: u64,
+}
+
+impl AttemptCacheSetupObservation {
+    pub fn new(
+        attempt_id: impl Into<String>,
+        authorization_ms: u64,
+        wall_ms: u64,
+    ) -> Result<Self, DomainError> {
+        let attempt_id = attempt_id.into();
+        if attempt_id.trim().is_empty() {
+            return Err(DomainError::invalid_input(
+                "cache setup observation attempt id is required",
+            ));
+        }
+        validate_observation_duration(authorization_ms)?;
+        validate_observation_duration(wall_ms)?;
+        if authorization_ms > wall_ms {
+            return Err(DomainError::invalid_input(
+                "cache authorization duration cannot exceed cache setup wall duration",
+            ));
+        }
+        Ok(Self {
+            attempt_id,
+            authorization_ms,
+            wall_ms,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttemptCachePreparationTiming {
+    pub key_ms: u64,
+    pub metadata_ms: u64,
+    pub size_bytes: u64,
+    pub download_verify_ms: u64,
+    pub sync_ms: u64,
+    pub extraction_ms: u64,
+    pub prepare_ms: u64,
+}
+
+impl AttemptCachePreparationTiming {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        key_ms: u64,
+        metadata_ms: u64,
+        size_bytes: u64,
+        download_verify_ms: u64,
+        sync_ms: u64,
+        extraction_ms: u64,
+        prepare_ms: u64,
+    ) -> Result<Self, DomainError> {
+        for duration in [
+            key_ms,
+            metadata_ms,
+            download_verify_ms,
+            sync_ms,
+            extraction_ms,
+            prepare_ms,
+        ] {
+            validate_observation_duration(duration)?;
+        }
+        if size_bytes > MAX_CACHE_OBJECT_BYTES {
+            return Err(DomainError::invalid_input(
+                "cache observation size exceeds the maximum cache object size",
+            ));
+        }
+        let derived_prepare_ms = key_ms
+            .checked_add(metadata_ms)
+            .and_then(|total| total.checked_add(download_verify_ms))
+            .and_then(|total| total.checked_add(sync_ms))
+            .and_then(|total| total.checked_add(extraction_ms))
+            .ok_or_else(|| DomainError::invalid_input("cache preparation duration overflow"))?;
+        if prepare_ms != derived_prepare_ms {
+            return Err(DomainError::invalid_input(
+                "cache preparation duration must equal the sum of its measured phases",
+            ));
+        }
+        Ok(Self {
+            key_ms,
+            metadata_ms,
+            size_bytes,
+            download_verify_ms,
+            sync_ms,
+            extraction_ms,
+            prepare_ms,
+        })
+    }
+}
+
 /// Durable facts observed by a runner for one cache during one attempt.
 ///
 /// The workflow namespace is supplied by the claimed attempt, not by the runner
@@ -269,7 +364,7 @@ pub struct AttemptCacheObservation {
     pub cache_name: String,
     pub identity_digest: String,
     pub preparation: CachePreparation,
-    pub prepare_ms: u64,
+    pub timing: AttemptCachePreparationTiming,
     pub final_state: CacheFinalState,
     pub finalize_ms: Option<u64>,
 }
@@ -282,7 +377,7 @@ impl AttemptCacheObservation {
         cache_name: impl Into<String>,
         identity_digest: impl Into<String>,
         preparation: CachePreparation,
-        prepare_ms: u64,
+        timing: AttemptCachePreparationTiming,
     ) -> Result<Self, DomainError> {
         let attempt_id = attempt_id.into();
         if attempt_id.trim().is_empty() {
@@ -302,7 +397,15 @@ impl AttemptCacheObservation {
                 "cache observation identity digest must be 64 lowercase hexadecimal characters",
             ));
         }
-        validate_observation_duration(prepare_ms)?;
+        AttemptCachePreparationTiming::new(
+            timing.key_ms,
+            timing.metadata_ms,
+            timing.size_bytes,
+            timing.download_verify_ms,
+            timing.sync_ms,
+            timing.extraction_ms,
+            timing.prepare_ms,
+        )?;
         Ok(Self {
             attempt_id,
             workflow_path,
@@ -310,7 +413,7 @@ impl AttemptCacheObservation {
             cache_name,
             identity_digest,
             preparation,
-            prepare_ms,
+            timing,
             final_state: CacheFinalState::Pending,
             finalize_ms: None,
         })
@@ -324,7 +427,7 @@ impl AttemptCacheObservation {
         cache_name: impl Into<String>,
         identity_digest: impl Into<String>,
         preparation: CachePreparation,
-        prepare_ms: u64,
+        timing: AttemptCachePreparationTiming,
         final_state: CacheFinalState,
         finalize_ms: Option<u64>,
     ) -> Result<Self, DomainError> {
@@ -335,7 +438,7 @@ impl AttemptCacheObservation {
             cache_name,
             identity_digest,
             preparation,
-            prepare_ms,
+            timing,
         )?;
         match (final_state, finalize_ms) {
             (CacheFinalState::Pending, None) => {}
@@ -387,7 +490,7 @@ impl AttemptCacheObservation {
             && self.cache_name == other.cache_name
             && self.identity_digest == other.identity_digest
             && self.preparation == other.preparation
-            && self.prepare_ms == other.prepare_ms
+            && self.timing == other.timing
     }
 }
 
@@ -739,6 +842,7 @@ mod tests {
 
     #[test]
     fn attempt_cache_observation_accepts_exact_retries_and_rejects_conflicts() {
+        let cold_timing = AttemptCachePreparationTiming::new(7, 10, 0, 0, 0, 0, 17).unwrap();
         let mut observation = AttemptCacheObservation::prepared(
             "attempt-1",
             WorkflowPath::parse("/.scope/runs/test.yml").unwrap(),
@@ -748,7 +852,7 @@ mod tests {
             CachePreparation::Cold {
                 reason: CacheColdReason::MetadataMissing,
             },
-            17,
+            cold_timing,
         )
         .unwrap();
 
@@ -763,9 +867,27 @@ mod tests {
                 "cargo",
                 "A".repeat(64),
                 CachePreparation::Exact,
-                1,
+                AttemptCachePreparationTiming::new(1, 0, 1, 0, 0, 0, 1).unwrap(),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn cache_timing_requires_truthful_phase_totals_and_setup_wall_time() {
+        assert!(AttemptCachePreparationTiming::new(1, 2, 3, 4, 5, 6, 17).is_err());
+        assert!(
+            AttemptCachePreparationTiming::new(1, 2, MAX_CACHE_OBJECT_BYTES + 1, 0, 0, 0, 3,)
+                .is_err()
+        );
+        assert!(AttemptCacheSetupObservation::new("attempt-1", 5, 4).is_err());
+        assert_eq!(
+            AttemptCacheSetupObservation::new("attempt-1", 4, 5).unwrap(),
+            AttemptCacheSetupObservation {
+                attempt_id: "attempt-1".to_string(),
+                authorization_ms: 4,
+                wall_ms: 5,
+            }
         );
     }
 }
