@@ -15,16 +15,18 @@ const plainClick: MarkdownLinkClick = {
   metaKey: false,
   shiftKey: false,
 }
+const isClientRoute = (pathname: string) => pathname.startsWith('/acme/')
 
 test('resolves app-relative and same-origin links for client navigation', () => {
   assert.equal(
-    markdownClientNavigationHref(plainClick, currentHref),
+    markdownClientNavigationHref(plainClick, currentHref, isClientRoute),
     '/acme/widgets/requests/43?view=changes#diff',
   )
   assert.equal(
     markdownClientNavigationHref(
       { ...plainClick, href: './41?discussion=one#discussion-one' },
       currentHref,
+      isClientRoute,
     ),
     '/acme/widgets/requests/41?discussion=one#discussion-one',
   )
@@ -32,6 +34,7 @@ test('resolves app-relative and same-origin links for client navigation', () => 
     markdownClientNavigationHref(
       { ...plainClick, href: 'https://scope.test/acme/widgets' },
       currentHref,
+      isClientRoute,
     ),
     '/acme/widgets',
   )
@@ -48,7 +51,24 @@ test('leaves external URLs, fragments, and other protocols to the browser', () =
     'custom:payload',
   ]) {
     assert.equal(
-      markdownClientNavigationHref({ ...plainClick, href }, currentHref),
+      markdownClientNavigationHref(
+        { ...plainClick, href },
+        currentHref,
+        isClientRoute,
+      ),
+      null,
+    )
+  }
+})
+
+test('leaves same-origin server resources outside the route tree to the browser', () => {
+  for (const href of ['/v1/repos', '/assets/archive.patch']) {
+    assert.equal(
+      markdownClientNavigationHref(
+        { ...plainClick, href },
+        currentHref,
+        isClientRoute,
+      ),
       null,
     )
   }
@@ -68,7 +88,11 @@ test('leaves nonstandard clicks and links with native attributes to the browser'
     { target: '_self' },
   ]) {
     assert.equal(
-      markdownClientNavigationHref({ ...plainClick, ...overrides }, currentHref),
+      markdownClientNavigationHref(
+        { ...plainClick, ...overrides },
+        currentHref,
+        isClientRoute,
+      ),
       null,
     )
   }

@@ -10,9 +10,25 @@ export type MarkdownLinkClick = {
   target?: string
 }
 
+const NATIVE_DOCUMENT_PATHS = new Set([
+  '/favicon.png',
+  '/favicon.svg',
+  '/robots.txt',
+  '/sitemap.xml',
+])
+const NATIVE_DOCUMENT_PREFIXES = [
+  '/.well-known/',
+  '/_serverFn/',
+  '/api/',
+  '/assets/',
+  '/brand/',
+  '/v1/',
+]
+
 export function markdownClientNavigationHref(
   click: MarkdownLinkClick,
   currentHref: string,
+  isClientRoute: (pathname: string) => boolean,
 ) {
   if (
     click.defaultPrevented ||
@@ -33,6 +49,15 @@ export function markdownClientNavigationHref(
     const destination = new URL(click.href, current)
     if (destination.origin !== current.origin) return null
     if (destination.protocol !== 'http:' && destination.protocol !== 'https:') {
+      return null
+    }
+    if (
+      NATIVE_DOCUMENT_PATHS.has(destination.pathname) ||
+      NATIVE_DOCUMENT_PREFIXES.some((prefix) =>
+        destination.pathname.startsWith(prefix)
+      ) ||
+      !isClientRoute(destination.pathname)
+    ) {
       return null
     }
     if (
