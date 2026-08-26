@@ -682,29 +682,40 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
 
     const retryThread = page.locator('#discussion-discussion_demo_retry_cap')
     assert.equal(
-      await retryThread.getByRole('button', { name: /3 replies/ }).count(),
+      await retryThread.getByRole('button', { name: /(?:show|hide).*repl/i }).count(),
       0,
     )
     const maintainerReply = page.locator(
       '#reply-discussion_reply_demo_retry_cap_maintainer',
     )
     await maintainerReply.getByText('Two seconds is intentional', { exact: false }).waitFor()
-    const showMaintainerReply = maintainerReply.getByRole('button', {
-      name: 'Show 1 reply',
-    })
-    await page.waitForFunction(
-      (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
-      await showMaintainerReply.elementHandle(),
-    )
-    await showMaintainerReply.click()
     const contributorReply = page.locator(
       '#reply-discussion_reply_demo_retry_cap_quote',
     )
     await contributorReply.getByText('Agreed. Quoting the maintainer', { exact: false }).waitFor()
-    await contributorReply.getByRole('button', { name: 'Show 1 reply' }).click()
-    await page
-      .locator('#reply-discussion_reply_demo_retry_cap_nested')
-      .getByText('Exactly. Keeping that decision nested', { exact: false })
+    const nestedReply = page.locator('#reply-discussion_reply_demo_retry_cap_nested')
+    await nestedReply.getByText('Exactly. Keeping that decision', { exact: false }).waitFor()
+    assert.deepEqual(
+      await retryThread.locator('[id^="reply-"]').evaluateAll((elements) =>
+        elements.map(({ id }) => id),
+      ),
+      [
+        'reply-discussion_reply_demo_retry_cap_maintainer',
+        'reply-discussion_reply_demo_retry_cap_quote',
+        'reply-discussion_reply_demo_retry_cap_nested',
+      ],
+    )
+    await contributorReply
+      .locator(
+        'a[href="#discussion=discussion_demo_retry_cap&reply=discussion_reply_demo_retry_cap_maintainer"]',
+      )
+      .getByText('Two seconds is intentional', { exact: false })
+      .waitFor()
+    await nestedReply
+      .locator(
+        'a[href="#discussion=discussion_demo_retry_cap&reply=discussion_reply_demo_retry_cap_quote"]',
+      )
+      .getByText('Agreed. Quoting the maintainer', { exact: false })
       .waitFor()
 
     const {

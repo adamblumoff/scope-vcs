@@ -26,7 +26,6 @@ export type LoadDiscussionsInput = RequestParams & {
 export type LoadRepliesInput = RequestParams & {
   before?: number
   discussion_id: string
-  parent_reply_id?: string
 }
 
 export type LoadActivityInput = RequestParams
@@ -75,7 +74,6 @@ export async function loadRequestDiscussionRepliesForRequest(
     `${requestDiscussionRoute(ApiRouteTemplates.repoRequestDiscussionReplies, data)}${query({
       before: data.before?.toString(),
       limit: '50',
-      parent_reply_id: data.parent_reply_id,
     })}`,
     { auth: 'optional' },
   )

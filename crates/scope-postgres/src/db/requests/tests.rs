@@ -385,7 +385,7 @@ async fn completed_private_discussion_transitions_persist_nothing() {
 }
 
 #[tokio::test]
-async fn discussion_replies_are_read_as_paginated_tree_levels() {
+async fn discussion_replies_are_read_as_flat_chronological_pages() {
     let store = postgres_store();
     start_public_request(&store).await;
     let discussion = store
@@ -437,66 +437,80 @@ async fn discussion_replies_are_read_as_paginated_tree_levels() {
         .unwrap()
         .0;
     assert_eq!(summary.reply_count, 5);
-    assert_eq!(summary.latest_replies.len(), 4);
+    assert_eq!(summary.latest_replies.len(), 3);
     assert_eq!(
         summary
             .latest_replies
             .iter()
             .map(|model| model.reply.id.as_str())
             .collect::<Vec<_>>(),
-        ["root_a", "child_a", "child_b", "grandchild"]
+        ["child_a", "child_b", "grandchild"]
     );
     assert_eq!(
         summary
             .latest_replies
             .iter()
-            .find(|model| model.reply.id == "root_a")
+            .find(|model| model.reply.id == "child_a")
             .unwrap()
-            .child_reply_count,
-        2
+            .reply_to
+            .as_ref()
+            .unwrap()
+            .id,
+        "root_a"
+    );
+    assert_eq!(
+        summary
+            .latest_replies
+            .iter()
+            .find(|model| model.reply.id == "grandchild")
+            .unwrap()
+            .reply_to
+            .as_ref()
+            .unwrap()
+            .body_markdown,
+        "Reply child_a"
+    );
+    assert_eq!(
+        summary.read_through_position,
+        summary.discussion.last_activity_position
     );
 
-    let (roots, _) = store
+    let (replies, _) = store
         .requests()
-        .request_discussion_replies(&discussion.discussion.id, None, None, 10)
+        .request_discussion_replies(&discussion.discussion.id, None, 10)
         .await
         .unwrap();
     assert_eq!(
-        roots
+        replies
+            .iter()
+            .map(|model| model.reply.id.as_str())
+            .collect::<Vec<_>>(),
+        ["root_a", "root_b", "child_a", "child_b", "grandchild"]
+    );
+    let (newest, _) = store
+        .requests()
+        .request_discussion_replies(&discussion.discussion.id, None, 3)
+        .await
+        .unwrap();
+    assert_eq!(
+        newest
+            .iter()
+            .map(|model| model.reply.id.as_str())
+            .collect::<Vec<_>>(),
+        ["child_a", "child_b", "grandchild"]
+    );
+    let (older, _) = store
+        .requests()
+        .request_discussion_replies(&discussion.discussion.id, Some(newest[0].reply.position), 3)
+        .await
+        .unwrap();
+    assert_eq!(
+        older
             .iter()
             .map(|model| model.reply.id.as_str())
             .collect::<Vec<_>>(),
         ["root_a", "root_b"]
     );
-    let (children, _) = store
-        .requests()
-        .request_discussion_replies(&discussion.discussion.id, Some("root_a"), None, 10)
-        .await
-        .unwrap();
-    assert_eq!(
-        children
-            .iter()
-            .map(|model| model.reply.id.as_str())
-            .collect::<Vec<_>>(),
-        ["child_a", "child_b"]
-    );
-    assert_eq!(children[0].child_reply_count, 1);
-    assert_eq!(children[1].child_reply_count, 0);
-    assert_eq!(
-        store
-            .requests()
-            .request_discussion_reply_child_count("root_a")
-            .await
-            .unwrap(),
-        2
-    );
-    let (grandchildren, _) = store
-        .requests()
-        .request_discussion_replies(&discussion.discussion.id, Some("child_a"), None, 10)
-        .await
-        .unwrap();
-    assert_eq!(grandchildren.len(), 1);
-    assert_eq!(grandchildren[0].reply.id, "grandchild");
 }
 
 #[tokio::test]

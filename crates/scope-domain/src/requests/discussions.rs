@@ -1,7 +1,7 @@
 use super::{
-    REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES,
-    REQUEST_DISCUSSION_REPLY_MAX_DEPTH, Request, RequestEvent, RequestEventKind,
-    RequestEventPayload, validate_body_size, validate_required_body, validate_required_id,
+    REQUEST_DISCUSSION_BODY_MAX_BYTES, REQUEST_DISCUSSION_CLIENT_ID_MAX_BYTES, Request,
+    RequestEvent, RequestEventKind, RequestEventPayload, validate_body_size,
+    validate_required_body, validate_required_id,
 };
 use crate::{error::DomainError, policy::ScopePath};
 use serde::{Deserialize, Serialize};
@@ -41,7 +41,6 @@ pub struct RequestDiscussionReply {
     pub id: String,
     pub discussion_id: String,
     pub position: u64,
-    pub depth: u16,
     pub author_user_id: String,
     pub body_markdown: String,
     pub reply_to_reply_id: Option<String>,
@@ -230,24 +229,25 @@ pub fn create_request_discussion_reply(
             "request discussion reply already exists",
         ));
     }
-    let depth = validate_reply_target(
+    let request = request_mut(requests, &input.request_id)?;
+    let position = next_activity_position(request)?;
+    validate_reply_target(
         discussions,
         replies,
         &input.discussion_id,
         input.reply_to_reply_id.as_deref(),
+        position,
     )?;
-    let request = request_mut(requests, &input.request_id)?;
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
     if discussion.status == RequestDiscussionStatus::Resolved {
         return Err(DomainError::conflict("request discussion is resolved"));
     }
-    let position = advance_activity(request)?;
+    request.activity_version = position;
     discussion.last_activity_position = position;
     let reply = RequestDiscussionReply {
         id: input.id,
         discussion_id: discussion.id.clone(),
         position,
-        depth,
         author_user_id: input.actor_user_id.clone(),
         body_markdown: input.body_markdown,
         reply_to_reply_id: input.reply_to_reply_id,
@@ -325,14 +325,16 @@ pub fn reopen_and_reply_to_request_discussion(
         &input.body_markdown,
     )?;
     validate_required_id("event id", &input.event_id)?;
-    let depth = validate_reply_target(
+    let request = request_mut(requests, &input.request_id)?;
+    ensure_request_discussion_transition_allowed(request, input.actor_can_transition)?;
+    let position = next_activity_position(request)?;
+    validate_reply_target(
         discussions,
         replies,
         &input.discussion_id,
         input.reply_to_reply_id.as_deref(),
+        position,
     )?;
-    let request = request_mut(requests, &input.request_id)?;
-    ensure_request_discussion_transition_allowed(request, input.actor_can_transition)?;
     let request_author_user_id = request.author_user_id.clone();
     let discussion = discussion_mut(discussions, &input.request_id, &input.discussion_id)?;
     ensure_can_transition(
@@ -347,7 +349,7 @@ pub fn reopen_and_reply_to_request_discussion(
     let request = requests
         .get_mut(&input.request_id)
         .expect("validated request");
-    let position = advance_activity(request)?;
+    request.activity_version = position;
     discussion.status = RequestDiscussionStatus::Open;
     discussion.resolved_at_unix = None;
     discussion.resolved_by_user_id = None;
@@ -356,7 +358,6 @@ pub fn reopen_and_reply_to_request_discussion(
         id: input.reply_id,
         discussion_id: discussion.id.clone(),
         position,
-        depth,
         author_user_id: input.actor_user_id.clone(),
         body_markdown: input.body_markdown,
         reply_to_reply_id: input.reply_to_reply_id,
@@ -578,7 +579,8 @@ fn validate_reply_target(
     replies: &BTreeMap<String, RequestDiscussionReply>,
     discussion_id: &str,
     reply_to: Option<&str>,
-) -> Result<u16, DomainError> {
+    new_reply_position: u64,
+) -> Result<(), DomainError> {
     if !discussions.contains_key(discussion_id) {
         return Err(DomainError::not_found("request discussion not found"));
     }
@@ -591,16 +593,13 @@ fn validate_reply_target(
                 "quoted reply belongs to another discussion",
             ));
         }
-        let depth = reply
-            .depth
-            .checked_add(1)
-            .ok_or_else(|| DomainError::invalid_input("reply nesting is too deep"))?;
-        if depth > REQUEST_DISCUSSION_REPLY_MAX_DEPTH {
-            return Err(DomainError::invalid_input("reply nesting is too deep"));
+        if reply.position >= new_reply_position {
+            return Err(DomainError::invalid_input(
+                "quoted reply must be earlier than reply",
+            ));
         }
-        return Ok(depth);
     }
-    Ok(0)
+    Ok(())
 }
 
 fn discussion_mut<'a>(
@@ -624,11 +623,15 @@ fn request_mut<'a>(
 }
 
 fn advance_activity(request: &mut Request) -> Result<u64, DomainError> {
-    request.activity_version = request
+    request.activity_version = next_activity_position(request)?;
+    Ok(request.activity_version)
+}
+
+fn next_activity_position(request: &Request) -> Result<u64, DomainError> {
+    request
         .activity_version
         .checked_add(1)
-        .ok_or_else(|| DomainError::conflict("request activity version overflow"))?;
-    Ok(request.activity_version)
+        .ok_or_else(|| DomainError::conflict("request activity version overflow"))
 }
 
 fn read_state(
@@ -661,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn reply_nesting_is_bounded() {
+    fn reply_target_must_be_in_the_same_discussion_and_earlier() {
         let discussion = RequestDiscussion {
             id: "discussion".to_string(),
             request_id: "request".to_string(),
@@ -680,7 +683,6 @@ mod tests {
             id: "parent".to_string(),
             discussion_id: discussion.id.clone(),
             position: 2,
-            depth: REQUEST_DISCUSSION_REPLY_MAX_DEPTH,
             author_user_id: "author".to_string(),
             body_markdown: "Parent".to_string(),
             reply_to_reply_id: None,
@@ -691,11 +693,40 @@ mod tests {
         let replies = BTreeMap::from([(parent.id.clone(), parent)]);
 
         assert_eq!(
-            validate_reply_target(&discussions, &replies, "discussion", None).unwrap(),
-            0
+            validate_reply_target(&discussions, &replies, "discussion", None, 3),
+            Ok(())
         );
         assert_eq!(
-            validate_reply_target(&discussions, &replies, "discussion", Some("parent"))
+            validate_reply_target(&discussions, &replies, "discussion", Some("parent"), 2)
+                .unwrap_err()
+                .kind,
+            crate::error::DomainErrorKind::InvalidInput
+        );
+        assert_eq!(
+            validate_reply_target(&discussions, &replies, "discussion", Some("parent"), 3),
+            Ok(())
+        );
+
+        let other = RequestDiscussion {
+            id: "other".to_string(),
+            request_id: "request".to_string(),
+            opened_position: 1,
+            last_activity_position: 1,
+            author_user_id: "author".to_string(),
+            body_markdown: "Other".to_string(),
+            anchor: None,
+            status: RequestDiscussionStatus::Open,
+            client_discussion_id: "other-client".to_string(),
+            created_at_unix: 1,
+            resolved_at_unix: None,
+            resolved_by_user_id: None,
+        };
+        let discussions = BTreeMap::from([
+            ("discussion".to_string(), discussions["discussion"].clone()),
+            (other.id.clone(), other),
+        ]);
+        assert_eq!(
+            validate_reply_target(&discussions, &replies, "other", Some("parent"), 3)
                 .unwrap_err()
                 .kind,
             crate::error::DomainErrorKind::InvalidInput

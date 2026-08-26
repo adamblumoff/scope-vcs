@@ -1,8 +1,7 @@
 use super::entities;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QueryResult, QuerySelect, Statement,
-    sea_query::Expr,
+    IntoActiveModel, QueryFilter, QueryOrder, QueryResult, QuerySelect, Statement, sea_query::Expr,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use {
@@ -16,7 +15,15 @@ use {
 #[derive(Clone, Debug)]
 pub struct RequestDiscussionReplyReadModel {
     pub reply: RequestDiscussionReply,
-    pub child_reply_count: u64,
+    pub reply_to: Option<RequestDiscussionReplyReferenceReadModel>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RequestDiscussionReplyReferenceReadModel {
+    pub id: String,
+    pub position: u64,
+    pub author_user_id: String,
+    pub body_markdown: String,
 }
 
 pub struct DiscussionPageFilter<'a> {
@@ -150,7 +157,6 @@ where
 pub async fn replies_for_discussion<C>(
     conn: &C,
     discussion_id: &str,
-    parent_reply_id: Option<&str>,
     before_position: Option<u64>,
     limit: u64,
 ) -> Result<Vec<RequestDiscussionReplyReadModel>, PostgresError>
@@ -161,28 +167,26 @@ where
         .query_all(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
             r#"
-            SELECT replies.id, replies.discussion_id, replies.position, replies.depth,
+            SELECT replies.id, replies.discussion_id, replies.position,
                    replies.author_user_id, replies.body_markdown,
                    replies.reply_to_reply_id, replies.client_reply_id,
                    replies.created_at_unix,
-                   (
-                       SELECT COUNT(*)
-                       FROM scope_request_discussion_replies children
-                       WHERE children.reply_to_reply_id = replies.id
-                   ) AS child_reply_count
+                   target.id AS target_id,
+                   target.position AS target_position,
+                   target.author_user_id AS target_author_user_id,
+                   target.body_markdown AS target_body_markdown
             FROM scope_request_discussion_replies replies
+            LEFT JOIN scope_request_discussion_replies target
+              ON target.id = replies.reply_to_reply_id
+             AND target.discussion_id = replies.discussion_id
+             AND target.position < replies.position
             WHERE replies.discussion_id = $1
-              AND (
-                  ($2::varchar IS NULL AND replies.reply_to_reply_id IS NULL)
-                  OR replies.reply_to_reply_id = $2
-              )
-              AND ($3::bigint IS NULL OR replies.position < $3)
+              AND ($2::bigint IS NULL OR replies.position < $2)
             ORDER BY replies.position DESC, replies.id DESC
-            LIMIT $4
+            LIMIT $3
             "#,
             vec![
                 discussion_id.to_string().into(),
-                parent_reply_id.map(str::to_string).into(),
                 before_position
                     .map(i64::try_from)
                     .transpose()
@@ -203,21 +207,10 @@ where
     Ok(replies)
 }
 
-pub async fn reply_child_count<C>(conn: &C, reply_id: &str) -> Result<u64, PostgresError>
-where
-    C: ConnectionTrait,
-{
-    entities::request_discussion_reply::Entity::find()
-        .filter(entities::request_discussion_reply::Column::ReplyToReplyId.eq(reply_id))
-        .count(conn)
-        .await
-        .map_err(PostgresError::internal)
-}
-
 pub async fn reply_previews_for_discussions<C>(
     conn: &C,
     discussion_ids: &[String],
-) -> Result<BTreeMap<String, (u64, u64, Vec<RequestDiscussionReplyReadModel>)>, PostgresError>
+) -> Result<BTreeMap<String, (u64, Vec<RequestDiscussionReplyReadModel>)>, PostgresError>
 where
     C: ConnectionTrait,
 {
@@ -229,34 +222,26 @@ where
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        "WITH RECURSIVE ranked AS ( \
+        "WITH ranked AS ( \
            SELECT replies.*, \
+             COUNT(*) OVER (PARTITION BY discussion_id) AS reply_count, \
              ROW_NUMBER() OVER (PARTITION BY discussion_id ORDER BY position DESC, id DESC) AS row_number \
            FROM scope_request_discussion_replies replies \
            WHERE discussion_id IN ({placeholders}) \
-         ), preview_replies AS ( \
-           SELECT id, discussion_id, position, depth, author_user_id, body_markdown, \
-             reply_to_reply_id, client_reply_id, created_at_unix \
-           FROM ranked \
-           WHERE row_number <= 3 \
-           UNION \
-           SELECT parent.id, parent.discussion_id, parent.position, parent.depth, parent.author_user_id, \
-             parent.body_markdown, parent.reply_to_reply_id, parent.client_reply_id, \
-             parent.created_at_unix \
-           FROM scope_request_discussion_replies parent \
-           INNER JOIN preview_replies child ON child.reply_to_reply_id = parent.id \
-             AND parent.depth = child.depth - 1 \
          ) \
-         SELECT replies.*, \
-           (SELECT COUNT(*) FROM scope_request_discussion_replies counted \
-              WHERE counted.discussion_id = replies.discussion_id) AS reply_count, \
-           (SELECT COUNT(*) FROM scope_request_discussion_replies rooted \
-              WHERE rooted.discussion_id = replies.discussion_id \
-                AND rooted.reply_to_reply_id IS NULL) AS root_reply_count, \
-           (SELECT COUNT(*) FROM scope_request_discussion_replies children \
-              WHERE children.reply_to_reply_id = replies.id) AS child_reply_count \
-         FROM preview_replies replies \
-         ORDER BY discussion_id ASC, position ASC, id ASC"
+         SELECT replies.id, replies.discussion_id, replies.position, \
+           replies.author_user_id, replies.body_markdown, replies.reply_to_reply_id, \
+           replies.client_reply_id, replies.created_at_unix, replies.reply_count, \
+           target.id AS target_id, target.position AS target_position, \
+           target.author_user_id AS target_author_user_id, \
+           target.body_markdown AS target_body_markdown \
+         FROM ranked replies \
+         LEFT JOIN scope_request_discussion_replies target \
+           ON target.id = replies.reply_to_reply_id \
+          AND target.discussion_id = replies.discussion_id \
+          AND target.position < replies.position \
+         WHERE replies.row_number <= 3 \
+         ORDER BY replies.discussion_id ASC, replies.position ASC, replies.id ASC"
     );
     let rows = conn
         .query_all(Statement::from_sql_and_values(
@@ -266,7 +251,7 @@ where
         ))
         .await
         .map_err(PostgresError::internal)?;
-    let mut result = BTreeMap::<String, (u64, u64, Vec<RequestDiscussionReplyReadModel>)>::new();
+    let mut result = BTreeMap::<String, (u64, Vec<RequestDiscussionReplyReadModel>)>::new();
     for row in rows {
         let discussion_id = row
             .try_get::<String>("", "discussion_id")
@@ -276,15 +261,10 @@ where
             .map_err(PostgresError::internal)?
             .try_into()
             .map_err(PostgresError::internal)?;
-        let root_count = row
-            .try_get::<i64>("", "root_reply_count")
-            .map_err(PostgresError::internal)?
-            .try_into()
-            .map_err(PostgresError::internal)?;
         let entry = result
             .entry(discussion_id)
-            .or_insert_with(|| (count, root_count, Vec::new()));
-        entry.2.push(reply_read_model(&row)?);
+            .or_insert_with(|| (count, Vec::new()));
+        entry.1.push(reply_read_model(&row)?);
     }
     Ok(result)
 }
@@ -298,7 +278,6 @@ fn reply_read_model(row: &QueryResult) -> Result<RequestDiscussionReplyReadModel
         position: row
             .try_get("", "position")
             .map_err(PostgresError::internal)?,
-        depth: row.try_get("", "depth").map_err(PostgresError::internal)?,
         author_user_id: row
             .try_get("", "author_user_id")
             .map_err(PostgresError::internal)?,
@@ -316,15 +295,33 @@ fn reply_read_model(row: &QueryResult) -> Result<RequestDiscussionReplyReadModel
             .map_err(PostgresError::internal)?,
     }
     .try_into_domain()?;
-    let child_reply_count = row
-        .try_get::<i64>("", "child_reply_count")
+    let reply_to = row
+        .try_get::<Option<String>>("", "target_id")
         .map_err(PostgresError::internal)?
-        .try_into()
-        .map_err(PostgresError::internal)?;
-    Ok(RequestDiscussionReplyReadModel {
-        reply,
-        child_reply_count,
-    })
+        .map(|id| {
+            Ok::<_, PostgresError>(RequestDiscussionReplyReferenceReadModel {
+                id,
+                position: row
+                    .try_get::<i64>("", "target_position")
+                    .map_err(PostgresError::internal)?
+                    .try_into()
+                    .map_err(PostgresError::internal)?,
+                author_user_id: row
+                    .try_get("", "target_author_user_id")
+                    .map_err(PostgresError::internal)?,
+                body_markdown: row
+                    .try_get("", "target_body_markdown")
+                    .map_err(PostgresError::internal)?,
+            })
+        })
+        .transpose()?;
+    if reply.reply_to_reply_id.is_some() && reply_to.is_none() {
+        return Err(PostgresError::internal_message(format!(
+            "discussion reply {} has an invalid reply target",
+            reply.id
+        )));
+    }
+    Ok(RequestDiscussionReplyReadModel { reply, reply_to })
 }
 
 pub async fn unread_content_counts<C>(

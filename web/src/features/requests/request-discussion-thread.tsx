@@ -1,8 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
-import { Check, ChevronRight, CircleAlert, Link2, RotateCcw } from 'lucide-react'
-import { memo, useEffect } from 'react'
+import { Check, ChevronRight, CircleAlert, Link2, Reply, RotateCcw } from 'lucide-react'
+import { memo, useEffect, useRef } from 'react'
 import { compactDiscussionSummary } from './discussion-preview-text'
 import { RequestDiscussionAnchor } from './request-discussion-anchor'
 import {
@@ -11,9 +10,11 @@ import {
 } from './request-discussion-byline'
 import { RequestReplyComposer } from './request-discussion-composer'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
-import { RequestDiscussionReplyToggle } from './request-discussion-reply-toggle'
-import { RequestDiscussionReplyTree } from './request-discussion-reply-tree'
-import { requestDiscussionRailColor } from './request-discussion-thread-state'
+import { replyTargetFromFragment } from './request-discussion-reply-presentation'
+import {
+  RequestDiscussionReplyList,
+  RequestDiscussionUnreadBoundary,
+} from './request-discussion-reply-list'
 import type {
   RequestDiscussion,
   RequestDiscussionView,
@@ -62,22 +63,16 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   const {
     availableReplies,
     canPostReply,
-    entireReplyTreeExposed,
-    expandedReplies,
-    expandedReplyIds,
+    hasOlderReplies,
     loadOlderReplies,
-    loadReplyChildren,
+    loadReplyTarget,
     loadingReplies,
-    nextBeforePosition,
+    olderReplyCount,
     postReply,
-    previewContentExposed,
     quotedReply,
-    replyBranches,
     replyError,
     setQuoteId,
-    toggleReplies,
-    toggleReplyChildren,
-    visibleReplies,
+    unreadContentFullyExposed,
   } = useRequestDiscussionReplies({
     actions,
     actor,
@@ -91,10 +86,40 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
 
   const readMarkerRef = useRequestDiscussionReadMarker({
     collapsed,
-    contentFullyExposed: previewContentExposed || entireReplyTreeExposed,
+    contentFullyExposed: unreadContentFullyExposed,
     discussion,
     onMarkRead,
   })
+  const attemptedReplyHashRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    function resolveReplyHash() {
+      const hash = window.location.hash
+      const replyTarget = replyTargetFromFragment(hash)
+      if (!replyTarget || replyTarget.discussionId !== discussion.id) return
+      const { replyId } = replyTarget
+      const target = document.getElementById(`reply-${replyId}`)
+      if (target) {
+        target.scrollIntoView({ block: 'center' })
+        attemptedReplyHashRef.current = hash
+        return
+      }
+      if (attemptedReplyHashRef.current === hash) return
+      attemptedReplyHashRef.current = hash
+      void loadReplyTarget(replyId).then(() => {
+        if (!active) return
+        requestAnimationFrame(resolveReplyHash)
+      })
+    }
+
+    resolveReplyHash()
+    window.addEventListener('hashchange', resolveReplyHash)
+    return () => {
+      active = false
+      window.removeEventListener('hashchange', resolveReplyHash)
+    }
+  }, [availableReplies, discussion.id, loadReplyTarget])
 
   useEffect(() => {
     if (!composerOpen) setQuoteId(null)
@@ -105,20 +130,39 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     onOpenComposer()
   }
 
+  async function loadOlderWithoutJump() {
+    const firstReplyId = availableReplies.at(0)?.id
+    const firstReply = firstReplyId
+      ? document.querySelector<HTMLElement>(`#reply-${CSS.escape(firstReplyId)}`)
+      : null
+    const topBefore = firstReply?.getBoundingClientRect().top
+    const loading = loadOlderReplies()
+    if (!firstReply || topBefore === undefined) return loading
+    await loading
+    requestAnimationFrame(() => {
+      const topAfter = firstReply.getBoundingClientRect().top
+      const scrollContainer = document.querySelector<HTMLElement>('#main-content')
+      if (scrollContainer) scrollContainer.scrollTop += topAfter - topBefore
+    })
+  }
+
+  const rootUnread =
+    discussion.unread_count > 0 &&
+    discussion.opened_position > discussion.read_through_position
+
   return (
     <article
       className="request-discussion-thread group/thread grid scroll-mt-32 grid-cols-[2rem_minmax(0,1fr)] gap-x-3 border-t border-border px-5 py-5 first:border-t-0 lg:px-7"
       id={`discussion-${discussion.id}`}
     >
-      <div className="relative">
+      {rootUnread ? (
+        <div className="col-span-2">
+          <RequestDiscussionUnreadBoundary />
+        </div>
+      ) : null}
+
+      <div>
         <RequestDiscussionActorAvatar handle={discussion.author.handle} />
-        <span
-          aria-hidden="true"
-          className={cn(
-            'absolute inset-x-0 bottom-0 top-10 mx-auto w-0.5 rounded-full',
-            requestDiscussionRailColor(discussion),
-          )}
-        />
       </div>
 
       <div className="min-w-0">
@@ -179,15 +223,6 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
         )}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {expandedReplies ||
-          discussion.root_reply_count > visibleReplies.length ? (
-            <RequestDiscussionReplyToggle
-              count={discussion.root_reply_count}
-              expanded={expandedReplies}
-              keepsPreview
-              onToggle={() => void toggleReplies()}
-            />
-          ) : null}
           {canPostReply ? (
             <Button
               onClick={openComposer}
@@ -195,7 +230,11 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
               type="button"
               variant="ghost"
             >
-              <RotateCcw className="size-3.5" />
+              {discussion.status === 'Resolved' ? (
+                <RotateCcw className="size-3.5" />
+              ) : (
+                <Reply className="size-3.5" />
+              )}
               {discussion.status === 'Resolved' ? 'Reopen and reply' : 'Reply'}
             </Button>
           ) : null}
@@ -223,25 +262,23 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
           ) : null}
         </div>
 
-        {!collapsed && visibleReplies.length > 0 ? (
-          <div className="mt-2 border-l border-border pb-3 pl-4">
-            {expandedReplies && nextBeforePosition !== null ? (
+        {!collapsed && (availableReplies.length > 0 || hasOlderReplies) ? (
+          <div className="mt-2 pb-3">
+            {hasOlderReplies ? (
               <button
-                className="mb-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+                className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground disabled:cursor-wait disabled:opacity-70"
                 disabled={loadingReplies}
-                onClick={() => void loadOlderReplies()}
+                onClick={() => void loadOlderWithoutJump()}
                 type="button"
               >
-                {loadingReplies ? 'Loading…' : 'Load older replies'}
+                {loadingReplies
+                  ? 'Loading…'
+                  : `${olderReplyCount} earlier ${olderReplyCount === 1 ? 'reply' : 'replies'}`}
               </button>
             ) : null}
-            <RequestDiscussionReplyTree
-              branchStates={replyBranches}
-              canQuote={canPostReply}
-              expandedReplyIds={expandedReplyIds}
-              onLoadChildren={(replyId, before) =>
-                void loadReplyChildren(replyId, before)
-              }
+            <RequestDiscussionReplyList
+              canReply={canPostReply}
+              discussionCreatedAtUnix={discussion.created_at_unix}
               onQuote={(quoted) => {
                 setQuoteId(quoted.id)
                 openComposer()
@@ -250,19 +287,23 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
                 void postReply(
                   failedReply.body_markdown,
                   failedReply.id,
-                  failedReply.reply_to_reply_id,
+                  failedReply.reply_to?.id ??
+                    failedReply.optimistic_reply_to_reply_id ??
+                    null,
+                  failedReply.reply_to,
                 )
               }
-              onToggleChildren={(parent) => void toggleReplyChildren(parent)}
+              readThroughPosition={discussion.read_through_position}
               replies={availableReplies}
-              visibleReplies={visibleReplies}
+              showUnreadBoundary={
+                discussion.unread_count > 0 &&
+                !rootUnread &&
+                unreadContentFullyExposed
+              }
             />
           </div>
         ) : null}
 
-        {loadingReplies ? (
-          <p className="mt-3 text-xs text-muted-foreground">Loading replies…</p>
-        ) : null}
         {replyError ? (
           <p
             className="mt-3 flex items-center gap-2 text-sm text-destructive"

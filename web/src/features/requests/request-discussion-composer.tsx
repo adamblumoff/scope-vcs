@@ -1,7 +1,13 @@
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { MessageSquarePlus, Reply, RotateCcw, X } from 'lucide-react'
-import { type FormEvent, type ReactNode, useId, useState } from 'react'
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useId,
+  useState,
+} from 'react'
 
 /**
  * Sits at the end of the list, where a new discussion lands. Collapsed it is a
@@ -64,6 +70,7 @@ export function RequestReplyComposer({
 }) {
   return (
     <Composer
+      autoFocus
       label={reopen ? 'Reopen and reply' : 'Reply'}
       onCancel={onCancel}
       onSubmit={onSubmit}
@@ -126,6 +133,20 @@ function Composer({
     }
   }
 
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      if (quote && onCancelQuote) onCancelQuote()
+      else onCancel()
+      return
+    }
+    if (pending) return
+    if (event.key !== 'Enter' || event.shiftKey) return
+    event.preventDefault()
+    event.currentTarget.form?.requestSubmit()
+  }
+
   return (
     <form onSubmit={submit}>
       <label className="sr-only" htmlFor={composerId}>
@@ -152,15 +173,20 @@ function Composer({
           'min-h-24 w-full resize-y rounded-md border border-input bg-background',
           'px-3 py-2 text-sm leading-6 outline-none placeholder:text-muted-foreground',
           'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
+          'disabled:cursor-wait disabled:opacity-70',
         )}
         autoFocus={autoFocus}
+        disabled={pending}
         id={composerId}
         onChange={(event) => setBody(event.target.value)}
+        onKeyDown={handleKeyDown}
         placeholder={placeholder}
         value={body}
       />
       <div className="mt-2 flex items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground">Markdown supported</p>
+        <p className="text-xs text-muted-foreground">
+          Markdown · Shift+Enter for a new line
+        </p>
         <div className="flex items-center gap-2">
           <Button disabled={pending} onClick={onCancel} size="sm" type="button" variant="ghost">
             Cancel
