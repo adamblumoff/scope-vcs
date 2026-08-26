@@ -209,6 +209,7 @@ mod tests {
                     pinned_container_image: format!("registry/scope@sha256:{}", "a".repeat(64),),
                     state: RepositoryRunJobState::Succeeded,
                     created_at_unix: 1,
+                    started_at_unix: Some(1),
                     updated_at_unix: 2,
                     completed_at_unix: Some(2),
                 },

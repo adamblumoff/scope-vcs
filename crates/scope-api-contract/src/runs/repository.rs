@@ -232,6 +232,7 @@ pub struct RepositoryRunJobResponse {
     pub pinned_container_image: String,
     pub state: RepositoryRunJobState,
     pub created_at_unix: u64,
+    pub started_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub completed_at_unix: Option<u64>,
 }

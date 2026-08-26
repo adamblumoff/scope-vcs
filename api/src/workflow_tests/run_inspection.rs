@@ -283,6 +283,7 @@ async fn run_detail_reconstructs_jobs_attempts_and_steps() {
     let body = response_json(response).await;
     assert_eq!(body["run"]["id"], fixture.run_id);
     assert_eq!(body["jobs"][0]["job"]["key"], "checks");
+    assert_eq!(body["jobs"][0]["job"]["started_at_unix"], 4);
     assert_eq!(body["jobs"][0]["attempts"][0]["id"], fixture.attempt_id);
     assert_eq!(body["jobs"][0]["attempts"][0]["steps"][0]["name"], "Test");
     assert_eq!(

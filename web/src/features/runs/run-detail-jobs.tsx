@@ -132,7 +132,7 @@ function RunJobStrip({
             <RunStatusIcon state={job.state} />
             <span className="font-medium">{job.key}</span>
             <span className="text-xs text-muted-foreground">
-              <RunDuration end={job.completed_at_unix} start={job.created_at_unix} />
+              <RunDuration end={job.completed_at_unix} start={job.started_at_unix} />
             </span>
           </button>
         )

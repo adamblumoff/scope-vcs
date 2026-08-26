@@ -280,7 +280,7 @@ export type RepositoryRunSummaryResponse = { id: string, workflow_name: string, 
 
 export type RepositoryRunJobState = "blocked" | "queued" | "dispatching" | "running" | "succeeded" | "failed" | "skipped" | "canceled" | "lost";
 
-export type RepositoryRunJobResponse = { key: string, needs: Array<string>, pinned_container_image: string, state: RepositoryRunJobState, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
+export type RepositoryRunJobResponse = { key: string, needs: Array<string>, pinned_container_image: string, state: RepositoryRunJobState, created_at_unix: number, started_at_unix: number | null, updated_at_unix: number, completed_at_unix: number | null, };
 
 export type RepositoryRunJobDetailResponse = { job: RepositoryRunJobResponse, attempts: Array<RepositoryRunAttemptResponse>, };
 

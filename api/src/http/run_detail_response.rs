@@ -103,6 +103,7 @@ pub(super) fn build_run_detail_response(
             let job = persisted_jobs.remove(key).ok_or_else(|| {
                 ApiError::internal_message("persisted run job is missing from its workflow")
             })?;
+            let attempts = attempts_by_job.remove(key).unwrap_or_default();
             Ok(RepositoryRunJobDetailResponse {
                 job: RepositoryRunJobResponse {
                     key: key.to_string(),
@@ -114,10 +115,14 @@ pub(super) fn build_run_detail_response(
                     pinned_container_image: job.pinned_container_image.as_str().to_string(),
                     state: job_state(job.state),
                     created_at_unix: job.created_at_unix,
+                    started_at_unix: attempts
+                        .iter()
+                        .filter_map(|attempt| attempt.started_at_unix)
+                        .min(),
                     updated_at_unix: job.updated_at_unix,
                     completed_at_unix: job.completed_at_unix,
                 },
-                attempts: attempts_by_job.remove(key).unwrap_or_default(),
+                attempts,
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
