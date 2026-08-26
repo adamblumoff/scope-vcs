@@ -5,11 +5,11 @@ import { RequestInvitees } from './request-invitees'
 import { RequestRatingsSection } from './request-ratings-section'
 import type { RateRequestInput } from '@/api/requests'
 import {
-  formatUnixDate,
   requestAudienceLabel,
   requestAuthorRoleLabel,
   shortOid,
 } from './request-labels'
+import { RequestAbsoluteTimestamp } from './request-timestamp'
 import type { RequestActionController } from './use-request-actions'
 
 export function RequestContextRail({
@@ -31,12 +31,21 @@ export function RequestContextRail({
         <RailSection title="Lifecycle">
           <RailValue label="Author" value={requestAuthorRoleLabel(request)} />
           <RailValue label="Audience" value={requestAudienceLabel(request)} />
-          <RailValue label="Submitted" value={formatUnixDate(request.submitted_at_unix)} />
+          <RailValue
+            label="Submitted"
+            value={<RequestAbsoluteTimestamp value={request.submitted_at_unix} />}
+          />
           {request.closed_at_unix !== null && (
-            <RailValue label="Closed" value={formatUnixDate(request.closed_at_unix)} />
+            <RailValue
+              label="Closed"
+              value={<RequestAbsoluteTimestamp value={request.closed_at_unix} />}
+            />
           )}
           {request.merged_at_unix !== null && (
-            <RailValue label="Merged" value={formatUnixDate(request.merged_at_unix)} />
+            <RailValue
+              label="Merged"
+              value={<RequestAbsoluteTimestamp value={request.merged_at_unix} />}
+            />
           )}
         </RailSection>
 
@@ -74,7 +83,7 @@ function RailSection({
   )
 }
 
-function RailValue({ label, value }: { label: string; value: string }) {
+function RailValue({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-xs">
       <span className="shrink-0 text-muted-foreground">{label}</span>

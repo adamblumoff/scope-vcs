@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils'
 import type { ReactNode } from 'react'
-import { formatRelativeUnix, formatUnixDate } from './request-labels'
 import type { RequestActorSummary } from './request-discussion-types'
+import { RequestTimestamp } from './request-timestamp'
 
 /**
  * Author, time, and state for one discussion or reply. Threads and replies
@@ -25,13 +25,10 @@ export function RequestDiscussionByline({
       >
         {author.handle}
       </span>
-      <time
+      <RequestTimestamp
         className="whitespace-nowrap text-xs text-muted-foreground"
-        dateTime={new Date(createdAtUnix * 1000).toISOString()}
-        title={formatUnixDate(createdAtUnix)}
-      >
-        {formatRelativeUnix(createdAtUnix)}
-      </time>
+        value={createdAtUnix}
+      />
       {children}
     </div>
   )

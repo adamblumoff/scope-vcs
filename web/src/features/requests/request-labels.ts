@@ -7,12 +7,22 @@ import type {
 } from '@/api/types'
 import type { BadgeVariant } from '@/components/ui/badge'
 
-const REQUEST_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+const REQUEST_DATE_FORMAT_OPTIONS = {
   day: '2-digit',
   hour: '2-digit',
   minute: '2-digit',
   month: 'short',
   year: 'numeric',
+} satisfies Intl.DateTimeFormatOptions
+
+const REQUEST_DATE_FORMATTER = new Intl.DateTimeFormat(
+  'en-US',
+  REQUEST_DATE_FORMAT_OPTIONS,
+)
+
+const REQUEST_UTC_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  ...REQUEST_DATE_FORMAT_OPTIONS,
+  timeZone: 'UTC',
 })
 
 const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat('en-US', {
@@ -137,10 +147,21 @@ export function shortOid(oid: string | null | undefined) {
 }
 
 export function formatUnixDate(unixSeconds: number | null) {
+  return formatUnixDateWith(REQUEST_DATE_FORMATTER, unixSeconds)
+}
+
+export function formatUnixDateUtc(unixSeconds: number | null) {
+  return formatUnixDateWith(REQUEST_UTC_DATE_FORMATTER, unixSeconds)
+}
+
+function formatUnixDateWith(
+  formatter: Intl.DateTimeFormat,
+  unixSeconds: number | null,
+) {
   if (unixSeconds === null) {
     return 'Not set'
   }
-  return REQUEST_DATE_FORMATTER.format(new Date(unixSeconds * 1000))
+  return formatter.format(new Date(unixSeconds * 1000))
 }
 
 /**
@@ -150,12 +171,12 @@ export function formatUnixDate(unixSeconds: number | null) {
  */
 export function formatRelativeUnix(
   unixSeconds: number | null,
-  nowMs: number = Date.now(),
+  nowUnix: number = Date.now() / 1_000,
 ) {
   if (unixSeconds === null) {
     return 'Not set'
   }
-  const deltaSeconds = unixSeconds - nowMs / 1000
+  const deltaSeconds = unixSeconds - nowUnix
   const distance = Math.abs(deltaSeconds)
   if (distance >= RELATIVE_HORIZON_SECONDS) {
     return formatUnixDate(unixSeconds)

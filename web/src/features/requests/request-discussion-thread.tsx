@@ -192,6 +192,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
             <RequestDiscussionReplyToggle
               count={discussion.root_reply_count}
               expanded={expandedReplies}
+              keepsPreview
               onToggle={() => void toggleReplies()}
             />
           ) : null}

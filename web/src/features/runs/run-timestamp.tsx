@@ -1,5 +1,5 @@
-import { useSyncExternalStore } from 'react'
-import { useRunClock } from './run-clock'
+import { useHydrated } from '@/lib/use-hydrated'
+import { useUnixClock } from '@/lib/use-unix-clock'
 import {
   createRunTimeFormatter,
   formatRelativeTime,
@@ -14,7 +14,7 @@ const ABSOLUTE_FORMATTER = createRunTimeFormatter()
  * settle it rather than matching the server byte for byte.
  */
 export function RunTimestamp({ value }: { value: number }) {
-  const nowUnix = useRunClock()
+  const nowUnix = useUnixClock()
   const hydrated = useHydrated()
   const date = runUnixTimeDate(value)
 
@@ -28,17 +28,5 @@ export function RunTimestamp({ value }: { value: number }) {
     >
       {formatRelativeTime(value, nowUnix)}
     </time>
-  )
-}
-
-function subscribeToHydration() {
-  return () => {}
-}
-
-function useHydrated() {
-  return useSyncExternalStore(
-    subscribeToHydration,
-    () => true,
-    () => false,
   )
 }
