@@ -27,7 +27,7 @@ jobs:
     if: >-
       inputs.validate_targets ||
       (inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
@@ -43,7 +43,7 @@ jobs:
 
   checks:
     name: Check scope-cli
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -155,7 +155,7 @@ jobs:
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     services:
       postgres:
@@ -255,7 +255,7 @@ jobs:
   deploy:
     name: Deploy scope-cli
     needs: [build, e2e]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout

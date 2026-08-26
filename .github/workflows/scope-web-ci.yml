@@ -20,7 +20,7 @@ env:
 jobs:
   checks:
     name: Check scope-web
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: web
@@ -56,7 +56,7 @@ jobs:
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     services:
       postgres:
@@ -163,7 +163,7 @@ jobs:
   deploy:
     name: Deploy scope-web
     needs: [checks, smoke]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
