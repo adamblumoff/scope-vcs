@@ -28,6 +28,7 @@ readonly budget_email="${BUDGET_NOTIFICATION_EMAIL:-}"
 readonly monthly_budget_usd="${MONTHLY_BUDGET_USD:-100}"
 readonly github_repository="${GITHUB_REPOSITORY:-scope-vcs/scope-vcs}"
 readonly github_repository_id="${GITHUB_REPOSITORY_ID:-1272896256}"
+readonly github_repository_owner_id="${GITHUB_REPOSITORY_OWNER_ID:-321219119}"
 readonly existing_github_oidc_provider_arn="${EXISTING_GITHUB_OIDC_PROVIDER_ARN:-}"
 
 aws_command() {
@@ -85,6 +86,7 @@ readonly parameters=(
   "ParameterKey=MonthlyBudgetUsd,ParameterValue=$monthly_budget_usd"
   "ParameterKey=GitHubRepository,ParameterValue=$github_repository"
   "ParameterKey=GitHubRepositoryId,ParameterValue=$github_repository_id"
+  "ParameterKey=GitHubRepositoryOwnerId,ParameterValue=$github_repository_owner_id"
   "ParameterKey=ExistingGitHubOidcProviderArn,ParameterValue=$existing_github_oidc_provider_arn"
 )
 readonly tags=(

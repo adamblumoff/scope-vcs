@@ -33,6 +33,11 @@ Parameters:
     Default: "1272896256"
     AllowedPattern: "^[0-9]+$"
     Description: Immutable GitHub repository ID allowed to publish checks images.
+  GitHubRepositoryOwnerId:
+    Type: String
+    Default: "321219119"
+    AllowedPattern: "^[0-9]+$"
+    Description: Immutable GitHub repository owner ID used in OIDC subjects.
   ExistingGitHubOidcProviderArn:
     Type: String
     Default: ""
@@ -288,7 +293,10 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 token.actions.githubusercontent.com:repository_id: !Ref GitHubRepositoryId
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:ref:refs/heads/*
+                token.actions.githubusercontent.com:sub: !Sub
+                  - repo:${RepositoryOwner}@${GitHubRepositoryOwnerId}/${RepositoryName}@${GitHubRepositoryId}:ref:refs/heads/*
+                  - RepositoryOwner: !Select [0, !Split ["/", !Ref GitHubRepository]]
+                    RepositoryName: !Select [1, !Split ["/", !Ref GitHubRepository]]
                 token.actions.githubusercontent.com:job_workflow_ref: !Sub ${GitHubRepository}/.github/workflows/scope-checks-image.yml@refs/heads/*
       Policies:
         - PolicyName: publish-checks-images
@@ -337,7 +345,10 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 token.actions.githubusercontent.com:repository_id: !Ref GitHubRepositoryId
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:ref:refs/heads/main
+                token.actions.githubusercontent.com:sub: !Sub
+                  - repo:${RepositoryOwner}@${GitHubRepositoryOwnerId}/${RepositoryName}@${GitHubRepositoryId}:ref:refs/heads/main
+                  - RepositoryOwner: !Select [0, !Split ["/", !Ref GitHubRepository]]
+                    RepositoryName: !Select [1, !Split ["/", !Ref GitHubRepository]]
                 token.actions.githubusercontent.com:ref: refs/heads/main
                 token.actions.githubusercontent.com:workflow: Scope AWS Infrastructure
       ManagedPolicyArns:
