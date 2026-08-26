@@ -7,10 +7,10 @@ import {
   createDiscussionRepliesState,
   hasLoadedAllUnreadContent,
   insertOptimisticReply,
-  loadReplyPagesThroughTarget,
   markReplyFailed,
   mergeDiscussionReplies,
   mergeReplyPage,
+  mergeReplyTarget,
   updateReplyPage,
 } from './request-discussion-replies-model'
 import type { RequestDiscussionReplyView } from './request-discussion-types'
@@ -117,46 +117,24 @@ test('an exhausted page refreshes from the newest edge when preview activity adv
   )
 })
 
-test('fragment resolution scans flat reply pages until it finds the target', async () => {
-  const requestedBefore: Array<number | undefined> = []
-  const pages = await loadReplyPagesThroughTarget('target', async (before) => {
-    requestedBefore.push(before)
-    if (before === undefined) {
-      return {
-        next_before_position: 51,
-        replies: [reply('newest', 100)],
-      }
-    }
-    return {
-      next_before_position: 1,
-      replies: [reply('target', 25), reply('older', 50)],
-    }
-  })
-
-  assert.deepEqual(requestedBefore, [undefined, 51])
-  assert.deepEqual(pages.flatMap((page) => ids(page.replies)), [
-    'newest',
-    'target',
-    'older',
-  ])
-})
-
-test('fragment resolution stops on exhaustion or a repeated cursor', async () => {
-  const exhausted = await loadReplyPagesThroughTarget('missing', async () => ({
+test('fragment resolution merges one exact target without changing pagination', () => {
+  const loaded = mergeReplyPage(
+    createDiscussionRepliesState(),
+    {
+      next_before_position: 51,
+      replies: [reply('newest', 100)],
+    },
+    [],
+    true,
+  )
+  const resolved = mergeReplyTarget(loaded, {
     next_before_position: null,
-    replies: [reply('only', 1)],
-  }))
-  let calls = 0
-  const repeated = await loadReplyPagesThroughTarget('missing', async () => {
-    calls += 1
-    return {
-      next_before_position: 10,
-      replies: [reply(`page-${calls}`, 20 - calls)],
-    }
+    replies: [reply('target', 25)],
   })
 
-  assert.equal(exhausted.length, 1)
-  assert.equal(repeated.length, 2)
+  assert.deepEqual(ids(resolved.replies), ['target', 'newest'])
+  assert.equal(resolved.page.nextBeforePosition, 51)
+  assert.equal(resolved.page.newestLoadedPosition, 100)
 })
 
 test('failed page loads preserve their cursor and can restart', () => {

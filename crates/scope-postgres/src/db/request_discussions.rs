@@ -247,6 +247,28 @@ impl RequestStore {
         Ok((replies, users))
     }
 
+    pub async fn request_discussion_reply(
+        &self,
+        discussion_id: &str,
+        reply_id: &str,
+    ) -> Result<
+        Option<(
+            RequestDiscussionReplyReadModel,
+            BTreeMap<String, UserAccount>,
+        )>,
+        PostgresError,
+    > {
+        let Some(reply) = reply_by_id(self.db.as_ref(), reply_id).await? else {
+            return Ok(None);
+        };
+        if reply.discussion_id != discussion_id {
+            return Ok(None);
+        }
+        self.request_discussion_reply_read_model(reply)
+            .await
+            .map(Some)
+    }
+
     pub async fn users_by_ids(
         &self,
         user_ids: impl IntoIterator<Item = String>,

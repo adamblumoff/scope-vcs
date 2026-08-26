@@ -10,10 +10,10 @@ import {
   createDiscussionRepliesState,
   hasLoadedAllUnreadContent,
   insertOptimisticReply,
-  loadReplyPagesThroughTarget,
   markReplyFailed,
   mergeDiscussionReplies,
   mergeReplyPage,
+  mergeReplyTarget,
   updateReplyPage,
 } from './request-discussion-replies-model'
 import type {
@@ -133,30 +133,19 @@ export function useRequestDiscussionReplies({
     )
     const operation = (async () => {
       try {
-        const pages = await loadReplyPagesThroughTarget(
-          replyId,
-          (before) =>
-            actions.loadReplies({
-              ...params,
-              before,
-              discussion_id: discussion.id,
-            }),
-        )
+        const page = await actions.loadReplies({
+          ...params,
+          discussion_id: discussion.id,
+          reply: replyId,
+        })
         setReplyState((current) =>
-          pages.reduce(
-            (state, page, index) =>
-              mergeReplyPage(
-                state,
-                page,
-                discussion.latest_replies,
-                index === 0,
-              ),
+          mergeReplyTarget(
             current,
+            page,
+            discussion.latest_replies,
           ),
         )
-        return pages.some((page) =>
-          page.replies.some((reply) => reply.id === replyId),
-        )
+        return page.replies.some((reply) => reply.id === replyId)
       } catch (error) {
         setReplyState((current) =>
           updateReplyPage(current, {

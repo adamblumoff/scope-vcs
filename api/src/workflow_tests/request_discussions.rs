@@ -144,6 +144,32 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     assert!(reply["reply"].get("child_reply_count").is_none());
     assert!(reply["reply"].get("can_reply").is_none());
 
+    let exact_reply = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/threads/{discussion_id}/replies?reply={first_reply_id}"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(exact_reply.status(), StatusCode::OK);
+    let exact_reply = response_json(exact_reply).await;
+    assert_eq!(exact_reply["next_before_position"], serde_json::Value::Null);
+    assert_eq!(exact_reply["replies"].as_array().unwrap().len(), 1);
+    assert_eq!(exact_reply["replies"][0]["id"], first_reply_id);
+
+    let missing_reply = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/threads/{discussion_id}/replies?reply=missing"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(missing_reply.status(), StatusCode::OK);
+    let missing_reply = response_json(missing_reply).await;
+    assert_eq!(missing_reply["replies"].as_array().unwrap().len(), 0);
+
     let resolved = api_request(
         app.clone(),
         "POST",

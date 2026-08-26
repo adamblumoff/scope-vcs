@@ -52,6 +52,7 @@ pub(crate) struct DiscussionChangesQuery {
 pub(crate) struct DiscussionRepliesQuery {
     before: Option<u64>,
     limit: Option<u64>,
+    reply: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,6 +194,28 @@ pub(crate) async fn list_replies(
     )
     .await?;
     ensure_discussion_in_request(&state, &request_id, &discussion_id).await?;
+    if let Some(reply_id) = query.reply.as_deref() {
+        if query.before.is_some() {
+            return Err(ApiError::bad_request(
+                "reply and before cannot be used together",
+            ));
+        }
+        let Some((reply, users)) = state
+            .metadata
+            .requests()
+            .request_discussion_reply(&discussion_id, reply_id)
+            .await?
+        else {
+            return Ok(Json(RequestDiscussionRepliesPageResponse {
+                replies: Vec::new(),
+                next_before_position: None,
+            }));
+        };
+        return Ok(Json(RequestDiscussionRepliesPageResponse {
+            replies: vec![reply_response(reply, &users)?],
+            next_before_position: None,
+        }));
+    }
     let limit = query
         .limit
         .unwrap_or(DEFAULT_REPLY_LIMIT)

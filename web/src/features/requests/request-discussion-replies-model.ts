@@ -18,26 +18,6 @@ export type ReplyPage = {
   replies: RequestDiscussionReplyView[]
 }
 
-export async function loadReplyPagesThroughTarget(
-  replyId: string,
-  loadPage: (before: number | undefined) => Promise<ReplyPage>,
-) {
-  const pages: ReplyPage[] = []
-  const seenCursors = new Set<number>()
-  let before: number | undefined
-
-  while (true) {
-    const page = await loadPage(before)
-    pages.push(page)
-    if (page.replies.some((reply) => reply.id === replyId)) return pages
-
-    const next = page.next_before_position
-    if (next === null || seenCursors.has(next)) return pages
-    seenCursors.add(next)
-    before = next
-  }
-}
-
 const unloadedPage: ReplyPageState = {
   error: null,
   loaded: false,
@@ -91,6 +71,20 @@ export function beforePositionForNextReplyPage(
 
   if (!state.page.loaded || newestPageIsStale) return undefined
   return state.page.nextBeforePosition ?? undefined
+}
+
+export function mergeReplyTarget(
+  state: DiscussionRepliesState,
+  page: ReplyPage,
+  latest: RequestDiscussionReplyView[] = [],
+): DiscussionRepliesState {
+  return {
+    page: { ...state.page, error: null, loading: false },
+    replies: mergeDiscussionReplies(
+      state.replies,
+      [...latest, ...page.replies],
+    ),
+  }
 }
 
 export function insertOptimisticReply(
