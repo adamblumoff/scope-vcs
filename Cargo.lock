@@ -5089,6 +5089,7 @@ dependencies = [
  "base64",
  "getrandom 0.3.4",
  "hex",
+ "hmac 0.12.1",
  "scope-api-contract",
  "scope-content-lifecycle",
  "scope-domain",

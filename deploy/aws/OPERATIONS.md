@@ -103,7 +103,13 @@ dispatcher_user="$(aws cloudformation describe-stacks \
 aws iam create-access-key --user-name "$dispatcher_user"
 ```
 
-Copy the returned access key ID and secret directly into Railway. Do not save the JSON to the repository or shell history. The worker also needs the six non-secret stack outputs:
+Copy the returned access key ID and secret directly into Railway. Do not save the JSON to the repository or shell history. Generate a separate secret-name key in the secure shell that will update Railway:
+
+```bash
+ecs_secret_name_key="$(openssl rand -hex 32)"
+```
+
+The worker also needs the six non-secret stack outputs:
 
 ```text
 AWS_REGION                    <- AwsRegion
@@ -114,18 +120,18 @@ SCOPE_ECS_EXECUTION_ROLE_ARN  <- RunnerExecutionRoleArn
 SCOPE_ECS_LOG_GROUP           <- RunnerLogGroupName
 ```
 
-Set them with `railway variable set` in the production worker service. Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the same command or through a secure, non-recorded shell session. Do not paste secrets into command examples, tickets, or logs.
+Set them with `railway variable set` in the production worker service. Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `SCOPE_ECS_SECRET_NAME_KEY="$ecs_secret_name_key"` in the same command or through a secure, non-recorded shell session. Do not paste secrets into command examples, tickets, or logs.
 
 The dispatcher's policy permits only these operations:
 
-- register, list, deregister, and tag `scope-runner-attempt_*` task definitions
+- register, list, deregister, and tag `scope-runner-attempt_*` task definitions, without permission to inspect their secret references
 - run those task definitions only in this cluster
 - find an ambiguously started task by its Scope attempt ID
 - describe, stop, and tag tasks in this cluster
 - create and delete project-tagged per-attempt bootstrap secrets without permission to read them
 - pass the exact task execution role to ECS
 
-The task execution role can read only secrets under this cluster's per-attempt prefix so the ECS agent can inject the bootstrap value. Those credentials are not available inside the container. The tasks receive no task IAM role, and runner code has no AWS credentials.
+The task execution role can read only secrets under this cluster's per-attempt prefix so the ECS agent can inject the bootstrap value. Secret names contain an HMAC suffix derived from `SCOPE_ECS_SECRET_NAME_KEY`; the AWS dispatcher identity can neither list secrets nor inspect registered task definitions, so possession of that access key alone cannot discover another attempt's secret reference. Those credentials are not available inside the container. The tasks receive no task IAM role, and runner code has no AWS credentials.
 
 ## Observe a real run
 

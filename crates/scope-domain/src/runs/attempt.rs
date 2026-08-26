@@ -7,13 +7,15 @@ use super::{
         skip_pending_steps,
     },
     validation::{required, validate_sha256_hash},
-    workflow::definition::WorkflowJobId,
+    workflow::definition::{MAX_WORKFLOW_TIMEOUT_SECONDS, WorkflowJobId},
 };
 use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_RUN_ATTEMPTS: u32 = 100;
-pub const MAX_RUN_ATTEMPT_AGE_SECONDS: u64 = 24 * 60 * 60;
+const RUN_ATTEMPT_OVERHEAD_SECONDS: u64 = 60 * 60;
+pub const MAX_RUN_ATTEMPT_AGE_SECONDS: u64 =
+    MAX_WORKFLOW_TIMEOUT_SECONDS + RUN_ATTEMPT_OVERHEAD_SECONDS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

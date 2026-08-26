@@ -223,7 +223,7 @@ Resources:
                 Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !GetAtt RunnerLogGroup.Arn
+                Resource: !Sub '${RunnerLogGroup.Arn}:*'
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:scope-vcs/${RunnerCluster}/attempts/*
@@ -246,11 +246,9 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: ReadTaskDefinitions
+              - Sid: ListTaskDefinitions
                 Effect: Allow
-                Action:
-                  - ecs:ListTaskDefinitions
-                  - ecs:DescribeTaskDefinition
+                Action: ecs:ListTaskDefinitions
                 Resource: "*"
               - Sid: RegisterTaggedTaskDefinitions
                 Effect: Allow

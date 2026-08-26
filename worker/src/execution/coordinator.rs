@@ -8,6 +8,7 @@ use std::time::Duration;
 
 const DISPATCH_LEASE: Duration = Duration::from_secs(15 * 60);
 
+#[derive(Clone)]
 pub(crate) struct CloudExecutionCoordinator {
     metadata: MetadataStore,
     ecs: EcsClient,

@@ -13,6 +13,7 @@ fn settings() -> CloudExecutionSettings {
         ecs_security_group_id: "sg-a".to_string(),
         ecs_execution_role_arn: "arn:aws:iam::123456789012:role/scope-task-execution".to_string(),
         ecs_log_group: "/scope/production/runner".to_string(),
+        ecs_secret_name_key: [7; 32],
         runtime_version: "test".to_string(),
         max_concurrency: 1,
     }
@@ -51,6 +52,20 @@ fn task_family_is_unique_to_the_attempt() {
 fn task_family_rejects_unsafe_attempt_ids() {
     assert!(task_family("").is_err());
     assert!(task_family("attempt/unsafe").is_err());
+}
+
+#[test]
+fn secret_names_are_unpredictable_to_the_aws_dispatcher_identity() {
+    let cluster = "arn:aws:ecs:us-east-1:123456789012:cluster/scope";
+    let first = secret_name(cluster, "attempt_123", &[7; 32]).unwrap();
+    let second = secret_name(cluster, "attempt_123", &[8; 32]).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(
+        first,
+        secret_name(cluster, "attempt_123", &[7; 32]).unwrap()
+    );
+    assert!(first.starts_with("scope-vcs/scope/attempts/attempt_123-"));
+    assert_eq!(first.rsplit_once('-').unwrap().1.len(), 32);
 }
 
 #[test]

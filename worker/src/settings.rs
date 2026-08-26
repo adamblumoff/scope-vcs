@@ -67,6 +67,7 @@ pub(crate) struct CloudExecutionSettings {
     pub(crate) ecs_security_group_id: String,
     pub(crate) ecs_execution_role_arn: String,
     pub(crate) ecs_log_group: String,
+    pub(crate) ecs_secret_name_key: [u8; 32],
     pub(crate) runtime_version: String,
     pub(crate) max_concurrency: usize,
 }
@@ -181,10 +182,25 @@ fn cloud_execution_from_env() -> anyhow::Result<Option<CloudExecutionSettings>> 
         ecs_security_group_id: required_env("SCOPE_ECS_SECURITY_GROUP_ID")?,
         ecs_execution_role_arn: required_env("SCOPE_ECS_EXECUTION_ROLE_ARN")?,
         ecs_log_group: required_env("SCOPE_ECS_LOG_GROUP")?,
+        ecs_secret_name_key: secret_name_key_from_env()?,
         runtime_version: non_empty_env("SCOPE_RUNTIME_VERSION")
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
         max_concurrency,
     }))
+}
+
+fn secret_name_key_from_env() -> anyhow::Result<[u8; 32]> {
+    let encoded = required_env("SCOPE_ECS_SECRET_NAME_KEY")?;
+    parse_secret_name_key(&encoded)
+}
+
+fn parse_secret_name_key(encoded: &str) -> anyhow::Result<[u8; 32]> {
+    let decoded = hex::decode(encoded).map_err(|_| {
+        anyhow::anyhow!("SCOPE_ECS_SECRET_NAME_KEY must be 64 hexadecimal characters")
+    })?;
+    decoded
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("SCOPE_ECS_SECRET_NAME_KEY must be 64 hexadecimal characters"))
 }
 
 fn comma_separated_env(name: &str) -> anyhow::Result<Vec<String>> {
@@ -275,5 +291,12 @@ mod tests {
             ["subnet-a", "subnet-b"]
         );
         assert!(parse_comma_separated("SUBNETS", " , ").is_err());
+    }
+
+    #[test]
+    fn secret_name_key_requires_exactly_32_hex_encoded_bytes() {
+        assert_eq!(parse_secret_name_key(&"ab".repeat(32)).unwrap(), [0xab; 32]);
+        assert!(parse_secret_name_key(&"ab".repeat(31)).is_err());
+        assert!(parse_secret_name_key(&"xy".repeat(32)).is_err());
     }
 }

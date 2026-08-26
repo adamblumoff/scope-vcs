@@ -15,6 +15,8 @@ use aws_sdk_ecs::{
     },
 };
 use aws_sdk_secretsmanager::{Client as SecretsManagerClient, types::Tag as SecretTag};
+use hmac::{Hmac, Mac as _};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
@@ -178,7 +180,11 @@ impl EcsClient {
         let result = self
             .secrets
             .create_secret()
-            .name(secret_name(&self.settings.ecs_cluster_arn, attempt_id)?)
+            .name(secret_name(
+                &self.settings.ecs_cluster_arn,
+                attempt_id,
+                &self.settings.ecs_secret_name_key,
+            )?)
             .client_request_token(attempt_id)
             .secret_string(bootstrap_token)
             .tags(secret_tag("Project", "scope-vcs"))
@@ -228,7 +234,11 @@ impl EcsClient {
                 .context("deregister per-attempt ECS task definition")?;
         }
 
-        let secret_name = secret_name(&self.settings.ecs_cluster_arn, attempt_id)?;
+        let secret_name = secret_name(
+            &self.settings.ecs_cluster_arn,
+            attempt_id,
+            &self.settings.ecs_secret_name_key,
+        )?;
         match self
             .secrets
             .delete_secret()
@@ -597,14 +607,25 @@ fn task_definition_family(arn: &str) -> Option<&str> {
         .map(|(family, _)| family)
 }
 
-fn secret_name(cluster_arn: &str, attempt_id: &str) -> anyhow::Result<String> {
+fn secret_name(
+    cluster_arn: &str,
+    attempt_id: &str,
+    secret_name_key: &[u8; 32],
+) -> anyhow::Result<String> {
     let cluster = cluster_arn
         .rsplit_once('/')
         .map(|(_, cluster)| cluster)
         .filter(|cluster| !cluster.is_empty())
         .context("ECS cluster ARN is missing its cluster name")?;
     task_family(attempt_id)?;
-    Ok(format!("scope-vcs/{cluster}/attempts/{attempt_id}"))
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret_name_key)
+        .expect("a fixed-size HMAC key is always valid");
+    mac.update(attempt_id.as_bytes());
+    let suffix = hex::encode(mac.finalize().into_bytes());
+    Ok(format!(
+        "scope-vcs/{cluster}/attempts/{attempt_id}-{}",
+        &suffix[..32]
+    ))
 }
 
 #[cfg(test)]
