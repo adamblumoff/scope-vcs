@@ -21,7 +21,12 @@ on:
           - cli
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('scope-ci-pr-{0}', github.event.pull_request.number) || 'scope-production-deploy' }}
+  group: >-
+    ${{ github.event_name == 'pull_request' &&
+    format('scope-ci-pr-{0}', github.event.pull_request.number) ||
+    (github.ref == 'refs/heads/main' &&
+    'scope-production-deploy' ||
+    format('scope-candidate-{0}', github.ref_name)) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -102,6 +107,11 @@ jobs:
     name: Checks image
     needs: plan
     if: needs.plan.outputs.checks_image == 'true'
+    permissions:
+      contents: read
+      deployments: write
+      id-token: write
+      packages: write
     uses: ./.github/workflows/scope-checks-image.yml
     with:
       publish: ${{ github.event_name != 'pull_request' }}

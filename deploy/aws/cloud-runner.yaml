@@ -23,9 +23,30 @@ Parameters:
     Type: Number
     Default: 100
     MinValue: 1
+  GitHubRepository:
+    Type: String
+    Default: scope-vcs/scope-vcs
+    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    Description: GitHub owner and repository allowed to publish checks images.
+  GitHubRepositoryId:
+    Type: String
+    Default: "1272896256"
+    AllowedPattern: "^[0-9]+$"
+    Description: Immutable GitHub repository ID allowed to publish checks images.
+  GitHubRepositoryOwnerId:
+    Type: String
+    Default: "321219119"
+    AllowedPattern: "^[0-9]+$"
+    Description: Immutable GitHub repository owner ID used in OIDC subjects.
+  ExistingGitHubOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: Supply the account's token.actions.githubusercontent.com provider ARN, or leave empty for this stack to create it.
 
 Conditions:
   HasBudgetNotification: !Not [!Equals [!Ref BudgetNotificationEmail, ""]]
+  CreateGitHubOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
+  UseExistingGitHubOidcProvider: !Not [!Equals [!Ref ExistingGitHubOidcProviderArn, ""]]
 
 Resources:
   RunnerVpc:
@@ -198,6 +219,150 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
+  ChecksImageRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub scope-vcs/${Environment}/checks
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Delete untagged artifacts after fourteen days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 14
+                },
+                "action": {"type": "expire"}
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: checks-image
+        - Key: ManagedBy
+          Value: cloudformation
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateGitHubOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: checks-image
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ChecksImagePublisherRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-github-checks-publisher
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - UseExistingGitHubOidcProvider
+                - !Ref ExistingGitHubOidcProviderArn
+                - !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:repository_id: !Ref GitHubRepositoryId
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub
+                  - repo:${RepositoryOwner}@${GitHubRepositoryOwnerId}/${RepositoryName}@${GitHubRepositoryId}:ref:refs/heads/*
+                  - RepositoryOwner: !Select [0, !Split ["/", !Ref GitHubRepository]]
+                    RepositoryName: !Select [1, !Split ["/", !Ref GitHubRepository]]
+                token.actions.githubusercontent.com:job_workflow_ref: !Sub ${GitHubRepository}/.github/workflows/scope-checks-image.yml@refs/heads/*
+      Policies:
+        - PolicyName: publish-checks-images
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt ChecksImageRepository.Arn
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: checks-image
+        - Key: ManagedBy
+          Value: cloudformation
+
+  GitHubInfrastructureRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-github-infrastructure
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - UseExistingGitHubOidcProvider
+                - !Ref ExistingGitHubOidcProviderArn
+                - !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:repository_id: !Ref GitHubRepositoryId
+                token.actions.githubusercontent.com:sub: !Sub
+                  - repo:${RepositoryOwner}@${GitHubRepositoryOwnerId}/${RepositoryName}@${GitHubRepositoryId}:ref:refs/heads/main
+                  - RepositoryOwner: !Select [0, !Split ["/", !Ref GitHubRepository]]
+                    RepositoryName: !Select [1, !Split ["/", !Ref GitHubRepository]]
+                token.actions.githubusercontent.com:ref: refs/heads/main
+                token.actions.githubusercontent.com:workflow: Scope AWS Infrastructure
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: infrastructure
+        - Key: ManagedBy
+          Value: cloudformation
+
   RunnerTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -227,6 +392,15 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:scope-vcs/${RunnerCluster}/attempts/*
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !GetAtt ChecksImageRepository.Arn
       Tags:
         - Key: Project
           Value: scope-vcs
@@ -407,3 +581,15 @@ Outputs:
   RailwayDispatcherUserName:
     Description: IAM user for the Railway worker; create its access key outside CloudFormation.
     Value: !Ref RailwayDispatcherUser
+  ChecksImageRepositoryName:
+    Description: Private ECR repository name for raw and SOCI v2 checks images.
+    Value: !Ref ChecksImageRepository
+  ChecksImageRepositoryUri:
+    Description: Private ECR repository URI for raw and SOCI v2 checks images.
+    Value: !GetAtt ChecksImageRepository.RepositoryUri
+  ChecksImagePublisherRoleArn:
+    Description: GitHub Actions OIDC role for publishing checks images.
+    Value: !GetAtt ChecksImagePublisherRole.Arn
+  GitHubInfrastructureRoleArn:
+    Description: GitHub Actions OIDC role for CLI-driven infrastructure plans and applies.
+    Value: !GetAtt GitHubInfrastructureRole.Arn
