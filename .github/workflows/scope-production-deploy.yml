@@ -106,6 +106,7 @@ jobs:
       contents: read
       deployments: write
       id-token: write
+      packages: write
     uses: ./.github/workflows/scope-checks-image.yml
     with:
       publish: ${{ github.event_name != 'pull_request' }}
