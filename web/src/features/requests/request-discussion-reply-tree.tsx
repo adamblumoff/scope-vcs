@@ -78,10 +78,16 @@ function DiscussionReply({
   const parent = reply.reply_to_reply_id
     ? replies.find((candidate) => candidate.id === reply.reply_to_reply_id)
     : undefined
+  const parentBranches = parent
+    ? Math.max(
+        parent.child_reply_count,
+        directDiscussionReplies(replies, parent.id).length,
+      ) > 1
+    : false
 
   return (
     <div
-      className="grid scroll-mt-32 grid-cols-[1.25rem_minmax(0,1fr)] gap-x-2 py-3"
+      className="grid scroll-mt-32 grid-cols-[1.25rem_minmax(0,1fr)] gap-x-2 pt-3"
       id={`reply-${reply.id}`}
     >
       <RequestDiscussionActorAvatar handle={reply.author.handle} small />
@@ -92,7 +98,7 @@ function DiscussionReply({
           createdAtUnix={reply.created_at_unix}
           small
         >
-          {parent && flattened ? (
+          {parent && flattened && parentBranches ? (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <CornerLeftUp className="size-3 shrink-0" />
               to {parent.author.handle}
@@ -132,7 +138,7 @@ function DiscussionReply({
               Retry
             </button>
           ) : null}
-          {childCount > 0 ? (
+          {childCount > 0 && (!expanded || childCount > 1) ? (
             <RequestDiscussionReplyToggle
               count={childCount}
               expanded={expanded}

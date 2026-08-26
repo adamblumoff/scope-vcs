@@ -226,7 +226,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
         </div>
 
         {!collapsed && visibleReplies.length > 0 ? (
-          <div className="mt-2 border-l border-border pl-4">
+          <div className="mt-2 border-l border-border pb-3 pl-4">
             {expandedReplies && nextBeforePosition !== null ? (
               <button
                 className="mb-3 text-xs font-medium text-muted-foreground hover:text-foreground"
