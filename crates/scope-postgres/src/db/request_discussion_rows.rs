@@ -217,7 +217,7 @@ where
 pub async fn reply_previews_for_discussions<C>(
     conn: &C,
     discussion_ids: &[String],
-) -> Result<BTreeMap<String, (u64, Vec<RequestDiscussionReplyReadModel>)>, PostgresError>
+) -> Result<BTreeMap<String, (u64, u64, Vec<RequestDiscussionReplyReadModel>)>, PostgresError>
 where
     C: ConnectionTrait,
 {
@@ -250,6 +250,9 @@ where
          SELECT replies.*, \
            (SELECT COUNT(*) FROM scope_request_discussion_replies counted \
               WHERE counted.discussion_id = replies.discussion_id) AS reply_count, \
+           (SELECT COUNT(*) FROM scope_request_discussion_replies rooted \
+              WHERE rooted.discussion_id = replies.discussion_id \
+                AND rooted.reply_to_reply_id IS NULL) AS root_reply_count, \
            (SELECT COUNT(*) FROM scope_request_discussion_replies children \
               WHERE children.reply_to_reply_id = replies.id) AS child_reply_count \
          FROM preview_replies replies \
@@ -263,7 +266,8 @@ where
         ))
         .await
         .map_err(PostgresError::internal)?;
-    let mut result = BTreeMap::<String, (u64, Vec<RequestDiscussionReplyReadModel>)>::new();
+    let mut result =
+        BTreeMap::<String, (u64, u64, Vec<RequestDiscussionReplyReadModel>)>::new();
     for row in rows {
         let discussion_id = row
             .try_get::<String>("", "discussion_id")
@@ -273,10 +277,15 @@ where
             .map_err(PostgresError::internal)?
             .try_into()
             .map_err(PostgresError::internal)?;
+        let root_count = row
+            .try_get::<i64>("", "root_reply_count")
+            .map_err(PostgresError::internal)?
+            .try_into()
+            .map_err(PostgresError::internal)?;
         let entry = result
             .entry(discussion_id)
-            .or_insert_with(|| (count, Vec::new()));
-        entry.1.push(reply_read_model(&row)?);
+            .or_insert_with(|| (count, root_count, Vec::new()));
+        entry.2.push(reply_read_model(&row)?);
     }
     Ok(result)
 }

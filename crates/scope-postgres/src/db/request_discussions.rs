@@ -36,6 +36,9 @@ use {
 pub struct RequestDiscussionReadModel {
     pub discussion: RequestDiscussion,
     pub reply_count: u64,
+    /// Replies that answer the discussion itself. The thread's reply control
+    /// reveals these, so it counts them rather than the whole tree.
+    pub root_reply_count: u64,
     pub latest_replies: Vec<RequestDiscussionReplyReadModel>,
     pub unread_count: u64,
 }
@@ -161,7 +164,7 @@ impl RequestStore {
             .collect::<Vec<_>>();
         let mut models = Vec::with_capacity(discussions.len());
         for discussion in discussions {
-            let (reply_count, latest_replies) =
+            let (reply_count, root_reply_count, latest_replies) =
                 previews.get(&discussion.id).cloned().unwrap_or_default();
             user_ids.extend(
                 latest_replies
@@ -172,6 +175,7 @@ impl RequestStore {
             models.push(RequestDiscussionReadModel {
                 discussion,
                 reply_count,
+                root_reply_count,
                 latest_replies,
                 unread_count,
             });

@@ -31,3 +31,20 @@ export function requestDiscussionRailColor(
 ) {
   return railColors[state]
 }
+
+/**
+ * The thread's reply control reveals root-level replies only, so it compares
+ * against the root count. Comparing against the whole tree renders a control
+ * that reveals nothing when every remaining reply is nested behind its own.
+ */
+export function showsThreadReplyToggle({
+  expanded,
+  rootReplyCount,
+  visibleCount,
+}: {
+  expanded: boolean
+  rootReplyCount: number
+  visibleCount: number
+}) {
+  return expanded || rootReplyCount > visibleCount
+}

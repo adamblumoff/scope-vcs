@@ -16,6 +16,7 @@ import { RequestDiscussionReplyTree } from './request-discussion-reply-tree'
 import {
   requestDiscussionRailColor,
   requestDiscussionThreadState,
+  showsThreadReplyToggle,
 } from './request-discussion-thread-state'
 import type {
   RequestDiscussion,
@@ -183,9 +184,13 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
         )}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {discussion.reply_count > visibleReplies.length || expandedReplies ? (
+          {showsThreadReplyToggle({
+            expanded: expandedReplies,
+            rootReplyCount: discussion.root_reply_count,
+            visibleCount: visibleReplies.length,
+          }) ? (
             <RequestDiscussionReplyToggle
-              count={discussion.reply_count}
+              count={discussion.root_reply_count}
               expanded={expandedReplies}
               onToggle={() => void toggleReplies()}
             />

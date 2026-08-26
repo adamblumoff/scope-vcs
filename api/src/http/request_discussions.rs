@@ -533,6 +533,7 @@ fn discussion_summary(
         anchor,
         status: model.discussion.status.into(),
         reply_count: model.reply_count,
+        root_reply_count: model.root_reply_count,
         unread_count: model.unread_count,
         latest_replies: model
             .latest_replies

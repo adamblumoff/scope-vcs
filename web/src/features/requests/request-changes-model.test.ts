@@ -167,6 +167,7 @@ function discussion(
     latest_replies: [],
     opened_position: openedPosition,
     reply_count: 0,
+    root_reply_count: 0,
     request_id: 'request-1',
     resolved_at_unix: null,
     resolved_by: null,

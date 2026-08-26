@@ -502,6 +502,7 @@ pub struct RequestDiscussionSummaryResponse {
     pub anchor: Option<RequestDiscussionAnchor>,
     pub status: RequestDiscussionStatus,
     pub reply_count: u64,
+    pub root_reply_count: u64,
     pub unread_count: u64,
     pub latest_replies: Vec<RequestDiscussionReplyResponse>,
     pub created_at_unix: u64,

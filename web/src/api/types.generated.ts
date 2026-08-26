@@ -226,7 +226,7 @@ export type RequestDiscussionStatus = "Open" | "Resolved";
 
 export type RequestDiscussionReplyResponse = { id: string, discussion_id: string, position: number, author: RequestActorSummaryResponse, body_markdown: string, reply_to_reply_id: string | null, child_reply_count: number, can_reply: boolean, created_at_unix: number, };
 
-export type RequestDiscussionSummaryResponse = { id: string, request_id: string, client_discussion_id: string, opened_position: number, last_activity_position: number, author: RequestActorSummaryResponse, body_markdown: string, anchor: RequestDiscussionAnchor | null, status: RequestDiscussionStatus, reply_count: number, unread_count: number, latest_replies: Array<RequestDiscussionReplyResponse>, created_at_unix: number, resolved_at_unix: number | null, resolved_by: RequestActorSummaryResponse | null, };
+export type RequestDiscussionSummaryResponse = { id: string, request_id: string, client_discussion_id: string, opened_position: number, last_activity_position: number, author: RequestActorSummaryResponse, body_markdown: string, anchor: RequestDiscussionAnchor | null, status: RequestDiscussionStatus, reply_count: number, root_reply_count: number, unread_count: number, latest_replies: Array<RequestDiscussionReplyResponse>, created_at_unix: number, resolved_at_unix: number | null, resolved_by: RequestActorSummaryResponse | null, };
 
 export type RequestDiscussionAnchor = { revision_id: string, revision_position: number, commit_oid: string | null, path: string | null, };
 

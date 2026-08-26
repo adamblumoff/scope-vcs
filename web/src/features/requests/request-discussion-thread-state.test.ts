@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { requestDiscussionThreadState } from './request-discussion-thread-state'
+import {
+  requestDiscussionThreadState,
+  showsThreadReplyToggle,
+} from './request-discussion-thread-state'
 import type { RequestDiscussionView } from './request-discussion-types'
 
 function discussion(
@@ -17,6 +20,7 @@ function discussion(
     latest_replies: [],
     opened_position: 1,
     reply_count: 0,
+    root_reply_count: 0,
     request_id: 'request_1',
     resolved_at_unix: null,
     resolved_by: null,
@@ -53,4 +57,39 @@ test('an open discussion with unread activity is unread', () => {
 
 test('an open discussion with nothing new is read', () => {
   assert.equal(requestDiscussionThreadState(discussion()), 'read')
+})
+
+test('a thread whose only root reply is already shown gets no toggle', () => {
+  // ten replies in the tree, one of them root-level and already previewed:
+  // expanding the root list would reveal nothing
+  assert.equal(
+    showsThreadReplyToggle({
+      expanded: false,
+      rootReplyCount: 1,
+      visibleCount: 1,
+    }),
+    false,
+  )
+})
+
+test('a thread with unshown root replies gets a toggle', () => {
+  assert.equal(
+    showsThreadReplyToggle({
+      expanded: false,
+      rootReplyCount: 3,
+      visibleCount: 1,
+    }),
+    true,
+  )
+})
+
+test('an expanded thread keeps its toggle so it can collapse', () => {
+  assert.equal(
+    showsThreadReplyToggle({
+      expanded: true,
+      rootReplyCount: 1,
+      visibleCount: 1,
+    }),
+    true,
+  )
 })
