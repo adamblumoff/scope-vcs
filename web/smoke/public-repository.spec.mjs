@@ -689,7 +689,14 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       '#reply-discussion_reply_demo_retry_cap_maintainer',
     )
     await maintainerReply.getByText('Two seconds is intentional', { exact: false }).waitFor()
-    await maintainerReply.getByRole('button', { name: 'Show 1 reply' }).click()
+    const showMaintainerReply = maintainerReply.getByRole('button', {
+      name: 'Show 1 reply',
+    })
+    await page.waitForFunction(
+      (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
+      await showMaintainerReply.elementHandle(),
+    )
+    await showMaintainerReply.click()
     const contributorReply = page.locator(
       '#reply-discussion_reply_demo_retry_cap_quote',
     )
