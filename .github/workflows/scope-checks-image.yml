@@ -239,13 +239,13 @@ jobs:
         if: steps.source.outputs.publish_main == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.published.outputs.digest }}
           LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: >-
           node .github/scripts/production-deployment-progress.mjs record
           --component checksImage
           --source-sha "$SOURCE_SHA"
-          --provider ghcr
+          --provider ecr
           --evidence-id "$IMAGE_DIGEST"
           --log-url "$LOG_URL"
