@@ -8,7 +8,10 @@ use super::{
         reply_by_id, reply_child_count, reply_previews_for_discussions, save_discussion,
         save_read_state, unread_content_counts, users_by_ids as load_users_by_ids,
     },
-    request_revision_rows::{RequestRevisionWindow, revision_by_id, revision_window_for_request},
+    request_revision_rows::{
+        RequestRevisionWindow, revision_by_id, revision_positions_for_request,
+        revision_window_for_request,
+    },
     request_rows::insert_request_event_row,
     request_rows::save_request_row,
 };
@@ -64,6 +67,13 @@ impl RequestStore {
         limit: u64,
     ) -> Result<RequestRevisionWindow, PostgresError> {
         revision_window_for_request(self.db.as_ref(), request_id, selected_revision_id, limit).await
+    }
+
+    pub async fn request_revision_positions(
+        &self,
+        request_id: &str,
+    ) -> Result<BTreeMap<String, u64>, PostgresError> {
+        revision_positions_for_request(self.db.as_ref(), request_id).await
     }
 
     pub async fn request_discussions_page(

@@ -86,6 +86,7 @@ pub(crate) struct DiscussionMutationResult {
     pub(crate) discussion: RequestDiscussionReadModel,
     pub(crate) users: BTreeMap<String, UserAccount>,
     pub(crate) visible_anchor_commits: BTreeSet<(String, String)>,
+    pub(crate) revision_positions: BTreeMap<String, u64>,
 }
 
 pub(crate) struct ReplyMutationResult {
@@ -431,10 +432,16 @@ async fn load_discussion_result(
         discussion.discussion.anchor.as_ref(),
     )
     .await;
+    let revision_positions = state
+        .metadata
+        .requests()
+        .request_revision_positions(&context.request.id)
+        .await?;
     Ok(DiscussionMutationResult {
         discussion,
         users,
         visible_anchor_commits,
+        revision_positions,
     })
 }
 

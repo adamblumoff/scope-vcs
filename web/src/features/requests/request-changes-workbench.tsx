@@ -24,7 +24,7 @@ import { useCachedResource } from '@/lib/use-cached-resource'
 import { Link } from '@tanstack/react-router'
 import { GitCommit, MessageSquare } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
-import { compactDiscussionSummary } from './request-discussion-model'
+import { compactDiscussionSummary } from './discussion-preview-text'
 import type { LoadDiscussionsInput } from './request-discussion-api'
 import {
   discussionsForRequestCommit,

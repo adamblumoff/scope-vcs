@@ -7,6 +7,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { History, TriangleAlert, X } from 'lucide-react'
 import {
   eventKindLabel,
+  formatRelativeUnix,
   formatUnixDate,
   requestEventBody,
 } from './request-labels'
@@ -108,9 +109,13 @@ export function RequestActivityDrawer({
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="outline">{eventKindLabel(event.kind)}</Badge>
-                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                        {formatUnixDate(event.created_at_unix)}
-                      </span>
+                      <time
+                        className="text-xs text-muted-foreground"
+                        dateTime={new Date(event.created_at_unix * 1000).toISOString()}
+                        title={formatUnixDate(event.created_at_unix)}
+                      >
+                        {formatRelativeUnix(event.created_at_unix)}
+                      </time>
                       <span className="text-xs text-muted-foreground">
                         {event.actor.handle}
                       </span>

@@ -1,13 +1,13 @@
 import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
-import { Reply, RotateCcw } from 'lucide-react'
+import { CornerLeftUp, Reply, RotateCcw } from 'lucide-react'
+import { RequestDiscussionByline } from './request-discussion-byline'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
+import { RequestDiscussionReplyToggle } from './request-discussion-reply-toggle'
 import {
   directDiscussionReplies,
   type ReplyBranchState,
 } from './request-discussion-replies-model'
 import type { RequestDiscussionReplyView } from './request-discussion-types'
-import { formatUnixDate } from './request-labels'
 
 type ReplyTreeContext = {
   branchStates: ReadonlyMap<string, ReplyBranchState>
@@ -53,30 +53,41 @@ function DiscussionReply({
   const expanded = expandedReplyIds.has(reply.id)
   const branch = branchStates.get(reply.id)
   const branchCursor = branch?.nextBeforePosition ?? null
+  const parent = reply.reply_to_reply_id
+    ? replies.find((candidate) => candidate.id === reply.reply_to_reply_id)
+    : undefined
 
   return (
-    <div
-      className="scroll-mt-32 border-t border-border/70 py-4 first:border-t-0 first:pt-0"
-      id={`reply-${reply.id}`}
-    >
-      <div className="flex items-center gap-2">
-        <RequestDiscussionActorAvatar handle={reply.author.handle} small />
-        <span className="text-sm font-semibold">{reply.author.handle}</span>
-        <span className="font-mono text-xs tabular-nums text-muted-foreground">
-          {formatUnixDate(reply.created_at_unix)}
-        </span>
+    <div className="scroll-mt-32 py-3" id={`reply-${reply.id}`}>
+      <RequestDiscussionByline
+        author={reply.author}
+        createdAtUnix={reply.created_at_unix}
+        small
+      >
         {reply.pending === 'sending' ? (
           <span className="text-xs text-muted-foreground">Posting…</span>
         ) : null}
         {reply.pending === 'failed' ? (
           <Badge variant="danger">Failed</Badge>
         ) : null}
-      </div>
+      </RequestDiscussionByline>
+
+      {parent ? (
+        <a
+          className="mt-1.5 inline-flex max-w-full items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground"
+          href={`#reply-${parent.id}`}
+        >
+          <CornerLeftUp className="size-3 shrink-0" />
+          <span className="truncate">Replying to {parent.author.handle}</span>
+        </a>
+      ) : null}
+
       <RequestDiscussionMarkdown
         className="mt-1.5"
         source={reply.body_markdown}
       />
-      <div className="mt-2 flex items-center gap-2">
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         {canQuote && reply.can_reply ? (
           <button
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
@@ -98,25 +109,19 @@ function DiscussionReply({
           </button>
         ) : null}
         {childCount > 0 ? (
-          <button
-            aria-label={expanded
-              ? 'Hide replies'
-              : `Show ${childCount} ${childCount === 1 ? 'reply' : 'replies'}`}
-            aria-expanded={expanded}
-            className="text-xs font-medium text-brand hover:text-foreground"
-            onClick={() => onToggleChildren(reply)}
-            type="button"
-          >
-            {expanded ? '-' : `+${childCount}`}
-          </button>
+          <RequestDiscussionReplyToggle
+            count={childCount}
+            expanded={expanded}
+            onToggle={() => onToggleChildren(reply)}
+          />
         ) : null}
       </div>
 
       {expanded ? (
-        <div className="mt-3 border-l border-border pl-4">
+        <div>
           {branch && branchCursor !== null ? (
             <button
-              className="mb-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+              className="mt-3 text-xs font-medium text-muted-foreground hover:text-foreground"
               disabled={branch.loading}
               onClick={() => onLoadChildren(reply.id, branchCursor)}
               type="button"
@@ -148,26 +153,6 @@ function DiscussionReply({
           ) : null}
         </div>
       ) : null}
-    </div>
-  )
-}
-
-export function RequestDiscussionActorAvatar({
-  handle,
-  small = false,
-}: {
-  handle: string
-  small?: boolean
-}) {
-  return (
-    <div
-      aria-hidden="true"
-      className={cn(
-        'grid shrink-0 place-items-center rounded-full border border-border bg-muted font-mono font-semibold uppercase text-muted-foreground',
-        small ? 'size-6 text-[9px]' : 'size-8 text-[10px]',
-      )}
-    >
-      {handle.slice(0, 2)}
     </div>
   )
 }

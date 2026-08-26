@@ -1,10 +1,14 @@
-use super::{entities, object_references::replace_object_reference};
+use super::{
+    entities::{self, i64_to_u64},
+    object_references::replace_object_reference,
+};
 use crate::error::PostgresError;
 use scope_domain::requests::RequestRevision;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
     QueryOrder, QuerySelect,
 };
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
 pub struct RequestRevisionWindow {
@@ -41,6 +45,28 @@ where
         .map_err(PostgresError::internal)?
         .into_iter()
         .map(entities::request_revision::Model::try_into_domain)
+        .collect()
+}
+
+/// Revision display positions keyed by revision id, without loading git snapshot metadata.
+pub async fn revision_positions_for_request<C>(
+    conn: &C,
+    request_id: &str,
+) -> Result<BTreeMap<String, u64>, PostgresError>
+where
+    C: ConnectionTrait,
+{
+    entities::request_revision::Entity::find()
+        .select_only()
+        .column(entities::request_revision::Column::Id)
+        .column(entities::request_revision::Column::Position)
+        .filter(entities::request_revision::Column::RequestId.eq(request_id))
+        .into_tuple::<(String, i64)>()
+        .all(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(|(id, position)| Ok((id, i64_to_u64(position, "request revision position")?)))
         .collect()
 }
 

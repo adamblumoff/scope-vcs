@@ -16,7 +16,7 @@ use crate::{
 };
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
-use scope_api_contract::{ErrorCode, ErrorResponse, RequestAudience, RequestDiscussionAnchor};
+use scope_api_contract::{ErrorCode, ErrorResponse, RequestAudience, RequestDiscussionAnchorInput};
 use scope_domain::{policy::ScopePath, repo_control::is_public_request_protected_path};
 use std::{
     fs,
@@ -527,11 +527,13 @@ fn start_request_discussion(
         args.target.remote,
         args.target.request,
     )?;
-    let anchor = args.revision.map(|revision_id| RequestDiscussionAnchor {
-        revision_id,
-        commit_oid: args.commit,
-        path: args.path,
-    });
+    let anchor = args
+        .revision
+        .map(|revision_id| RequestDiscussionAnchorInput {
+            revision_id,
+            commit_oid: args.commit,
+            path: args.path,
+        });
     let response = create_request_discussion(
         client,
         api_url,

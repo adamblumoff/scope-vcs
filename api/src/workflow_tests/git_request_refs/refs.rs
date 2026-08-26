@@ -356,6 +356,10 @@ async fn draft_push_records_revision_activity_without_touching_main() {
     assert_eq!(anchored.status(), StatusCode::OK);
     let anchored = response_json(anchored).await;
     assert_eq!(anchored["discussion"]["anchor"]["revision_id"], revision_id);
+    assert_eq!(
+        anchored["discussion"]["anchor"]["revision_position"],
+        latest["position"]
+    );
     assert_eq!(anchored["discussion"]["anchor"]["commit_oid"], commit_oid);
     assert_eq!(anchored["discussion"]["anchor"]["path"], "/request.txt");
     let anchored_id = anchored["discussion"]["id"].as_str().unwrap();
@@ -477,6 +481,10 @@ async fn draft_push_records_revision_activity_without_touching_main() {
     assert_eq!(
         redacted_discussion["discussions"][0]["anchor"]["revision_id"],
         revision_id
+    );
+    assert_eq!(
+        redacted_discussion["discussions"][0]["anchor"]["revision_position"],
+        latest["position"]
     );
     assert_eq!(
         redacted_discussion["discussions"][0]["anchor"]["commit_oid"],

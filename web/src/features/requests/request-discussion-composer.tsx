@@ -1,20 +1,47 @@
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { MessageSquarePlus, Reply, RotateCcw, Send, X } from 'lucide-react'
+import { MessageSquarePlus, Reply, RotateCcw, X } from 'lucide-react'
 import { type FormEvent, type ReactNode, useId, useState } from 'react'
 
+/**
+ * Sits at the end of the list, where a new discussion lands. Collapsed it is a
+ * single line; activating it opens the full composer.
+ */
 export function RequestDiscussionComposer({
-  onCancel,
   onSubmit,
 }: {
-  onCancel: () => void
   onSubmit: (body: string) => Promise<boolean>
 }) {
+  const [open, setOpen] = useState(false)
+
+  if (!open) {
+    return (
+      <button
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md border border-input bg-background',
+          'px-3 py-2 text-left text-sm text-muted-foreground',
+          'hover:border-ring hover:text-foreground',
+          'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
+        )}
+        onClick={() => setOpen(true)}
+        type="button"
+      >
+        <MessageSquarePlus className="size-3.5 shrink-0" />
+        Start a discussion about this request…
+      </button>
+    )
+  }
+
   return (
     <Composer
+      autoFocus
       label="Start a new discussion"
-      onCancel={onCancel}
-      onSubmit={onSubmit}
+      onCancel={() => setOpen(false)}
+      onSubmit={async (body) => {
+        const posted = await onSubmit(body)
+        if (posted) setOpen(false)
+        return posted
+      }}
       placeholder="Start a focused discussion about this request…"
       submitIcon={<MessageSquarePlus className="size-3.5" />}
       submitLabel="Start discussion"
@@ -60,6 +87,7 @@ export function RequestReplyComposer({
 }
 
 function Composer({
+  autoFocus = false,
   label,
   onCancel,
   onCancelQuote,
@@ -69,6 +97,7 @@ function Composer({
   submitIcon,
   submitLabel,
 }: {
+  autoFocus?: boolean
   label: string
   onCancel: () => void
   onCancelQuote?: () => void
@@ -98,7 +127,7 @@ function Composer({
   }
 
   return (
-    <form className="border-t border-border pt-3" onSubmit={submit}>
+    <form onSubmit={submit}>
       <label className="sr-only" htmlFor={composerId}>
         {label}
       </label>
@@ -124,6 +153,7 @@ function Composer({
           'px-3 py-2 text-sm leading-6 outline-none placeholder:text-muted-foreground',
           'focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
         )}
+        autoFocus={autoFocus}
         id={composerId}
         onChange={(event) => setBody(event.target.value)}
         placeholder={placeholder}

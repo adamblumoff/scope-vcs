@@ -513,6 +513,15 @@ pub struct RequestDiscussionSummaryResponse {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestDiscussionAnchor {
     pub revision_id: String,
+    pub revision_position: u64,
+    pub commit_oid: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionAnchorInput {
+    pub revision_id: String,
     pub commit_oid: Option<String>,
     pub path: Option<String>,
 }
@@ -643,7 +652,7 @@ pub struct EditRequestIdentityRequest {
 pub struct CreateRequestDiscussionRequest {
     pub body_markdown: String,
     pub client_discussion_id: String,
-    pub anchor: Option<RequestDiscussionAnchor>,
+    pub anchor: Option<RequestDiscussionAnchorInput>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

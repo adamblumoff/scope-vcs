@@ -490,7 +490,8 @@ fn mutation_discussion_response(
     let anchor = discussion_anchor_response(
         result.discussion.discussion.anchor.clone(),
         &result.visible_anchor_commits,
-    );
+        &result.revision_positions,
+    )?;
     discussion_summary(result.discussion, &result.users, anchor)
 }
 
@@ -568,9 +569,19 @@ async fn discussion_summaries(
         models.iter().map(|model| model.discussion.anchor.as_ref()),
     )
     .await;
+    let revision_positions = projection
+        .state
+        .metadata
+        .requests()
+        .request_revision_positions(&projection.request.id)
+        .await?;
     let mut summaries = Vec::with_capacity(models.len());
     for model in models {
-        let anchor = discussion_anchor_response(model.discussion.anchor.clone(), &visibility);
+        let anchor = discussion_anchor_response(
+            model.discussion.anchor.clone(),
+            &visibility,
+            &revision_positions,
+        )?;
         summaries.push(discussion_summary(model, users, anchor)?);
     }
     Ok(summaries)
@@ -614,23 +625,41 @@ async fn discussion_anchor_visibility<'a>(
 fn discussion_anchor_response(
     anchor: Option<scope_domain::requests::RequestDiscussionAnchor>,
     visible_commits: &BTreeSet<(String, String)>,
-) -> Option<RequestDiscussionAnchor> {
-    let anchor = anchor?;
+    revision_positions: &BTreeMap<String, u64>,
+) -> Result<Option<RequestDiscussionAnchor>, ApiError> {
+    let Some(anchor) = anchor else {
+        return Ok(None);
+    };
     let commit_context_is_visible = match anchor.commit_oid.as_deref() {
         None => anchor.path.is_none(),
         Some(commit_oid) => {
             visible_commits.contains(&(anchor.revision_id.clone(), commit_oid.to_string()))
         }
     };
-    Some(project_discussion_anchor(anchor, commit_context_is_visible))
+    let revision_position = revision_positions
+        .get(&anchor.revision_id)
+        .copied()
+        .ok_or_else(|| {
+            ApiError::internal_message(format!(
+                "request discussion anchor references unknown revision {}",
+                anchor.revision_id
+            ))
+        })?;
+    Ok(Some(project_discussion_anchor(
+        anchor,
+        revision_position,
+        commit_context_is_visible,
+    )))
 }
 
 fn project_discussion_anchor(
     anchor: scope_domain::requests::RequestDiscussionAnchor,
+    revision_position: u64,
     commit_context_is_visible: bool,
 ) -> RequestDiscussionAnchor {
     RequestDiscussionAnchor {
         revision_id: anchor.revision_id,
+        revision_position,
         commit_oid: commit_context_is_visible
             .then_some(anchor.commit_oid)
             .flatten(),
@@ -715,13 +744,44 @@ mod tests {
             path: Some(private_path),
         };
 
-        let public = project_discussion_anchor(anchor.clone(), false);
-        let private = project_discussion_anchor(anchor, true);
+        let public = project_discussion_anchor(anchor.clone(), 3, false);
+        let private = project_discussion_anchor(anchor, 3, true);
 
         assert_eq!(public.path, None);
         assert_eq!(public.commit_oid, None);
         assert_eq!(private.path.as_deref(), Some("/internal/plan.md"));
         assert_eq!(private.commit_oid.as_deref(), Some("commit"));
+    }
+
+    #[test]
+    fn discussion_anchor_carries_the_revision_ordinal() {
+        let anchor = DomainDiscussionAnchor {
+            revision_id: "revision".to_string(),
+            commit_oid: None,
+            path: None,
+        };
+        let positions = BTreeMap::from([("revision".to_string(), 4_u64)]);
+
+        let response = discussion_anchor_response(Some(anchor), &BTreeSet::new(), &positions)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(response.revision_id, "revision");
+        assert_eq!(response.revision_position, 4);
+    }
+
+    #[test]
+    fn discussion_anchor_rejects_an_unknown_revision() {
+        let anchor = DomainDiscussionAnchor {
+            revision_id: "missing".to_string(),
+            commit_oid: None,
+            path: None,
+        };
+
+        let error = discussion_anchor_response(Some(anchor), &BTreeSet::new(), &BTreeMap::new())
+            .unwrap_err();
+
+        assert!(format!("{error:?}").contains("unknown revision"));
     }
 
     #[test]
@@ -732,7 +792,7 @@ mod tests {
             path: None,
         };
 
-        let public = project_discussion_anchor(anchor, false);
+        let public = project_discussion_anchor(anchor, 1, false);
 
         assert_eq!(public.commit_oid, None);
         assert_eq!(public.path, None);

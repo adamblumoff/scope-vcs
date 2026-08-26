@@ -4,7 +4,6 @@ import {
   appendDiscussionPage,
   applyDiscussionChanges,
   collectionFromPage,
-  compactDiscussionSummary,
   includeFocusedDiscussion,
   insertOptimisticDiscussion,
   markDiscussionRead,
@@ -470,12 +469,6 @@ test('mark read is monotonic in the client projection', () => {
   assert.equal(markDiscussionRead(read, 'one'), read)
 })
 
-test('compact summary uses the first nonempty Markdown line', () => {
-  assert.equal(compactDiscussionSummary('\n## Cache invalidation\nMore'), 'Cache invalidation')
-  assert.equal(compactDiscussionSummary(' \n'), 'Untitled discussion')
-  assert.equal(compactDiscussionSummary(null), 'Update')
-})
-
 function discussion(id: string, lastActivity: number): RequestDiscussion {
   return {
     anchor: null,
@@ -493,19 +486,5 @@ function discussion(id: string, lastActivity: number): RequestDiscussion {
     resolved_by: null,
     status: 'Open',
     unread_count: 0,
-  }
-}
-
-function reply(id: string, position: number) {
-  return {
-    author: { handle: 'maya', id: 'user-maya' },
-    body_markdown: `Reply ${id}`,
-    child_reply_count: 0,
-    can_reply: true,
-    created_at_unix: position,
-    discussion_id: 'one',
-    id,
-    position,
-    reply_to_reply_id: null,
   }
 }

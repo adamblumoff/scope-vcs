@@ -106,9 +106,9 @@ test('keeps repeated commit OIDs distinct across revisions', () => {
 
 test('orders matching commit and revision discussions chronologically', () => {
   const discussions = [
-    discussion('later', 8, { revision_id: 'revision-1', commit_oid: 'commit-b', path: null }),
-    discussion('revision', 5, { revision_id: 'revision-1', commit_oid: null, path: null }),
-    discussion('other', 6, { revision_id: 'revision-1', commit_oid: 'commit-a', path: null }),
+    discussion('later', 8, { revision_id: 'revision-1', revision_position: 1, commit_oid: 'commit-b', path: null }),
+    discussion('revision', 5, { revision_id: 'revision-1', revision_position: 1, commit_oid: null, path: null }),
+    discussion('other', 6, { revision_id: 'revision-1', revision_position: 1, commit_oid: 'commit-a', path: null }),
   ]
   assert.deepEqual(
     discussionsForRequestCommit(discussions, revisions[0], 'commit-b')

@@ -22,7 +22,7 @@ pub struct CreateRequestDiscussionParams<'a> {
     pub target: RequestTarget<'a>,
     pub body_markdown: String,
     pub client_discussion_id: String,
-    pub anchor: Option<RequestDiscussionAnchor>,
+    pub anchor: Option<RequestDiscussionAnchorInput>,
 }
 
 pub struct CreateRequestDiscussionReplyParams<'a> {
@@ -638,7 +638,7 @@ mod tests {
                 target: target(),
                 body_markdown: "Question\\n".to_string(),
                 client_discussion_id: "client-discussion".to_string(),
-                anchor: Some(RequestDiscussionAnchor {
+                anchor: Some(RequestDiscussionAnchorInput {
                     revision_id: "rev_one".to_string(),
                     commit_oid: Some("0123456789abcdef".to_string()),
                     path: Some("src/lib.rs".to_string()),

@@ -228,7 +228,9 @@ export type RequestDiscussionReplyResponse = { id: string, discussion_id: string
 
 export type RequestDiscussionSummaryResponse = { id: string, request_id: string, client_discussion_id: string, opened_position: number, last_activity_position: number, author: RequestActorSummaryResponse, body_markdown: string, anchor: RequestDiscussionAnchor | null, status: RequestDiscussionStatus, reply_count: number, unread_count: number, latest_replies: Array<RequestDiscussionReplyResponse>, created_at_unix: number, resolved_at_unix: number | null, resolved_by: RequestActorSummaryResponse | null, };
 
-export type RequestDiscussionAnchor = { revision_id: string, commit_oid: string | null, path: string | null, };
+export type RequestDiscussionAnchor = { revision_id: string, revision_position: number, commit_oid: string | null, path: string | null, };
+
+export type RequestDiscussionAnchorInput = { revision_id: string, commit_oid: string | null, path: string | null, };
 
 export type RequestRevisionCommitResponse = { oid: string, parent_oids: Array<string>, author: string | null, authored_at_unix: number, message: string, change_count: number, files: Array<CommitFileResponse>, };
 
@@ -260,7 +262,7 @@ export type SubmitRequestRequest = Record<symbol, never>;
 
 export type EditRequestIdentityRequest = { title: string | null, description_markdown: string | null, };
 
-export type CreateRequestDiscussionRequest = { body_markdown: string, client_discussion_id: string, anchor: RequestDiscussionAnchor | null, };
+export type CreateRequestDiscussionRequest = { body_markdown: string, client_discussion_id: string, anchor: RequestDiscussionAnchorInput | null, };
 
 export type CreateRequestDiscussionReplyRequest = { body_markdown: string, client_reply_id: string, reply_to_reply_id: string | null, };
 

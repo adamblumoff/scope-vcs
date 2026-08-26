@@ -12,9 +12,17 @@ const REQUEST_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   hour: '2-digit',
   minute: '2-digit',
   month: 'short',
-  timeZone: 'UTC',
   year: 'numeric',
 })
+
+const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat('en-US', {
+  numeric: 'auto',
+})
+
+const SECONDS_PER_MINUTE = 60
+const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE
+const SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
+const RELATIVE_HORIZON_SECONDS = 30 * SECONDS_PER_DAY
 
 export type BadgeTone = BadgeVariant
 
@@ -133,6 +141,44 @@ export function formatUnixDate(unixSeconds: number | null) {
     return 'Not set'
   }
   return REQUEST_DATE_FORMATTER.format(new Date(unixSeconds * 1000))
+}
+
+/**
+ * Relative wording for message streams, where every entry repeating the same
+ * absolute timestamp reads as noise. Falls back to the absolute date once the
+ * event is far enough away that "47 days ago" stops being useful.
+ */
+export function formatRelativeUnix(
+  unixSeconds: number | null,
+  nowMs: number = Date.now(),
+) {
+  if (unixSeconds === null) {
+    return 'Not set'
+  }
+  const deltaSeconds = unixSeconds - nowMs / 1000
+  const distance = Math.abs(deltaSeconds)
+  if (distance >= RELATIVE_HORIZON_SECONDS) {
+    return formatUnixDate(unixSeconds)
+  }
+  if (distance < SECONDS_PER_MINUTE) {
+    return 'just now'
+  }
+  if (distance < SECONDS_PER_HOUR) {
+    return RELATIVE_FORMATTER.format(
+      Math.trunc(deltaSeconds / SECONDS_PER_MINUTE),
+      'minute',
+    )
+  }
+  if (distance < SECONDS_PER_DAY) {
+    return RELATIVE_FORMATTER.format(
+      Math.trunc(deltaSeconds / SECONDS_PER_HOUR),
+      'hour',
+    )
+  }
+  return RELATIVE_FORMATTER.format(
+    Math.trunc(deltaSeconds / SECONDS_PER_DAY),
+    'day',
+  )
 }
 
 function oidText(value: unknown) {
