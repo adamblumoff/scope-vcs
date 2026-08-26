@@ -266,8 +266,7 @@ where
         ))
         .await
         .map_err(PostgresError::internal)?;
-    let mut result =
-        BTreeMap::<String, (u64, u64, Vec<RequestDiscussionReplyReadModel>)>::new();
+    let mut result = BTreeMap::<String, (u64, u64, Vec<RequestDiscussionReplyReadModel>)>::new();
     for row in rows {
         let discussion_id = row
             .try_get::<String>("", "discussion_id")
