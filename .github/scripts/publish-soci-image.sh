@@ -54,10 +54,37 @@ image_manifest="$(aws ecr batch-get-image \
   --output text)"
 readonly image_manifest
 
-jq -e '
+image_digest="$(jq -r '
+  [.manifests[] | select(.annotations["com.amazon.soci.index-digest"] != null)] |
+  if length == 1 then .[0].digest else empty end
+' <<<"$image_manifest")"
+readonly image_digest
+soci_digest="$(jq -r '
+  [.manifests[] | select(.annotations["com.amazon.soci.image-manifest-digest"] != null)] |
+  if length == 1 then .[0].digest else empty end
+' <<<"$image_manifest")"
+readonly soci_digest
+
+jq -e --arg image_digest "$image_digest" --arg soci_digest "$soci_digest" '
   .mediaType == "application/vnd.oci.image.index.v1+json" and
-  ([
-    .manifests[] |
-    select(.artifactType == "application/vnd.amazon.soci.index.v2+json")
+  ([.manifests[] |
+    select(
+      .digest == $image_digest and
+      .annotations["com.amazon.soci.index-digest"] == $soci_digest
+    )
+  ] | length) == 1 and
+  ([.manifests[] |
+    select(
+      .digest == $soci_digest and
+      .annotations["com.amazon.soci.image-manifest-digest"] == $image_digest
+    )
   ] | length) == 1
 ' <<<"$image_manifest" >/dev/null
+
+artifact_media_type="$(aws ecr describe-images \
+  --repository-name "$repository_name" \
+  --image-ids "imageDigest=$soci_digest" \
+  --query 'imageDetails[0].artifactMediaType' \
+  --output text)"
+readonly artifact_media_type
+test "$artifact_media_type" = "application/vnd.amazon.soci.index.v2+json"
