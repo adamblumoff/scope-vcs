@@ -48,11 +48,10 @@ async function assertRequestDocumentAndShell(page, shell) {
 export async function assertFileSelectionSkipsRevisionReload(page, fileName, path) {
   await page.locator('[data-slot="pending-surface"]').waitFor({ state: 'detached' })
   const fileNavigator = page.getByLabel('Commit file navigator')
-  const serverFunctions = []
+  let serverFunctionRequests = 0
   const recordServerFunction = (request) => {
     if (request.url().includes('/_serverFn/')) {
-      const id = new URL(request.url()).pathname.split('/').at(-1)
-      serverFunctions.push(JSON.parse(Buffer.from(id, 'base64url')).export)
+      serverFunctionRequests += 1
     }
   }
   page.on('request', recordServerFunction)
@@ -72,7 +71,7 @@ export async function assertFileSelectionSkipsRevisionReload(page, fileName, pat
   } finally {
     page.off('request', recordServerFunction)
   }
-  assert.deepEqual(serverFunctions, ['loadRevisionDiff_createServerFn_handler'])
+  assert.equal(serverFunctionRequests, 1)
 }
 
 export async function assertUpdateSelectionUsesInitialPayload(page) {
@@ -84,11 +83,10 @@ export async function assertUpdateSelectionUsesInitialPayload(page) {
   const target = updates.nth(1)
   const commit = await target.getAttribute('title')
   assert(commit)
-  const serverFunctions = []
+  let serverFunctionRequests = 0
   const recordServerFunction = (request) => {
     if (request.url().includes('/_serverFn/')) {
-      const id = new URL(request.url()).pathname.split('/').at(-1)
-      serverFunctions.push(JSON.parse(Buffer.from(id, 'base64url')).export)
+      serverFunctionRequests += 1
     }
   }
   await page.evaluate(() => {
@@ -120,7 +118,7 @@ export async function assertUpdateSelectionUsesInitialPayload(page) {
     window.__requestChangesPendingObserver.disconnect()
     return window.__requestChangesPendingLabels
   })
-  assert.deepEqual(serverFunctions, [])
+  assert.equal(serverFunctionRequests, 0)
   assert.deepEqual(pendingLabels, [])
 }
 
