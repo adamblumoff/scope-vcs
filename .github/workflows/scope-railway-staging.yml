@@ -20,7 +20,7 @@ jobs:
   prove:
     name: Deploy and smoke staging
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     environment: staging
     env:
@@ -186,7 +186,7 @@ jobs:
     name: Revoke staging proof access
     needs: prove
     if: always() && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     environment: staging
     env:
