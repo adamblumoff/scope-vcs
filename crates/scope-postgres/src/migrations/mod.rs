@@ -28,6 +28,7 @@ mod m0027_run_creation_sequence;
 mod m0028_repository_workflow_catalogs;
 mod m0029_exact_compatible_caches;
 mod m0030_cache_preparation_timings;
+mod m0031_provider_neutral_run_attempts;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -136,6 +137,10 @@ fn inventory() -> Vec<MigrationSpec> {
         ),
         spec(
             m0030_cache_preparation_timings::Migration,
+            MaintenanceRequired,
+        ),
+        spec(
+            m0031_provider_neutral_run_attempts::Migration,
             MaintenanceRequired,
         ),
     ]

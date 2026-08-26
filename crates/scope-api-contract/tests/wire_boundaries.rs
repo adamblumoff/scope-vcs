@@ -57,7 +57,6 @@ fn public_payload_fields_are_owned_wire_types() {
     ) {
         let _: RepositoryRunTrigger = summary.trigger;
         let _: RepositoryRunState = summary.state;
-        let _: RepositoryExecutionProvider = attempt.execution_provider;
         let _: RepositoryRunAttemptState = attempt.state;
         let _: Option<RepositoryRunTerminalReason> = attempt.terminal_reason;
         let _: RepositoryRunStepState = step.state;

@@ -13,12 +13,7 @@ use crate::error::DomainError;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_RUN_ATTEMPTS: u32 = 100;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ExecutionProvider {
-    Northflank,
-}
+pub const MAX_RUN_ATTEMPT_AGE_SECONDS: u64 = 24 * 60 * 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -46,7 +41,6 @@ pub struct RunAttempt {
     pub run_id: String,
     pub job_key: WorkflowJobId,
     pub number: u32,
-    pub execution_provider: ExecutionProvider,
     pub external_run_id: Option<String>,
     pub runtime_version: String,
     pub token_hash: String,
@@ -69,7 +63,6 @@ impl RunAttempt {
         run_id: impl Into<String>,
         job_key: WorkflowJobId,
         number: u32,
-        execution_provider: ExecutionProvider,
         external_run_id: Option<String>,
         runtime_version: impl Into<String>,
         token_hash: impl Into<String>,
@@ -91,7 +84,6 @@ impl RunAttempt {
             run_id: required("run attempt run id", run_id.into())?,
             job_key,
             number,
-            execution_provider,
             external_run_id: external_run_id
                 .map(|value| required("external run id", value))
                 .transpose()?,
@@ -444,8 +436,15 @@ impl RunAttempt {
         if self.state.is_terminal() {
             return Err(DomainError::conflict("attempt is terminal"));
         }
-        if now_unix < self.lease_expires_at_unix {
-            return Err(DomainError::conflict("attempt lease has not expired"));
+        if now_unix < self.lease_expires_at_unix
+            && now_unix
+                < self
+                    .created_at_unix
+                    .saturating_add(MAX_RUN_ATTEMPT_AGE_SECONDS)
+        {
+            return Err(DomainError::conflict(
+                "attempt lease and maximum runtime have not expired",
+            ));
         }
         self.finish_lost_or_requeue(run, job, steps, now_unix)
     }

@@ -1,6 +1,7 @@
 mod api;
 mod cache;
 mod checkout;
+mod deadline;
 mod execute;
 mod settings;
 mod workflow;
@@ -11,6 +12,7 @@ use settings::RuntimeSettings;
 
 fn main() -> anyhow::Result<()> {
     let settings = RuntimeSettings::from_env()?;
+    deadline::arm(settings.attempt_deadline_unix)?;
     let client = api::RuntimeClient::new(&settings)?;
     let claim = client.claim(&settings.bootstrap_token)?;
     let job_definition = workflow::domain_workflow_job(&claim.job.definition)?;

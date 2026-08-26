@@ -1,4 +1,4 @@
 mod coordinator;
-mod northflank;
+mod ecs;
 
 pub(crate) use coordinator::CloudExecutionCoordinator;

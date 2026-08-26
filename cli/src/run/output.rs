@@ -19,10 +19,9 @@ pub(super) fn detail_lines(detail: &RepositoryRunDetailResponse) -> Vec<String> 
         ));
         for attempt in &job_detail.attempts {
             lines.push(format!(
-                "    {} · {} · {:?}",
+                "    {} · {}",
                 attempt.id,
                 attempt_state_label(attempt),
-                attempt.execution_provider,
             ));
             lines.extend(environment_lines(
                 Some(job_detail.job.pinned_container_image.as_str()),
@@ -216,8 +215,7 @@ mod tests {
                 attempts: vec![RepositoryRunAttemptResponse {
                     id: "attempt-1".to_string(),
                     number: 1,
-                    execution_provider: scope_api_contract::RepositoryExecutionProvider::Northflank,
-                    external_run_id: Some("nf-run-1".to_string()),
+                    external_run_id: Some("external-run-1".to_string()),
                     runtime_version: "0.1.0".to_string(),
                     state: RepositoryRunAttemptState::Succeeded,
                     created_at_unix: 1,

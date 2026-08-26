@@ -207,20 +207,11 @@ pub struct RepositoryRunStepResponse {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
-pub enum RepositoryExecutionProvider {
-    Northflank,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RepositoryRunAttemptResponse {
     pub id: String,
     pub number: u32,
-    pub execution_provider: RepositoryExecutionProvider,
     pub external_run_id: Option<String>,
     pub runtime_version: String,
     pub state: RepositoryRunAttemptState,

@@ -56,6 +56,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0028_repository_workflow_catalogs",
     "m0029_exact_compatible_caches",
     "m0030_cache_preparation_timings",
+    "m0031_provider_neutral_run_attempts",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -240,6 +241,54 @@ async fn fresh_database_reaches_exact_latest_schema() {
             .try_get::<bool>("", "required_identity")
             .unwrap()
     );
+    let execution_provider_columns = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'scope_run_attempts'
+               AND column_name = 'execution_provider'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(execution_provider_columns, 0);
+    let runner_stop_columns = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'scope_run_attempts'
+               AND column_name = 'runner_stop_claimed_at_unix'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(runner_stop_columns, 1);
+    let runner_stop_completion_columns = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'scope_run_attempts'
+               AND column_name = 'runner_stop_completed_at_unix'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(runner_stop_completion_columns, 1);
     let scope_table_count = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -282,6 +331,99 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .try_get::<i64>("", "count")
         .unwrap();
     assert_eq!(review_columns, 0);
+}
+
+#[tokio::test]
+async fn provider_neutral_cutover_refuses_an_active_legacy_attempt() {
+    let (_target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(30))
+        .await
+        .unwrap();
+    db.execute_unprepared(
+        r#"INSERT INTO scope_users (id, handle, email, email_verified)
+         VALUES ('user_cutover', 'cutover', 'cutover@scope.test', TRUE);
+         INSERT INTO scope_repositories (
+             id, owner_handle, name, owner_user_id, publication_state,
+             change_version, repo_config, policy
+         ) VALUES (
+             'repo_cutover', 'cutover', 'repo', 'user_cutover', 'Ready',
+             1, '{}'::jsonb, '{}'::jsonb
+         );
+         INSERT INTO scope_workflow_revisions (digest, definition, created_at_unix)
+         VALUES (repeat('a', 64), '{"jobs":[{}]}'::jsonb, 1);
+         INSERT INTO scope_runs (
+             id, idempotency_key, repo_id, workflow_path, workflow_revision_digest,
+             trigger, requested_by_user_id, source, state, cancellation_requested,
+             created_at_unix, updated_at_unix, completed_at_unix
+         ) VALUES (
+             'run_cutover', 'cutover:run', 'repo_cutover', '.scope/workflow.yml',
+             repeat('a', 64), 'manual', 'user_cutover',
+             jsonb_build_object(
+                 'kind', 'ephemeral-git-bundle',
+                 'object', jsonb_build_object(
+                     'sha256', repeat('b', 64),
+                     'git_oid', repeat('c', 40)
+                 )
+             ),
+             'queued', FALSE, 1, 1, NULL
+         );
+         INSERT INTO scope_run_jobs (
+             run_id, job_key, pinned_container_image, state, last_attempt_number,
+             current_attempt_id, created_at_unix, updated_at_unix, completed_at_unix
+         ) VALUES (
+             'run_cutover', 'test',
+             'ghcr.io/scope/test@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+             'queued', 0, NULL, 1, 1, NULL
+         );
+         INSERT INTO scope_run_attempts (
+             id, run_id, job_key, number, execution_provider, external_run_id,
+             runtime_version, token_hash, token_expires_at_unix, state,
+             lease_expires_at_unix, last_heartbeat_at_unix, created_at_unix,
+             started_at_unix, completed_at_unix, terminal_reason, log_bytes,
+             first_truncated_step_index, provider_abort_requested_at_unix
+         ) VALUES (
+             'attempt_cutover', 'run_cutover', 'test', 1, 'northflank',
+             'northflank-job', 'legacy', repeat('e', 64), 100, 'running',
+             100, 2, 1, 2, NULL, NULL, 0, NULL, NULL
+         );
+         UPDATE scope_run_jobs
+         SET state = 'running', last_attempt_number = 1,
+             current_attempt_id = 'attempt_cutover', updated_at_unix = 2
+         WHERE run_id = 'run_cutover' AND job_key = 'test';
+         UPDATE scope_runs SET state = 'running', updated_at_unix = 2
+         WHERE id = 'run_cutover';"#,
+    )
+    .await
+    .unwrap();
+
+    let error = migrations::Migrator::up(db.as_ref(), Some(1))
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("requires every Northflank run attempt to be terminal")
+    );
+    let columns = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(*) AS count
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'scope_run_attempts'
+               AND column_name = 'execution_provider'"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(
+        columns, 1,
+        "the refused migration must roll back completely"
+    );
 }
 
 #[tokio::test]
@@ -614,7 +756,8 @@ async fn structured_attempt_migration_preserves_runs_and_replaces_execution_stat
             "{table} should be purged by the cloud execution cutover"
         );
     }
-    assert!(relation_exists(db.as_ref(), "idx_scope_run_attempts_provider_state").await);
+    assert!(!relation_exists(db.as_ref(), "idx_scope_run_attempts_provider_state").await);
+    assert!(relation_exists(db.as_ref(), "idx_scope_run_attempts_state").await);
     assert!(relation_exists(db.as_ref(), "idx_scope_run_attempts_external_run").await);
     assert!(!relation_exists(db.as_ref(), "scope_run_cache_objects").await);
     assert!(relation_exists(db.as_ref(), "scope_cache_objects").await);

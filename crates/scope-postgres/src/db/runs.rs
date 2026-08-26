@@ -159,12 +159,18 @@ impl RunStore {
         limit: u64,
     ) -> Result<Vec<String>, PostgresError> {
         let now_unix = entities::u64_to_i64(now_unix, "attempt recovery time")?;
+        let maximum_age_cutoff = now_unix
+            .saturating_sub(scope_domain::runs::attempt::MAX_RUN_ATTEMPT_AGE_SECONDS as i64);
         Ok(entities::run_attempt::Entity::find()
             .filter(
                 entities::run_attempt::Column::State
                     .is_in(["dispatching".to_string(), "running".to_string()]),
             )
-            .filter(entities::run_attempt::Column::LeaseExpiresAtUnix.lte(now_unix))
+            .filter(
+                entities::run_attempt::Column::LeaseExpiresAtUnix
+                    .lte(now_unix)
+                    .or(entities::run_attempt::Column::CreatedAtUnix.lte(maximum_age_cutoff)),
+            )
             .order_by_asc(entities::run_attempt::Column::LeaseExpiresAtUnix)
             .order_by_asc(entities::run_attempt::Column::Id)
             .limit(limit)

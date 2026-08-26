@@ -1,15 +1,15 @@
 use crate::error::ApiError;
 use scope_api_contract::{
-    RepositoryExecutionProvider, RepositoryRunAttemptResponse, RepositoryRunAttemptState,
-    RepositoryRunCacheColdReason, RepositoryRunCacheFinalState,
-    RepositoryRunCacheObservationResponse, RepositoryRunCachePreparation,
-    RepositoryRunCacheResponse, RepositoryRunCacheSetupObservationResponse,
-    RepositoryRunDetailResponse, RepositoryRunJobDetailResponse, RepositoryRunJobResponse,
-    RepositoryRunJobState, RepositoryRunStepResponse, RepositoryRunStepState,
-    RepositoryRunSummaryResponse, RepositoryRunTerminalReason,
+    RepositoryRunAttemptResponse, RepositoryRunAttemptState, RepositoryRunCacheColdReason,
+    RepositoryRunCacheFinalState, RepositoryRunCacheObservationResponse,
+    RepositoryRunCachePreparation, RepositoryRunCacheResponse,
+    RepositoryRunCacheSetupObservationResponse, RepositoryRunDetailResponse,
+    RepositoryRunJobDetailResponse, RepositoryRunJobResponse, RepositoryRunJobState,
+    RepositoryRunStepResponse, RepositoryRunStepState, RepositoryRunSummaryResponse,
+    RepositoryRunTerminalReason,
 };
 use scope_domain::runs::{
-    attempt::{AttemptState, ExecutionProvider},
+    attempt::AttemptState,
     cache::{
         definition::WorkflowCache,
         observation::{
@@ -72,7 +72,6 @@ pub(super) fn build_run_detail_response(
             .push(RepositoryRunAttemptResponse {
                 id: attempt.id,
                 number: attempt.number,
-                execution_provider: execution_provider(attempt.execution_provider),
                 external_run_id: attempt.external_run_id,
                 runtime_version: attempt.runtime_version,
                 state: attempt_state(attempt.state),
@@ -189,12 +188,6 @@ fn cache_responses(
         ));
     }
     Ok(caches)
-}
-
-fn execution_provider(provider: ExecutionProvider) -> RepositoryExecutionProvider {
-    match provider {
-        ExecutionProvider::Northflank => RepositoryExecutionProvider::Northflank,
-    }
 }
 
 fn job_state(state: RunJobState) -> RepositoryRunJobState {

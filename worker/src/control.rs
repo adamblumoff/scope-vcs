@@ -10,13 +10,13 @@ pub(crate) async fn run(
     settings: WorkerSettings,
     health: WorkerHealth,
 ) -> anyhow::Result<()> {
-    let execution = settings
-        .execution
-        .clone()
-        .map(|cloud| {
+    let execution = match settings.execution.clone() {
+        Some(cloud) => Some(
             CloudExecutionCoordinator::new(metadata.clone(), cloud, settings.worker_id.clone())
-        })
-        .transpose()?;
+                .await,
+        ),
+        None => None,
+    };
     loop {
         if !super::schema_ready_or_wait(&metadata, &health).await {
             return Ok(());
@@ -60,6 +60,9 @@ pub(crate) async fn run(
             .await;
         }
         if let Some(execution) = &execution {
+            if let Err(error) = execution.cleanup_terminal(super::unix_now()?).await {
+                tracing::error!(error = %error, "terminal cloud task cleanup failed");
+            }
             if let Err(error) = execution.abort_canceled(super::unix_now()?).await {
                 tracing::error!(error = %error, "cloud run cancellation reconciliation failed");
             }

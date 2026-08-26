@@ -5,6 +5,7 @@ pub struct RuntimeSettings {
     pub api_url: String,
     pub attempt_id: String,
     pub bootstrap_token: String,
+    pub attempt_deadline_unix: u64,
     pub work_root: PathBuf,
 }
 
@@ -14,10 +15,14 @@ impl RuntimeSettings {
         if !(api_url.starts_with("https://") || api_url.starts_with("http://127.0.0.1")) {
             bail!("SCOPE_API_URL must use HTTPS outside local development");
         }
+        let attempt_deadline_unix = required("SCOPE_ATTEMPT_DEADLINE_UNIX")?
+            .parse::<u64>()
+            .context("SCOPE_ATTEMPT_DEADLINE_UNIX must be an unsigned Unix timestamp")?;
         Ok(Self {
             api_url,
             attempt_id: required("SCOPE_ATTEMPT_ID")?,
             bootstrap_token: required("SCOPE_BOOTSTRAP_TOKEN")?,
+            attempt_deadline_unix,
             work_root: env::var_os("SCOPE_WORK_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/scope/work")),

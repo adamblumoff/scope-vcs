@@ -1,6 +1,7 @@
-use super::northflank::{NorthflankClient, StartError};
+use super::ecs::{EcsClient, StartError};
 use crate::settings::CloudExecutionSettings;
-use scope_domain::runs::step::AttemptConclusion;
+use anyhow::Context as _;
+use scope_domain::runs::{attempt::MAX_RUN_ATTEMPT_AGE_SECONDS, step::AttemptConclusion};
 use scope_postgres::db::MetadataStore;
 use sha2::{Digest as _, Sha256};
 use std::time::Duration;
@@ -9,23 +10,23 @@ const DISPATCH_LEASE: Duration = Duration::from_secs(15 * 60);
 
 pub(crate) struct CloudExecutionCoordinator {
     metadata: MetadataStore,
-    northflank: NorthflankClient,
+    ecs: EcsClient,
     origin_id: String,
     settings: CloudExecutionSettings,
 }
 
 impl CloudExecutionCoordinator {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         metadata: MetadataStore,
         settings: CloudExecutionSettings,
         origin_id: String,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             metadata,
-            northflank: NorthflankClient::new(settings.clone())?,
+            ecs: EcsClient::new(settings.clone()).await,
             origin_id,
             settings,
-        })
+        }
     }
 
     pub(crate) async fn dispatch_available(&self, now_unix: u64) -> anyhow::Result<usize> {
@@ -77,11 +78,12 @@ impl CloudExecutionCoordinator {
                 .job(&claim.job.key)
                 .ok_or_else(|| anyhow::anyhow!("dispatched workflow job definition is missing"))?;
             match self
-                .northflank
+                .ecs
                 .start(
                     definition.container().image(),
                     &attempt_id,
                     &bootstrap_token,
+                    now_unix + MAX_RUN_ATTEMPT_AGE_SECONDS,
                 )
                 .await
             {
@@ -95,7 +97,7 @@ impl CloudExecutionCoordinator {
                     tracing::info!(attempt_id, external_run_id, run_id = %claim.run.id, job = %claim.job.key.as_str(), "dispatched cloud run");
                 }
                 Err(StartError::Rejected(error)) => {
-                    tracing::error!(attempt_id, error = %error, "Northflank rejected cloud run");
+                    tracing::error!(attempt_id, error = %error, "ECS rejected cloud run");
                     let claim = self
                         .metadata
                         .runs()
@@ -114,10 +116,15 @@ impl CloudExecutionCoordinator {
                         )
                         .await
                         .map_err(db_error)?;
+                    self.metadata
+                        .runs()
+                        .complete_cloud_task_absence(&attempt_id, now_unix)
+                        .await
+                        .map_err(db_error)?;
                     self.publish_status_change(&claim).await;
                 }
                 Err(StartError::Ambiguous(error)) => {
-                    tracing::warn!(attempt_id, error = %error, "Northflank dispatch outcome is ambiguous; lease recovery owns resolution");
+                    tracing::warn!(attempt_id, error = %error, "ECS dispatch outcome is ambiguous; lease recovery and task cleanup own resolution");
                 }
             }
             dispatched += 1;
@@ -132,31 +139,45 @@ impl CloudExecutionCoordinator {
             .claim_cloud_attempt_aborts(now_unix, self.settings.max_concurrency as u64)
             .await
             .map_err(db_error)?;
-        let mut aborted = 0;
+        let mut tasks = tokio::task::JoinSet::new();
         for attempt in attempts {
-            match self.northflank.abort(&attempt.external_run_id).await {
-                Ok(()) => {
-                    let claim = self
-                        .metadata
-                        .runs()
-                        .confirm_provider_cancellation(&attempt.attempt_id, now_unix)
-                        .await
-                        .map_err(db_error)?;
-                    self.publish_status_change(&claim).await;
-                    aborted += 1;
-                    tracing::info!(attempt_id = %attempt.attempt_id, external_run_id = %attempt.external_run_id, "aborted canceled cloud run");
-                }
-                Err(error) => {
-                    self.metadata
-                        .runs()
-                        .release_cloud_attempt_abort(&attempt.attempt_id)
-                        .await
-                        .map_err(db_error)?;
-                    tracing::warn!(attempt_id = %attempt.attempt_id, error = %error, "failed to abort canceled cloud run; will retry");
-                }
+            let metadata = self.metadata.clone();
+            let ecs = self.ecs.clone();
+            tasks.spawn(
+                async move { abort_canceled_attempt(metadata, ecs, attempt, now_unix).await },
+            );
+        }
+        let mut aborted = 0;
+        while let Some(result) = tasks.join_next().await {
+            if let Some(claim) = result.context("cloud cancellation task panicked")?? {
+                self.publish_status_change(&claim).await;
+                aborted += 1;
             }
         }
         Ok(aborted)
+    }
+
+    pub(crate) async fn cleanup_terminal(&self, now_unix: u64) -> anyhow::Result<usize> {
+        let tasks = self
+            .metadata
+            .runs()
+            .claim_terminal_cloud_task_stops(now_unix, self.settings.max_concurrency as u64)
+            .await
+            .map_err(db_error)?;
+        let mut reconciliations = tokio::task::JoinSet::new();
+        for task in tasks {
+            let metadata = self.metadata.clone();
+            let ecs = self.ecs.clone();
+            reconciliations
+                .spawn(async move { cleanup_terminal_task(metadata, ecs, task, now_unix).await });
+        }
+        let mut stopped = 0;
+        while let Some(result) = reconciliations.join_next().await {
+            if result.context("terminal cloud cleanup task panicked")?? {
+                stopped += 1;
+            }
+        }
+        Ok(stopped)
     }
 
     async fn publish_status_change(&self, claim: &scope_postgres::db::DispatchClaim) {
@@ -168,6 +189,73 @@ impl CloudExecutionCoordinator {
             scope_api_contract::RunChangeKind::StatusChanged,
         )
         .await;
+    }
+}
+
+async fn abort_canceled_attempt(
+    metadata: MetadataStore,
+    ecs: EcsClient,
+    attempt: scope_postgres::db::CloudTaskStop,
+    now_unix: u64,
+) -> anyhow::Result<Option<scope_postgres::db::DispatchClaim>> {
+    match ecs
+        .stop_terminal_task(&attempt.attempt_id, attempt.external_run_id.as_deref())
+        .await
+    {
+        Ok(()) => {
+            let claim = metadata
+                .runs()
+                .confirm_provider_cancellation(&attempt.attempt_id, now_unix)
+                .await
+                .map_err(db_error)?;
+            metadata
+                .runs()
+                .complete_cloud_task_stop(&attempt.attempt_id, now_unix)
+                .await
+                .map_err(db_error)?;
+            tracing::info!(attempt_id = %attempt.attempt_id, external_run_id = ?attempt.external_run_id, "aborted canceled cloud run");
+            Ok(Some(claim))
+        }
+        Err(error) => {
+            metadata
+                .runs()
+                .release_cloud_task_stop_claim(&attempt.attempt_id)
+                .await
+                .map_err(db_error)?;
+            tracing::warn!(attempt_id = %attempt.attempt_id, error = %error, "failed to abort canceled cloud run; will retry");
+            Ok(None)
+        }
+    }
+}
+
+async fn cleanup_terminal_task(
+    metadata: MetadataStore,
+    ecs: EcsClient,
+    task: scope_postgres::db::CloudTaskStop,
+    now_unix: u64,
+) -> anyhow::Result<bool> {
+    match ecs
+        .stop_terminal_task(&task.attempt_id, task.external_run_id.as_deref())
+        .await
+    {
+        Ok(()) => {
+            metadata
+                .runs()
+                .complete_cloud_task_stop(&task.attempt_id, now_unix)
+                .await
+                .map_err(db_error)?;
+            tracing::info!(attempt_id = %task.attempt_id, "reconciled terminal cloud task");
+            Ok(true)
+        }
+        Err(error) => {
+            metadata
+                .runs()
+                .release_cloud_task_stop_claim(&task.attempt_id)
+                .await
+                .map_err(db_error)?;
+            tracing::warn!(attempt_id = %task.attempt_id, error = %error, "failed to reconcile terminal cloud task; will retry");
+            Ok(false)
+        }
     }
 }
 

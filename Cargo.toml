@@ -28,6 +28,9 @@ repository = "https://github.com/adamblumoff/scope-vcs"
 # standalone CLI release stages those two crates outside this workspace.
 [workspace.dependencies]
 anyhow = "1.0.100"
+aws-config = { version = "1.11.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
+aws-sdk-ecs = "1.140.0"
+aws-sdk-secretsmanager = "1.114.0"
 axum = "0.8.7"
 base64 = "0.22.1"
 chacha20poly1305 = "0.10.1"

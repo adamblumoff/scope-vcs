@@ -61,12 +61,12 @@ pub(crate) struct WorkerSettings {
 #[derive(Clone)]
 pub(crate) struct CloudExecutionSettings {
     pub(crate) api_url: String,
-    pub(crate) northflank_api_url: String,
-    pub(crate) northflank_api_token: String,
-    pub(crate) northflank_project_id: String,
-    pub(crate) northflank_job_id: String,
-    pub(crate) northflank_deployment_plan: String,
-    pub(crate) northflank_registry_credentials_id: Option<String>,
+    pub(crate) aws_region: String,
+    pub(crate) ecs_cluster_arn: String,
+    pub(crate) ecs_subnet_ids: Vec<String>,
+    pub(crate) ecs_security_group_id: String,
+    pub(crate) ecs_execution_role_arn: String,
+    pub(crate) ecs_log_group: String,
     pub(crate) runtime_version: String,
     pub(crate) max_concurrency: usize,
 }
@@ -175,19 +175,33 @@ fn cloud_execution_from_env() -> anyhow::Result<Option<CloudExecutionSettings>> 
     }
     Ok(Some(CloudExecutionSettings {
         api_url,
-        northflank_api_url: non_empty_env("NORTHFLANK_API_URL")
-            .unwrap_or_else(|| "https://api.northflank.com".to_string())
-            .trim_end_matches('/')
-            .to_string(),
-        northflank_api_token: required_env("NORTHFLANK_API_TOKEN")?,
-        northflank_project_id: required_env("NORTHFLANK_PROJECT_ID")?,
-        northflank_job_id: required_env("NORTHFLANK_JOB_ID")?,
-        northflank_deployment_plan: required_env("NORTHFLANK_DEPLOYMENT_PLAN")?,
-        northflank_registry_credentials_id: non_empty_env("NORTHFLANK_REGISTRY_CREDENTIALS_ID"),
+        aws_region: required_env("AWS_REGION")?,
+        ecs_cluster_arn: required_env("SCOPE_ECS_CLUSTER_ARN")?,
+        ecs_subnet_ids: comma_separated_env("SCOPE_ECS_SUBNET_IDS")?,
+        ecs_security_group_id: required_env("SCOPE_ECS_SECURITY_GROUP_ID")?,
+        ecs_execution_role_arn: required_env("SCOPE_ECS_EXECUTION_ROLE_ARN")?,
+        ecs_log_group: required_env("SCOPE_ECS_LOG_GROUP")?,
         runtime_version: non_empty_env("SCOPE_RUNTIME_VERSION")
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
         max_concurrency,
     }))
+}
+
+fn comma_separated_env(name: &str) -> anyhow::Result<Vec<String>> {
+    parse_comma_separated(name, &required_env(name)?)
+}
+
+fn parse_comma_separated(name: &str, value: &str) -> anyhow::Result<Vec<String>> {
+    let values = value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        anyhow::bail!("{name} must contain at least one value");
+    }
+    Ok(values)
 }
 
 fn required_env(name: &str) -> anyhow::Result<String> {
@@ -252,5 +266,14 @@ mod tests {
             WorkerRole::Cleanup
         );
         assert!(parse_worker_role(Some("worker")).is_err());
+    }
+
+    #[test]
+    fn comma_separated_settings_ignore_only_empty_segments() {
+        assert_eq!(
+            parse_comma_separated("SUBNETS", " subnet-a,subnet-b ,, ").unwrap(),
+            ["subnet-a", "subnet-b"]
+        );
+        assert!(parse_comma_separated("SUBNETS", " , ").is_err());
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     error::PostgresError,
 };
 use scope_domain::runs::{
-    attempt::{AttemptState, ExecutionProvider, RunAttempt},
+    attempt::{AttemptState, RunAttempt},
     cache::observation::{
         AttemptCacheObservation, AttemptCachePreparationTiming, AttemptCacheSetupObservation,
         CacheColdReason, CacheFinalState, CachePreparation,
