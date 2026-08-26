@@ -51,6 +51,7 @@ function discussion(id: string): RequestDiscussion {
     latest_replies: [],
     opened_position: 1,
     reply_count: 0,
+    root_reply_count: 0,
     request_id: 'request',
     resolved_at_unix: null,
     resolved_by: null,

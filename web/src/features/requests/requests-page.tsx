@@ -24,13 +24,13 @@ import {
   type RequestQueuePages,
 } from './request-list-model'
 import {
-  formatUnixDate,
   requestAudienceLabel,
   requestAuthorRoleLabel,
   requestMergeabilityLabel,
   requestStatusLabel,
   requestStatusTone,
 } from './request-labels'
+import { RequestAbsoluteTimestamp } from './request-timestamp'
 
 const SECTION_DETAILS = {
   your_work: {
@@ -388,9 +388,21 @@ function QueueDate({
   section: RequestQueueSection
 }) {
   if (section === 'open' && request.submitted_at_unix !== null) {
-    return <span className="tabular-nums">Submitted {formatUnixDate(request.submitted_at_unix)}</span>
+    return (
+      <RequestAbsoluteTimestamp
+        className="tabular-nums"
+        prefix="Submitted "
+        value={request.submitted_at_unix}
+      />
+    )
   }
-  return <span className="tabular-nums">Updated {formatUnixDate(request.updated_at_unix)}</span>
+  return (
+    <RequestAbsoluteTimestamp
+      className="tabular-nums"
+      prefix="Updated "
+      value={request.updated_at_unix}
+    />
+  )
 }
 
 function errorMessage(error: unknown, fallback: string) {

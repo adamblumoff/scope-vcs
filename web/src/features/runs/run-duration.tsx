@@ -1,4 +1,4 @@
-import { useRunClock } from './run-clock'
+import { useUnixClock } from '@/lib/use-unix-clock'
 import { elapsedDuration } from './run-formatting'
 
 /**
@@ -12,7 +12,7 @@ export function RunDuration({
   end: number | null
   start: number | null
 }) {
-  const nowUnix = useRunClock()
+  const nowUnix = useUnixClock()
   const value = elapsedDuration(start, end, nowUnix)
 
   return (

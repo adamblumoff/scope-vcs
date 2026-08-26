@@ -246,14 +246,6 @@ export function orderedDiscussions(collection: DiscussionCollection) {
   })
 }
 
-export function compactDiscussionSummary(body: string | null) {
-  if (!body) return 'Update'
-  return body
-    .split('\n')
-    .map((line) => line.trim().replace(/^#{1,6}\s+/, ''))
-    .find(Boolean) ?? 'Untitled discussion'
-}
-
 function unique(values: string[]) {
   return [...new Set(values)]
 }

@@ -413,6 +413,7 @@ function optimisticDiscussion({
     opened_position: position,
     pending: 'sending',
     reply_count: 0,
+    root_reply_count: 0,
     request_id: requestId,
     resolved_at_unix: null,
     resolved_by: null,

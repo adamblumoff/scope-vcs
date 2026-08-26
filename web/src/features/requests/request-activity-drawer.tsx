@@ -5,11 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import * as Dialog from '@radix-ui/react-dialog'
 import { History, TriangleAlert, X } from 'lucide-react'
-import {
-  eventKindLabel,
-  formatUnixDate,
-  requestEventBody,
-} from './request-labels'
+import { eventKindLabel, requestEventBody } from './request-labels'
+import { RequestTimestamp } from './request-timestamp'
 import type {
   RequestActivityPage,
   RequestActorSummary,
@@ -108,9 +105,10 @@ export function RequestActivityDrawer({
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="outline">{eventKindLabel(event.kind)}</Badge>
-                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                        {formatUnixDate(event.created_at_unix)}
-                      </span>
+                      <RequestTimestamp
+                        className="text-xs text-muted-foreground"
+                        value={event.created_at_unix}
+                      />
                       <span className="text-xs text-muted-foreground">
                         {event.actor.handle}
                       </span>

@@ -7,20 +7,16 @@ import {
   readRequestDiscussionScroll,
   writeRequestDiscussionScroll,
 } from './request-discussion-cache'
-import {
-  RequestDiscussionComposer,
-} from './request-discussion-composer'
-import { RequestDiscussionThread } from './request-discussion-thread'
-import type {
-  RequestDiscussionThreadActions,
-} from './use-request-discussion-replies'
+import { RequestDiscussionComposer } from './request-discussion-composer'
 import type { RequestDiscussionActions } from './request-discussion-store'
 import { useRequestDiscussionStore } from './request-discussion-store'
+import { RequestDiscussionThread } from './request-discussion-thread'
 import type {
   RequestActorSummary,
   RequestDiscussion,
   RequestDiscussionPage,
 } from './request-discussion-types'
+import type { RequestDiscussionThreadActions } from './use-request-discussion-replies'
 
 export function RequestDiscussionWorkbench({
   actions,
@@ -55,7 +51,7 @@ export function RequestDiscussionWorkbench({
     params,
     repoId,
   })
-  const [activeComposer, setActiveComposer] = useState<string | 'new' | null>(null)
+  const [activeComposer, setActiveComposer] = useState<string | null>(null)
 
   useEffect(() => {
     const scrollContainer = document.querySelector<HTMLElement>('#main-content')
@@ -76,36 +72,12 @@ export function RequestDiscussionWorkbench({
     return () => cancelAnimationFrame(frame)
   }, [focusedDiscussionId, store.cacheKey])
 
-  const canStartDiscussion = permissions.canOpenDiscussion &&
+  const canStartDiscussion =
+    permissions.canOpenDiscussion &&
     !['Closed', 'Merged'].includes(request.state)
 
   return (
     <section aria-label="Request discussion">
-      {canStartDiscussion ? (
-        <div className="flex justify-end px-5 py-3 lg:px-7">
-          <Button
-            onClick={() => setActiveComposer('new')}
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            Start discussion
-          </Button>
-        </div>
-      ) : null}
-      {activeComposer === 'new' ? (
-        <div className="border-b border-border px-5 py-5 lg:px-7">
-          <RequestDiscussionComposer
-            onCancel={() => setActiveComposer(null)}
-            onSubmit={async (body) => {
-              const posted = await store.create(body)
-              if (posted) setActiveComposer(null)
-              return posted
-            }}
-          />
-        </div>
-      ) : null}
-
       {store.error ? (
         <div
           className="flex items-center gap-2 border-b border-border px-5 py-3 text-sm text-destructive lg:px-7"
@@ -113,6 +85,20 @@ export function RequestDiscussionWorkbench({
         >
           <CircleAlert className="size-4" />
           {store.error}
+        </div>
+      ) : null}
+
+      {store.collection.nextCursor ? (
+        <div className="border-b border-border px-5 py-4 text-center lg:px-7">
+          <Button
+            disabled={store.loadingMore}
+            onClick={() => void store.loadMore()}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            {store.loadingMore ? 'Loading…' : 'Load earlier discussions'}
+          </Button>
         </div>
       ) : null}
 
@@ -140,23 +126,15 @@ export function RequestDiscussionWorkbench({
         </div>
       ) : (
         <EmptyState
-          description="Updates and conversations will appear here in order."
+          description="Open one to ask a question or leave review notes."
           icon={<MessageSquare />}
-          title="No timeline activity yet"
+          title="No discussions yet"
         />
       )}
 
-      {store.collection.nextCursor ? (
-        <div className="border-t border-border px-5 py-5 text-center lg:px-7">
-          <Button
-            disabled={store.loadingMore}
-            onClick={() => void store.loadMore()}
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            {store.loadingMore ? 'Loading…' : 'Load earlier activity'}
-          </Button>
+      {canStartDiscussion ? (
+        <div className="border-t border-border px-5 py-4 lg:px-7">
+          <RequestDiscussionComposer onSubmit={store.create} />
         </div>
       ) : null}
     </section>

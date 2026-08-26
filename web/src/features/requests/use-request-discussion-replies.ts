@@ -105,7 +105,11 @@ export function useRequestDiscussionReplies({
     }
   }
 
-  function expandReplies() {
+  function toggleReplies() {
+    if (expandedReplies) {
+      setExpandedReplies(false)
+      return
+    }
     onExpandedChange(discussion.id, true)
     setExpandedReplies(true)
     if (
@@ -227,7 +231,6 @@ export function useRequestDiscussionReplies({
     entireReplyTreeExposed,
     expandedReplies,
     expandedReplyIds,
-    expandReplies,
     loadOlderReplies,
     loadReplyChildren,
     loadingReplies,
@@ -240,6 +243,7 @@ export function useRequestDiscussionReplies({
     replyBranches,
     replyError,
     setQuoteId,
+    toggleReplies,
     toggleReplyChildren,
     visibleReplies,
   }

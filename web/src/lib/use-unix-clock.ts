@@ -20,9 +20,8 @@ function tick() {
 }
 
 function subscribe(listener: () => void) {
-  // The snapshot freezes when the last runs page unmounts, so a reader coming
-  // back through client navigation would otherwise see times from their last
-  // visit until the first tick lands.
+  // The snapshot freezes without subscribers. Refresh it when the first
+  // timestamp mounts so client navigation never shows the previous visit.
   if (listeners.size === 0) tick()
   listeners.add(listener)
   timer ??= setInterval(tick, TICK_MS)
@@ -51,10 +50,7 @@ function serverSnapshot() {
   return nowUnix
 }
 
-/**
- * One clock for every relative time and running duration on a runs page, so
- * they advance together instead of each surface owning a timer.
- */
-export function useRunClock() {
+/** One clock for every live timestamp, so the app owns a single timer. */
+export function useUnixClock() {
   return useSyncExternalStore(subscribe, snapshot, serverSnapshot)
 }
