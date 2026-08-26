@@ -20,9 +20,6 @@ export function RequestDiscussionByline({
 }) {
   return (
     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-      {small ? (
-        <RequestDiscussionActorAvatar handle={author.handle} small />
-      ) : null}
       <span
         className={cn('truncate font-semibold', small ? 'text-[13px]' : 'text-sm')}
       >
