@@ -16,7 +16,9 @@ export async function assertRequestCrossLinksStayInDocument(page) {
   const anchoredThread = page.locator(
     '#discussion-discussion_demo_revision_jitter',
   )
-  await anchoredThread.getByRole('link', { name: /Revision/ }).click()
+  const revisionLink = anchoredThread.getByRole('link', { name: /Revision/ })
+  await waitForClientHydration(page, revisionLink)
+  await revisionLink.click()
   await page.waitForURL((url) => (
     url.pathname.endsWith('/requests/req_demo_ready/changes') &&
     url.searchParams.get('revision') === 'event_req_demo_ready_revision_2'
@@ -24,9 +26,11 @@ export async function assertRequestCrossLinksStayInDocument(page) {
   await assertRequestDocumentAndShell(page, { documentSentinel, heading, navigation })
   assert.equal(await page.getByRole('textbox').count(), 0)
 
-  await page
-    .getByRole('link', { name: /The bounded jitter looks right/ })
-    .click()
+  const discussionLink = page.getByRole('link', {
+    name: /The bounded jitter looks right/,
+  })
+  await waitForClientHydration(page, discussionLink)
+  await discussionLink.click()
   await page.waitForURL((url) => (
     url.pathname.endsWith('/requests/req_demo_ready') &&
     url.searchParams.get('discussion') === 'discussion_demo_revision_jitter' &&
@@ -35,6 +39,15 @@ export async function assertRequestCrossLinksStayInDocument(page) {
   await page.locator('.request-discussion-thread').first().waitFor()
   await assertRequestDocumentAndShell(page, { documentSentinel, heading, navigation })
   return { heading, navigation }
+}
+
+async function waitForClientHydration(page, locator) {
+  const element = await locator.elementHandle()
+  assert(element)
+  await page.waitForFunction(
+    (target) => Object.keys(target).some((key) => key.startsWith('__reactProps$')),
+    element,
+  )
 }
 
 async function assertRequestDocumentAndShell(page, shell) {
