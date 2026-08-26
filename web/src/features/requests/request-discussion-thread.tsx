@@ -13,11 +13,7 @@ import { RequestReplyComposer } from './request-discussion-composer'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
 import { RequestDiscussionReplyToggle } from './request-discussion-reply-toggle'
 import { RequestDiscussionReplyTree } from './request-discussion-reply-tree'
-import {
-  requestDiscussionRailColor,
-  requestDiscussionThreadState,
-  showsThreadReplyToggle,
-} from './request-discussion-thread-state'
+import { requestDiscussionRailColor } from './request-discussion-thread-state'
 import type {
   RequestDiscussion,
   RequestDiscussionView,
@@ -63,7 +59,6 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     discussion.status === 'Resolved' &&
     Boolean(discussion.initiallyResolved) &&
     !discussion.expanded
-  const state = requestDiscussionThreadState(discussion)
   const {
     availableReplies,
     canPostReply,
@@ -121,7 +116,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
           aria-hidden="true"
           className={cn(
             'absolute inset-x-0 bottom-0 top-10 mx-auto w-0.5 rounded-full',
-            requestDiscussionRailColor(state),
+            requestDiscussionRailColor(discussion),
           )}
         />
       </div>
@@ -184,11 +179,8 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
         )}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {showsThreadReplyToggle({
-            expanded: expandedReplies,
-            rootReplyCount: discussion.root_reply_count,
-            visibleCount: visibleReplies.length,
-          }) ? (
+          {expandedReplies ||
+          discussion.root_reply_count > visibleReplies.length ? (
             <RequestDiscussionReplyToggle
               count={discussion.root_reply_count}
               expanded={expandedReplies}

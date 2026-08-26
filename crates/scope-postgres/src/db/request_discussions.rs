@@ -35,6 +35,7 @@ use {
 #[derive(Clone, Debug)]
 pub struct RequestDiscussionReadModel {
     pub discussion: RequestDiscussion,
+    pub anchor_revision_position: Option<u64>,
     pub reply_count: u64,
     /// Replies that answer the discussion itself. The thread's reply control
     /// reveals these, so it counts them rather than the whole tree.
@@ -70,13 +71,6 @@ impl RequestStore {
         limit: u64,
     ) -> Result<RequestRevisionWindow, PostgresError> {
         revision_window_for_request(self.db.as_ref(), request_id, selected_revision_id, limit).await
-    }
-
-    pub async fn request_revision_positions(
-        &self,
-        request_id: &str,
-    ) -> Result<BTreeMap<String, u64>, PostgresError> {
-        revision_positions_for_request(self.db.as_ref(), request_id).await
     }
 
     pub async fn request_discussions_page(
@@ -139,6 +133,15 @@ impl RequestStore {
         discussions: Vec<RequestDiscussion>,
         viewer_user_id: Option<&str>,
     ) -> Result<RequestDiscussionReadBatch, PostgresError> {
+        let revision_positions = match discussions
+            .iter()
+            .find(|discussion| discussion.anchor.is_some())
+        {
+            Some(discussion) => {
+                revision_positions_for_request(self.db.as_ref(), &discussion.request_id).await?
+            }
+            None => BTreeMap::new(),
+        };
         let ids = discussions
             .iter()
             .map(|discussion| discussion.id.clone())
@@ -164,6 +167,21 @@ impl RequestStore {
             .collect::<Vec<_>>();
         let mut models = Vec::with_capacity(discussions.len());
         for discussion in discussions {
+            let anchor_revision_position = discussion
+                .anchor
+                .as_ref()
+                .map(|anchor| {
+                    revision_positions
+                        .get(&anchor.revision_id)
+                        .copied()
+                        .ok_or_else(|| {
+                            PostgresError::internal_message(format!(
+                                "request discussion anchor references unknown revision {}",
+                                anchor.revision_id
+                            ))
+                        })
+                })
+                .transpose()?;
             let (reply_count, root_reply_count, latest_replies) =
                 previews.get(&discussion.id).cloned().unwrap_or_default();
             user_ids.extend(
@@ -174,6 +192,7 @@ impl RequestStore {
             let unread_count = unread_counts.get(&discussion.id).copied().unwrap_or(0);
             models.push(RequestDiscussionReadModel {
                 discussion,
+                anchor_revision_position,
                 reply_count,
                 root_reply_count,
                 latest_replies,
