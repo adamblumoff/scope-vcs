@@ -126,7 +126,7 @@ jobs:
             'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
             'SCOPE_DEV_USER_EMAIL=smoke@example.test' \
             'SCOPE_DEV_USER_HANDLE=dev' > .env.local
-          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\n' \
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\nVITE_SCOPE_WEB_FORCE_SIGNED_OUT=1\n' \
             "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" \
             "$CLERK_DEVELOPMENT_SECRET_KEY" > web/.env.local
 
