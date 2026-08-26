@@ -279,7 +279,7 @@ Resources:
           - Sid: DeregisterAttemptTaskDefinitions
             Effect: Allow
             Action: ecs:DeregisterTaskDefinition
-            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/scope-runner-attempt_*:*
+            Resource: "*"
           - Sid: RunScopeTaskDefinitions
             Effect: Allow
             Action: ecs:RunTask
