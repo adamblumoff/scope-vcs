@@ -28,7 +28,7 @@ jobs:
 
   deployment-tests:
     name: Check backend deployment cutover
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -44,7 +44,7 @@ jobs:
   deploy-backend:
     name: Deploy backend
     needs: [checks, deployment-tests]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     if: >-
       github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       (inputs.deploy_cache || inputs.deploy_worker || inputs.deploy_api)
