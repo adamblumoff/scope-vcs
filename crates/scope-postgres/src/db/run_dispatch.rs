@@ -4,18 +4,17 @@ use super::{
     runs::{DispatchOffer, unique_conflict, workflow_revision_for_run},
 };
 use crate::error::PostgresError;
-use scope_domain::runs::{
-    attempt::ExecutionProvider,
-    job::{RunJobState, reconcile_run},
-};
+use scope_domain::runs::job::{RunJobState, reconcile_run};
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel, Statement, TransactionTrait,
 };
 
+const CLOUD_TASK_STOP_CLAIM_LEASE_SECS: u64 = 15 * 60;
+
 #[derive(Clone, Debug)]
-pub struct CloudAttemptAbort {
+pub struct CloudTaskStop {
     pub attempt_id: String,
-    pub external_run_id: String,
+    pub external_run_id: Option<String>,
 }
 
 impl RunStore {
@@ -23,7 +22,8 @@ impl RunStore {
         &self,
         now_unix: u64,
         limit: u64,
-    ) -> Result<Vec<CloudAttemptAbort>, PostgresError> {
+    ) -> Result<Vec<CloudTaskStop>, PostgresError> {
+        let claim_cutoff = now_unix.saturating_sub(CLOUD_TASK_STOP_CLAIM_LEASE_SECS);
         let rows = self
             .db
             .query_all(Statement::from_sql_and_values(
@@ -33,13 +33,14 @@ impl RunStore {
                JOIN scope_runs run ON run.id = attempt.run_id
                WHERE run.cancellation_requested = TRUE
                  AND attempt.state IN ('dispatching', 'running')
-                 AND attempt.external_run_id IS NOT NULL
-                 AND attempt.provider_abort_requested_at_unix IS NULL
+                 AND attempt.runner_stop_completed_at_unix IS NULL
+                 AND (attempt.runner_stop_claimed_at_unix IS NULL
+                      OR attempt.runner_stop_claimed_at_unix <= $3)
                ORDER BY attempt.created_at_unix, attempt.id
                FOR UPDATE OF attempt SKIP LOCKED LIMIT $1
              )
              UPDATE scope_run_attempts attempt
-             SET provider_abort_requested_at_unix = $2
+             SET runner_stop_claimed_at_unix = $2
              FROM candidates WHERE attempt.id = candidates.id
              RETURNING attempt.id, attempt.external_run_id",
                 [
@@ -49,13 +50,16 @@ impl RunStore {
                     i64::try_from(now_unix)
                         .map_err(PostgresError::internal)?
                         .into(),
+                    i64::try_from(claim_cutoff)
+                        .map_err(PostgresError::internal)?
+                        .into(),
                 ],
             ))
             .await
             .map_err(PostgresError::internal)?;
         rows.into_iter()
             .map(|row| {
-                Ok(CloudAttemptAbort {
+                Ok(CloudTaskStop {
                     attempt_id: row.try_get("", "id").map_err(PostgresError::internal)?,
                     external_run_id: row
                         .try_get("", "external_run_id")
@@ -65,10 +69,127 @@ impl RunStore {
             .collect()
     }
 
-    pub async fn release_cloud_attempt_abort(&self, attempt_id: &str) -> Result<(), PostgresError> {
-        self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Postgres,
-            "UPDATE scope_run_attempts SET provider_abort_requested_at_unix = NULL WHERE id = $1 AND state IN ('dispatching', 'running')",
-            [attempt_id.into()])).await.map_err(PostgresError::internal)?;
+    pub async fn claim_terminal_cloud_task_stops(
+        &self,
+        now_unix: u64,
+        limit: u64,
+    ) -> Result<Vec<CloudTaskStop>, PostgresError> {
+        let claim_cutoff = now_unix.saturating_sub(CLOUD_TASK_STOP_CLAIM_LEASE_SECS);
+        let rows = self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "WITH candidates AS (
+                   SELECT attempt.id FROM scope_run_attempts attempt
+                   WHERE attempt.state IN ('succeeded', 'failed', 'canceled', 'lost')
+                     AND attempt.runner_stop_completed_at_unix IS NULL
+                     AND (attempt.runner_stop_claimed_at_unix IS NULL
+                          OR attempt.runner_stop_claimed_at_unix <= $3)
+                   ORDER BY attempt.completed_at_unix, attempt.id
+                   FOR UPDATE OF attempt SKIP LOCKED LIMIT $1
+                 )
+                 UPDATE scope_run_attempts attempt
+                 SET runner_stop_claimed_at_unix = $2
+                 FROM candidates WHERE attempt.id = candidates.id
+                 RETURNING attempt.id, attempt.external_run_id",
+                [
+                    i64::try_from(limit)
+                        .map_err(PostgresError::internal)?
+                        .into(),
+                    i64::try_from(now_unix)
+                        .map_err(PostgresError::internal)?
+                        .into(),
+                    i64::try_from(claim_cutoff)
+                        .map_err(PostgresError::internal)?
+                        .into(),
+                ],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(CloudTaskStop {
+                    attempt_id: row.try_get("", "id").map_err(PostgresError::internal)?,
+                    external_run_id: row
+                        .try_get("", "external_run_id")
+                        .map_err(PostgresError::internal)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn release_cloud_task_stop_claim(
+        &self,
+        attempt_id: &str,
+    ) -> Result<(), PostgresError> {
+        self.db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "UPDATE scope_run_attempts SET runner_stop_claimed_at_unix = NULL WHERE id = $1 AND runner_stop_completed_at_unix IS NULL",
+                [attempt_id.into()],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        Ok(())
+    }
+
+    pub async fn complete_cloud_task_stop(
+        &self,
+        attempt_id: &str,
+        now_unix: u64,
+    ) -> Result<(), PostgresError> {
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "UPDATE scope_run_attempts
+                 SET runner_stop_completed_at_unix = $2
+                 WHERE id = $1
+                   AND runner_stop_claimed_at_unix IS NOT NULL
+                   AND runner_stop_completed_at_unix IS NULL",
+                [
+                    attempt_id.into(),
+                    i64::try_from(now_unix)
+                        .map_err(PostgresError::internal)?
+                        .into(),
+                ],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        if result.rows_affected() != 1 {
+            return Err(PostgresError::conflict(
+                "cloud task stop claim is missing or already complete",
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn complete_cloud_task_absence(
+        &self,
+        attempt_id: &str,
+        now_unix: u64,
+    ) -> Result<(), PostgresError> {
+        let now_unix = i64::try_from(now_unix).map_err(PostgresError::internal)?;
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "UPDATE scope_run_attempts
+                 SET runner_stop_claimed_at_unix = $2,
+                     runner_stop_completed_at_unix = $2
+                 WHERE id = $1
+                   AND state IN ('succeeded', 'failed', 'canceled', 'lost')
+                   AND external_run_id IS NULL
+                   AND runner_stop_completed_at_unix IS NULL",
+                [attempt_id.into(), now_unix.into()],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        if result.rows_affected() != 1 {
+            return Err(PostgresError::conflict(
+                "cloud task absence requires an untracked terminal attempt",
+            ));
+        }
         Ok(())
     }
 
@@ -95,6 +216,13 @@ impl RunStore {
                  WHERE job.state = 'queued'
                    AND run.state IN ('queued', 'dispatching', 'running')
                    AND run.cancellation_requested = FALSE
+                   AND NOT EXISTS (
+                     SELECT 1 FROM scope_run_attempts previous
+                     WHERE previous.run_id = job.run_id
+                       AND previous.job_key = job.job_key
+                       AND previous.state IN ('succeeded', 'failed', 'canceled', 'lost')
+                       AND previous.runner_stop_completed_at_unix IS NULL
+                   )
                  ORDER BY job.created_at_unix, job.run_id, job.job_key
                  LIMIT 1",
             ))
@@ -157,7 +285,6 @@ impl RunStore {
                 definition,
                 attempt_id,
                 token_hash,
-                ExecutionProvider::Northflank,
                 runtime_version,
                 now_unix,
                 lease_expires_at_unix,

@@ -268,7 +268,6 @@ pub mod run_attempt {
         pub run_id: String,
         pub job_key: String,
         pub number: i32,
-        pub execution_provider: String,
         pub external_run_id: Option<String>,
         pub runtime_version: String,
         #[sea_orm(unique)]
@@ -297,7 +296,6 @@ pub mod run_attempt {
                 run_id: attempt.run_id.clone(),
                 job_key: attempt.job_key.as_str().to_string(),
                 number: u32_to_i32(attempt.number, "run attempt number")?,
-                execution_provider: encode_enum(attempt.execution_provider)?,
                 external_run_id: attempt.external_run_id.clone(),
                 runtime_version: attempt.runtime_version.clone(),
                 token_hash: attempt.token_hash.clone(),
@@ -342,7 +340,6 @@ pub mod run_attempt {
                 self.run_id,
                 WorkflowJobId::parse(self.job_key).map_err(PostgresError::invalid_input)?,
                 i32_to_u32(self.number, "run attempt number")?,
-                decode_enum::<ExecutionProvider>(self.execution_provider)?,
                 self.external_run_id,
                 self.runtime_version,
                 self.token_hash,

@@ -1,5 +1,5 @@
 use super::{
-    attempt::{ExecutionProvider, MAX_RUN_ATTEMPTS, RunAttempt},
+    attempt::{MAX_RUN_ATTEMPTS, RunAttempt},
     image::PinnedContainerImage,
     run::{Run, RunState},
     step::RunAttemptStep,
@@ -102,7 +102,6 @@ impl RunJob {
         definition: &WorkflowJob,
         attempt_id: impl Into<String>,
         token_hash: impl Into<String>,
-        execution_provider: ExecutionProvider,
         runtime_version: impl Into<String>,
         now_unix: u64,
         lease_expires_at_unix: u64,
@@ -139,7 +138,6 @@ impl RunJob {
             run_id: run.id.clone(),
             job_key: self.key.clone(),
             number,
-            execution_provider,
             external_run_id: None,
             runtime_version: required("runtime version", runtime_version.into())?,
             token_hash,

@@ -81,7 +81,6 @@ fn cloud_dispatch_pins_the_workflow_image_and_rotates_the_bootstrap_credential()
             definition,
             "attempt-1",
             "b".repeat(64),
-            ExecutionProvider::Northflank,
             "runtime-1",
             11,
             911,
@@ -116,7 +115,6 @@ fn successful_attempt_finishes_only_after_runtime_finalization() {
             definition,
             "attempt-1",
             "b".repeat(64),
-            ExecutionProvider::Northflank,
             "runtime-1",
             11,
             911,
@@ -209,7 +207,6 @@ fn provider_confirmed_abort_terminalizes_a_running_attempt_as_canceled() {
             definition,
             "attempt-1",
             "b".repeat(64),
-            ExecutionProvider::Northflank,
             "runtime-1",
             11,
             911,
@@ -235,4 +232,46 @@ fn provider_confirmed_abort_terminalizes_a_running_attempt_as_canceled() {
     assert_eq!(job.state, RunJobState::Canceled);
     assert_eq!(run.state, RunState::Canceled);
     assert_eq!(steps[0].state, StepState::Canceled);
+}
+
+#[test]
+fn maximum_attempt_age_expires_even_a_renewed_lease() {
+    let revision = workflow();
+    let run = run(&revision);
+    let definition = revision.definition().only_job().unwrap();
+    let mut job = create_run_jobs(&run, &revision).unwrap().remove(0);
+    let created_at = 11;
+    let (mut attempt, mut steps) = job
+        .dispatch(
+            &run,
+            definition,
+            "attempt-1",
+            "b".repeat(64),
+            "runtime-1",
+            created_at,
+            created_at + MAX_RUN_ATTEMPT_AGE_SECONDS + 100,
+        )
+        .unwrap();
+
+    assert!(
+        attempt
+            .expire(
+                &run,
+                &mut job,
+                &mut steps,
+                created_at + MAX_RUN_ATTEMPT_AGE_SECONDS - 1,
+            )
+            .is_err()
+    );
+    attempt
+        .expire(
+            &run,
+            &mut job,
+            &mut steps,
+            created_at + MAX_RUN_ATTEMPT_AGE_SECONDS,
+        )
+        .unwrap();
+
+    assert_eq!(attempt.state, AttemptState::Lost);
+    assert_eq!(job.state, RunJobState::Queued);
 }

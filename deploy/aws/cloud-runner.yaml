@@ -1,0 +1,409 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Scope production Fargate runner infrastructure
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedPattern: "^[a-z0-9-]+$"
+  VpcCidr:
+    Type: String
+    Default: 10.42.0.0/16
+  PublicSubnetOneCidr:
+    Type: String
+    Default: 10.42.0.0/20
+  PublicSubnetTwoCidr:
+    Type: String
+    Default: 10.42.16.0/20
+  BudgetNotificationEmail:
+    Type: String
+    Default: ""
+    Description: Leave empty to omit the monthly project budget.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 100
+    MinValue: 1
+
+Conditions:
+  HasBudgetNotification: !Not [!Equals [!Ref BudgetNotificationEmail, ""]]
+
+Resources:
+  RunnerVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref RunnerInternetGateway
+      VpcId: !Ref RunnerVpc
+
+  RunnerPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref RunnerVpc
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner-public
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: RunnerInternetGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref RunnerInternetGateway
+      RouteTableId: !Ref RunnerPublicRouteTable
+
+  RunnerPublicSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnetOneCidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref RunnerVpc
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner-public-a
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerPublicSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnetTwoCidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref RunnerVpc
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner-public-b
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerPublicSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RunnerPublicRouteTable
+      SubnetId: !Ref RunnerPublicSubnetOne
+
+  RunnerPublicSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RunnerPublicRouteTable
+      SubnetId: !Ref RunnerPublicSubnetTwo
+
+  RunnerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound HTTPS for Scope Fargate runner tasks
+      SecurityGroupEgress:
+        - Description: HTTPS to the Scope API, cache, source hosts, and image registry
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref RunnerVpc
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub scope-vcs-${Environment}-runner
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /scope-vcs/${Environment}/cloud-runner
+      RetentionInDays: 14
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-task-execution
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: write-runner-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub '${RunnerLogGroup.Arn}:*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:scope-vcs/${RunnerCluster}/attempts/*
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RailwayDispatcherUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub ${AWS::StackName}-railway-dispatcher
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RailwayDispatcherPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Dispatch Scope cloud runner tasks from Railway
+      Users:
+        - !Ref RailwayDispatcherUser
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ListTaskDefinitions
+            Effect: Allow
+            Action: ecs:ListTaskDefinitions
+            Resource: "*"
+          - Sid: RegisterTaggedTaskDefinitions
+            Effect: Allow
+            Action: ecs:RegisterTaskDefinition
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestTag/Project: scope-vcs
+              ForAllValues:StringEquals:
+                aws:TagKeys:
+                  - Project
+                  - Component
+                  - ImageDigest
+          - Sid: DeregisterAttemptTaskDefinitions
+            Effect: Allow
+            Action: ecs:DeregisterTaskDefinition
+            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/scope-runner-attempt_*:*
+          - Sid: RunScopeTaskDefinitions
+            Effect: Allow
+            Action: ecs:RunTask
+            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/scope-runner-attempt_*:*
+            Condition:
+              ArnEquals:
+                ecs:cluster: !GetAtt RunnerCluster.Arn
+              StringEquals:
+                aws:RequestTag/Project: scope-vcs
+              ForAllValues:StringEquals:
+                aws:TagKeys:
+                  - Project
+                  - Component
+                  - AttemptId
+          - Sid: ManageScopeRunnerTasks
+            Effect: Allow
+            Action:
+              - ecs:DescribeTasks
+              - ecs:StopTask
+            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/scope-vcs-${Environment}-runner/*
+            Condition:
+              ArnEquals:
+                ecs:cluster: !GetAtt RunnerCluster.Arn
+          - Sid: DiscoverScopeRunnerTasks
+            Effect: Allow
+            Action: ecs:ListTasks
+            Resource: "*"
+            Condition:
+              ArnEquals:
+                ecs:cluster: !GetAtt RunnerCluster.Arn
+          - Sid: TagScopeRunnerResources
+            Effect: Allow
+            Action: ecs:TagResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/scope-runner-attempt_*:*
+              - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/scope-vcs-${Environment}-runner/*
+            Condition:
+              StringEquals:
+                ecs:CreateAction:
+                  - RegisterTaskDefinition
+                  - RunTask
+          - Sid: CreateAttemptBootstrapSecrets
+            Effect: Allow
+            Action:
+              - secretsmanager:CreateSecret
+              - secretsmanager:TagResource
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:scope-vcs/${RunnerCluster}/attempts/*
+            Condition:
+              StringEquals:
+                aws:RequestTag/Project: scope-vcs
+                aws:RequestTag/Component: cloud-runner
+              ForAllValues:StringEquals:
+                aws:TagKeys:
+                  - Project
+                  - Component
+                  - AttemptId
+          - Sid: DeleteAttemptBootstrapSecrets
+            Effect: Allow
+            Action: secretsmanager:DeleteSecret
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:scope-vcs/${RunnerCluster}/attempts/*
+            Condition:
+              StringEquals:
+                aws:ResourceTag/Project: scope-vcs
+                aws:ResourceTag/Component: cloud-runner
+          - Sid: PassRunnerExecutionRole
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !GetAtt RunnerTaskExecutionRole.Arn
+            Condition:
+              StringEquals:
+                iam:PassedToService: ecs-tasks.amazonaws.com
+
+  RunnerBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasBudgetNotification
+    Properties:
+      Budget:
+        BudgetName: !Sub scope-vcs-${Environment}-cloud-runner
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        BudgetType: COST
+        CostFilters:
+          TagKeyValue:
+            - user:Project$scope-vcs
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers:
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref BudgetNotificationEmail
+              SubscriptionType: EMAIL
+      ResourceTags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+Outputs:
+  AwsRegion:
+    Description: Worker AWS_REGION
+    Value: !Ref AWS::Region
+  RunnerClusterArn:
+    Description: Worker SCOPE_ECS_CLUSTER_ARN
+    Value: !GetAtt RunnerCluster.Arn
+  RunnerSubnetIds:
+    Description: Worker SCOPE_ECS_SUBNET_IDS
+    Value: !Join [",", [!Ref RunnerPublicSubnetOne, !Ref RunnerPublicSubnetTwo]]
+  RunnerSecurityGroupId:
+    Description: Worker SCOPE_ECS_SECURITY_GROUP_ID
+    Value: !GetAtt RunnerSecurityGroup.GroupId
+  RunnerExecutionRoleArn:
+    Description: Worker SCOPE_ECS_EXECUTION_ROLE_ARN
+    Value: !GetAtt RunnerTaskExecutionRole.Arn
+  RunnerLogGroupName:
+    Description: Worker SCOPE_ECS_LOG_GROUP
+    Value: !Ref RunnerLogGroup
+  RailwayDispatcherUserName:
+    Description: IAM user for the Railway worker; create its access key outside CloudFormation.
+    Value: !Ref RailwayDispatcherUser

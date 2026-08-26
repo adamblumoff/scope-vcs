@@ -29,6 +29,7 @@ impl StepProcess {
             .current_dir(workspace)
             .envs(job.environment())
             .env_remove("SCOPE_BOOTSTRAP_TOKEN")
+            .env_remove("SCOPE_ATTEMPT_DEADLINE_UNIX")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         unsafe {

@@ -272,8 +272,6 @@ export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { r
 
 export type RunChangeKind = "Created" | "StatusChanged" | "LogsAppended";
 
-export type RepositoryExecutionProvider = "northflank";
-
 export type RepositoryRunState = "queued" | "dispatching" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
 export type RepositoryRunTrigger = "manual" | "push-main";
@@ -306,7 +304,7 @@ export type RepositoryRunCacheResponse = { name: string, path: string, observati
 
 export type RepositoryRunStepResponse = { index: number, name: string, command: string, state: RepositoryRunStepState, started_at_unix: number | null, completed_at_unix: number | null, exit_code: number | null, };
 
-export type RepositoryRunAttemptResponse = { id: string, number: number, execution_provider: RepositoryExecutionProvider, external_run_id: string | null, runtime_version: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, cache_setup: RepositoryRunCacheSetupObservationResponse | null, caches: Array<RepositoryRunCacheResponse>, steps: Array<RepositoryRunStepResponse>, };
+export type RepositoryRunAttemptResponse = { id: string, number: number, external_run_id: string | null, runtime_version: string, state: RepositoryRunAttemptState, created_at_unix: number, started_at_unix: number | null, completed_at_unix: number | null, terminal_reason: RepositoryRunTerminalReason | null, cache_setup: RepositoryRunCacheSetupObservationResponse | null, caches: Array<RepositoryRunCacheResponse>, steps: Array<RepositoryRunStepResponse>, };
 
 export type RepositoryRunWorkflowResponse = { key: string, name: string, path: string, manual: boolean, push_main: boolean, job_count: number, };
 

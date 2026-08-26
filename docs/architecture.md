@@ -175,7 +175,7 @@ The guardrail is enforced in CI and by `./dev/check guardrails`.
 - `docs/architecture.md` is the current technical ownership guide.
 - `docs/maintenance-cutovers.md` documents migration recovery and the
   forward-only cutover rule.
-- `deploy/northflank/OPERATIONS.md` documents cloud-run and cache-service
+- `deploy/aws/OPERATIONS.md` documents Fargate cloud-run provisioning and
   operation.
 - `bench/README.md` documents local Git and deployed-system benchmarks.
 - `.scope/RULES.md`, `AGENTS.md`, and `CLAUDE.md` are contribution and agent

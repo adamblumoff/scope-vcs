@@ -10,13 +10,14 @@ pub(crate) async fn run(
     settings: WorkerSettings,
     health: WorkerHealth,
 ) -> anyhow::Result<()> {
-    let execution = settings
-        .execution
-        .clone()
-        .map(|cloud| {
+    let execution = match settings.execution.clone() {
+        Some(cloud) => Some(
             CloudExecutionCoordinator::new(metadata.clone(), cloud, settings.worker_id.clone())
-        })
-        .transpose()?;
+                .await,
+        ),
+        None => None,
+    };
+    let mut cloud_reconciliation = None;
     loop {
         if !super::schema_ready_or_wait(&metadata, &health).await {
             return Ok(());
@@ -59,19 +60,21 @@ pub(crate) async fn run(
             )
             .await;
         }
-        if let Some(execution) = &execution {
-            if let Err(error) = execution.abort_canceled(super::unix_now()?).await {
-                tracing::error!(error = %error, "cloud run cancellation reconciliation failed");
+        if cloud_reconciliation
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
+            let completed = cloud_reconciliation
+                .take()
+                .expect("a finished reconciliation handle is present");
+            if let Err(error) = completed.await {
+                tracing::error!(error = %error, "cloud reconciliation task panicked");
             }
-            match execution.dispatch_available(super::unix_now()?).await {
-                Ok(dispatched) if dispatched > 0 => {
-                    tracing::info!(dispatched, "processed cloud run dispatches");
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::error!(error = %error, "cloud run dispatch failed; continuing control loop");
-                }
-            }
+        }
+        if cloud_reconciliation.is_none()
+            && let Some(execution) = execution.clone()
+        {
+            cloud_reconciliation = Some(tokio::spawn(reconcile_cloud_execution(execution)));
         }
         health.mark_poll_succeeded(WorkerRole::Control, super::unix_now()?);
         if summary.claimed >= settings.batch_size {
@@ -80,5 +83,36 @@ pub(crate) async fn run(
         if super::wait_or_shutdown(settings.poll_interval).await {
             return Ok(());
         }
+    }
+}
+
+async fn reconcile_cloud_execution(execution: CloudExecutionCoordinator) {
+    match super::unix_now() {
+        Ok(now_unix) => {
+            if let Err(error) = execution.cleanup_terminal(now_unix).await {
+                tracing::error!(error = %error, "terminal cloud task cleanup failed");
+            }
+        }
+        Err(error) => tracing::error!(error = %error, "cloud cleanup clock failed"),
+    }
+    match super::unix_now() {
+        Ok(now_unix) => {
+            if let Err(error) = execution.abort_canceled(now_unix).await {
+                tracing::error!(error = %error, "cloud run cancellation reconciliation failed");
+            }
+        }
+        Err(error) => tracing::error!(error = %error, "cloud cancellation clock failed"),
+    }
+    match super::unix_now() {
+        Ok(now_unix) => match execution.dispatch_available(now_unix).await {
+            Ok(dispatched) if dispatched > 0 => {
+                tracing::info!(dispatched, "processed cloud run dispatches");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(error = %error, "cloud run dispatch failed; continuing control loop");
+            }
+        },
+        Err(error) => tracing::error!(error = %error, "cloud dispatch clock failed"),
     }
 }
