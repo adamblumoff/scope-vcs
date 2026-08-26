@@ -26,6 +26,9 @@ readonly stack_name="${STACK_NAME:-scope-cloud-runner-production}"
 readonly environment_name="${ENVIRONMENT_NAME:-production}"
 readonly budget_email="${BUDGET_NOTIFICATION_EMAIL:-}"
 readonly monthly_budget_usd="${MONTHLY_BUDGET_USD:-100}"
+readonly github_repository="${GITHUB_REPOSITORY:-scope-vcs/scope-vcs}"
+readonly github_repository_id="${GITHUB_REPOSITORY_ID:-1272896256}"
+readonly existing_github_oidc_provider_arn="${EXISTING_GITHUB_OIDC_PROVIDER_ARN:-}"
 
 aws_command() {
   aws --region "$aws_region" "$@"
@@ -47,7 +50,11 @@ print_outputs() {
     RunnerSecurityGroupId \
     RunnerExecutionRoleArn \
     RunnerLogGroupName \
-    RailwayDispatcherUserName; do
+    RailwayDispatcherUserName \
+    ChecksImageRepositoryName \
+    ChecksImageRepositoryUri \
+    ChecksImagePublisherRoleArn \
+    GitHubInfrastructureRoleArn; do
     output_value="$(aws_command cloudformation describe-stacks \
       --stack-name "$stack_name" \
       --query "Stacks[0].Outputs[?OutputKey=='$output_key'].OutputValue | [0]" \
@@ -76,6 +83,9 @@ readonly parameters=(
   "ParameterKey=Environment,ParameterValue=$environment_name"
   "ParameterKey=BudgetNotificationEmail,ParameterValue=$budget_email"
   "ParameterKey=MonthlyBudgetUsd,ParameterValue=$monthly_budget_usd"
+  "ParameterKey=GitHubRepository,ParameterValue=$github_repository"
+  "ParameterKey=GitHubRepositoryId,ParameterValue=$github_repository_id"
+  "ParameterKey=ExistingGitHubOidcProviderArn,ParameterValue=$existing_github_oidc_provider_arn"
 )
 readonly tags=(
   "Key=Project,Value=scope-vcs"

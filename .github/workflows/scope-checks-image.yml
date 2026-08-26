@@ -14,18 +14,15 @@ on:
         value: ${{ jobs.build.outputs.published_digest }}
       published_image:
         value: ${{ jobs.build.outputs.published_image }}
-  workflow_dispatch:
-    inputs:
-      source_sha:
-        description: Exact 40-character commit SHA to publish as a candidate
-        type: string
-        required: true
 
 permissions:
   contents: read
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}/checks
+  ECR_REPOSITORY: scope-vcs/production/checks
+  GHCR_IMAGE_NAME: ghcr.io/${{ github.repository }}/checks
+  SOCI_ARCHIVE_SHA256: 1c9d3bb74dd4fc1355fbea478c62e30d50ede062c54f4008a9e3516877fdfee3
+  SOCI_VERSION: 0.15.0
 
 jobs:
   build:
@@ -34,6 +31,7 @@ jobs:
     permissions:
       contents: read
       deployments: write
+      id-token: write
       packages: write
     outputs:
       published_digest: ${{ steps.published.outputs.digest }}
@@ -85,26 +83,54 @@ jobs:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
+      - name: Configure AWS credentials
+        if: steps.source.outputs.publish == 'true'
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ vars.SCOPE_CHECKS_IMAGE_AWS_ROLE_ARN }}
+          role-session-name: scope-checks-image-${{ github.run_id }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        if: steps.source.outputs.publish == 'true'
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
       - name: Prepare image tags
         id: tags
         shell: bash
         env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
           PUBLISH_MAIN: ${{ steps.source.outputs.publish_main }}
+          PUBLISH: ${{ steps.source.outputs.publish }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
+          ghcr_tag="sha-${SOURCE_SHA}"
+          unique_suffix="${SOURCE_SHA}-${RUN_ID}-${RUN_ATTEMPT}"
           {
             echo "tags<<EOF"
-            echo "${IMAGE_NAME}:sha-${SOURCE_SHA}"
+            echo "${GHCR_IMAGE_NAME}:${ghcr_tag}"
             if [[ "$PUBLISH_MAIN" == "true" ]]; then
-              echo "${IMAGE_NAME}:main"
+              echo "${GHCR_IMAGE_NAME}:main"
             fi
             echo "EOF"
+            echo "ghcr_image=${GHCR_IMAGE_NAME}:${ghcr_tag}"
+            if [[ "$PUBLISH" == "true" ]]; then
+              test -n "$ECR_REGISTRY"
+              echo "raw_tag=raw-${unique_suffix}"
+              echo "raw_image=${ECR_REGISTRY}/${ECR_REPOSITORY}:raw-${unique_suffix}"
+              echo "soci_tag=soci-${unique_suffix}"
+              echo "soci_image=${ECR_REGISTRY}/${ECR_REPOSITORY}:soci-${unique_suffix}"
+            fi
           } >> "$GITHUB_OUTPUT"
 
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1
 
       - name: Log in to the GitHub container registry
+        if: steps.source.outputs.publish == 'true'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -120,25 +146,86 @@ jobs:
           context: .
           file: .scope/images/checks/Dockerfile
           platforms: linux/amd64
+          provenance: false
           push: ${{ steps.source.outputs.publish == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
+
+      - name: Install SOCI publishing tools
+        if: steps.source.outputs.publish == 'true'
+        shell: bash
+        run: |
+          if ! command -v skopeo >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes skopeo
+          fi
+          archive="soci-snapshotter-${SOCI_VERSION}-linux-amd64-static.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/awslabs/soci-snapshotter/releases/download/v${SOCI_VERSION}/$archive"
+          echo "${SOCI_ARCHIVE_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/$archive" --directory "$RUNNER_TEMP" soci
+          sudo install --mode 0755 "$RUNNER_TEMP/soci" /usr/local/bin/soci
+
+      - name: Publish raw and SOCI v2 variants to Amazon ECR
+        if: steps.source.outputs.publish == 'true'
+        env:
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+          RAW_IMAGE: ${{ steps.tags.outputs.raw_image }}
+          RAW_TAG: ${{ steps.tags.outputs.raw_tag }}
+          SOCI_IMAGE: ${{ steps.tags.outputs.soci_image }}
+          SOCI_TAG: ${{ steps.tags.outputs.soci_tag }}
+        run: >-
+          .github/scripts/publish-soci-image.sh
+          "$GHCR_IMAGE"
+          "$RAW_IMAGE"
+          "$SOCI_IMAGE"
+          "$ECR_REPOSITORY"
+          "$RAW_TAG"
+          "$SOCI_TAG"
 
       - name: Record published digest
         id: published
         if: steps.source.outputs.publish == 'true'
         env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          GHCR_DIGEST: ${{ steps.image.outputs.digest }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+          RAW_IMAGE: ${{ steps.tags.outputs.raw_image }}
+          RAW_TAG: ${{ steps.tags.outputs.raw_tag }}
+          SOCI_IMAGE: ${{ steps.tags.outputs.soci_image }}
+          SOCI_TAG: ${{ steps.tags.outputs.soci_tag }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
-          test -n "$IMAGE_DIGEST"
+          raw_digest="$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$RAW_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+          soci_digest="$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$SOCI_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+          [[ "$GHCR_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$raw_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$soci_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          soci_repository="${SOCI_IMAGE%:*}"
           {
-            echo "Published \`${IMAGE_NAME}@${IMAGE_DIGEST}\`"
+            echo "Published one image as three startup variants:"
+            echo
+            echo "- GHCR: \`${GHCR_IMAGE}@${GHCR_DIGEST}\`"
+            echo "- ECR: \`${RAW_IMAGE}@${raw_digest}\`"
+            echo "- ECR + SOCI v2: \`${SOCI_IMAGE}@${soci_digest}\`"
             echo
             echo "Source commit: \`${SOURCE_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "image=${IMAGE_NAME}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
-          printf 'source_sha=%s\nimage=%s@%s\n' "$SOURCE_SHA" "$IMAGE_NAME" "$IMAGE_DIGEST" > checks-image.txt
+          echo "digest=${soci_digest}" >> "$GITHUB_OUTPUT"
+          echo "image=${soci_repository}@${soci_digest}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' \
+            "source_sha=$SOURCE_SHA" \
+            "ghcr_image=$GHCR_IMAGE@$GHCR_DIGEST" \
+            "raw_ecr_image=$RAW_IMAGE@$raw_digest" \
+            "soci_ecr_image=$SOCI_IMAGE@$soci_digest" \
+            > checks-image.txt
 
       - name: Upload published image reference
         if: steps.source.outputs.publish == 'true'

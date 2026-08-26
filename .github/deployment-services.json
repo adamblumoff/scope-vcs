@@ -66,6 +66,7 @@
     },
     "checksImage": {
       "files": [
+        ".github/scripts/publish-soci-image.sh",
         ".github/workflows/scope-checks-image.yml",
         "Cargo.lock",
         "Cargo.toml",

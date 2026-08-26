@@ -102,6 +102,10 @@ jobs:
     name: Checks image
     needs: plan
     if: needs.plan.outputs.checks_image == 'true'
+    permissions:
+      contents: read
+      deployments: write
+      id-token: write
     uses: ./.github/workflows/scope-checks-image.yml
     with:
       publish: ${{ github.event_name != 'pull_request' }}
