@@ -23,7 +23,10 @@ use scope_domain::{
     requests::Request,
 };
 use sea_orm::sea_query::Query;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, Statement,
+    TransactionTrait,
+};
 use std::{collections::BTreeSet, sync::Arc};
 
 #[cfg(test)]
@@ -198,6 +201,38 @@ impl RepositoryStore {
             .exec(&tx)
             .await
             .map_err(PostgresError::internal)?;
+        entities::git_pack_span::Entity::delete_many()
+            .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.clone()))
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "DELETE FROM scope_git_segment_references refs
+             USING scope_git_segment_uploads uploads
+             WHERE refs.segment_id = uploads.segment_id AND uploads.repo_id = $1",
+            [repo_id.clone().into()],
+        ))
+        .await
+        .map_err(PostgresError::internal)?;
+        tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "UPDATE scope_git_segment_uploads
+             SET state = 'deleting', updated_at_unix = GREATEST(updated_at_unix, $2)
+             WHERE repo_id = $1 AND state IN ('uploading', 'ready', 'published')",
+            [
+                repo_id.clone().into(),
+                i64::try_from(now_unix)
+                    .map_err(|_| {
+                        PostgresError::internal_message(
+                            "repository deletion time exceeds database bigint",
+                        )
+                    })?
+                    .into(),
+            ],
+        ))
+        .await
+        .map_err(PostgresError::internal)?;
         entities::repository::Entity::delete_by_id(repo_id.clone())
             .exec(&tx)
             .await

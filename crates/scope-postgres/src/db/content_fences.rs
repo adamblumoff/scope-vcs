@@ -126,7 +126,7 @@ pub(super) async fn acquire_content_ref_fence(
     Ok(fence)
 }
 
-async fn dedicated_fence_connection(
+pub(super) async fn dedicated_fence_connection(
     postgres_database_url: Option<&str>,
     schema: &str,
 ) -> Result<PgConnection, PostgresError> {
@@ -146,7 +146,7 @@ async fn dedicated_fence_connection(
     Ok(connection)
 }
 
-async fn current_schema(db: &DatabaseConnection) -> Result<String, PostgresError> {
+pub(super) async fn current_schema(db: &DatabaseConnection) -> Result<String, PostgresError> {
     db.query_one(Statement::from_string(
         DatabaseBackend::Postgres,
         "SELECT current_schema() AS schema".to_string(),

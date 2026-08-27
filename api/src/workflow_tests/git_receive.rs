@@ -54,7 +54,7 @@ async fn published_receive_pack_push_applies_from_seeded_git_repo() {
 
     assert_eq!(update.branch, format!("refs/heads/{DEFAULT_GIT_BRANCH}"));
     assert_eq!(update.message, "update from git");
-    assert_eq!(update.durable_objects.len(), 2);
+    assert_eq!(update.durable_objects.len(), 1);
     assert!(update.durable_objects.iter().all(|object| !matches!(
         object.content_ref,
         scope_domain::content_ref::ContentRef::GitBundleSha256(_)
@@ -86,12 +86,7 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
         geometric_tier: 0,
         base_oid: None,
         head_oid: base_head_oid.clone(),
-        object: {
-            let mut segment = source_blob(&state, "base Git segment");
-            segment.content_ref =
-                scope_domain::content_ref::ContentRef::git_segment_sha256(segment.sha256.clone());
-            segment
-        },
+        segment: ready_test_git_segment(&state, "base Git segment").await,
     };
     repo.git_head = Some(scope_domain::repository::git::GitHead {
         head_oid: base_head_oid.clone(),
@@ -145,13 +140,7 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
             geometric_tier: 0,
             base_oid: Some(previous_head_oid),
             head_oid: head_oid.clone(),
-            object: {
-                let mut segment = source_blob(&state, &format!("Git segment {sequence}"));
-                segment.content_ref = scope_domain::content_ref::ContentRef::git_segment_sha256(
-                    segment.sha256.clone(),
-                );
-                segment
-            },
+            segment: test_git_segment_ref(&format!("Git segment {sequence}")),
         };
         update.workflow_catalog = scope_domain::runs::catalog::RepositoryWorkflowCatalog::captured(
             TEST_REPO_ID,
@@ -389,9 +378,6 @@ async fn applying_push_does_not_delete_previous_snapshot_inline() {
         change_version: 1,
         manifest: old_snapshot,
     });
-    let mut old_pack = source_blob(&state, "old live Git pack");
-    old_pack.content_ref =
-        scope_domain::content_ref::ContentRef::git_segment_sha256(old_pack.sha256.clone());
     repo.git_pack_spans
         .push(scope_domain::repository::git::GitPackSpan {
             first_sequence: 1,
@@ -399,7 +385,7 @@ async fn applying_push_does_not_delete_previous_snapshot_inline() {
             geometric_tier: 0,
             base_oid: None,
             head_oid: repo.git_head.as_ref().unwrap().head_oid.clone(),
-            object: old_pack,
+            segment: ready_test_git_segment(&state, "old live Git pack").await,
         });
     replace_test_repo(&state, repo).await;
 

@@ -112,6 +112,32 @@ SCOPE_BENCH_RUN_LABEL=current-api1-2026-08-20 \
 node bench/railway-load.mjs
 ```
 
+The Git segment streaming acceptance run measures 64, 128, and 256 MiB pushes separately at c1, c2, and c4. The runner divides each delta into 16 MiB files so no file reaches Scope's 25 MiB per-file limit. It writes each file through a 256 KiB buffer, which keeps fixture generation from allocating the full delta in Node.
+
+Use a staging service whose hostname contains a `loadtest` label. The target guard will reject the ordinary staging and production hostnames.
+
+```bash
+export SCOPE_BENCH_API_URL=https://scope-api-loadtest-staging.up.railway.app
+export SCOPE_BENCH_AUTH_TOKEN=scope_cli_...
+
+for bytes in 67108864 134217728 268435456; do
+  SCOPE_LOAD_WORKLOADS=mixed \
+  SCOPE_LOAD_MIXED_WRITE_PERCENT=100 \
+  SCOPE_LOAD_WRITE_DELTA_BYTES="$bytes" \
+  SCOPE_LOAD_MIXED_REPOS=4 \
+  SCOPE_LOAD_STAGES=1,2,4 \
+  SCOPE_LOAD_STAGE_SECONDS=120 \
+  SCOPE_LOAD_CONFIRM_SECONDS=0 \
+  SCOPE_LOAD_TIMEOUT_MS=600000 \
+  SCOPE_LOAD_PROTOCOL_LABEL=git-segment-v2 \
+  SCOPE_LOAD_NODE_SCALE_LABEL=api-2-worker-1 \
+  SCOPE_BENCH_RUN_LABEL="git-segment-v2-${bytes}" \
+  node bench/railway-load.mjs
+done
+```
+
+Keep the API and worker sizes, replica count, region, database, object-store bucket, and local volume size fixed across all three runs. Record the exact start and end timestamps for each run, then collect telemetry over those windows.
+
 To measure landing-file write cost, run the mixed and consistency workloads with unrelated pushes plus 4 KiB and 1 MiB `README.html` updates. Record the pre-change push p95 and pass it to the post-change run; the runner marks a stage unhealthy if its measured push p95 regresses by more than 15%:
 
 ```bash
@@ -161,6 +187,9 @@ The telemetry report groups:
 - compaction phase timings and outcomes;
 - push persistence lock wait, serialization, transaction body, commit, and total time by protocol;
 - object-store operation latency, failures, bytes, and MiB per second of summed service time;
+- Git segment ingest phases, including local write and fsync, tee blocking, frame encryption, and multipart first-part, last-part, completion, and abort timings;
+- Git segment restore phases;
+- active ingests, buffered bytes, minimum local disk free bytes, upload-ledger state counts, and orphan counts;
 - Railway CPU and memory samples plus capacity and spawn errors.
 
 Object-store service metrics and Postgres server-side wait events still require their provider dashboards or exports. The application events show where Scope spent time, but they do not replace storage-side request, queue, throttling, or database WAL evidence.

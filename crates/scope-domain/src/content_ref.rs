@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 pub enum ContentRef {
     BlobSha256(String),
     GitBundleSha256(String),
-    GitSegmentSha256(String),
     GitManifestSha256(String),
     GitBlob { git_oid: String },
 }
@@ -20,10 +19,6 @@ impl ContentRef {
 
     pub fn git_bundle_sha256(sha256: impl Into<String>) -> Self {
         Self::GitBundleSha256(sha256.into())
-    }
-
-    pub fn git_segment_sha256(sha256: impl Into<String>) -> Self {
-        Self::GitSegmentSha256(sha256.into())
     }
 
     pub fn git_manifest_sha256(sha256: impl Into<String>) -> Self {
@@ -40,7 +35,6 @@ impl ContentRef {
         match self {
             Self::BlobSha256(sha256)
             | Self::GitBundleSha256(sha256)
-            | Self::GitSegmentSha256(sha256)
             | Self::GitManifestSha256(sha256) => Some(sha256),
             Self::GitBlob { .. } => None,
         }

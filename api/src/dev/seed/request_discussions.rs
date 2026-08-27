@@ -319,8 +319,10 @@ mod tests {
     #[tokio::test]
     async fn gallery_covers_open_resolved_and_quoted_conversations() {
         let object_store = EncryptedObjectStore::new(Arc::new(MemoryObjectStore::new()), [9; 32]);
+        let git_segment_store = super::super::test_seed_git_segment_store();
         let catalog = super::super::catalog(
             &object_store,
+            &git_segment_store,
             DevSeedUser {
                 email: "dev@example.com".to_string(),
                 handle: "dev".to_string(),

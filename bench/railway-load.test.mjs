@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import test from 'node:test';
 
 import { createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
@@ -7,8 +10,22 @@ import {
   abortTimeoutMs, apiHeaders, assertSafeTarget, capacityRejectionBreakdown, chooseWrite,
   consistencyStats, evaluateStage, failureBreakdown,
   historySizeSlope, landingFileSizeSlope, parseByteSizes, parseRates, parseStages, stageResult, stats,
-  writeSizeSlope,
+  WRITE_DELTA_FILE_BYTES, writeChunkedRandomPayload, writeSizeSlope,
 } from './railway-load.mjs';
+
+test('large write deltas use bounded files and buffers', async (context) => {
+  const root = await mkdtemp(join(tmpdir(), 'scope-load-delta-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+
+  const paths = await writeChunkedRandomPayload(join(root, 'delta'), 35, 16, 5);
+  assert.ok(WRITE_DELTA_FILE_BYTES < 25 * 1024 * 1024);
+  assert.deepEqual(paths.map((path) => basename(path)), ['0000.bin', '0001.bin', '0002.bin']);
+  assert.deepEqual(
+    await Promise.all(paths.map(async (path) => (await stat(path)).size)),
+    [16, 16, 3],
+  );
+  assert.equal((await readdir(join(root, 'delta'))).length, 3);
+});
 
 test('visibility polling rounds fractional AbortSignal timeouts up', () => {
   assert.equal(abortTimeoutMs(29_999.001), 30_000);

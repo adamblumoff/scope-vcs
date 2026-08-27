@@ -4,11 +4,15 @@ use crate::config::{
     SCOPE_OBJECT_ENCRYPTION_KEY_ENV, non_empty_env,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use scope_git_storage::{
+    GitSegmentStore, S3MultipartSettings, S3MultipartStore, SegmentEncryptionKey,
+};
 #[cfg(feature = "local-dev")]
 use scope_object_store::{FileObjectStore, FileObjectStoreSettings};
 use scope_object_store::{S3ObjectStore, S3ObjectStoreSettings};
 #[cfg(feature = "local-dev")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 #[cfg(feature = "local-dev")]
 const SCOPE_OBJECT_STORE_DIR_ENV: &str = "SCOPE_OBJECT_STORE_DIR";
@@ -39,6 +43,28 @@ pub(crate) fn s3_settings_from_env() -> anyhow::Result<S3ObjectStoreSettings> {
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false);
     Ok(settings)
+}
+
+pub(crate) fn git_segment_store_from_env(
+    local_root: PathBuf,
+    encryption_key: [u8; 32],
+) -> anyhow::Result<GitSegmentStore> {
+    let s3 = s3_settings_from_env()?;
+    let backend = S3MultipartStore::new(S3MultipartSettings {
+        endpoint: s3.endpoint,
+        bucket: s3.bucket,
+        region: s3.region,
+        access_key_id: s3.access_key_id,
+        secret_access_key: s3.secret_access_key,
+        force_path_style: s3.force_path_style,
+    })?;
+    let key = SegmentEncryptionKey::new("primary", encryption_key)?;
+    GitSegmentStore::new(
+        std::sync::Arc::new(backend),
+        key,
+        crate::config::git_segment_store_config_from_env(local_root)?,
+    )
+    .map_err(anyhow::Error::from)
 }
 
 #[cfg(feature = "local-dev")]

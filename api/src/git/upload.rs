@@ -15,7 +15,7 @@ use crate::{
     state::AppState,
 };
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     http::{
         HeaderMap, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE},
@@ -32,11 +32,13 @@ use scope_domain::{
     requests::{Request, RequestViewer, canonical_request_ref, request_policy},
 };
 use scope_git_process::{
-    ProcessLimits, STDERR_DIAGNOSTIC_BYTES, run as run_process, truncated_stderr,
+    ProcessLimits, STDERR_DIAGNOSTIC_BYTES, StreamingProcessError, run as run_process,
+    run_with_stdout, truncated_stderr,
 };
 use sha1::{Digest, Sha1};
 use std::{
     fs,
+    io::Read,
     path::Path as FsPath,
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
@@ -427,35 +429,77 @@ pub(crate) fn truncated_git_stderr(stderr: &[u8]) -> String {
 }
 
 pub(crate) async fn git_upload_pack_response(
-    repo_path: &FsPath,
+    repo: GitRepoHandle,
     request: &[u8],
     timeout: Duration,
     permit: RuntimePermit,
 ) -> Result<Response, ApiError> {
-    let repo_path = repo_path.to_path_buf();
+    let repo_path = repo.as_ref().to_path_buf();
     let request = request.to_vec();
-    let output = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let mut command = Command::new("git");
-        command
-            .arg("upload-pack")
-            .arg("--stateless-rpc")
-            .arg(repo_path);
-        git_process_output_with_timeout(&mut command, Some(request), timeout)
-    })
-    .await
-    .map_err(ApiError::internal)??;
-    if !output.status.success() {
-        return Err(ApiError::infrastructure_unavailable(format!(
-            "git upload-pack failed: {}",
-            truncated_git_stderr(&output.stderr)
-        )));
-    }
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
+    tokio::spawn(async move {
+        let error_sender = sender.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _repo = repo;
+            let mut command = Command::new("git");
+            command
+                .arg("upload-pack")
+                .arg("--stateless-rpc")
+                .arg(repo_path);
+            run_with_stdout(
+                &mut command,
+                Some(request),
+                ProcessLimits::new(timeout),
+                "Git upload-pack",
+                move |mut stdout| {
+                    let mut buffer = vec![0_u8; 64 * 1024];
+                    loop {
+                        let read = stdout.read(&mut buffer)?;
+                        if read == 0 {
+                            return Ok::<_, std::io::Error>(());
+                        }
+                        sender
+                            .blocking_send(Ok(Bytes::copy_from_slice(&buffer[..read])))
+                            .map_err(|_| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::BrokenPipe,
+                                    "Git upload-pack client disconnected",
+                                )
+                            })?;
+                    }
+                },
+            )
+        })
+        .await;
+        let stream_error = match result {
+            Ok(Ok(output)) if output.status.success() => None,
+            Ok(Ok(output)) => Some(format!(
+                "Git upload-pack failed: {}",
+                truncated_git_stderr(&output.stderr)
+            )),
+            Ok(Err(StreamingProcessError::Consumer(error)))
+                if error.kind() == std::io::ErrorKind::BrokenPipe =>
+            {
+                None
+            }
+            Ok(Err(error)) => Some(error.to_string()),
+            Err(error) => Some(format!("Git upload-pack task failed: {error}")),
+        };
+        if let Some(message) = stream_error {
+            let _ = error_sender.send(Err(std::io::Error::other(message))).await;
+        }
+    });
 
-    Ok(git_response(
-        "application/x-git-upload-pack-result",
-        output.stdout,
-    ))
+    Ok((
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, "application/x-git-upload-pack-result"),
+            (CACHE_CONTROL, "no-cache"),
+        ],
+        Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(receiver)),
+    )
+        .into_response())
 }
 
 pub(crate) fn git_upload_pack_advertisement(repo_path: &FsPath, timeout: Duration) -> Response {

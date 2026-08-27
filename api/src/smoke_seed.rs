@@ -1,7 +1,7 @@
 use crate::{
-    config::{database_url_from_env, non_empty_env},
+    config::{data_dir, database_url_from_env, git_repo_root, non_empty_env},
     demo_seed::{DevSeedUser, catalog, seed_request_discussion_gallery},
-    object_store_config::{encryption_key_from_env, s3_from_env},
+    object_store_config::{encryption_key_from_env, git_segment_store_from_env, s3_from_env},
 };
 use scope_object_store::EncryptedObjectStore;
 use scope_postgres::db::MetadataStore;
@@ -53,9 +53,12 @@ impl Snapshot {
 
 pub async fn run() -> anyhow::Result<()> {
     let target = validate(&Snapshot::from_env())?;
+    let encryption_key = encryption_key_from_env()?;
     let s3 = tokio::task::spawn_blocking(s3_from_env).await??;
-    let object_store = EncryptedObjectStore::new(Arc::new(s3), encryption_key_from_env()?);
-    let fixture = catalog(&object_store, target.seed_user)
+    let object_store = EncryptedObjectStore::new(Arc::new(s3), encryption_key);
+    let local_root = data_dir(&git_repo_root()).join("git-segments");
+    let git_segment_store = git_segment_store_from_env(local_root, encryption_key)?;
+    let fixture = catalog(&object_store, &git_segment_store, target.seed_user)
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
     let metadata = MetadataStore::connect(database_url_from_env()?).await?;
     metadata

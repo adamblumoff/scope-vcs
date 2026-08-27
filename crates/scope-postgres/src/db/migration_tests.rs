@@ -10,6 +10,7 @@ use std::sync::Arc;
 mod cache_service_cutover;
 mod git_compaction_scheduler;
 mod git_pack_spans;
+mod git_segment_streaming_v2;
 mod logical_run_sources;
 mod maintenance_cutover;
 mod repository_landing_files;
@@ -58,6 +59,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0030_cache_preparation_timings",
     "m0031_provider_neutral_run_attempts",
     "m0032_flat_discussion_replies",
+    "m0033_git_segment_streaming_v2",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -316,7 +318,8 @@ async fn fresh_database_reaches_exact_latest_schema() {
         .unwrap()
         .try_get::<i64>("", "count")
         .unwrap();
-    assert_eq!(scope_table_count, 51);
+    assert_eq!(scope_table_count, 53);
+    assert!(relation_exists(db.as_ref(), "scope_git_segment_uploads").await);
     assert!(relation_exists(db.as_ref(), "scope_cache_orphan_uploads").await);
     assert!(relation_exists(db.as_ref(), "scope_run_attempt_cache_setups").await);
     assert!(!relation_exists(db.as_ref(), "scope_user_credit_accounts").await);

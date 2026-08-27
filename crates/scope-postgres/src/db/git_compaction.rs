@@ -1,13 +1,11 @@
 use super::{
-    GeneratedIdKind, GeneratedIdSource, JobStore, acquire_aggregate_lock,
-    cleanup_queue::queue::queue_pending_source_blob_deletion_rows,
-    entities,
+    GeneratedIdKind, GeneratedIdSource, JobStore, acquire_aggregate_lock, entities,
     generated_ids::generate_id,
-    object_references::{delete_object_reference, insert_object_reference},
+    git_segments::{load_git_pack_spans, publish_git_segment, retire_git_segment},
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, FromQueryResult,
-    IntoActiveModel, QueryFilter, QueryOrder, Statement, TransactionTrait,
+    IntoActiveModel, QueryFilter, Statement, TransactionTrait,
 };
 use {
     crate::error::PostgresError,
@@ -157,15 +155,7 @@ impl JobStore {
             .ok_or_else(|| {
                 PostgresError::internal_message("Git compaction job has no repository")
             })?;
-        let spans = entities::git_pack_span::Entity::find()
-            .filter(entities::git_pack_span::Column::RepoId.eq(job.repo_id.clone()))
-            .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-            .all(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(entities::git_pack_span::Model::try_into_domain)
-            .collect::<Result<Vec<_>, _>>()?;
+        let spans = load_git_pack_spans(&tx, &job.repo_id).await?;
         validate_git_pack_layout(&spans)
             .map_err(|error| PostgresError::internal_message(error.to_string()))?;
         let candidate =
@@ -375,20 +365,12 @@ impl JobStore {
         expected_spans: &[GitPackSpan],
         replacement: GitPackSpan,
         now_unix: u64,
-        generated_ids: &dyn GeneratedIdSource,
+        _generated_ids: &dyn GeneratedIdSource,
     ) -> Result<bool, PostgresError> {
         validate_compaction_replacement(expected_spans, &replacement)?;
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
         acquire_aggregate_lock(&tx, "repository", repo_id).await?;
-        let current_spans = entities::git_pack_span::Entity::find()
-            .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.to_string()))
-            .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-            .all(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(entities::git_pack_span::Model::try_into_domain)
-            .collect::<Result<Vec<_>, _>>()?;
+        let current_spans = load_git_pack_spans(&tx, repo_id).await?;
         validate_git_pack_layout(&current_spans)
             .map_err(|error| PostgresError::internal_message(error.to_string()))?;
 
@@ -404,24 +386,12 @@ impl JobStore {
                 .map(|spans| (start, spans))
         });
         let Some((range_start, current_range)) = current_range else {
-            queue_pending_source_blob_deletion_rows(
-                &tx,
-                [replacement.object],
-                now_unix,
-                generated_ids,
-            )
-            .await?;
+            retire_git_segment(&tx, &replacement.segment.segment_id, now_unix).await?;
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(false);
         };
         if current_range != expected_spans {
-            queue_pending_source_blob_deletion_rows(
-                &tx,
-                [replacement.object],
-                now_unix,
-                generated_ids,
-            )
-            .await?;
+            retire_git_segment(&tx, &replacement.segment.segment_id, now_unix).await?;
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(false);
         }
@@ -434,14 +404,6 @@ impl JobStore {
         validate_git_pack_layout(&resulting_layout)
             .map_err(|error| PostgresError::internal_message(error.to_string()))?;
 
-        for span in expected_spans {
-            delete_object_reference(
-                &tx,
-                "git_segment",
-                &format!("{repo_id}:{}", span.first_sequence),
-            )
-            .await?;
-        }
         entities::git_pack_span::Entity::delete_many()
             .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.to_string()))
             .filter(
@@ -465,21 +427,12 @@ impl JobStore {
             .insert(&tx)
             .await
             .map_err(PostgresError::internal)?;
-        insert_object_reference(
-            &tx,
-            "git_segment",
-            &format!("{repo_id}:{}", replacement.first_sequence),
-            &replacement.object,
-        )
-        .await?;
-
-        let retired_objects = expected_spans
-            .iter()
-            .map(|span| span.object.clone())
-            .filter(|object| object.content_ref != replacement.object.content_ref)
-            .collect::<Vec<_>>();
-        queue_pending_source_blob_deletion_rows(&tx, retired_objects, now_unix, generated_ids)
-            .await?;
+        publish_git_segment(&tx, repo_id, &replacement.segment, now_unix).await?;
+        for span in expected_spans {
+            if span.segment.segment_id != replacement.segment.segment_id {
+                retire_git_segment(&tx, &span.segment.segment_id, now_unix).await?;
+            }
+        }
         tx.commit().await.map_err(PostgresError::internal)?;
         Ok(true)
     }
@@ -552,7 +505,7 @@ fn oldest_mergeable_pair_start(spans: &[GitPackSpan], minimum_spans: usize) -> O
 mod tests {
     use super::*;
     use crate::db::{MetadataStore, TestDatabaseTarget, generated_ids::test_generated_id};
-    use scope_domain::{content::DEFAULT_GIT_FILE_MODE, content_ref::ContentRef};
+    use scope_domain::repository::git::GitSegmentRef;
     use sea_orm::{ActiveModelTrait, IntoActiveModel};
 
     fn span(first_sequence: u64, last_sequence: u64, geometric_tier: u32) -> GitPackSpan {
@@ -562,14 +515,11 @@ mod tests {
             geometric_tier,
             base_oid: (first_sequence > 1).then(|| format!("head-{}", first_sequence - 1)),
             head_oid: format!("head-{last_sequence}"),
-            object: scope_domain::content::SourceBlob {
-                content_ref: ContentRef::git_segment_sha256(format!(
-                    "pack-{first_sequence}-{last_sequence}"
-                )),
-                sha256: format!("pack-{first_sequence}-{last_sequence}"),
-                git_oid: format!("head-{last_sequence}"),
-                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-                size_bytes: 1,
+            segment: GitSegmentRef {
+                segment_id: format!("segment-{first_sequence}-{last_sequence}"),
+                sha256: format!("{first_sequence:032x}{last_sequence:032x}"),
+                plaintext_bytes: 1,
+                encoding_version: 2,
             },
         }
     }
@@ -649,10 +599,30 @@ mod tests {
             )
             .await
             .unwrap();
-        entities::git_pack_span::Model::from_domain("scheduler/repo", &span(1, 1, 0))
+        let span = span(1, 1, 0);
+        let repositories = store.repositories();
+        repositories
+            .begin_git_segment_upload(
+                "scheduler/repo",
+                &span.segment.segment_id,
+                &format!("git/segments/v2/scheduler/repo/{}", span.segment.segment_id),
+                span.segment.encoding_version,
+                1,
+            )
+            .await
+            .unwrap();
+        repositories
+            .mark_git_segment_upload_ready(&span.segment, 2, 2)
+            .await
+            .unwrap();
+        entities::git_pack_span::Model::from_domain("scheduler/repo", &span)
             .unwrap()
             .into_active_model()
             .insert(store.db.as_ref())
+            .await
+            .unwrap();
+        repositories
+            .mark_git_segment_upload_published(&span.segment.segment_id, 3)
             .await
             .unwrap();
     }
@@ -871,20 +841,34 @@ mod tests {
             .unwrap();
         let initial = [span(1, 2, 1), span(3, 3, 0), span(4, 4, 0)];
         for span in initial {
+            let repositories = store.repositories();
+            repositories
+                .begin_git_segment_upload(
+                    "repo_compaction",
+                    &span.segment.segment_id,
+                    &format!(
+                        "git/segments/v2/repo_compaction/{}",
+                        span.segment.segment_id
+                    ),
+                    span.segment.encoding_version,
+                    1,
+                )
+                .await
+                .unwrap();
+            repositories
+                .mark_git_segment_upload_ready(&span.segment, 2, 2)
+                .await
+                .unwrap();
             entities::git_pack_span::Model::from_domain("repo_compaction", &span)
                 .unwrap()
                 .into_active_model()
                 .insert(store.db.as_ref())
                 .await
                 .unwrap();
-            insert_object_reference(
-                store.db.as_ref(),
-                "git_segment",
-                &format!("repo_compaction:{}", span.first_sequence),
-                &span.object,
-            )
-            .await
-            .unwrap();
+            repositories
+                .mark_git_segment_upload_published(&span.segment.segment_id, 3)
+                .await
+                .unwrap();
         }
 
         schedule_git_compaction(store.db.as_ref(), "repo_compaction", 4, 10)
@@ -914,20 +898,34 @@ mod tests {
         );
 
         let appended = span(5, 5, 0);
+        let repositories = store.repositories();
+        repositories
+            .begin_git_segment_upload(
+                "repo_compaction",
+                &appended.segment.segment_id,
+                &format!(
+                    "git/segments/v2/repo_compaction/{}",
+                    appended.segment.segment_id
+                ),
+                appended.segment.encoding_version,
+                1,
+            )
+            .await
+            .unwrap();
+        repositories
+            .mark_git_segment_upload_ready(&appended.segment, 2, 2)
+            .await
+            .unwrap();
         entities::git_pack_span::Model::from_domain("repo_compaction", &appended)
             .unwrap()
             .into_active_model()
             .insert(store.db.as_ref())
             .await
             .unwrap();
-        insert_object_reference(
-            store.db.as_ref(),
-            "git_segment",
-            "repo_compaction:5",
-            &appended.object,
-        )
-        .await
-        .unwrap();
+        repositories
+            .mark_git_segment_upload_published(&appended.segment.segment_id, 3)
+            .await
+            .unwrap();
         store
             .db
             .execute_unprepared(
@@ -939,6 +937,23 @@ mod tests {
             .unwrap();
 
         let replacement = span(3, 4, 1);
+        repositories
+            .begin_git_segment_upload(
+                "repo_compaction",
+                &replacement.segment.segment_id,
+                &format!(
+                    "git/segments/v2/repo_compaction/{}",
+                    replacement.segment.segment_id
+                ),
+                replacement.segment.encoding_version,
+                4,
+            )
+            .await
+            .unwrap();
+        repositories
+            .mark_git_segment_upload_ready(&replacement.segment, 2, 5)
+            .await
+            .unwrap();
         let applied = store
             .jobs()
             .replace_git_pack_spans_with_compaction(
@@ -952,15 +967,8 @@ mod tests {
             .unwrap();
         assert!(applied);
 
-        let layout = entities::git_pack_span::Entity::find()
-            .filter(entities::git_pack_span::Column::RepoId.eq("repo_compaction"))
-            .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-            .all(store.db.as_ref())
+        let layout = load_git_pack_spans(store.db.as_ref(), "repo_compaction")
             .await
-            .unwrap()
-            .into_iter()
-            .map(entities::git_pack_span::Model::try_into_domain)
-            .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(
             layout

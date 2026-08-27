@@ -19,6 +19,10 @@ pub const SCOPE_BUCKET_FORCE_PATH_STYLE_ENV: &str = "SCOPE_BUCKET_FORCE_PATH_STY
 pub const SCOPE_OBJECT_ENCRYPTION_KEY_ENV: &str = "SCOPE_OBJECT_ENCRYPTION_KEY";
 pub const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
 pub const SCOPE_GIT_CACHE_MAX_BYTES_ENV: &str = "SCOPE_GIT_CACHE_MAX_BYTES";
+pub const SCOPE_GIT_SEGMENT_CHUNK_BYTES_ENV: &str = "SCOPE_GIT_SEGMENT_CHUNK_BYTES";
+pub const SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES_ENV: &str =
+    "SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES";
+pub const SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY_ENV: &str = "SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY";
 pub const SCOPE_OPERATOR_TOKEN_ENV: &str = "SCOPE_OPERATOR_TOKEN";
 pub const CLERK_ISSUER_ENV: &str = "CLERK_ISSUER";
 pub const CLERK_JWKS_URL_ENV: &str = "CLERK_JWKS_URL";
@@ -69,6 +73,22 @@ pub fn git_cache_max_bytes_from_env() -> anyhow::Result<usize> {
         anyhow::bail!("{SCOPE_GIT_CACHE_MAX_BYTES_ENV} must be greater than zero");
     }
     Ok(bytes)
+}
+
+pub fn git_segment_store_config_from_env(
+    local_root: PathBuf,
+) -> anyhow::Result<scope_git_storage::GitSegmentStoreConfig> {
+    let mut config = scope_git_storage::GitSegmentStoreConfig::new(local_root);
+    config.chunk_bytes = parse_usize_env(SCOPE_GIT_SEGMENT_CHUNK_BYTES_ENV, config.chunk_bytes)?;
+    config.multipart_part_bytes = parse_usize_env(
+        SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES_ENV,
+        config.multipart_part_bytes,
+    )?;
+    config.channel_capacity = parse_usize_env(
+        SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY_ENV,
+        config.channel_capacity,
+    )?;
+    Ok(config)
 }
 
 fn parse_usize_env(name: &str, default: usize) -> anyhow::Result<usize> {

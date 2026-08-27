@@ -35,7 +35,7 @@ async function main() {
   await mkdir(outputRoot, { recursive: true });
 
   const report = {
-    version: 3,
+    version: 4,
     generatedAt: new Date().toISOString(),
     runLabel: process.env.SCOPE_BENCH_RUN_LABEL?.trim() || 'unlabeled',
     environment,
@@ -44,13 +44,16 @@ async function main() {
     services: {},
   };
   for (const service of services) {
-    const [logs, ...gitLogGroups] = await Promise.all([
+    const [logs, restoreLogs, contentLogs, materializationLogs, segmentIngestLogs, segmentRestoreLogs] = await Promise.all([
       railwayLogs(service, environment, since, until, logLines),
       railwayLogs(service, environment, since, until, logLines, '"Git restore operation completed"'),
       railwayLogs(service, environment, since, until, logLines, '"Git content read completed"'),
       railwayLogs(service, environment, since, until, logLines, '"repository Git replica materialization completed"'),
+      railwayLogs(service, environment, since, until, logLines, '"Git segment ingest telemetry"'),
+      railwayLogs(service, environment, since, until, logLines, '"Git segment restore telemetry"'),
     ]);
-    const gitLogs = gitLogGroups.flat();
+    const gitLogs = [restoreLogs, contentLogs, materializationLogs].flat();
+    const segmentLogs = [segmentIngestLogs, segmentRestoreLogs].flat();
     const snapshots = logs.flatMap((entry) => {
       const message = stripAnsi(entry.message || '');
       if (!message.includes('runtime process snapshot')) return [];
@@ -78,6 +81,10 @@ async function main() {
         && !message.includes('repository Git replica materialization completed')) return [];
       return [{ timestamp: entry.timestamp, ...gitOperationFields(message) }];
     });
+    const gitSegmentTelemetry = segmentLogs.flatMap((entry) => {
+      const event = gitSegmentTelemetryFields(stripAnsi(entry.message || ''));
+      return event ? [{ timestamp: entry.timestamp, ...event }] : [];
+    });
     const errors = logs.flatMap((entry) => {
       const message = stripAnsi(entry.message || '');
       return /Resource temporarily unavailable|capacity is exhausted|failed to spawn|panicked/i.test(message)
@@ -102,6 +109,8 @@ async function main() {
       gitOperations,
       gitOperationSummary: summarizeGitOperations(gitOperations),
       materializationSummary: summarizeMaterializations(gitOperations),
+      gitSegmentTelemetry,
+      gitSegmentSummary: summarizeGitSegmentTelemetry(gitSegmentTelemetry),
       errors,
       capacityRejections,
       capacityRejectionSummary: summarizeCapacityRejections(capacityRejections),
@@ -287,6 +296,52 @@ export function gitOperationFields(message) {
   };
 }
 
+export function gitSegmentTelemetryFields(message) {
+  const kind = message.includes('Git segment ingest telemetry')
+    ? 'ingest'
+    : message.includes('Git segment restore telemetry') ? 'restore' : null;
+  if (!kind) return null;
+  return {
+    kind,
+    phase: textField(message, 'phase') || 'unknown',
+    repositoryId: textField(message, 'repository_id'),
+    segmentId: textField(message, 'segment_id'),
+    success: booleanField(message, 'success'),
+    ...numericFields(message, [
+      'duration_us',
+      'bytes',
+      'blocked_us',
+      'active_ingests',
+      'buffered_bytes',
+      'disk_free_bytes',
+      'ledger_uploading',
+      'ledger_ready',
+      'ledger_published',
+      'orphan_count',
+    ]),
+  };
+}
+
+export function summarizeGitSegmentTelemetry(events) {
+  const phases = Object.fromEntries(groupBy(events, ({ kind, phase }) => `${kind}/${phase}`).map(([phase, values]) => [phase, {
+    count: values.length,
+    failures: values.filter(({ success }) => success === false).length,
+    durationUs: timingSummary(values, 'duration_us'),
+    blockedUs: timingSummary(values, 'blocked_us'),
+    totalBytes: values.reduce((total, event) => total + (event.bytes || 0), 0),
+  }]));
+  return {
+    phases,
+    activeIngests: gaugeSummary(events, 'active_ingests'),
+    bufferedBytes: gaugeSummary(events, 'buffered_bytes'),
+    diskFreeBytes: gaugeSummary(events, 'disk_free_bytes'),
+    ledgerUploading: gaugeSummary(events, 'ledger_uploading'),
+    ledgerReady: gaugeSummary(events, 'ledger_ready'),
+    ledgerPublished: gaugeSummary(events, 'ledger_published'),
+    orphanCount: gaugeSummary(events, 'orphan_count'),
+  };
+}
+
 export function summarizePushPersistence(events) {
   return Object.fromEntries(groupBy(events, ({ protocol }) => protocol).map(([protocol, values]) => [protocol, {
     count: values.length,
@@ -361,6 +416,15 @@ function timingSummary(events, field) {
   } : null;
 }
 
+function gaugeSummary(events, field) {
+  const values = events.map((event) => event[field]).filter(Number.isFinite);
+  return values.length ? {
+    minimum: Math.min(...values),
+    maximum: Math.max(...values),
+    last: values.at(-1),
+  } : null;
+}
+
 function groupBy(values, keyFor) {
   const groups = new Map();
   for (const value of values) {
@@ -386,6 +450,14 @@ function parseJsonLines(value) {
 }
 
 function telemetryMarkdown(report) {
+  const segmentRows = Object.entries(report.services).flatMap(([service, data]) =>
+    Object.entries(data.gitSegmentSummary.phases).map(([phase, summary]) =>
+      `| ${service} | ${phase} | ${summary.count} | ${summary.failures} | ${summary.durationUs?.p95 ?? 'n/a'} | ${summary.blockedUs?.p95 ?? 'n/a'} | ${summary.totalBytes} |`,
+    )).join('\n') || '| none | none | 0 | 0 | n/a | n/a | 0 |';
+  const segmentPressureRows = Object.entries(report.services).map(([service, data]) => {
+    const summary = data.gitSegmentSummary;
+    return `| ${service} | ${summary.activeIngests?.maximum ?? 'n/a'} | ${summary.bufferedBytes?.maximum ?? 'n/a'} | ${summary.diskFreeBytes?.minimum ?? 'n/a'} | ${summary.ledgerUploading?.last ?? 'n/a'} | ${summary.ledgerReady?.last ?? 'n/a'} | ${summary.ledgerPublished?.last ?? 'n/a'} | ${summary.orphanCount?.maximum ?? 'n/a'} |`;
+  }).join('\n');
   const compactionRows = Object.entries(report.services).map(([service, data]) => {
     const summary = data.compactionSummary;
     const outcomes = Object.entries(summary.outcomes).map(([name, count]) => `${name}:${count}`).join(', ') || 'none';
@@ -420,7 +492,7 @@ function telemetryMarkdown(report) {
     Object.entries(data.capacityRejectionSummary).map(([operation, count]) =>
       `| ${service} | ${operation} | ${count} |`,
     )).join('\n') || '| none | none | 0 |';
-  return `# Railway Git storage telemetry\n\nGenerated: ${report.generatedAt}\n\nRun label: ${report.runLabel}\n\nEnvironment: ${report.environment}\n\n## Git materialization outcomes\n\n| Service | Cache/path | Count | Duration p95 ms |\n|---|---|---:|---:|\n${materializationRows}\n\n## Git materialization phases\n\n| Service | Operation | Count | Failures | Duration p95 ms | Summed service ms | Bytes |\n|---|---|---:|---:|---:|---:|---:|\n${gitOperationRows}\n\n## Compaction scheduler\n\n| Service | Count | Outcomes | Queue delay p95 ms | Max attempts | Total p95 ms |\n|---|---:|---|---:|---:|---:|\n${compactionRows}\n\n## Capacity rejections\n\n| Service | Operation | Count |\n|---|---|---:|\n${rejectionRows}\n\n## Runtime pressure\n\n| Service | Peak CPU cores | Peak RSS MiB | Peak cgroup PIDs | Peak open FDs | Peak zombies |\n|---|---:|---:|---:|---:|---:|\n${pressureRows}\n\n## Push persistence\n\n| Service | Protocol | Count | Lock wait p95 us | Body p95 us | Commit p95 us | Total p95 us |\n|---|---|---:|---:|---:|---:|---:|\n${persistenceRows}\n\n## Object storage\n\n| Service | Operation | Count | Failures | Latency p95 us | Bytes | Service-time MiB/s |\n|---|---|---:|---:|---:|---:|---:|\n${objectRows}\n`;
+  return `# Railway Git storage telemetry\n\nGenerated: ${report.generatedAt}\n\nRun label: ${report.runLabel}\n\nEnvironment: ${report.environment}\n\n## Git segment phases\n\n| Service | Kind/phase | Count | Failures | Duration p95 us | Blocked p95 us | Bytes |\n|---|---|---:|---:|---:|---:|---:|\n${segmentRows}\n\n## Git segment pressure and cleanup\n\n| Service | Peak active ingests | Peak buffered bytes | Minimum disk free bytes | Uploading last | Ready last | Published last | Peak orphans |\n|---|---:|---:|---:|---:|---:|---:|---:|\n${segmentPressureRows}\n\n## Git materialization outcomes\n\n| Service | Cache/path | Count | Duration p95 ms |\n|---|---|---:|---:|\n${materializationRows}\n\n## Git materialization phases\n\n| Service | Operation | Count | Failures | Duration p95 ms | Summed service ms | Bytes |\n|---|---|---:|---:|---:|---:|---:|\n${gitOperationRows}\n\n## Compaction scheduler\n\n| Service | Count | Outcomes | Queue delay p95 ms | Max attempts | Total p95 ms |\n|---|---:|---|---:|---:|---:|\n${compactionRows}\n\n## Capacity rejections\n\n| Service | Operation | Count |\n|---|---|---:|\n${rejectionRows}\n\n## Runtime pressure\n\n| Service | Peak CPU cores | Peak RSS MiB | Peak cgroup PIDs | Peak open FDs | Peak zombies |\n|---|---:|---:|---:|---:|---:|\n${pressureRows}\n\n## Push persistence\n\n| Service | Protocol | Count | Lock wait p95 us | Body p95 us | Commit p95 us | Total p95 us |\n|---|---|---:|---:|---:|---:|---:|\n${persistenceRows}\n\n## Object storage\n\n| Service | Operation | Count | Failures | Latency p95 us | Bytes | Service-time MiB/s |\n|---|---|---:|---:|---:|---:|---:|\n${objectRows}\n`;
 }
 
 function required(name) {

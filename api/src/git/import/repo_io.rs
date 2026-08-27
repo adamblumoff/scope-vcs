@@ -1,7 +1,9 @@
 use crate::{
     config::{DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES},
     error::ApiError,
-    git::upload::{git_process_output_with_limits, git_process_output_with_timeout},
+    git::upload::{
+        git_process_output_with_limits, git_process_output_with_timeout, truncated_git_stderr,
+    },
     runtime_budgets::RuntimeBudgets,
     state::AppState,
 };
@@ -12,6 +14,8 @@ use scope_domain::{
     repo_control::{RepoControlPath, classify_repo_control_path},
 };
 use scope_git::{GitTreePath, StoredGitPush, prepare_git_push};
+use scope_git_process::{ProcessLimits, StreamingProcessError, run_with_stdout};
+use scope_git_storage::{ENCODING_VERSION, StagedGitSegment};
 use scope_object_store::{ContentObjectKind, content_object_for_bytes, object_key};
 use scope_postgres::db::ContentRefFence;
 use sha2::{Digest, Sha256};
@@ -316,13 +320,16 @@ pub(crate) fn validate_pushed_commit_range(
 pub(crate) struct FencedGitPush {
     pub(crate) stored: StoredGitPush,
     pub(crate) fence: ContentRefFence,
+    pub(crate) staged_segment: StagedGitSegment,
 }
 
 pub(crate) async fn git_push_from_repo(
     state: &AppState,
+    repository_id: &str,
     repo: &FsPath,
     previous: Option<&GitHead>,
 ) -> Result<FencedGitPush, ApiError> {
+    let _ingest_permit = state.runtime_budgets.try_git_segment_ingest()?;
     let storage_limits = state.runtime_budgets.git_storage_limits();
     let refname = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
     let head_oid = git_stdout_text(repo, &["rev-parse", &refname], "reading pushed Git head")?
@@ -334,39 +341,148 @@ pub(crate) async fn git_push_from_repo(
         revisions.push_str(&previous.head_oid);
         revisions.push('\n');
     }
+    let reservation = state
+        .git_segment_store
+        .reserve(repository_id)
+        .map_err(|error| ApiError::infrastructure_unavailable(error.to_string()))?;
+    let segment_id = reservation.segment_id.clone();
+    let object_key = reservation.object_key.clone();
+    state
+        .metadata
+        .repositories()
+        .begin_git_segment_upload(
+            repository_id,
+            &segment_id,
+            &object_key,
+            ENCODING_VERSION,
+            crate::persistence::unix_now()?,
+        )
+        .await?;
+
     let pack_started = Instant::now();
-    let output = git_process_output_with_limits(
-        Command::new("git")
+    let segment_store = state.git_segment_store.clone();
+    let repository_id_for_ingest = repository_id.to_string();
+    let repo = repo.to_path_buf();
+    let timeout = state.runtime_budgets.git_command_timeout();
+    let output = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Handle::current();
+        let mut command = Command::new("git");
+        command
             .current_dir(repo)
-            .args(["pack-objects", "--revs", "--stdout"]),
-        Some(revisions.into_bytes()),
-        state.runtime_budgets.git_command_timeout(),
-        storage_limits.max_object_bytes(),
-    )?;
+            .args(["pack-objects", "--revs", "--stdout"]);
+        run_with_stdout(
+            &mut command,
+            Some(revisions.into_bytes()),
+            ProcessLimits::new(timeout),
+            "creating incremental Git pack",
+            move |stdout| {
+                runtime.block_on(segment_store.ingest_reserved_blocking_reader(
+                    &repository_id_for_ingest,
+                    reservation,
+                    stdout,
+                ))
+            },
+        )
+    })
+    .await;
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            best_effort_delete_git_segment_identity(state, repository_id, &segment_id, &object_key)
+                .await;
+            return Err(ApiError::internal(error));
+        }
+    };
     let pack_elapsed = pack_started.elapsed();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            best_effort_delete_git_segment_identity(state, repository_id, &segment_id, &object_key)
+                .await;
+            return Err(match error {
+                StreamingProcessError::Process(error) => {
+                    ApiError::infrastructure_unavailable(error.to_string())
+                }
+                StreamingProcessError::Consumer(error) => {
+                    ApiError::infrastructure_unavailable(error.to_string())
+                }
+            });
+        }
+    };
+    let staged_segment = output.value;
     if !output.status.success() {
         tracing::info!(
             incremental = previous.is_some(),
             pack_us = pack_elapsed.as_micros(),
-            pack_bytes = output.stdout.len(),
+            pack_bytes = staged_segment.segment.plaintext_bytes,
             success = false,
             "Git push pack timing"
         );
+        best_effort_delete_staged_git_segment(state, repository_id, &staged_segment).await;
         return Err(ApiError::infrastructure_unavailable(format!(
             "creating incremental Git pack: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            truncated_git_stderr(&output.stderr).trim()
         )));
     }
-    let pack_bytes = output.stdout.len();
+    if let Err(error) = state
+        .metadata
+        .repositories()
+        .mark_git_segment_upload_ready(
+            &staged_segment.segment,
+            staged_segment.encrypted_bytes,
+            crate::persistence::unix_now()?,
+        )
+        .await
+    {
+        best_effort_delete_staged_git_segment(state, repository_id, &staged_segment).await;
+        return Err(error.into());
+    }
+
+    let pack_bytes = staged_segment.segment.plaintext_bytes;
     let store_started = Instant::now();
-    let prepared = prepare_git_push(&output.stdout, head_oid, previous, storage_limits)
-        .map_err(|failure| ApiError::from(failure.into_parts().0))?;
-    let content_refs = prepared.objects().map(|object| object.content_ref.clone());
-    let fence = state
+    let prepared = match prepare_git_push(
+        staged_segment.segment.clone(),
+        head_oid,
+        previous,
+        storage_limits,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            best_effort_delete_staged_git_segment(state, repository_id, &staged_segment).await;
+            return Err(error.into());
+        }
+    };
+    let content_refs = [prepared.manifest().content_ref.clone()];
+    let fence = match state
         .metadata
         .acquire_content_ref_fence(&content_refs)
-        .await?;
-    let stored = prepared.store(state.object_store.as_ref());
+        .await
+    {
+        Ok(fence) => fence,
+        Err(error) => {
+            best_effort_delete_staged_git_segment(state, repository_id, &staged_segment).await;
+            return Err(error.into());
+        }
+    };
+    let stored = prepared.store_manifest(state.object_store.as_ref());
+    let timings = &staged_segment.timings;
+    tracing::info!(
+        phase = "complete",
+        repository_id,
+        segment_id = staged_segment.segment.segment_id,
+        success = stored.is_ok(),
+        duration_us = timings.total.as_micros(),
+        bytes = timings.plaintext_bytes,
+        blocked_us = timings.fanout_blocked.as_micros(),
+        active_ingests = 1_u64,
+        buffered_bytes = timings.chunk_bytes.saturating_mul(timings.channel_capacity),
+        disk_free_bytes = disk_free_bytes(staged_segment.local_pack_path()),
+        ledger_uploading = 0_u64,
+        ledger_ready = u64::from(stored.is_ok()),
+        ledger_published = 0_u64,
+        orphan_count = u64::from(stored.is_err()),
+        "Git segment ingest telemetry"
+    );
     tracing::info!(
         incremental = previous.is_some(),
         pack_us = pack_elapsed.as_micros(),
@@ -376,12 +492,105 @@ pub(crate) async fn git_push_from_repo(
         "Git push pack timing"
     );
     match stored {
-        Ok(stored) => Ok(FencedGitPush { stored, fence }),
-        Err(failure) => {
-            let (error, orphan_objects) = failure.into_parts();
-            queue_failed_git_objects(state, orphan_objects).await?;
+        Ok(stored) => Ok(FencedGitPush {
+            stored,
+            fence,
+            staged_segment,
+        }),
+        Err(error) => {
+            fence.release().await;
+            best_effort_delete_staged_git_segment(state, repository_id, &staged_segment).await;
             Err(error.into())
         }
+    }
+}
+
+#[cfg(unix)]
+fn disk_free_bytes(path: &FsPath) -> u64 {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+    let Some(path) = path.parent() else {
+        return 0;
+    };
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return 0;
+    };
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is a live NUL-terminated string and `stats` points to
+    // writable storage initialized by statvfs on success.
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return 0;
+    }
+    // SAFETY: statvfs returned success and initialized the structure.
+    let stats = unsafe { stats.assume_init() };
+    stats.f_bavail.saturating_mul(stats.f_frsize)
+}
+
+#[cfg(not(unix))]
+fn disk_free_bytes(_path: &FsPath) -> u64 {
+    0
+}
+
+pub(crate) async fn best_effort_delete_staged_git_segment(
+    state: &AppState,
+    repository_id: &str,
+    staged: &StagedGitSegment,
+) {
+    best_effort_delete_git_segment_identity(
+        state,
+        repository_id,
+        &staged.segment.segment_id,
+        &staged.object_key,
+    )
+    .await;
+    if let Err(error) = state.git_segment_store.delete_local(staged).await {
+        tracing::warn!(
+            repository_id,
+            segment_id = staged.segment.segment_id,
+            error = %error,
+            "failed to delete local Git segment"
+        );
+    }
+}
+
+async fn best_effort_delete_git_segment_identity(
+    state: &AppState,
+    repository_id: &str,
+    segment_id: &str,
+    object_key: &str,
+) {
+    let now = crate::persistence::unix_now().unwrap_or(0);
+    let abandoned = match state
+        .metadata
+        .repositories()
+        .abandon_git_segment_upload(segment_id, now)
+        .await
+    {
+        Ok(abandoned) => abandoned,
+        Err(error) => {
+            tracing::warn!(repository_id, segment_id, error = %error.message, "failed to abandon Git segment");
+            return;
+        }
+    };
+    if !abandoned {
+        tracing::warn!(
+            repository_id,
+            segment_id,
+            "Git segment may already be published; leaving remote bytes untouched"
+        );
+        return;
+    }
+    if let Err(error) = state.git_segment_store.cleanup_remote(object_key).await {
+        tracing::warn!(repository_id, segment_id, error = %error, "failed to delete remote Git segment");
+        return;
+    }
+    if let Err(error) = state
+        .metadata
+        .repositories()
+        .mark_git_segment_upload_deleted(segment_id, crate::persistence::unix_now().unwrap_or(now))
+        .await
+    {
+        tracing::warn!(repository_id, segment_id, error = %error.message, "failed to mark Git segment deleted");
     }
 }
 

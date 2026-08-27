@@ -114,7 +114,6 @@ impl Repository {
     pub fn source_blobs(&self) -> Vec<SourceBlob> {
         let mut blobs = Vec::new();
         blobs.extend(self.git_head.iter().map(|head| head.manifest.clone()));
-        blobs.extend(self.git_pack_spans.iter().map(|span| span.object.clone()));
         for change in self.graph.commits.iter().flat_map(|commit| &commit.changes) {
             blobs.extend(change.old_content.clone());
             blobs.extend(change.new_content.clone());

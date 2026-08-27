@@ -44,6 +44,7 @@ hmac.workspace = true
 http = "1.4.0"
 jsonwebtoken.workspace = true
 getrandom.workspace = true
+libc.workspace = true
 posthog-rs = { version = "0.24.0", default-features = false, features = ["async-client"] }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
 serde.workspace = true
@@ -57,6 +58,7 @@ scope_cache_contract.workspace = true
 scope_cache_domain.workspace = true
 scope_content_lifecycle.workspace = true
 scope_git = { workspace = true, features = ["storage"] }
+scope_git_storage.workspace = true
 scope_run_config.workspace = true
 scope_object_store.workspace = true
 url = "2.5.7"

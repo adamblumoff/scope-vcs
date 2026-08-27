@@ -12,6 +12,10 @@ use crate::{
     settings::{WorkerRole, WorkerSettings},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use scope_git_storage::{
+    FileMultipartStore, GitSegmentStore, MultipartStore, S3MultipartSettings, S3MultipartStore,
+    SegmentEncryptionKey,
+};
 use scope_object_store::{
     EncryptedObjectStore, FileObjectStore, FileObjectStoreSettings, ObjectStore, S3ObjectStore,
     S3ObjectStoreSettings,
@@ -93,6 +97,9 @@ async fn run() -> anyhow::Result<()> {
         git_compaction_spans = settings.git_compaction_spans,
         git_compaction_timeout_secs = settings.git_compaction_timeout.as_secs(),
         git_object_max_bytes = settings.git_storage_limits.max_object_bytes(),
+        git_segment_chunk_bytes = settings.git_segment_store.chunk_bytes,
+        git_segment_multipart_part_bytes = settings.git_segment_store.multipart_part_bytes,
+        git_segment_channel_capacity = settings.git_segment_store.channel_capacity,
         "starting worker"
     );
 
@@ -110,19 +117,26 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
     let Some(metadata) = connect_worker_or_wait(&settings, &health).await else {
         return Ok(());
     };
-    let object_store = if settings.role.runs_compaction() || settings.role.runs_cleanup() {
+    let object_store = if settings.role.runs_cleanup() {
         Some(object_store_from_env(&settings.data_dir)?)
+    } else {
+        None
+    };
+    let git_segment_store = if settings.role.runs_compaction() {
+        Some(Arc::new(git_segment_store_from_env(&settings)?))
     } else {
         None
     };
     match settings.role {
         WorkerRole::All => {
             let object_store = object_store.expect("all roles require object storage");
+            let git_segment_store =
+                git_segment_store.expect("all roles require Git segment storage");
             tokio::try_join!(
                 control::run(metadata.clone(), settings.clone(), health.clone()),
                 compaction::run(
                     metadata.clone(),
-                    Arc::clone(&object_store),
+                    git_segment_store,
                     settings.clone(),
                     health.clone(),
                 ),
@@ -133,7 +147,7 @@ async fn run_worker(settings: WorkerSettings, health: WorkerHealth) -> anyhow::R
         WorkerRole::Compaction => {
             compaction::run(
                 metadata,
-                object_store.expect("compaction role requires object storage"),
+                git_segment_store.expect("compaction role requires Git segment storage"),
                 settings,
                 health,
             )
@@ -247,6 +261,37 @@ fn object_store_from_env(data_dir: &std::path::Path) -> anyhow::Result<Arc<dyn O
         raw,
         encryption_key_from_env()?,
     )))
+}
+
+fn git_segment_store_from_env(settings: &WorkerSettings) -> anyhow::Result<GitSegmentStore> {
+    let backend: Arc<dyn MultipartStore> = match non_empty_env(SCOPE_OBJECT_STORE_ENV).as_deref() {
+        Some("filesystem") => {
+            let root = non_empty_env(SCOPE_OBJECT_STORE_DIR_ENV)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| settings.data_dir.join("objects"));
+            Arc::new(FileMultipartStore::new(root)?)
+        }
+        Some(value) if value != "s3" => {
+            anyhow::bail!("unsupported {SCOPE_OBJECT_STORE_ENV} value {value}")
+        }
+        _ => {
+            let s3 = s3_settings_from_env()?;
+            Arc::new(S3MultipartStore::new(S3MultipartSettings {
+                endpoint: s3.endpoint,
+                bucket: s3.bucket,
+                region: s3.region,
+                access_key_id: s3.access_key_id,
+                secret_access_key: s3.secret_access_key,
+                force_path_style: s3.force_path_style,
+            })?)
+        }
+    };
+    GitSegmentStore::new(
+        backend,
+        SegmentEncryptionKey::new("primary", encryption_key_from_env()?)?,
+        settings.git_segment_store.clone(),
+    )
+    .map_err(anyhow::Error::from)
 }
 
 fn s3_settings_from_env() -> anyhow::Result<S3ObjectStoreSettings> {

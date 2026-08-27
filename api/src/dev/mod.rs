@@ -18,6 +18,7 @@ use axum::{
     extract::{Path, State},
 };
 use scope_api_contract::CliSessionTokenResponse;
+use scope_git_storage::{FileMultipartStore, GitSegmentStore, SegmentEncryptionKey};
 use scope_object_store::{EncryptedObjectStore, ObjectStore};
 use scope_postgres::db::MetadataStore;
 use std::sync::Arc;
@@ -42,13 +43,24 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         Arc::new(file_from_env(&data_dir.join("objects"))),
         object_encryption_key,
     ));
-    let catalog =
-        seed::catalog(raw_object_store.as_ref(), settings.seed_user.clone()).map_err(|error| {
-            anyhow::anyhow!(
-                "building local dev catalog: {}",
-                error.into_operator_diagnostic()
-            )
-        })?;
+    let git_segment_store = Arc::new(GitSegmentStore::new(
+        Arc::new(FileMultipartStore::new(
+            data_dir.join("git-segment-objects"),
+        )?),
+        SegmentEncryptionKey::new("primary", object_encryption_key)?,
+        crate::config::git_segment_store_config_from_env(data_dir.join("git-segments"))?,
+    )?);
+    let catalog = seed::catalog(
+        raw_object_store.as_ref(),
+        git_segment_store.as_ref(),
+        settings.seed_user.clone(),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "building local dev catalog: {}",
+            error.into_operator_diagnostic()
+        )
+    })?;
     let metadata = MetadataStore::connect(settings.database_url.clone()).await?;
     metadata
         .admin()
@@ -101,6 +113,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         data_dir: Arc::new(data_dir),
         clerk: ClerkVerifier::from_env(),
         object_store,
+        git_segment_store,
         cache_grants: crate::cache_grants::CacheGrantIssuer::test(),
         runtime_budgets,
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
@@ -116,6 +129,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     repository_engine.start_reaper();
     state.start_run_attempt_recovery();
     state.start_run_retention();
+    state.start_git_segment_recovery();
     Ok(state)
 }
 

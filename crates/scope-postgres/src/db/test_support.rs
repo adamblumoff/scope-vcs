@@ -492,6 +492,13 @@ async fn seed_catalog_rows(
             .await
             .map_err(PostgresError::internal)?;
     }
+    for upload in &catalog.git_segment_uploads {
+        entities::git_segment_upload::Model::from_domain(upload)?
+            .into_active_model()
+            .insert(tx)
+            .await
+            .map_err(PostgresError::internal)?;
+    }
     for repo in catalog.repositories.values() {
         insert_repository(
             tx,

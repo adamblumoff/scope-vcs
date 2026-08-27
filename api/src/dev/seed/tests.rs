@@ -39,9 +39,11 @@ fn local_dev_actor_lookup_is_limited_to_seeded_identities() {
 #[tokio::test]
 async fn seed_catalog_contains_owned_repos_with_readable_blobs() {
     let store = EncryptedObjectStore::new(Arc::new(MemoryObjectStore::new()), [9; 32]);
+    let git_segment_store = super::test_seed_git_segment_store();
 
     let catalog = super::catalog(
         &store,
+        &git_segment_store,
         DevSeedUser {
             email: "dev@example.com".to_string(),
             handle: "dev".to_string(),
@@ -144,8 +146,10 @@ async fn seed_catalog_git_segments_restore_raw_repositories() {
         Arc::new(MemoryObjectStore::new()),
         [9; 32],
     ));
+    let git_segment_store = Arc::new(super::test_seed_git_segment_store());
     let catalog = super::catalog(
         store.as_ref(),
+        git_segment_store.as_ref(),
         DevSeedUser {
             email: "dev@example.com".to_string(),
             handle: "dev".to_string(),
@@ -153,6 +157,7 @@ async fn seed_catalog_git_segments_restore_raw_repositories() {
     )
     .unwrap();
     let mut state = AppState::test_state();
+    state.git_segment_store = git_segment_store;
     state.object_store = store;
     let target = scope_postgres::db::TestDatabaseTarget::required().unwrap();
     state.metadata = scope_postgres::db::MetadataStore::connect_fresh_for_tests(&target).unwrap();

@@ -14,9 +14,11 @@ use crate::{
     state::AppState,
 };
 use scope_domain::repository::git::{GitHead, GitPackSpan, validate_git_pack_layout};
+use scope_git_process::{ProcessLimits, run_with_stdin_reader};
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
@@ -33,7 +35,7 @@ const MATERIALIZATION_PATH_RESTORE: u8 = 3;
 /// Owns this API process's disposable Git replicas and coordinates mutations of
 /// each replica through one repository-scoped stream. Durable publication is
 /// still ordered by the Postgres repository aggregate, and compaction remains a
-/// worker concern; `sync_after_push` receives only an already-committed frontier.
+/// worker concern; local promotion receives only an already-committed frontier.
 pub(crate) struct RepositoryEngine {
     cache: Arc<RepositoryGitCache>,
     materializations: GitDerivedCacheCoordinator,
@@ -221,7 +223,7 @@ impl RepositoryEngine {
             pack_span_count = pack_spans.len(),
             total_pack_bytes = pack_spans
                 .iter()
-                .map(|span| span.object.size_bytes)
+                .map(|span| span.segment.plaintext_bytes)
                 .sum::<u64>(),
             success = result.is_ok(),
             "repository Git replica materialization completed"
@@ -233,7 +235,7 @@ impl RepositoryEngine {
     pub(crate) fn sync_after_push(
         &self,
         repository_id: &str,
-        source_repo: &Path,
+        local_pack: &Path,
         expected_head: &str,
         push_sequence: u64,
     ) -> Result<(), ApiError> {
@@ -254,31 +256,51 @@ impl RepositoryEngine {
         let result = self.coordinate_repository(repository_id, is_ready, || {
             built.store(true, Ordering::Relaxed);
             if target.is_dir() {
-                run_git(
+                index_local_pack(&target, local_pack)?;
+                run_timed_git_restore_phase(
+                    repository_id,
+                    "promote_update_ref",
                     Some(&target),
                     &[
-                        "fetch",
-                        "--no-tags",
-                        "--force",
-                        source_repo.to_string_lossy().as_ref(),
-                        &format!(
-                            "+refs/heads/{DEFAULT_GIT_BRANCH}:refs/heads/{DEFAULT_GIT_BRANCH}"
-                        ),
+                        "update-ref",
+                        &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+                        expected_head,
                     ],
-                    "advancing repository Git cache from accepted push",
+                    "advancing repository Git cache from accepted segment",
                 )?;
             } else {
+                let attempt = REPOSITORY_MATERIALIZATION_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+                let temp = self.cache_root().join(format!(
+                    "repo-promoting.{}.{}.tmp",
+                    std::process::id(),
+                    attempt
+                ));
                 run_git(
                     None,
-                    &[
-                        "clone",
-                        "--bare",
-                        "--local",
-                        source_repo.to_string_lossy().as_ref(),
-                        target.to_string_lossy().as_ref(),
-                    ],
+                    &["--bare", "init", temp.to_string_lossy().as_ref()],
                     "seeding repository Git cache from accepted push",
                 )?;
+                let build = (|| {
+                    index_local_pack(&temp, local_pack)?;
+                    run_timed_git_restore_phase(
+                        repository_id,
+                        "promote_update_ref",
+                        Some(&temp),
+                        &[
+                            "update-ref",
+                            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+                            expected_head,
+                        ],
+                        "seeding repository Git cache head",
+                    )?;
+                    sanitize_repository_git_cache_repo(&temp, expected_head)?;
+                    self.cache.note_applied(&temp, push_sequence)?;
+                    fs::rename(&temp, &target).map_err(ApiError::internal)
+                })();
+                if build.is_err() {
+                    let _ = fs::remove_dir_all(&temp);
+                }
+                return build;
             }
             sanitize_repository_git_cache_repo(&target, expected_head)?;
             self.cache.note_applied(&target, push_sequence)
@@ -380,6 +402,28 @@ impl RepositoryEngine {
             &["fsck", "--connectivity-only", &head.head_oid],
             "verifying caught-up repository Git cache",
         )
+    }
+}
+
+fn index_local_pack(repo_root: &Path, local_pack: &Path) -> Result<(), ApiError> {
+    let pack = fs::File::open(local_pack).map_err(ApiError::internal)?;
+    let output = run_with_stdin_reader(
+        Command::new("git")
+            .arg("--git-dir")
+            .arg(repo_root)
+            .args(["index-pack", "--stdin"]),
+        pack,
+        ProcessLimits::new(crate::runtime_budgets::RuntimeBudgets::default_git_command_timeout()),
+        "indexing accepted local Git segment",
+    )
+    .map_err(|error| ApiError::infrastructure_unavailable(error.to_string()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(ApiError::infrastructure_unavailable(format!(
+            "indexing accepted local Git segment: {}",
+            crate::git::upload::truncated_git_stderr(&output.stderr).trim()
+        )))
     }
 }
 
@@ -571,8 +615,8 @@ mod tests {
         let engine = test_engine("repository-engine-monotonic-sync");
         let root = engine.cache_root().to_path_buf();
         let work = root.join("work");
-        let older = root.join("older.git");
-        let newer = root.join("newer.git");
+        let older = root.join("older.pack");
+        let newer = root.join("newer.pack");
         run_git(
             None,
             &["init", work.to_string_lossy().as_ref()],
@@ -606,17 +650,14 @@ mod tests {
         )
         .unwrap();
         let first_head = git_head(&work);
-        run_git(
-            None,
-            &[
-                "clone",
-                "--bare",
-                work.to_string_lossy().as_ref(),
-                older.to_string_lossy().as_ref(),
-            ],
+        let older_pack = run_git_output(
+            Some(&work),
+            &["pack-objects", "--all", "--stdout"],
             "snapshot older source",
         )
         .unwrap();
+        assert!(older_pack.status.success());
+        fs::write(&older, older_pack.stdout).unwrap();
 
         fs::write(work.join("README.md"), "second\n").unwrap();
         run_git(
@@ -626,17 +667,14 @@ mod tests {
         )
         .unwrap();
         let second_head = git_head(&work);
-        run_git(
-            None,
-            &[
-                "clone",
-                "--bare",
-                work.to_string_lossy().as_ref(),
-                newer.to_string_lossy().as_ref(),
-            ],
+        let newer_pack = run_git_output(
+            Some(&work),
+            &["pack-objects", "--all", "--stdout"],
             "snapshot newer source",
         )
         .unwrap();
+        assert!(newer_pack.status.success());
+        fs::write(&newer, newer_pack.stdout).unwrap();
 
         engine
             .sync_after_push("owner/repo", &newer, &second_head, 2)

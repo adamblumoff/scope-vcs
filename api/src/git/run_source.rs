@@ -309,12 +309,29 @@ mod tests {
     use super::*;
     use crate::git::import::{git_push_from_repo, run_git, run_git_output};
     use scope_domain::{
-        projection::ProjectionViewKey, repository::git::GitHead, runs::source::RunSource,
+        account::UserAccount, policy::Visibility, projection::ProjectionViewKey,
+        repository::git::GitHead, runs::source::RunSource,
     };
 
     #[tokio::test]
     async fn accepted_git_head_materializes_a_non_durable_bundle_at_run_start() {
         let state = AppState::test_state();
+        let owner = UserAccount {
+            id: "user-owner".to_string(),
+            handle: "owner".to_string(),
+            email: "owner@example.test".to_string(),
+            email_verified: true,
+        };
+        let mut catalog = scope_postgres::db::CatalogFixture::default();
+        catalog
+            .create_repository(&owner, "repo", Visibility::Private)
+            .unwrap();
+        catalog.users.insert(owner.id.clone(), owner);
+        state
+            .metadata
+            .admin()
+            .seed_catalog_for_tests(catalog)
+            .unwrap();
         let repository = TemporaryRunSourceRepository::new(&state).unwrap();
         fs::create_dir_all(repository.path()).unwrap();
         run_git(
@@ -349,7 +366,7 @@ mod tests {
         )
         .unwrap();
 
-        let pushed = git_push_from_repo(&state, repository.path(), None)
+        let pushed = git_push_from_repo(&state, "owner/repo", repository.path(), None)
             .await
             .unwrap();
         let source = RunSource::accepted_git_head(

@@ -1,8 +1,8 @@
 use super::{
-    RepositoryStore, begin_metadata_read_snapshot, entities, history_rows::RepositoryHistory,
-    repository_rows::RepositoryFactRows,
+    RepositoryStore, begin_metadata_read_snapshot, entities, git_segments::load_git_pack_spans,
+    history_rows::RepositoryHistory, repository_rows::RepositoryFactRows,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::collections::BTreeMap;
 use {
     crate::error::PostgresError,
@@ -50,15 +50,7 @@ impl RepositoryStore {
             .map_err(PostgresError::internal)?
             .map(entities::git_head::Model::try_into_domain)
             .transpose()?;
-        let pack_spans = entities::git_pack_span::Entity::find()
-            .filter(entities::git_pack_span::Column::RepoId.eq(id.clone()))
-            .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-            .all(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(entities::git_pack_span::Model::try_into_domain)
-            .collect::<Result<Vec<_>, _>>()?;
+        let pack_spans = load_git_pack_spans(&tx, &id).await?;
         let members = entities::repository_member::Entity::find()
             .filter(entities::repository_member::Column::RepoId.eq(id.clone()))
             .filter(entities::repository_member::Column::UserId.eq(user_id.to_string()))

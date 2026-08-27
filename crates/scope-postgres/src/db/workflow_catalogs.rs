@@ -1,6 +1,6 @@
 use super::{
     RepositoryStore, acquire_aggregate_lock, begin_metadata_read_snapshot, entities,
-    repository_from_model,
+    git_segments::load_git_pack_spans, repository_from_model,
 };
 use crate::error::PostgresError;
 use scope_domain::{
@@ -158,15 +158,7 @@ impl RepositoryStore {
                 continue;
             };
             let source_change_version = git_head.change_version;
-            let git_pack_spans = entities::git_pack_span::Entity::find()
-                .filter(entities::git_pack_span::Column::RepoId.eq(&repository.id))
-                .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-                .all(self.db.as_ref())
-                .await
-                .map_err(PostgresError::internal)?
-                .into_iter()
-                .map(entities::git_pack_span::Model::try_into_domain)
-                .collect::<Result<Vec<_>, _>>()?;
+            let git_pack_spans = load_git_pack_spans(self.db.as_ref(), &repository.id).await?;
             let workflow_blobs = current_workflow_blobs(self.db.as_ref(), &repository.id).await?;
             candidates.push(RepositoryWorkflowCatalogBackfillCandidate {
                 repo_id: repository.id,

@@ -1,12 +1,11 @@
 use super::{
     GeneratedIdSource, entities,
+    git_segments::{load_git_pack_spans, publish_git_segment, retire_git_segment},
     history_rows::{
         RepositoryHistoryDelta, insert_repository_history, insert_repository_live_files,
         save_repository_history_delta,
     },
-    object_references::{
-        delete_object_reference, insert_object_reference, replace_object_reference,
-    },
+    object_references::{insert_object_reference, replace_object_reference},
     outbox::enqueue_projection_read_model_rebuild,
 };
 use sea_orm::{
@@ -54,7 +53,7 @@ where
         .insert(conn)
         .await
         .map_err(PostgresError::internal)?;
-    insert_repository_fact_rows(conn, repo).await?;
+    insert_repository_fact_rows(conn, repo, now_unix).await?;
     insert_repository_history(conn, &repo.graph, &repo.visibility_change_sets).await?;
     insert_repository_live_files(conn, &repo.record.id, &repo.live_files).await?;
     insert_repository_relations(conn, repo).await?;
@@ -116,7 +115,7 @@ where
         active.update(conn).await.map_err(PostgresError::internal)?;
     }
 
-    save_repository_fact_delta(conn, before, after).await?;
+    save_repository_fact_delta(conn, before, after, now_unix).await?;
     save_repository_history_delta(
         conn,
         RepositoryHistoryDelta {
@@ -143,7 +142,11 @@ where
     Ok(())
 }
 
-async fn insert_repository_fact_rows<C>(conn: &C, repo: &Repository) -> Result<(), PostgresError>
+async fn insert_repository_fact_rows<C>(
+    conn: &C,
+    repo: &Repository,
+    now_unix: u64,
+) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
 {
@@ -177,13 +180,7 @@ where
             .insert(conn)
             .await
             .map_err(PostgresError::internal)?;
-        insert_object_reference(
-            conn,
-            "git_segment",
-            &format!("{repo_id}:{}", span.first_sequence),
-            &span.object,
-        )
-        .await?;
+        publish_git_segment(conn, &repo_id, &span.segment, now_unix).await?;
     }
 
     Ok(())
@@ -193,6 +190,7 @@ async fn save_repository_fact_delta<C>(
     conn: &C,
     before: &Repository,
     after: &Repository,
+    now_unix: u64,
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
@@ -247,32 +245,28 @@ where
     let spans_are_append_only = after.git_pack_spans.len() >= before.git_pack_spans.len()
         && after.git_pack_spans[..before.git_pack_spans.len()] == before.git_pack_spans[..];
     if !spans_are_append_only {
-        for span in &before.git_pack_spans {
-            delete_object_reference(
-                conn,
-                "git_segment",
-                &format!("{repo_id}:{}", span.first_sequence),
-            )
-            .await?;
-        }
+        let retained_segment_ids = after
+            .git_pack_spans
+            .iter()
+            .map(|span| span.segment.segment_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
         entities::git_pack_span::Entity::delete_many()
             .filter(entities::git_pack_span::Column::RepoId.eq(repo_id.clone()))
             .exec(conn)
             .await
             .map_err(PostgresError::internal)?;
+        for span in &before.git_pack_spans {
+            if !retained_segment_ids.contains(span.segment.segment_id.as_str()) {
+                retire_git_segment(conn, &span.segment.segment_id, now_unix).await?;
+            }
+        }
         for span in &after.git_pack_spans {
             entities::git_pack_span::Model::from_domain(repo_id, span)?
                 .into_active_model()
                 .insert(conn)
                 .await
                 .map_err(PostgresError::internal)?;
-            insert_object_reference(
-                conn,
-                "git_segment",
-                &format!("{repo_id}:{}", span.first_sequence),
-                &span.object,
-            )
-            .await?;
+            publish_git_segment(conn, repo_id, &span.segment, now_unix).await?;
         }
     } else {
         for span in &after.git_pack_spans[before.git_pack_spans.len()..] {
@@ -281,13 +275,7 @@ where
                 .insert(conn)
                 .await
                 .map_err(PostgresError::internal)?;
-            insert_object_reference(
-                conn,
-                "git_segment",
-                &format!("{repo_id}:{}", span.first_sequence),
-                &span.object,
-            )
-            .await?;
+            publish_git_segment(conn, repo_id, &span.segment, now_unix).await?;
         }
     }
     Ok(())
@@ -454,16 +442,9 @@ where
             fact.git_head = Some(row.try_into_domain()?);
         }
     }
-    let git_pack_spans = entities::git_pack_span::Entity::find()
-        .filter(entities::git_pack_span::Column::RepoId.is_in(repo_ids.to_vec()))
-        .order_by_asc(entities::git_pack_span::Column::RepoId)
-        .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-        .all(conn)
-        .await
-        .map_err(PostgresError::internal)?;
-    for row in git_pack_spans {
-        if let Some(fact) = facts.get_mut(&row.repo_id) {
-            fact.git_pack_spans.push(row.try_into_domain()?);
+    for repo_id in repo_ids {
+        if let Some(fact) = facts.get_mut(repo_id) {
+            fact.git_pack_spans = load_git_pack_spans(conn, repo_id).await?;
         }
     }
 

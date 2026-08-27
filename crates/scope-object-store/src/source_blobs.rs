@@ -13,7 +13,6 @@ use {
 pub enum ContentObjectKind {
     Blob,
     GitBundle,
-    GitSegment,
     GitManifest,
 }
 
@@ -22,7 +21,6 @@ impl ContentObjectKind {
         match self {
             Self::Blob => ContentRef::blob_sha256(sha256),
             Self::GitBundle => ContentRef::git_bundle_sha256(sha256),
-            Self::GitSegment => ContentRef::git_segment_sha256(sha256),
             Self::GitManifest => ContentRef::git_manifest_sha256(sha256),
         }
     }
@@ -36,7 +34,6 @@ pub fn object_key_for_content_ref(content_ref: &ContentRef) -> String {
     match content_ref {
         ContentRef::BlobSha256(sha256) => format!("objects/blobs/{sha256}"),
         ContentRef::GitBundleSha256(sha256) => format!("objects/git-bundles/{sha256}"),
-        ContentRef::GitSegmentSha256(sha256) => format!("objects/git-segments/{sha256}"),
         ContentRef::GitManifestSha256(sha256) => format!("objects/git-manifests/{sha256}"),
         ContentRef::GitBlob { git_oid } => format!("git-blobs/{git_oid}"),
     }

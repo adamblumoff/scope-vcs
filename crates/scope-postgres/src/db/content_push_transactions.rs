@@ -3,9 +3,10 @@
 use super::{
     GeneratedIdSource, entities,
     git_compaction::schedule_git_compaction,
+    git_segments::{load_git_pack_spans, publish_git_segment},
     history_rows::{insert_commits, save_live_file},
     landing_files::apply_repository_landing_file_mutation,
-    object_references::{insert_object_reference, replace_object_reference},
+    object_references::replace_object_reference,
     outbox::enqueue_projection_read_model_rebuild,
     push_triggers::enqueue_push_main_trigger_evaluation,
     workflow_catalogs::apply_repository_workflow_catalog,
@@ -196,18 +197,9 @@ async fn accept_and_persist_content_update(
         .insert(tx)
         .await
         .map_err(PostgresError::internal)?;
-    let segment_ref_id = format!("{repo_id}:{}", git_pack_span.first_sequence);
-    insert_object_reference(tx, "git_segment", &segment_ref_id, &git_pack_span.object).await?;
+    publish_git_segment(tx, &repo_id, &git_pack_span.segment, now_unix).await?;
     schedule_git_compaction(tx, &repo_id, git_head.push_sequence, now_unix).await?;
-    let pinned_pack_spans = entities::git_pack_span::Entity::find()
-        .filter(entities::git_pack_span::Column::RepoId.eq(&repo_id))
-        .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-        .all(tx)
-        .await
-        .map_err(PostgresError::internal)?
-        .into_iter()
-        .map(entities::git_pack_span::Model::try_into_domain)
-        .collect::<Result<Vec<_>, _>>()?;
+    let pinned_pack_spans = load_git_pack_spans(tx, &repo_id).await?;
     let ordinal = usize::try_from(next_ordinal)
         .map_err(|_| PostgresError::internal_message("logical commit ordinal is invalid"))?;
     insert_commits(tx, &repo_id, ordinal, std::slice::from_ref(&logical_commit)).await?;

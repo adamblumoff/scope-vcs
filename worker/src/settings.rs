@@ -1,11 +1,15 @@
 use scope_git::{
     DEFAULT_GIT_COMPACTION_SPANS, DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES, GitStorageLimits,
 };
+use scope_git_storage::GitSegmentStoreConfig;
 use std::{path::PathBuf, time::Duration};
 
 const DATABASE_URL_ENV: &str = "DATABASE_URL";
 const SCOPE_DATA_DIR_ENV: &str = "SCOPE_DATA_DIR";
 const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
+const SCOPE_GIT_SEGMENT_CHUNK_BYTES_ENV: &str = "SCOPE_GIT_SEGMENT_CHUNK_BYTES";
+const SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES_ENV: &str = "SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES";
+const SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY_ENV: &str = "SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY";
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -54,6 +58,7 @@ pub(crate) struct WorkerSettings {
     pub(crate) git_compaction_spans: usize,
     pub(crate) git_compaction_timeout: Duration,
     pub(crate) git_storage_limits: GitStorageLimits,
+    pub(crate) git_segment_store: GitSegmentStoreConfig,
     pub(crate) data_dir: PathBuf,
     pub(crate) execution: Option<CloudExecutionSettings>,
 }
@@ -119,6 +124,21 @@ impl WorkerSettings {
         let data_dir = non_empty_env(SCOPE_DATA_DIR_ENV)
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(".scope"));
+        let mut git_segment_store = GitSegmentStoreConfig::new(data_dir.join("git-segments"));
+        if role.runs_compaction() {
+            git_segment_store.chunk_bytes = parse_usize_env(
+                SCOPE_GIT_SEGMENT_CHUNK_BYTES_ENV,
+                git_segment_store.chunk_bytes,
+            )?;
+            git_segment_store.multipart_part_bytes = parse_usize_env(
+                SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES_ENV,
+                git_segment_store.multipart_part_bytes,
+            )?;
+            git_segment_store.channel_capacity = parse_usize_env(
+                SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY_ENV,
+                git_segment_store.channel_capacity,
+            )?;
+        }
         let execution = if role.runs_control() {
             cloud_execution_from_env()?
         } else {
@@ -134,6 +154,7 @@ impl WorkerSettings {
             git_compaction_spans,
             git_compaction_timeout: Duration::from_secs(git_compaction_timeout_secs),
             git_storage_limits,
+            git_segment_store,
             data_dir,
             execution,
         })

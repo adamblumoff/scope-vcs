@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{ErrorKind, Read, Write},
     path::Path,
-    process::{Child, Command, Output, Stdio},
+    process::{Child, Command, ExitStatus, Output, Stdio},
     sync::{
         atomic::{AtomicI32, Ordering},
         mpsc,
@@ -315,6 +315,21 @@ pub enum ProcessError {
     },
 }
 
+#[derive(Debug)]
+pub struct StreamedOutput<T> {
+    pub status: ExitStatus,
+    pub value: T,
+    pub stderr: Vec<u8>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StreamingProcessError<E> {
+    #[error(transparent)]
+    Process(#[from] ProcessError),
+    #[error("process stdout consumer failed: {0}")]
+    Consumer(E),
+}
+
 impl ProcessError {
     pub fn is_timeout(&self) -> bool {
         matches!(self, Self::TimedOut { .. })
@@ -361,6 +376,177 @@ pub fn run(
         None
     };
     wait_for_output(child, stdin_writer, limits, action)
+}
+
+/// Runs a child while copying a caller-owned reader into stdin incrementally.
+///
+/// This preserves the same timeout, bounded-output, and process-tree cleanup
+/// behavior as [`run`] without requiring the complete input in memory.
+pub fn run_with_stdin_reader<R>(
+    command: &mut Command,
+    mut input: R,
+    limits: ProcessLimits,
+    action: &str,
+) -> Result<Output, ProcessError>
+where
+    R: Read + Send + 'static,
+{
+    command.stdin(Stdio::piped());
+    configure_process_group(command);
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|source| ProcessError::Spawn {
+            action: action.to_string(),
+            source,
+        })?;
+    let mut child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ProcessError::PipeUnavailable {
+            action: action.to_string(),
+            pipe: "stdin",
+        })?;
+    let stdin_writer = thread::spawn(move || {
+        std::io::copy(&mut input, &mut child_stdin)?;
+        child_stdin.flush()
+    });
+    wait_for_output(child, Some(stdin_writer), limits, action)
+}
+
+/// Runs a child while a caller-owned consumer drains stdout incrementally.
+///
+/// The consumer executes on a dedicated thread so this function can retain the
+/// existing timeout and process-group cleanup guarantees. Unlike [`run`], this
+/// path never collects stdout into a `Vec` owned by the process runner.
+pub fn run_with_stdout<T, E, F>(
+    command: &mut Command,
+    input: Option<Vec<u8>>,
+    limits: ProcessLimits,
+    action: &str,
+    consume: F,
+) -> Result<StreamedOutput<T>, StreamingProcessError<E>>
+where
+    T: Send + 'static,
+    E: Send + 'static,
+    F: FnOnce(Box<dyn Read + Send>) -> Result<T, E> + Send + 'static,
+{
+    if input.is_some() {
+        command.stdin(Stdio::piped());
+    } else {
+        command.stdin(Stdio::null());
+    }
+    configure_process_group(command);
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|source| ProcessError::Spawn {
+            action: action.to_string(),
+            source,
+        })?;
+    let stdin_writer = if let Some(input) = input {
+        let mut child_stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ProcessError::PipeUnavailable {
+                action: action.to_string(),
+                pipe: "stdin",
+            })?;
+        Some(thread::spawn(move || {
+            child_stdin.write_all(&input)?;
+            child_stdin.flush()
+        }))
+    } else {
+        None
+    };
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ProcessError::PipeUnavailable {
+            action: action.to_string(),
+            pipe: "stdout",
+        })?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ProcessError::PipeUnavailable {
+            action: action.to_string(),
+            pipe: "stderr",
+        })?;
+    let mut stdout_consumer = Some(thread::spawn(move || consume(Box::new(stdout))));
+    let stderr_reader =
+        thread::spawn(move || read_stderr_diagnostic(stderr, STDERR_DIAGNOSTIC_BYTES));
+
+    let started_at = Instant::now();
+    let mut status = None;
+    let mut value = None;
+    loop {
+        if stdout_consumer
+            .as_ref()
+            .is_some_and(thread::JoinHandle::is_finished)
+        {
+            match stdout_consumer
+                .take()
+                .expect("finished stdout consumer must exist")
+                .join()
+            {
+                Ok(Ok(consumed)) => value = Some(consumed),
+                Ok(Err(error)) => {
+                    terminate_and_reap(&mut child);
+                    let _ = join_writer(stdin_writer, action);
+                    let _ = join_reader(stderr_reader, action);
+                    return Err(StreamingProcessError::Consumer(error));
+                }
+                Err(_) => {
+                    terminate_and_reap(&mut child);
+                    let _ = join_writer(stdin_writer, action);
+                    let _ = join_reader(stderr_reader, action);
+                    return Err(ProcessError::ThreadPanicked {
+                        action: action.to_string(),
+                    }
+                    .into());
+                }
+            }
+        }
+        if status.is_none() {
+            status = child.try_wait().map_err(|source| ProcessError::Io {
+                action: action.to_string(),
+                source,
+            })?;
+        }
+        let stdin_done = stdin_writer
+            .as_ref()
+            .is_none_or(thread::JoinHandle::is_finished);
+        if value.is_some() && stderr_reader.is_finished() && stdin_done && status.is_some() {
+            break;
+        }
+        if started_at.elapsed() >= limits.timeout {
+            terminate_and_reap(&mut child);
+            let _ = join_writer(stdin_writer, action);
+            if let Some(stdout_consumer) = stdout_consumer {
+                let _ = stdout_consumer.join();
+            }
+            let stderr = join_reader(stderr_reader, action).unwrap_or_default();
+            return Err(ProcessError::TimedOut {
+                action: action.to_string(),
+                timeout_ms: limits.timeout.as_millis(),
+                diagnostic: diagnostic_suffix(&stderr, STDERR_DIAGNOSTIC_BYTES),
+            }
+            .into());
+        }
+        let remaining = limits.timeout.saturating_sub(started_at.elapsed());
+        thread::sleep(remaining.min(Duration::from_millis(1)));
+    }
+
+    join_writer(stdin_writer, action)?;
+    let stderr = join_reader(stderr_reader, action)?;
+    Ok(StreamedOutput {
+        status: status.expect("completed child must have an exit status"),
+        value: value.expect("completed stdout consumer must return a value"),
+        stderr,
+    })
 }
 
 fn wait_for_output(
@@ -642,6 +828,93 @@ mod tests {
             error.to_string(),
             "oversized output stdout exceeded 4 bytes"
         );
+    }
+
+    #[test]
+    fn streaming_stdout_is_consumed_without_process_owned_buffering() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("cat; printf diagnostic >&2");
+
+        let output = run_with_stdout(
+            &mut command,
+            Some(b"streamed input".to_vec()),
+            ProcessLimits::new(Duration::from_secs(1)),
+            "streaming output",
+            |mut stdout| {
+                let mut retained = Vec::new();
+                stdout.read_to_end(&mut retained)?;
+                Ok::<_, std::io::Error>(retained)
+            },
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.value, b"streamed input");
+        assert_eq!(output.stderr, b"diagnostic");
+    }
+
+    #[test]
+    fn stdin_reader_is_copied_incrementally() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("wc -c");
+
+        let output = run_with_stdin_reader(
+            &mut command,
+            std::io::repeat(b'x').take(3 * 1024 * 1024),
+            ProcessLimits::new(Duration::from_secs(2)),
+            "streaming input",
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "3145728");
+    }
+
+    #[test]
+    fn streaming_stdout_timeout_kills_the_child() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("printf ready; sleep 5");
+        let started_at = Instant::now();
+
+        let error = run_with_stdout(
+            &mut command,
+            None,
+            ProcessLimits::new(Duration::from_millis(50)),
+            "slow stream",
+            |mut stdout| {
+                std::io::copy(&mut stdout, &mut std::io::sink())?;
+                Ok::<_, std::io::Error>(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            StreamingProcessError::Process(ProcessError::TimedOut { .. })
+        ));
+        assert!(started_at.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn streaming_stdout_consumer_failure_kills_the_child() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("printf ready; sleep 5");
+        let started_at = Instant::now();
+
+        let error = run_with_stdout(
+            &mut command,
+            None,
+            ProcessLimits::new(Duration::from_secs(10)),
+            "rejected stream",
+            |_stdout| Err::<(), _>("disk full"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            StreamingProcessError::Consumer("disk full")
+        ));
+        assert!(started_at.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

@@ -65,8 +65,12 @@ async fn readme_html_uses_postgres_when_git_cache_and_pack_objects_are_absent() 
         .unwrap();
     for span in &repo.git_pack_spans {
         state
-            .test_object_store
-            .delete(&scope_object_store::object_key(&span.object))
+            .git_segment_store
+            .delete_remote(&scope_git_storage::object_key(
+                TEST_REPO_ID,
+                &span.segment.segment_id,
+            ))
+            .await
             .unwrap();
     }
     let cache_path = state.repository_engine.repository_path(TEST_REPO_ID);

@@ -7,10 +7,7 @@ pub use projection_identity::{
     PROJECTION_IDENTITY_VERSION, ProjectionIdentityError, projection_head_oid,
 };
 #[cfg(feature = "storage")]
-pub use snapshot::{
-    GitSnapshotMaterializationError, PreparedGitPush, StoredGitPush, materialize_git_push,
-    prepare_compacted_git_pack, prepare_git_push, store_compacted_git_pack,
-};
+pub use snapshot::{PreparedGitPush, StoredGitPush, prepare_git_push};
 pub use tree_path::{GitTreePath, GitTreePathError};
 
 use scope_domain::content::SourceBlob;

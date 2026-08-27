@@ -19,7 +19,9 @@ use scope_domain::runs::{
     },
     workflow::identity::WorkflowPath,
 };
+use scope_git_storage::StagedGitSegment;
 use scope_postgres::db::ContentRefFence;
+use scope_postgres::db::RepositoryGitWriteLease;
 use std::{path::Path as FsPath, time::Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -32,6 +34,8 @@ enum ReviewedUpdateMode {
 pub(crate) struct PreparedReceivePackUpdate {
     pub(crate) update: ReceivePackUpdate,
     pub(crate) fence: ContentRefFence,
+    pub(crate) staged_segment: StagedGitSegment,
+    pub(crate) write_lease: RepositoryGitWriteLease,
 }
 
 impl std::fmt::Debug for PreparedReceivePackUpdate {
@@ -135,6 +139,12 @@ async fn reviewed_update_from_staging_repo_mode(
     }
     let (branch, head_oid) = refs.into_iter().next().expect("length checked");
     ensure_default_branch(&branch)?;
+    let repository_id = scope_domain::repository::repo_id(owner, repo_name);
+    let write_lease = state
+        .metadata
+        .repositories()
+        .acquire_git_write_lease(&repository_id)
+        .await?;
     let repo = state
         .metadata
         .repositories()
@@ -160,7 +170,8 @@ async fn reviewed_update_from_staging_repo_mode(
     let FencedGitPush {
         stored: mut created_push,
         fence,
-    } = match git_push_from_repo(state, staging_repo, repo.git_head.as_ref()).await {
+        staged_segment,
+    } = match git_push_from_repo(state, &repo.repo_id, staging_repo, repo.git_head.as_ref()).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return Err(error);
@@ -168,11 +179,8 @@ async fn reviewed_update_from_staging_repo_mode(
     };
     created_push.head.change_version = repo.change_version.saturating_add(1);
     let pack_put_ms = pack_started.elapsed().as_millis();
-    let pack_bytes = created_push.pack_span.object.size_bytes;
-    let durable_objects = vec![
-        created_push.pack_span.object.clone(),
-        created_push.head.manifest.clone(),
-    ];
+    let pack_bytes = created_push.pack_span.segment.plaintext_bytes;
+    let durable_objects = vec![created_push.head.manifest.clone()];
     let landing_file_mutation = match repository_landing_file_mutation(
         staging_repo,
         &pushed_entries,
@@ -180,7 +188,8 @@ async fn reviewed_update_from_staging_repo_mode(
     ) {
         Ok(mutation) => mutation,
         Err(error) => {
-            queue_failed_git_objects(state, durable_objects).await?;
+            cleanup_prepared_git_push(state, &repo.repo_id, &staged_segment, durable_objects)
+                .await?;
             return Err(error);
         }
     };
@@ -205,7 +214,8 @@ async fn reviewed_update_from_staging_repo_mode(
     {
         Ok(changes) => changes,
         Err(error) => {
-            queue_failed_git_objects(state, durable_objects).await?;
+            cleanup_prepared_git_push(state, &repo.repo_id, &staged_segment, durable_objects)
+                .await?;
             return Err(error);
         }
     };
@@ -229,7 +239,8 @@ async fn reviewed_update_from_staging_repo_mode(
     ) {
         Ok(catalog) => catalog,
         Err(error) => {
-            queue_failed_git_objects(state, durable_objects).await?;
+            cleanup_prepared_git_push(state, &repo.repo_id, &staged_segment, durable_objects)
+                .await?;
             return Err(error);
         }
     };
@@ -251,7 +262,20 @@ async fn reviewed_update_from_staging_repo_mode(
             config,
         },
         fence,
+        staged_segment,
+        write_lease,
     })
+}
+
+async fn cleanup_prepared_git_push(
+    state: &AppState,
+    repository_id: &str,
+    staged_segment: &StagedGitSegment,
+    durable_objects: Vec<scope_domain::content::SourceBlob>,
+) -> Result<(), ApiError> {
+    super::repo_io::best_effort_delete_staged_git_segment(state, repository_id, staged_segment)
+        .await;
+    queue_failed_git_objects(state, durable_objects).await
 }
 
 fn repository_landing_file_mutation(

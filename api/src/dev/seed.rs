@@ -1,3 +1,5 @@
+#[path = "seed/git_segments.rs"]
+mod git_segments;
 #[path = "seed/request_discussions.rs"]
 mod request_discussions;
 #[path = "seed/request_revisions.rs"]
@@ -10,6 +12,9 @@ mod runs;
 mod tests;
 #[path = "seed/workflow_files.rs"]
 mod workflow_files;
+use git_segments::store_seed_git_pack;
+#[cfg(test)]
+pub(super) use git_segments::test_seed_git_segment_store;
 #[cfg(any(feature = "local-dev", feature = "smoke-seed"))]
 pub(crate) use request_discussions::seed_request_discussion_gallery;
 use request_revisions::SeedRequestRevision;
@@ -24,7 +29,7 @@ use scope_domain::{
     policy::{ScopePath, Visibility, VisibilityRule},
     projection::LogicalCommitOrigin,
     projection::{FileChange, LogicalCommit},
-    repository::git::{GitHead, GitPackSpan},
+    repository::git::{GitHead, GitPackSpan, GitSegmentUpload},
     repository::{RepoLifecycleState, Repository},
     requests::{
         EditRequestIdentityInput, RecordRequestRevisionInput, RecordWorkingRequestUploadInput,
@@ -36,9 +41,8 @@ use scope_domain::{
 use scope_object_store::{ContentObjectKind, ObjectStore, put_content_object, put_source_blob};
 use std::{
     fs,
-    io::Write,
     path::Path as FsPath,
-    process::{Command, Stdio},
+    process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -187,6 +191,7 @@ const UPDATE_DEMO_CACHE_NOTE: &str =
 
 pub(crate) fn catalog(
     object_store: &dyn ObjectStore,
+    git_segment_store: &scope_git_storage::GitSegmentStore,
     seed_user: DevSeedUser,
 ) -> Result<scope_postgres::db::CatalogFixture, ApiError> {
     let owner = seed_user_account(seed_user);
@@ -200,9 +205,15 @@ pub(crate) fn catalog(
         .users
         .insert(maintainer.id.clone(), maintainer.clone());
 
-    let (mut update_demo, request_gallery) = update_demo(object_store, &owner)?;
+    let (mut update_demo, request_gallery, update_segment) =
+        update_demo(object_store, git_segment_store, &owner)?;
     request_discussions::add_maintainer(&mut update_demo);
-    for repo in [published_demo(object_store, &owner)?, update_demo] {
+    let (published_demo, published_segment) =
+        published_demo(object_store, git_segment_store, &owner)?;
+    catalog
+        .git_segment_uploads
+        .extend([published_segment, update_segment]);
+    for repo in [published_demo, update_demo] {
         catalog.repositories.insert(repo.record.id.clone(), repo);
     }
     seed_request_gallery(&mut catalog, &owner, request_gallery)?;
@@ -232,8 +243,9 @@ pub(crate) fn actor_account(seed_user: DevSeedUser, handle: &str) -> Option<User
 
 fn published_demo(
     object_store: &dyn ObjectStore,
+    git_segment_store: &scope_git_storage::GitSegmentStore,
     owner: &UserAccount,
-) -> Result<Repository, ApiError> {
+) -> Result<(Repository, GitSegmentUpload), ApiError> {
     let mut repo = repo(owner, "public-demo", Visibility::Public)?;
     let readme = blob(object_store, PUBLIC_DEMO_README_HTML)?;
     let app = blob(object_store, PUBLIC_DEMO_APP)?;
@@ -262,8 +274,10 @@ fn published_demo(
     ));
     populate_seed_live_files(&mut repo);
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
-    let (head, pack_span) = git_pack_state(
+    let (head, pack_span, segment_upload) = git_pack_state(
         object_store,
+        git_segment_store,
+        &repo.record.id,
         "public-demo-live",
         &[SeedGitCommit {
             files: &[
@@ -278,13 +292,14 @@ fn published_demo(
     )?;
     repo.git_head = Some(head);
     repo.git_pack_spans.push(pack_span);
-    Ok(repo)
+    Ok((repo, segment_upload))
 }
 
 fn update_demo(
     object_store: &dyn ObjectStore,
+    git_segment_store: &scope_git_storage::GitSegmentStore,
     owner: &UserAccount,
-) -> Result<(Repository, SeedRequestGallery), ApiError> {
+) -> Result<(Repository, SeedRequestGallery, GitSegmentUpload), ApiError> {
     let mut repo = repo(owner, "update-demo", Visibility::Public)?;
     let initial_readme = blob(object_store, UPDATE_DEMO_INITIAL_README)?;
     let rules = blob(object_store, UPDATE_DEMO_RULES)?;
@@ -328,10 +343,16 @@ fn update_demo(
         files: &[("docs/release.md", UPDATE_DEMO_RELEASE_GUIDE)],
         message: "Document release flow",
     };
-    let (head, pack_span, gallery) = update_demo_git_snapshot(object_store, initial, accepted)?;
+    let (head, pack_span, gallery, segment_upload) = update_demo_git_snapshot(
+        object_store,
+        git_segment_store,
+        &repo.record.id,
+        initial,
+        accepted,
+    )?;
     repo.git_head = Some(head);
     repo.git_pack_spans.push(pack_span);
-    Ok((repo, gallery))
+    Ok((repo, gallery, segment_upload))
 }
 
 fn populate_seed_live_files(repo: &mut Repository) {
@@ -547,20 +568,24 @@ struct SeedGitCommit<'a> {
 
 fn git_pack_state(
     object_store: &dyn ObjectStore,
+    git_segment_store: &scope_git_storage::GitSegmentStore,
+    repository_id: &str,
     label: &str,
     commits: &[SeedGitCommit<'_>],
-) -> Result<(GitHead, GitPackSpan), ApiError> {
+) -> Result<(GitHead, GitPackSpan, GitSegmentUpload), ApiError> {
     with_seed_git_repo(label, |repo_path| {
         apply_seed_commits(repo_path, commits)?;
-        store_seed_git_pack(object_store, repo_path)
+        store_seed_git_pack(object_store, git_segment_store, repository_id, repo_path)
     })
 }
 
 fn update_demo_git_snapshot(
     object_store: &dyn ObjectStore,
+    git_segment_store: &scope_git_storage::GitSegmentStore,
+    repository_id: &str,
     initial: SeedGitCommit<'_>,
     accepted: SeedGitCommit<'_>,
-) -> Result<(GitHead, GitPackSpan, SeedRequestGallery), ApiError> {
+) -> Result<(GitHead, GitPackSpan, SeedRequestGallery, GitSegmentUpload), ApiError> {
     with_seed_git_repo("update-demo-live", |repo_path| {
         apply_seed_commits(repo_path, &[initial])?;
         let initial_oid = seed_git_head(repo_path)?;
@@ -631,7 +656,8 @@ fn update_demo_git_snapshot(
             },
             &main_oid,
         )?;
-        let (main_head, main_pack_span) = store_seed_git_pack(object_store, repo_path)?;
+        let (main_head, main_pack_span, segment_upload) =
+            store_seed_git_pack(object_store, git_segment_store, repository_id, repo_path)?;
         let working_snapshot = store_seed_bundle(
             object_store,
             repo_path,
@@ -747,46 +773,8 @@ fn update_demo_git_snapshot(
                 now_unix: 1_800_000_500,
             },
         ];
-        Ok((main_head, main_pack_span, gallery))
+        Ok((main_head, main_pack_span, gallery, segment_upload))
     })
-}
-
-fn store_seed_git_pack(
-    object_store: &dyn ObjectStore,
-    repo_path: &FsPath,
-) -> Result<(GitHead, GitPackSpan), ApiError> {
-    let head_oid = seed_git_head(repo_path)?;
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(["pack-objects", "--revs", "--stdout"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(ApiError::internal)?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| ApiError::internal_message("seed pack stdin unavailable"))?
-        .write_all(format!("{head_oid}\n").as_bytes())
-        .map_err(ApiError::internal)?;
-    let output = child.wait_with_output().map_err(ApiError::internal)?;
-    if !output.status.success() {
-        return Err(ApiError::infrastructure_unavailable(format!(
-            "creating seeded Git pack: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    let stored = scope_git::materialize_git_push(
-        object_store,
-        &output.stdout,
-        head_oid,
-        None,
-        crate::config::default_git_storage_limits(),
-    )
-    .map_err(|failure| failure.into_parts().0)?;
-    Ok((stored.head, stored.pack_span))
 }
 
 fn seed_request_branch(

@@ -13,10 +13,28 @@ use scope_domain::{
     reviewed_updates::content::{ReviewedUpdateAuthorization, authorize_reviewed_update},
     runs::trigger::PushTriggerInput,
 };
+use scope_git_storage::StagedGitSegment;
+use scope_postgres::db::RepositoryGitWriteLease;
 use scope_postgres::db::RepositoryMutation;
 use std::{path::Path, time::Instant};
 
 use super::ReceivePackAccess;
+
+pub(crate) struct PersistedGitPush {
+    pub(crate) head: GitHead,
+    pub(crate) staged_segment: StagedGitSegment,
+    pub(crate) write_lease: RepositoryGitWriteLease,
+}
+
+impl std::fmt::Debug for PersistedGitPush {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PersistedGitPush")
+            .field("head", &self.head)
+            .field("segment", &self.staged_segment.segment)
+            .finish_non_exhaustive()
+    }
+}
 
 pub(super) async fn prepare_main_push(
     state: &AppState,
@@ -65,11 +83,20 @@ pub(super) async fn prepare_main_push(
     prepared.base_git_manifest_ref = Some(match push_intent.base_for_head(&prepared.head_oid) {
         Ok(base) => base,
         Err(error) => {
+            let repository_id = scope_domain::repository::repo_id(owner, repo_name);
+            crate::git::import::best_effort_delete_staged_git_segment(
+                state,
+                &repository_id,
+                &prepared.staged_segment,
+            )
+            .await;
             crate::use_cases::content_cleanup::best_effort_cleanup_rollback_source_blobs(
                 state,
                 &durable_objects,
             )
             .await;
+            prepared.fence.release().await;
+            prepared.write_lease.release().await;
             return Err(error);
         }
     });
@@ -84,9 +111,30 @@ pub(crate) async fn persist_main_push(
     repo_name: &str,
     prepared: PreparedReceivePackUpdate,
     author_id: &str,
-) -> Result<GitHead, ApiError> {
-    let PreparedReceivePackUpdate { update, fence } = prepared;
-    let now_unix = crate::persistence::unix_now()?;
+) -> Result<PersistedGitPush, ApiError> {
+    let PreparedReceivePackUpdate {
+        update,
+        fence,
+        staged_segment,
+        write_lease,
+    } = prepared;
+    let repository_id = scope_domain::repository::repo_id(owner, repo_name);
+    let durable_objects = update.durable_objects.clone();
+    let now_unix = match crate::persistence::unix_now() {
+        Ok(now) => now,
+        Err(error) => {
+            cleanup_failed_persist(
+                state,
+                &repository_id,
+                &staged_segment,
+                &durable_objects,
+                fence,
+                write_lease,
+            )
+            .await;
+            return Err(error);
+        }
+    };
     let author_id = author_id.to_string();
     let workflow_catalog = update.workflow_catalog.clone();
     let push_trigger_input = PushTriggerInput::from(&workflow_catalog);
@@ -100,7 +148,7 @@ pub(crate) async fn persist_main_push(
             .base_git_manifest_ref
             .as_ref()
             .and_then(Option::as_ref)
-        && let Some(git_head) = state
+        && let Some(git_head) = match state
             .metadata
             .repositories()
             .apply_content_only_push(
@@ -117,11 +165,30 @@ pub(crate) async fn persist_main_push(
                 },
                 &crate::persistence_ids::generate_persistence_id,
             )
-            .await?
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                cleanup_failed_persist(
+                    state,
+                    &repository_id,
+                    &staged_segment,
+                    &durable_objects,
+                    fence,
+                    write_lease,
+                )
+                .await;
+                return Err(error.into());
+            }
+        }
     {
         tracing::info!("committed focused content-only push transaction");
         fence.release().await;
-        return Ok(git_head);
+        return Ok(PersistedGitPush {
+            head: git_head,
+            staged_segment,
+            write_lease,
+        });
     }
 
     let transaction_started = Instant::now();
@@ -175,13 +242,51 @@ pub(crate) async fn persist_main_push(
                 ))
             },
         )
-        .await?;
+        .await;
+    let git_head = match git_head {
+        Ok(git_head) => git_head,
+        Err(error) => {
+            cleanup_failed_persist(
+                state,
+                &repository_id,
+                &staged_segment,
+                &durable_objects,
+                fence,
+                write_lease,
+            )
+            .await;
+            return Err(error.into());
+        }
+    };
     tracing::info!(
         database_commit_ms = transaction_started.elapsed().as_millis(),
         "committed reviewed push transaction"
     );
     fence.release().await;
-    Ok(git_head)
+    Ok(PersistedGitPush {
+        head: git_head,
+        staged_segment,
+        write_lease,
+    })
+}
+
+async fn cleanup_failed_persist(
+    state: &AppState,
+    repository_id: &str,
+    staged_segment: &StagedGitSegment,
+    durable_objects: &[scope_domain::content::SourceBlob],
+    fence: scope_postgres::db::ContentRefFence,
+    write_lease: RepositoryGitWriteLease,
+) {
+    crate::git::import::best_effort_delete_staged_git_segment(state, repository_id, staged_segment)
+        .await;
+    crate::use_cases::content_cleanup::best_effort_cleanup_rollback_source_blobs(
+        state,
+        durable_objects,
+    )
+    .await;
+    fence.release().await;
+    write_lease.release().await;
 }
 
 fn ensure_receive_pack_config_base_matches(

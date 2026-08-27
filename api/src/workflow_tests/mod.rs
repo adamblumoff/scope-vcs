@@ -496,20 +496,71 @@ async fn persist_test_update(
     persist_and_promote_test_update(state, update, &test_owner_id()).await
 }
 
+fn test_git_segment_ref(label: &str) -> scope_domain::repository::git::GitSegmentRef {
+    use sha2::{Digest, Sha256};
+
+    scope_domain::repository::git::GitSegmentRef {
+        segment_id: format!("test-{}", hex::encode(Sha256::digest(label.as_bytes()))),
+        sha256: hex::encode(Sha256::digest(format!("pack:{label}").as_bytes())),
+        plaintext_bytes: label.len() as u64,
+        encoding_version: scope_git_storage::ENCODING_VERSION,
+    }
+}
+
+async fn ready_test_git_segment(
+    state: &AppState,
+    label: &str,
+) -> scope_domain::repository::git::GitSegmentRef {
+    let reservation = state.git_segment_store.reserve(TEST_REPO_ID).unwrap();
+    state
+        .metadata
+        .repositories()
+        .begin_git_segment_upload(
+            TEST_REPO_ID,
+            &reservation.segment_id,
+            &reservation.object_key,
+            scope_git_storage::ENCODING_VERSION,
+            crate::persistence::unix_now().unwrap(),
+        )
+        .await
+        .unwrap();
+    let staged = state
+        .git_segment_store
+        .ingest_reserved_blocking_reader(
+            TEST_REPO_ID,
+            reservation,
+            std::io::Cursor::new(format!("test segment {label}").into_bytes()),
+        )
+        .await
+        .unwrap();
+    state
+        .metadata
+        .repositories()
+        .mark_git_segment_upload_ready(
+            &staged.segment,
+            staged.encrypted_bytes,
+            crate::persistence::unix_now().unwrap(),
+        )
+        .await
+        .unwrap();
+    state.git_segment_store.delete_local(&staged).await.unwrap();
+    staged.segment
+}
+
 enum TestReceivePackUpdate {
-    Prepared(PreparedReceivePackUpdate),
-    Raw(ReceivePackUpdate),
+    Prepared(Box<PreparedReceivePackUpdate>),
+    Raw(Box<ReceivePackUpdate>),
 }
 
 impl From<PreparedReceivePackUpdate> for TestReceivePackUpdate {
     fn from(update: PreparedReceivePackUpdate) -> Self {
-        Self::Prepared(update)
+        Self::Prepared(Box::new(update))
     }
 }
 
 impl From<ReceivePackUpdate> for TestReceivePackUpdate {
     fn from(update: ReceivePackUpdate) -> Self {
-        Self::Raw(update)
+        Self::Raw(Box::new(update))
     }
 }
 
@@ -519,8 +570,40 @@ async fn persist_and_promote_test_update(
     actor_id: &str,
 ) -> Result<scope_domain::repository::git::GitHead, crate::error::ApiError> {
     let prepared = match update.into() {
-        TestReceivePackUpdate::Prepared(prepared) => prepared,
+        TestReceivePackUpdate::Prepared(prepared) => *prepared,
         TestReceivePackUpdate::Raw(update) => {
+            let mut update = *update;
+            let reservation = state.git_segment_store.reserve(TEST_REPO_ID).unwrap();
+            state
+                .metadata
+                .repositories()
+                .begin_git_segment_upload(
+                    TEST_REPO_ID,
+                    &reservation.segment_id,
+                    &reservation.object_key,
+                    scope_git_storage::ENCODING_VERSION,
+                    crate::persistence::unix_now()?,
+                )
+                .await?;
+            let staged_segment = state
+                .git_segment_store
+                .ingest_reserved_blocking_reader(
+                    TEST_REPO_ID,
+                    reservation,
+                    std::io::Cursor::new(b"test Git pack segment".to_vec()),
+                )
+                .await
+                .map_err(|error| crate::error::ApiError::internal_message(error.to_string()))?;
+            state
+                .metadata
+                .repositories()
+                .mark_git_segment_upload_ready(
+                    &staged_segment.segment,
+                    staged_segment.encrypted_bytes,
+                    crate::persistence::unix_now()?,
+                )
+                .await?;
+            update.git_pack_span.segment = staged_segment.segment.clone();
             let content_refs = update
                 .durable_objects
                 .iter()
@@ -530,17 +613,35 @@ async fn persist_and_promote_test_update(
                 .metadata
                 .acquire_content_ref_fence(&content_refs)
                 .await?;
-            PreparedReceivePackUpdate { update, fence }
+            let write_lease = state
+                .metadata
+                .repositories()
+                .acquire_git_write_lease(TEST_REPO_ID)
+                .await?;
+            PreparedReceivePackUpdate {
+                update,
+                fence,
+                staged_segment,
+                write_lease,
+            }
         }
     };
-    git_receive_use_case::main_push::persist_main_push(
+    let persisted = git_receive_use_case::main_push::persist_main_push(
         state,
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         prepared,
         actor_id,
     )
-    .await
+    .await?;
+    let head = persisted.head;
+    state
+        .git_segment_store
+        .delete_local(&persisted.staged_segment)
+        .await
+        .map_err(|error| crate::error::ApiError::internal_message(error.to_string()))?;
+    persisted.write_lease.release().await;
+    Ok(head)
 }
 
 async fn receive_pack_access(
@@ -723,12 +824,6 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
         b"test staged Git manifest",
     )
     .unwrap();
-    let segment_object = put_content_object(
-        state.object_store.as_ref(),
-        ContentObjectKind::GitSegment,
-        b"test staged Git segment",
-    )
-    .unwrap();
     let head_oid = "1111111111111111111111111111111111111111";
     manifest.git_oid = head_oid.to_string();
     ReceivePackUpdate {
@@ -749,7 +844,7 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
             geometric_tier: 0,
             base_oid: None,
             head_oid: "1111111111111111111111111111111111111111".to_string(),
-            object: segment_object,
+            segment: test_git_segment_ref("test staged Git segment"),
         },
         durable_objects: Vec::new(),
         workflow_catalog: scope_domain::runs::catalog::RepositoryWorkflowCatalog::captured(

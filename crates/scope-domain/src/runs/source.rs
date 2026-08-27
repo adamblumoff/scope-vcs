@@ -4,7 +4,7 @@ use crate::{
     content_ref::ContentRef,
     error::DomainError,
     projection::ProjectionViewKey,
-    repository::git::{GitHead, GitPackSpan, validate_git_pack_layout},
+    repository::git::{GitHead, GitPackSpan, GitSegmentRef, validate_git_pack_layout},
 };
 use serde::{Deserialize, Serialize};
 
@@ -76,14 +76,6 @@ impl RunSource {
         }
         validate_git_pack_layout(&pack_spans)
             .map_err(|error| DomainError::invalid_input(error.to_string()))?;
-        for span in &pack_spans {
-            validate_source_blob(&span.object, "run source Git pack")?;
-            if !matches!(span.object.content_ref, ContentRef::GitSegmentSha256(_)) {
-                return Err(DomainError::invalid_input(
-                    "accepted run source packs must be Git segments",
-                ));
-            }
-        }
         let final_span = pack_spans.last().expect("empty pack spans were rejected");
         if final_span.last_sequence != head.push_sequence || final_span.head_oid != head.head_oid {
             return Err(DomainError::invalid_input(
@@ -108,11 +100,16 @@ impl RunSource {
     pub fn retained_objects(&self) -> Vec<&SourceBlob> {
         match self {
             Self::EphemeralGitBundle { object } => vec![object],
-            Self::AcceptedGitHead {
-                head, pack_spans, ..
-            } => std::iter::once(&head.manifest)
-                .chain(pack_spans.iter().map(|span| &span.object))
-                .collect(),
+            Self::AcceptedGitHead { head, .. } => vec![&head.manifest],
+        }
+    }
+
+    pub fn retained_git_segments(&self) -> Vec<&GitSegmentRef> {
+        match self {
+            Self::EphemeralGitBundle { .. } => Vec::new(),
+            Self::AcceptedGitHead { pack_spans, .. } => {
+                pack_spans.iter().map(|span| &span.segment).collect()
+            }
         }
     }
 
@@ -176,7 +173,7 @@ fn validate_git_oid(label: &str, git_oid: &str) -> Result<(), DomainError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::DEFAULT_GIT_FILE_MODE;
+    use crate::{content::DEFAULT_GIT_FILE_MODE, repository::git::GitSegmentRef};
 
     #[test]
     fn accepted_git_head_pins_the_exact_pack_layout() {
@@ -192,11 +189,7 @@ mod tests {
             geometric_tier: 0,
             base_oid: None,
             head_oid: head_oid.clone(),
-            object: source_blob(
-                ContentRef::git_segment_sha256("c".repeat(64)),
-                'c',
-                &head_oid,
-            ),
+            segment: git_segment('c'),
         };
         let source = RunSource::accepted_git_head(
             "owner/repo",
@@ -213,7 +206,8 @@ mod tests {
 
         assert_eq!(source.git_oid(), head_oid);
         assert_eq!(source.source_identity(), manifest.sha256);
-        assert_eq!(source.retained_objects(), vec![&manifest, &pack.object]);
+        assert_eq!(source.retained_objects(), vec![&manifest]);
+        assert_eq!(source.retained_git_segments(), vec![&pack.segment]);
     }
 
     #[test]
@@ -237,11 +231,7 @@ mod tests {
                 geometric_tier: 0,
                 base_oid: None,
                 head_oid: head_oid.clone(),
-                object: source_blob(
-                    ContentRef::git_segment_sha256("c".repeat(64)),
-                    'c',
-                    &head_oid,
-                ),
+                segment: git_segment('c'),
             }],
             ProjectionViewKey::Private,
         );
@@ -256,6 +246,15 @@ mod tests {
             git_oid: git_oid.to_string(),
             git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
             size_bytes: 1,
+        }
+    }
+
+    fn git_segment(character: char) -> GitSegmentRef {
+        GitSegmentRef {
+            segment_id: format!("segment-{character}"),
+            sha256: character.to_string().repeat(64),
+            plaintext_bytes: 1,
+            encoding_version: 2,
         }
     }
 }
