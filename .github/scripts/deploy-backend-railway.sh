@@ -55,6 +55,7 @@ railway_scope=(--project "$RAILWAY_PROJECT_ID" --environment "$environment")
 cutover_committed=0
 api_closed=0
 worker_closed=0
+cache_closed=0
 
 validate_production_target() {
   local status_json services_json environment_config_json
@@ -365,13 +366,25 @@ quiesce_writers() {
     deployment_action Stop "$worker_service"
     worker_closed=1
   fi
+  if [[ "$cache_closed" == "0" ]]; then
+    if [[ "$cutover_committed" == "0" ]] && ! service_is_healthy "$cache_service"; then
+      echo "Refusing maintenance because $cache_service is not healthy before shutdown." >&2
+      return 1
+    fi
+    deployment_action Stop "$cache_service"
+    cache_closed=1
+  fi
   # Railway's replica counts can remain stale after a successful stop mutation. The database
-  # fence is the authoritative proof that both metadata writers have actually quiesced.
+  # fence is the authoritative proof that every metadata writer has actually quiesced.
   wait_for_writer_fence
 }
 
 restore_old_release() {
-  echo "Migration did not commit; restoring the previous worker and API deployments." >&2
+  echo "Migration did not commit; restoring the previous metadata-writer deployments." >&2
+  if [[ "$cache_closed" == "1" ]]; then
+    restart_service "$cache_service"
+    cache_closed=0
+  fi
   if [[ "$worker_closed" == "1" ]]; then
     restart_service "$worker_service"
     worker_closed=0
@@ -401,6 +414,18 @@ deploy_release() {
     bash .github/scripts/deploy-railway.sh "$service_name" "$upload_root"
 }
 
+activate_release() {
+  local component="$1"
+  local service_name="$2"
+  local upload_root="$3"
+  deploy_release "$component" "$service_name" "$upload_root"
+  if [[ "$(running_replicas "$service_name")" == "0" ]]; then
+    restart_service "$service_name"
+  else
+    wait_for_service_health "$service_name"
+  fi
+}
+
 promote_pending_evidence() {
   [[ -n "$deployment_evidence_path" && -s "$pending_evidence_path" ]] || return 0
   FINAL_EVIDENCE_PATH="$deployment_evidence_path" \
@@ -417,8 +442,7 @@ discard_pending_evidence() {
 }
 
 deploy_cache_release() {
-  deploy_release cache "$cache_service" "$cache_upload_root"
-  wait_for_service_health "$cache_service"
+  activate_release cache "$cache_service" "$cache_upload_root"
   promote_pending_evidence
 }
 
@@ -440,11 +464,10 @@ deploy_and_reopen() {
   maintenance_read verify
   backfill_repository_snapshots
   deploy_cache_release
-  deploy_release worker "$worker_service" "$worker_upload_root"
-  wait_for_service_health "$worker_service"
+  cache_closed=0
+  activate_release worker "$worker_service" "$worker_upload_root"
   worker_closed=0
-  deploy_release api "$api_service" "$api_upload_root"
-  wait_for_service_health "$api_service"
+  activate_release api "$api_service" "$api_upload_root"
   api_closed=0
   # Worker and API form one cutover. Publish their evidence only after both writers are healthy
   # so the durable ledger cannot claim a deployment that the failure trap subsequently closes.
@@ -455,10 +478,11 @@ leave_failure_state() {
   local exit_status="$1"
   trap - EXIT
   if [[ "$exit_status" -ne 0 ]]; then
-    if [[ "$cutover_committed" == "0" && ( "$api_closed" == "1" || "$worker_closed" == "1" ) ]]; then
+    if [[ "$cutover_committed" == "0" \
+      && ( "$api_closed" == "1" || "$worker_closed" == "1" || "$cache_closed" == "1" ) ]]; then
       restore_old_release || echo "Failed to restore the previous release; writers remain closed." >&2
     elif [[ "$cutover_committed" == "1" ]]; then
-      quiesce_writers || echo "Failed to re-close both writers after the committed cutover." >&2
+      quiesce_writers || echo "Failed to re-close metadata writers after the committed cutover." >&2
       echo "Migration committed; writers remain closed. Rerun this workflow to finish the forward-only deployment." >&2
     fi
   fi
@@ -479,12 +503,16 @@ case "$plan_status" in
   1)
     api_running="$(running_replicas "$api_service")"
     worker_running="$(running_replicas "$worker_service")"
-    if [[ "$api_running" == "0" && "$worker_running" == "0" ]]; then
+    cache_running="$(running_replicas "$cache_service")"
+    if [[ "$api_running" == "0" && "$worker_running" == "0" && "$cache_running" == "0" ]]; then
       api_has_history=0
       worker_has_history=0
+      cache_has_history=0
       service_has_deployment_history "$api_service" && api_has_history=1
       service_has_deployment_history "$worker_service" && worker_has_history=1
-      if [[ "$api_has_history" != "$worker_has_history" ]]; then
+      service_has_deployment_history "$cache_service" && cache_has_history=1
+      if [[ "$api_has_history" != "$worker_has_history" ]] \
+        || [[ "$api_has_history" != "$cache_has_history" ]]; then
         echo "Closed writers have inconsistent deployment history." >&2
         exit 1
       fi
@@ -494,14 +522,15 @@ case "$plan_status" in
       fi
       api_closed=1
       worker_closed=1
+      cache_closed=1
       cutover_committed=1
       deploy_and_reopen
       trap - EXIT
       discard_pending_evidence
       exit 0
     fi
-    if [[ "$api_running" == "0" || "$worker_running" == "0" ]]; then
-      echo "API and worker replica state is inconsistent; refusing deployment." >&2
+    if [[ "$api_running" == "0" || "$worker_running" == "0" || "$cache_running" == "0" ]]; then
+      echo "Metadata-writer replica state is inconsistent; refusing deployment." >&2
       exit 1
     fi
     maintenance_read verify
@@ -516,8 +545,9 @@ case "$plan_status" in
     ;;
 esac
 
-if ! service_is_healthy "$api_service" || ! service_is_healthy "$worker_service"; then
-  echo "Maintenance cutover requires healthy API and worker deployments before closing writers." >&2
+if ! service_is_healthy "$api_service" || ! service_is_healthy "$worker_service" \
+  || ! service_is_healthy "$cache_service"; then
+  echo "Maintenance cutover requires healthy metadata-writer deployments before closing writers." >&2
   exit 1
 fi
 

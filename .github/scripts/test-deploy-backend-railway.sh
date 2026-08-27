@@ -41,6 +41,7 @@ case "${1:-}" in
     if [[ "${FAKE_STALE_STOP_STATUS:-0}" == "1" ]]; then
       [[ -f "$FAKE_RAILWAY_STATE/stop-requested-scope-api" ]]
       [[ -f "$FAKE_RAILWAY_STATE/stop-requested-scope-worker" ]]
+      [[ -f "$FAKE_RAILWAY_STATE/stop-requested-scope-cache-service" ]]
     fi
     if [[ "${FAKE_STUCK_FENCE:-0}" == "1" && ! -f "$FAKE_RAILWAY_STATE/writers-drained" ]]; then
       exit 1
@@ -158,6 +159,7 @@ if [[ "$1 $2" == "service list" ]]; then
   cache_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
   api_stopped=false
   worker_stopped=false
+  cache_stopped=false
   api_regions="[{\"name\":\"${api_region}\",\"configured\":1}]"
   worker_regions='[{"name":"us-east4-eqdc4a","configured":1}]'
   if [[ -f "$FAKE_RAILWAY_STATE/no-history-scope-api" && ! -f "$FAKE_RAILWAY_STATE/up-scope-api" ]]; then
@@ -167,6 +169,10 @@ if [[ "$1 $2" == "service list" ]]; then
   if [[ -f "$FAKE_RAILWAY_STATE/no-history-scope-worker" && ! -f "$FAKE_RAILWAY_STATE/up-scope-worker" ]]; then
     worker_deployment=null
     worker_replicas=null
+  fi
+  if [[ -f "$FAKE_RAILWAY_STATE/no-history-scope-cache-service" && ! -f "$FAKE_RAILWAY_STATE/up-scope-cache-service" ]]; then
+    cache_deployment=null
+    cache_replicas=null
   fi
   [[ -f "$FAKE_RAILWAY_STATE/up-scope-api" ]] && api_deployment='"new-scope-api"'
   [[ -f "$FAKE_RAILWAY_STATE/up-scope-worker" ]] && worker_deployment='"new-scope-worker"'
@@ -179,11 +185,18 @@ if [[ "$1 $2" == "service list" ]]; then
     worker_stopped=true
     worker_replicas='{"configured":1,"running":0,"crashed":0,"exited":1,"total":1}'
   fi
+  if [[ -f "$FAKE_RAILWAY_STATE/stopped-scope-cache-service" ]]; then
+    cache_stopped=true
+    cache_replicas='{"configured":1,"running":0,"crashed":0,"exited":1,"total":1}'
+  fi
   if [[ -f "$FAKE_RAILWAY_STATE/up-scope-api" && "$api_stopped" == "false" && ! -f "$FAKE_RAILWAY_STATE/crashed-scope-api" ]]; then
     api_replicas="{\"configured\":${FAKE_NEW_REPLICAS:-1},\"running\":${FAKE_NEW_REPLICAS:-1},\"crashed\":0,\"exited\":0,\"total\":${FAKE_NEW_REPLICAS:-1}}"
   fi
   if [[ -f "$FAKE_RAILWAY_STATE/up-scope-worker" && "$worker_stopped" == "false" && ! -f "$FAKE_RAILWAY_STATE/crashed-scope-worker" ]]; then
     worker_replicas="{\"configured\":${FAKE_NEW_REPLICAS:-1},\"running\":${FAKE_NEW_REPLICAS:-1},\"crashed\":0,\"exited\":0,\"total\":${FAKE_NEW_REPLICAS:-1}}"
+  fi
+  if [[ -f "$FAKE_RAILWAY_STATE/up-scope-cache-service" && "$cache_stopped" == "false" && ! -f "$FAKE_RAILWAY_STATE/crashed-scope-cache-service" ]]; then
+    cache_replicas="{\"configured\":${FAKE_NEW_REPLICAS:-1},\"running\":${FAKE_NEW_REPLICAS:-1},\"crashed\":0,\"exited\":0,\"total\":${FAKE_NEW_REPLICAS:-1}}"
   fi
   if [[ -f "$FAKE_RAILWAY_STATE/crashed-scope-api" && "$api_stopped" == "false" ]]; then
     api_status=CRASHED
@@ -193,7 +206,7 @@ if [[ "$1 $2" == "service list" ]]; then
     worker_status=CRASHED
     worker_replicas='{"configured":1,"running":0,"crashed":1,"exited":0,"total":1}'
   fi
-  if [[ -f "$FAKE_RAILWAY_STATE/crashed-scope-cache-service" ]]; then
+  if [[ -f "$FAKE_RAILWAY_STATE/crashed-scope-cache-service" && "$cache_stopped" == "false" ]]; then
     cache_status=CRASHED
     cache_replicas='{"configured":1,"running":0,"crashed":1,"exited":0,"total":1}'
   fi
@@ -205,12 +218,15 @@ if [[ "$1 $2" == "service list" ]]; then
     worker_replicas='{"configured":2,"running":1,"crashed":1,"exited":0,"total":2}'
     worker_regions='[{"name":"us-east4-eqdc4a","configured":2}]'
   fi
+  if [[ "${FAKE_DEGRADED_SERVICE:-}" == "scope-cache-service" && "$cache_stopped" == "false" ]]; then
+    cache_replicas='{"configured":2,"running":1,"crashed":1,"exited":0,"total":2}'
+  fi
   if [[ "${FAKE_DEGRADE_WORKER_AFTER_API_STOP:-0}" == "1" \
     && -f "$FAKE_RAILWAY_STATE/stopped-scope-api" && "$worker_stopped" == "false" ]]; then
     worker_status=CRASHED
     worker_replicas='{"configured":1,"running":0,"crashed":1,"exited":0,"total":1}'
   fi
-  printf '[{"id":"scope-api","name":"scope-api","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-worker","name":"scope-worker","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-cache-service","name":"scope-cache-service","status":"%s","deploymentId":%s,"deploymentStopped":false,"replicas":%s}]\n' "$api_status" "$api_deployment" "$api_stopped" "$api_replicas" "$api_regions" "$worker_status" "$worker_deployment" "$worker_stopped" "$worker_replicas" "$worker_regions" "$cache_status" "$cache_deployment" "$cache_replicas"
+  printf '[{"id":"scope-api","name":"scope-api","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-worker","name":"scope-worker","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-cache-service","name":"scope-cache-service","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s}]\n' "$api_status" "$api_deployment" "$api_stopped" "$api_replicas" "$api_regions" "$worker_status" "$worker_deployment" "$worker_stopped" "$worker_replicas" "$worker_regions" "$cache_status" "$cache_deployment" "$cache_stopped" "$cache_replicas"
   exit 0
 fi
 
@@ -318,10 +334,12 @@ run_cutover() {
   mkdir -p "$state"
   [[ "$initial_exact" == "1" ]] && touch "$state/exact"
   if [[ "$initial_closed" == "1" ]]; then
-    touch "$state/stopped-scope-api" "$state/stopped-scope-worker"
+    touch "$state/stopped-scope-api" "$state/stopped-scope-worker" \
+      "$state/stopped-scope-cache-service"
   fi
   if [[ "$no_history" == "1" ]]; then
-    touch "$state/no-history-scope-api" "$state/no-history-scope-worker"
+    touch "$state/no-history-scope-api" "$state/no-history-scope-worker" \
+      "$state/no-history-scope-cache-service"
   fi
   : > "$trace"
   set +e
@@ -410,6 +428,7 @@ assert_in_order "$test_dir/success-trace" \
   "$test_dir/maintenance plan" \
   "graphql stop scope-api old-scope-api" \
   "graphql stop scope-worker old-scope-worker" \
+  "graphql stop scope-cache-service old-scope-cache-service" \
   "$test_dir/maintenance fence" \
   "$test_dir/maintenance validate-workflow-catalogs" \
   "$test_dir/maintenance apply" \
@@ -426,6 +445,7 @@ run_cutover stale-stop-status 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
 assert_in_order "$test_dir/stale-stop-status-trace" \
   "graphql stop scope-api old-scope-api" \
   "graphql stop scope-worker old-scope-worker" \
+  "graphql stop scope-cache-service old-scope-cache-service" \
   "$test_dir/maintenance fence" \
   "$test_dir/maintenance apply"
 
@@ -435,6 +455,7 @@ run_cutover draining-writer 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
 [[ "$(grep -F -x -c "$test_dir/maintenance fence" "$test_dir/draining-writer-trace")" == "2" ]]
 assert_in_order "$test_dir/draining-writer-trace" \
   "graphql stop scope-worker old-scope-worker" \
+  "graphql stop scope-cache-service old-scope-cache-service" \
   "$test_dir/maintenance fence" \
   "$test_dir/maintenance drain-writers" \
   "$test_dir/maintenance fence" \
@@ -447,8 +468,10 @@ run_cutover invalid-workflow-catalog 0 0 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
 assert_in_order "$test_dir/invalid-workflow-catalog-trace" \
   "graphql stop scope-api old-scope-api" \
   "graphql stop scope-worker old-scope-worker" \
+  "graphql stop scope-cache-service old-scope-cache-service" \
   "$test_dir/maintenance fence" \
   "$test_dir/maintenance validate-workflow-catalogs" \
+  "graphql restart scope-cache-service old-scope-cache-service" \
   "graphql restart scope-worker old-scope-worker" \
   "graphql restart scope-api old-scope-api"
 if grep -F "$test_dir/maintenance apply" "$test_dir/invalid-workflow-catalog-trace"; then
@@ -461,6 +484,14 @@ run_cutover degraded 0 0 "" 0 0 0 0 "" 0 "" "" 1 scope-worker
 if grep -E "graphql (stop|restart) " "$test_dir/degraded-trace" \
   || grep -F "$test_dir/maintenance apply" "$test_dir/degraded-trace"; then
   echo "maintenance must not start from a degraded service" >&2
+  exit 1
+fi
+
+run_cutover degraded-cache 0 0 "" 0 0 0 0 "" 0 "" "" 1 scope-cache-service
+[[ "$(cat "$test_dir/degraded-cache-result")" != "0" ]]
+if grep -E "graphql (stop|restart) " "$test_dir/degraded-cache-trace" \
+  || grep -F "$test_dir/maintenance apply" "$test_dir/degraded-cache-trace"; then
+  echo "maintenance must not start with a degraded cache writer" >&2
   exit 1
 fi
 
@@ -495,7 +526,8 @@ run_cutover crashed-worker 0 0 "" 0 0 0 0 "" 0 "" scope-worker
 assert_evidence_components crashed-worker cache
 assert_in_order "$test_dir/crashed-worker-trace" \
   "$test_dir/maintenance apply" \
-  "up $test_dir/worker"
+  "up $test_dir/worker" \
+  "graphql stop scope-cache-service new-scope-cache-service"
 
 run_cutover crashed-cache 0 0 "" 0 0 0 0 "" 0 "" scope-cache-service
 [[ "$(cat "$test_dir/crashed-cache-result")" != "0" ]]
@@ -506,7 +538,7 @@ assert_in_order "$test_dir/crashed-cache-trace" \
 if grep -F "up $test_dir/worker" "$test_dir/crashed-cache-trace" \
   || grep -F "up $test_dir/api" "$test_dir/crashed-cache-trace" \
   || grep -F "graphql restart " "$test_dir/crashed-cache-trace"; then
-  echo "failed cache deployment must leave both writers closed" >&2
+  echo "failed cache deployment must leave all metadata writers closed" >&2
   exit 1
 fi
 
@@ -515,6 +547,7 @@ run_cutover rollback rollback
 assert_in_order "$test_dir/rollback-trace" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance plan" \
+  "graphql restart scope-cache-service old-scope-cache-service" \
   "graphql restart scope-worker old-scope-worker" \
   "graphql restart scope-api old-scope-api"
 if grep -F "up $test_dir/api" "$test_dir/rollback-trace"; then
@@ -635,7 +668,8 @@ assert_in_order "$test_dir/partial-reopen-trace" \
   "up $test_dir/cache" \
   "up $test_dir/worker" \
   "up $test_dir/api" \
-  "graphql stop scope-worker new-scope-worker"
+  "graphql stop scope-worker new-scope-worker" \
+  "graphql stop scope-cache-service new-scope-cache-service"
 [[ "$(grep -F -c "graphql stop scope-api old-scope-api" "$test_dir/partial-reopen-trace")" == "1" ]]
 
 run_cutover denied-api 0 0 "" 0 0 0 0 "" 0 scope-api
@@ -654,6 +688,19 @@ assert_in_order "$test_dir/denied-worker-trace" \
   "graphql restart scope-api old-scope-api"
 if grep -F "graphql restart scope-worker" "$test_dir/denied-worker-trace"; then
   echo "a worker shutdown denial must not restore a worker that was never closed" >&2
+  exit 1
+fi
+
+run_cutover denied-cache 0 0 "" 0 0 0 0 "" 0 scope-cache-service
+[[ "$(cat "$test_dir/denied-cache-result")" != "0" ]]
+assert_in_order "$test_dir/denied-cache-trace" \
+  "graphql stop scope-api old-scope-api" \
+  "graphql stop scope-worker old-scope-worker" \
+  "graphql stop scope-cache-service old-scope-cache-service" \
+  "graphql restart scope-worker old-scope-worker" \
+  "graphql restart scope-api old-scope-api"
+if grep -F "graphql restart scope-cache-service" "$test_dir/denied-cache-trace"; then
+  echo "a cache shutdown denial must not restore a cache deployment that was never closed" >&2
   exit 1
 fi
 
