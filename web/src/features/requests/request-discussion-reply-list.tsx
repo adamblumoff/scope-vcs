@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { CornerLeftUp, Ellipsis, Link2, Reply, RotateCcw } from 'lucide-react'
+import { CornerLeftUp, Ellipsis, Reply, RotateCcw } from 'lucide-react'
 import { compactDiscussionSummary } from './discussion-preview-text'
 import {
   RequestDiscussionActorAvatar,
@@ -96,8 +96,7 @@ function DiscussionReply({
   reply: RequestDiscussionReplyView
 }) {
   const canQuote = canReply && !reply.pending
-  const hasOverflowActions = canQuote || reply.pending === 'failed'
-  const hasDesktopActions = hasOverflowActions || !reply.pending
+  const hasActions = canQuote || reply.pending === 'failed'
 
   return (
     <div
@@ -139,7 +138,7 @@ function DiscussionReply({
         />
       </div>
 
-      {hasDesktopActions ? (
+      {hasActions ? (
         <div className="absolute top-1 right-1 hidden items-center rounded-md border border-border bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-focus-within/message:opacity-100 group-hover/message:opacity-100 lg:flex">
           <ReplyActionItems
             canReply={canQuote}
@@ -150,7 +149,7 @@ function DiscussionReply({
         </div>
       ) : null}
 
-      {hasOverflowActions ? (
+      {hasActions ? (
         <details className="group/actions absolute top-1 right-1 z-10 lg:hidden">
           <summary
             aria-label={`Actions for ${reply.author.handle}'s reply`}
@@ -168,15 +167,6 @@ function DiscussionReply({
             />
           </div>
         </details>
-      ) : !reply.pending ? (
-        <a
-          aria-label="Link to reply"
-          className="absolute top-1 right-1 grid size-8 place-items-center rounded-md border border-border bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none lg:hidden"
-          href={replyFragment(reply.discussion_id, reply.id)}
-          title="Link to reply"
-        >
-          <Link2 className="size-3.5" />
-        </a>
       ) : null}
     </div>
   )
@@ -230,18 +220,6 @@ function ReplyActionItems({
           <RotateCcw className="size-3.5" />
           {labels ? 'Retry' : null}
         </button>
-      ) : null}
-      {!reply.pending ? (
-        <a
-          aria-label="Link to reply"
-          className={itemClass}
-          href={replyFragment(reply.discussion_id, reply.id)}
-          onClick={(event) => closeMobileActions(event.currentTarget)}
-          title="Link to reply"
-        >
-          <Link2 className="size-3.5" />
-          {labels ? 'Link' : null}
-        </a>
       ) : null}
     </>
   )

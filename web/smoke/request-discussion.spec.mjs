@@ -32,6 +32,7 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
     const threads = page.locator('.request-discussion-thread')
     await threads.first().waitFor()
     assert.equal(await page.getByRole('link', { name: 'Link to discussion' }).count(), 0)
+    assert.equal(await page.getByRole('link', { name: 'Link to reply' }).count(), 0)
     assert.deepEqual(
       await threads.evaluateAll((elements) => elements.map(({ id }) => id)),
       [
@@ -127,6 +128,34 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
     await assertReplyRegion(page, retryReplies, true)
     await retryThread.getByRole('button', { name: 'Hide 3 replies' }).click()
     await assertReplyRegion(page, retryReplies, false)
+
+    const jitterThread = page.locator('#discussion-discussion_demo_jitter')
+    const hideJitterReplies = jitterThread.getByRole('button', {
+      name: 'Hide 1 reply',
+    })
+    const mainContent = page.locator('#main-content')
+    await page.evaluate(() => {
+      window.location.hash =
+        '#discussion=discussion_demo_jitter&reply=discussion_reply_demo_jitter'
+    })
+    await page.locator('#reply-discussion_reply_demo_jitter').waitFor()
+    await hideJitterReplies.evaluate((element) => {
+      element.scrollIntoView({ block: 'center' })
+    })
+    const deepScrollPosition = await mainContent.evaluate(
+      (element) => element.scrollTop,
+    )
+    assert(deepScrollPosition > 0)
+    await hideJitterReplies.click()
+    await assertReplyRegion(
+      page,
+      jitterThread.locator('#discussion-discussion_demo_jitter-replies'),
+      false,
+    )
+    assert.equal(
+      await mainContent.evaluate((element) => element.scrollTop),
+      deepScrollPosition,
+    )
 
     const {
       heading: requestHeading,

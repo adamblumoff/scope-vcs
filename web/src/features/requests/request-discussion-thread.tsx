@@ -99,6 +99,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     onMarkRead,
   })
   const attemptedReplyHashRef = useRef<string | null>(null)
+  const handledReplyHashRef = useRef<string | null>(null)
   const disclosureRef = useRef<HTMLButtonElement>(null)
   const replyRegionRef = useRef<HTMLDivElement>(null)
 
@@ -108,6 +109,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
       const hash = window.location.hash
       const replyTarget = replyTargetFromFragment(hash)
       if (!replyTarget || replyTarget.discussionId !== discussion.id) return
+      if (handledReplyHashRef.current === hash) return
       const hashHandled = attemptedReplyHashRef.current === hash
       if (collapsed && !hashHandled) {
         onExpandedChange(discussion.id, true)
@@ -118,6 +120,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
       if (target) {
         target.scrollIntoView({ block: 'center' })
         attemptedReplyHashRef.current = hash
+        handledReplyHashRef.current = hash
         return
       }
       if (hashHandled) return
@@ -129,10 +132,16 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     }
 
     resolveReplyHash()
-    window.addEventListener('hashchange', resolveReplyHash)
+    function handleHashChange() {
+      attemptedReplyHashRef.current = null
+      handledReplyHashRef.current = null
+      resolveReplyHash()
+    }
+
+    window.addEventListener('hashchange', handleHashChange)
     return () => {
       active = false
-      window.removeEventListener('hashchange', resolveReplyHash)
+      window.removeEventListener('hashchange', handleHashChange)
     }
   }, [availableReplies, collapsed, discussion.id, loadReplyTarget, onExpandedChange])
 
