@@ -6,6 +6,7 @@ import {
   assertRequestCrossLinksStayInDocument,
   assertRequestShellPreserved,
   assertUpdateSelectionUsesInitialPayload,
+  waitForClientHydration,
 } from './request-changes-smoke.mjs'
 
 const baseUrl = (
@@ -81,7 +82,11 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       .getByText('Agreed. Quoting the maintainer', { exact: false })
       .waitFor()
 
-    await retryThread.getByRole('button', { name: 'Collapse discussion' }).click()
+    const collapseRetryThread = retryThread.getByRole('button', {
+      name: 'Collapse discussion',
+    })
+    await waitForClientHydration(page, collapseRetryThread)
+    await collapseRetryThread.click()
     await maintainerReply.waitFor({ state: 'hidden' })
     await retryThread.getByRole('button', { name: 'Expand discussion' }).click()
     await maintainerReply.waitFor()
@@ -95,10 +100,7 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
 
     const requestViews = page.getByRole('navigation', { name: 'Request views' })
     const changesLink = requestViews.getByRole('link', { name: 'Changes' })
-    await page.waitForFunction(
-      (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
-      await changesLink.elementHandle(),
-    )
+    await waitForClientHydration(page, changesLink)
     const transitionServerFunctions = []
     const recordServerFunction = (request) => {
       if (request.url().includes('/_serverFn/')) {

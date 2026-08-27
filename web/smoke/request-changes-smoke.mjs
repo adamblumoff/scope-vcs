@@ -41,7 +41,7 @@ export async function assertRequestCrossLinksStayInDocument(page) {
   return { heading, navigation }
 }
 
-async function waitForClientHydration(page, locator) {
+export async function waitForClientHydration(page, locator) {
   const element = await locator.elementHandle()
   assert(element)
   await page.waitForFunction(
