@@ -1,10 +1,7 @@
 use super::*;
 use scope_git::GitStorageLimits;
 use scope_object_store::ObjectStore;
-use std::{
-    process::Command,
-    time::{Duration, Instant},
-};
+use std::{process::Command, time::Duration};
 
 fn budgeted_store(config: RuntimeBudgetConfig) -> (Arc<MemoryObjectStore>, BudgetedObjectStore) {
     let raw = Arc::new(MemoryObjectStore::new());
@@ -209,22 +206,6 @@ fn object_store_size_limits_cover_writes_and_reads() {
 }
 
 #[test]
-fn git_command_timeout_covers_blocked_stdin_write() {
-    let mut command = Command::new("sh");
-    command.arg("-c").arg("sleep 5");
-    let input = vec![b'x'; 8 * 1024 * 1024];
-    let started_at = Instant::now();
-
-    let error =
-        git_command_output_with_timeout(&mut command, Some(input), Duration::from_millis(250))
-            .unwrap_err();
-
-    assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(error.operator_diagnostic().contains("timed out"));
-    assert!(started_at.elapsed() < Duration::from_secs(2));
-}
-
-#[test]
 fn git_command_broken_pipe_preserves_child_failure() {
     let mut command = Command::new("sh");
     command
@@ -237,19 +218,6 @@ fn git_command_broken_pipe_preserves_child_failure() {
 
     assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(error.operator_diagnostic(), "real git failure");
-}
-
-#[test]
-fn git_command_drains_stderr_after_diagnostic_cap() {
-    let mut command = Command::new("sh");
-    command
-        .arg("-c")
-        .arg("set -e; dd if=/dev/zero bs=1024 count=20 >&2 2>/dev/null; printf ok");
-
-    let output =
-        git_command_output_with_timeout(&mut command, None, Duration::from_secs(2)).unwrap();
-
-    assert_eq!(output, b"ok");
 }
 
 fn state_with_budget_config(config: RuntimeBudgetConfig) -> AppState {

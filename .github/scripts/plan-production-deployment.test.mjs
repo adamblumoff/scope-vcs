@@ -13,81 +13,56 @@ function repositoryJson(path) {
   return JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
 }
 
-test("documentation-only changes do not deploy", () => {
-  assert.deepEqual(classifyChanges(manifest, ["docs/cache.md"]), {
+function deploymentSelection(overrides = {}) {
+  return {
     checksImage: false,
     cache: false,
     worker: false,
     api: false,
     web: false,
     cli: false,
-  });
-});
+    ...overrides,
+  };
+}
 
-test("cache service changes run backend only", () => {
-  assert.deepEqual(classifyChanges(manifest, ["cache-service/src/main.rs"]), {
-    checksImage: false,
-    cache: true,
-    worker: false,
-    api: false,
-    web: false,
-    cli: false,
-  });
-});
-
-test("runner changes publish the image before the backend lane", () => {
-  assert.deepEqual(classifyChanges(manifest, ["runner-runtime/src/main.rs"]), {
-    checksImage: true,
-    cache: false,
-    worker: true,
-    api: false,
-    web: false,
-    cli: false,
-  });
-});
-
-test("toolchain changes publish the checks image and rebuild Rust services", () => {
-  assert.deepEqual(classifyChanges(manifest, ["rust-toolchain.toml"]), {
-    checksImage: true,
-    cache: true,
-    worker: true,
-    api: true,
-    web: false,
-    cli: true,
-  });
-});
-
-test("web-only changes deploy only web", () => {
-  assert.deepEqual(classifyChanges(manifest, ["web/src/routes/+page.svelte"]), {
-    checksImage: false,
-    cache: false,
-    worker: false,
-    api: false,
-    web: true,
-    cli: false,
-  });
-});
-
-test("shared workspace changes preserve the previous conservative scope", () => {
-  assert.deepEqual(classifyChanges(manifest, ["crates/scope-domain/src/lib.rs"]), {
+test("changes select the required deployment lanes", () => {
+  const allLanes = {
     checksImage: true,
     cache: true,
     worker: true,
     api: true,
     web: true,
     cli: true,
-  });
-});
+  };
+  const cases = [
+    ["documentation-only changes do not deploy", ["docs/cache.md"], {}],
+    ["cache service changes run backend only", ["cache-service/src/main.rs"], { cache: true }],
+    [
+      "runner changes publish the image before the backend lane",
+      ["runner-runtime/src/main.rs"],
+      { checksImage: true, worker: true },
+    ],
+    [
+      "toolchain changes publish the checks image and rebuild Rust services",
+      ["rust-toolchain.toml"],
+      { checksImage: true, cache: true, worker: true, api: true, cli: true },
+    ],
+    ["web-only changes deploy only web", ["web/src/routes/+page.svelte"], { web: true }],
+    [
+      "shared workspace changes preserve the previous conservative scope",
+      ["crates/scope-domain/src/lib.rs"],
+      allLanes,
+    ],
+    [
+      "conductor changes exercise every lane",
+      [".github/workflows/scope-production-deploy.yml"],
+      allLanes,
+    ],
+  ];
 
-test("conductor changes exercise every lane", () => {
-  assert.deepEqual(classifyChanges(manifest, [".github/workflows/scope-production-deploy.yml"]), {
-    checksImage: true,
-    cache: true,
-    worker: true,
-    api: true,
-    web: true,
-    cli: true,
-  });
+  for (const [name, paths, lanes] of cases) {
+    assert.deepEqual(classifyChanges(manifest, paths), deploymentSelection(lanes), name);
+  }
 });
 
 test("manual component and all scopes are explicit", () => {

@@ -319,26 +319,6 @@ test('timeline keeps roots in place when they become resolved', () => {
   assert.equal(patched.snapshotVersion, 8)
 })
 
-test('realtime timeline keeps roots that become resolved', () => {
-  const collection = collectionFromPage({
-    discussions: [discussion('one', 5)],
-    next_cursor: null,
-    snapshot_version: 5,
-  })
-  const resolved = {
-    ...discussion('one', 8),
-    resolved_at_unix: 8,
-    status: 'Resolved' as const,
-  }
-  const patched = applyDiscussionChanges(
-    collection,
-    [resolved],
-    8,
-  )
-  assert.deepEqual(patched.order, ['one'])
-  assert.equal(patched.byId.get('one')?.status, 'Resolved')
-})
-
 test('optimistic roots are replaced in their visible position', () => {
   const collection = collectionFromPage({
     discussions: [discussion('one', 5)],

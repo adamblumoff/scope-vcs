@@ -476,83 +476,66 @@ fn public_request_merge_requires_an_ordered_public_native_range() {
 }
 
 #[test]
-fn public_request_merge_rejects_private_changes() {
-    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
-    let config = config(
-        Visibility::Public,
-        Some(("/secret.txt", Visibility::Private)),
-        None,
-    );
-    let result = accept_request_merge(
-        ContentPushState {
-            change_version: repo.record.change_version,
-            policy: repo.policy.clone(),
-            repo_config: config.clone(),
-            live_files: repo.live_tree(),
-            git_head: repo.git_head.clone(),
-        },
-        reviewed_update(
-            "3333333333333333333333333333333333333333",
+fn public_request_merge_rejects_private_paths() {
+    let cases = [
+        (
+            "reviewed private change",
+            "/secret.txt",
+            "/secret.txt",
             "mixed request",
-            vec![reviewed_change("/secret.txt", Some("secret"))],
-            Some(config.clone()),
-            config,
+            true,
         ),
-        RequestMergeOrigin::Public {
-            request_id: "request-1".to_string(),
-            public_base_oid: "0000000000000000000000000000000000000000".to_string(),
-            public_parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
-            request_head_oid: "1111111111111111111111111111111111111111".to_string(),
-            commits: vec![NativePublicCommit {
-                oid: "1111111111111111111111111111111111111111".to_string(),
-                parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
-                tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-                changed_paths: vec![ScopePath::parse("/secret.txt").unwrap()],
-            }],
-        },
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn public_request_merge_rejects_private_intermediate_native_paths() {
-    let repo = published_repo_with_public_file("initial", "/README.md", "hello");
-    let config = config(
-        Visibility::Public,
-        Some(("/secret/**", Visibility::Private)),
-        None,
-    );
-    let result = accept_request_merge(
-        ContentPushState {
-            change_version: repo.record.change_version,
-            policy: repo.policy.clone(),
-            repo_config: config.clone(),
-            live_files: repo.live_tree(),
-            git_head: repo.git_head.clone(),
-        },
-        reviewed_update(
-            "3333333333333333333333333333333333333333",
+        (
+            "private intermediate native path",
+            "/secret/**",
+            "/secret/transient.txt",
             "request with transient private path",
-            Vec::new(),
-            Some(config.clone()),
-            config,
+            false,
         ),
-        RequestMergeOrigin::Public {
-            request_id: "request-1".to_string(),
-            public_base_oid: "0000000000000000000000000000000000000000".to_string(),
-            public_parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
-            request_head_oid: "1111111111111111111111111111111111111111".to_string(),
-            commits: vec![NativePublicCommit {
-                oid: "1111111111111111111111111111111111111111".to_string(),
-                parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
-                tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-                changed_paths: vec![ScopePath::parse("/secret/transient.txt").unwrap()],
-            }],
-        },
-    );
+    ];
 
-    assert!(result.is_err());
+    for (case, private_rule, changed_path, message, include_reviewed_change) in cases {
+        let repo = published_repo_with_public_file("initial", "/README.md", "hello");
+        let config = config(
+            Visibility::Public,
+            Some((private_rule, Visibility::Private)),
+            None,
+        );
+        let changes = include_reviewed_change
+            .then(|| reviewed_change(changed_path, Some("secret")))
+            .into_iter()
+            .collect();
+        let result = accept_request_merge(
+            ContentPushState {
+                change_version: repo.record.change_version,
+                policy: repo.policy.clone(),
+                repo_config: config.clone(),
+                live_files: repo.live_tree(),
+                git_head: repo.git_head.clone(),
+            },
+            reviewed_update(
+                "3333333333333333333333333333333333333333",
+                message,
+                changes,
+                Some(config.clone()),
+                config,
+            ),
+            RequestMergeOrigin::Public {
+                request_id: "request-1".to_string(),
+                public_base_oid: "0000000000000000000000000000000000000000".to_string(),
+                public_parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
+                request_head_oid: "1111111111111111111111111111111111111111".to_string(),
+                commits: vec![NativePublicCommit {
+                    oid: "1111111111111111111111111111111111111111".to_string(),
+                    parent_oids: vec!["0000000000000000000000000000000000000000".to_string()],
+                    tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                    changed_paths: vec![ScopePath::parse(changed_path).unwrap()],
+                }],
+            },
+        );
+
+        assert!(result.is_err(), "{case}");
+    }
 }
 
 #[test]

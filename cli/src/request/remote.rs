@@ -93,11 +93,12 @@ mod tests {
     }
 
     #[test]
-    fn default_remote_discovers_one_repository_in_priority_order() {
-        for (label, remotes, expected) in [
+    fn implicit_remote_selection_follows_the_priority_matrix() {
+        for (label, remotes, tracking_remote, expected) in [
             (
                 "origin",
                 vec![("origin", "https://scope.example/git/public/adam/repo")],
+                None,
                 "origin",
             ),
             (
@@ -106,6 +107,7 @@ mod tests {
                     ("origin", "https://scope.example/git/public/adam/repo"),
                     ("scope", "https://scope.example/git/permissioned/adam/repo"),
                 ],
+                None,
                 "scope",
             ),
             (
@@ -114,32 +116,38 @@ mod tests {
                     ("origin", "https://github.com/adam/repo"),
                     ("upstream", "https://scope.example/git/public/adam/repo"),
                 ],
+                None,
                 "upstream",
             ),
+            (
+                "non-scope-tracking-falls-back",
+                vec![
+                    ("origin", "https://github.com/adam/repo"),
+                    ("scope", "https://scope.example/git/public/adam/repo"),
+                ],
+                Some("origin"),
+                "scope",
+            ),
+            (
+                "scope-tracking-wins-over-ambiguity",
+                vec![
+                    ("origin", "https://scope.example/git/public/adam/one"),
+                    ("scope", "https://scope.example/git/public/adam/two"),
+                ],
+                Some("origin"),
+                "origin",
+            ),
         ] {
-            let (_dir, repo) = repo_with_remotes(label, &remotes);
+            let (dir, repo) = repo_with_remotes(label, &remotes);
+            if let Some(remote) = tracking_remote {
+                dir.run_git(["config", "branch.main.remote", remote]);
+            }
             assert_eq!(
                 request_remote_name(&repo, "https://scope.example", None).unwrap(),
-                expected
+                expected,
+                "{label}"
             );
         }
-    }
-
-    #[test]
-    fn non_scope_tracking_remote_falls_back_to_scope_remote() {
-        let (dir, repo) = repo_with_remotes(
-            "github-tracking",
-            &[
-                ("origin", "https://github.com/adam/repo"),
-                ("scope", "https://scope.example/git/public/adam/repo"),
-            ],
-        );
-        dir.run_git(["config", "branch.main.remote", "origin"]);
-
-        assert_eq!(
-            request_remote_name(&repo, "https://scope.example", None).unwrap(),
-            "scope"
-        );
     }
 
     #[test]
@@ -156,23 +164,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("pass --remote"), "{error}");
-    }
-
-    #[test]
-    fn tracking_remote_wins_over_ambiguous_repository_targets() {
-        let (dir, repo) = repo_with_remotes(
-            "tracking",
-            &[
-                ("origin", "https://scope.example/git/public/adam/one"),
-                ("scope", "https://scope.example/git/public/adam/two"),
-            ],
-        );
-        dir.run_git(["config", "branch.main.remote", "origin"]);
-
-        assert_eq!(
-            request_remote_name(&repo, "https://scope.example", None).unwrap(),
-            "origin"
-        );
     }
 
     fn repo_with_remotes(label: &str, remotes: &[(&str, &str)]) -> (TempDir, GitRepo) {

@@ -109,6 +109,16 @@ pub(super) async fn relation_exists(db: &DatabaseConnection, relation: &str) -> 
     .unwrap()
 }
 
+async fn assert_v6_adoption_refused(db: &DatabaseConnection, expected_diagnostic: &str) {
+    let error = migrations::apply_in_maintenance(db).await.unwrap_err();
+
+    assert!(
+        error.to_string().contains(expected_diagnostic),
+        "unexpected migration error: {error}"
+    );
+    assert!(!relation_exists(db, "seaql_migrations").await);
+}
+
 pub(super) async fn applied_versions(db: &DatabaseConnection) -> Vec<String> {
     db.query_all(Statement::from_string(
         DatabaseBackend::Postgres,
@@ -774,12 +784,7 @@ async fn structurally_drifted_v6_is_refused_without_stamping_migration_state() {
         .await
         .unwrap();
 
-    let error = migrations::apply_in_maintenance(db.as_ref())
-        .await
-        .unwrap_err();
-
-    assert!(error.to_string().contains("column fingerprint"));
-    assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
+    assert_v6_adoption_refused(db.as_ref(), "column fingerprint").await;
     assert!(relation_exists(db.as_ref(), "scope_metadata_schema").await);
 }
 
@@ -854,12 +859,7 @@ async fn unknown_v6_table_is_refused_without_deleting_it() {
     .await
     .unwrap();
 
-    let error = migrations::apply_in_maintenance(db.as_ref())
-        .await
-        .unwrap_err();
-
-    assert!(error.to_string().contains("expected v6 table set"));
-    assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
+    assert_v6_adoption_refused(db.as_ref(), "expected v6 table set").await;
     assert!(relation_exists(db.as_ref(), "scope_unexpected_production_table").await);
 }
 
@@ -871,12 +871,7 @@ async fn invalid_v6_marker_is_refused_without_stamping_migration_state() {
         .await
         .unwrap();
 
-    let error = migrations::apply_in_maintenance(db.as_ref())
-        .await
-        .unwrap_err();
-
-    assert!(error.to_string().contains("expected current ready v6"));
-    assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
+    assert_v6_adoption_refused(db.as_ref(), "expected current ready v6").await;
 }
 
 #[tokio::test]
@@ -926,12 +921,7 @@ async fn multiple_v6_markers_are_refused_without_stamping_migration_state() {
     .await
     .unwrap();
 
-    let error = migrations::apply_in_maintenance(db.as_ref())
-        .await
-        .unwrap_err();
-
-    assert!(error.to_string().contains("expected one v6 marker"));
-    assert!(!relation_exists(db.as_ref(), "seaql_migrations").await);
+    assert_v6_adoption_refused(db.as_ref(), "expected one v6 marker").await;
 }
 
 #[tokio::test]

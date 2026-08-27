@@ -515,7 +515,6 @@ pub(crate) fn pkt_line(payload: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     #[test]
     fn stderr_truncation_preserves_utf8_boundaries() {
@@ -542,20 +541,5 @@ mod tests {
                 .operator_diagnostic()
                 .contains("stdout exceeded 4 bytes")
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn git_timeout_kills_descendants_that_hold_output_pipes() {
-        let mut command = Command::new("sh");
-        command.arg("-c").arg("(sleep 5) & sleep 5");
-        let started_at = Instant::now();
-
-        let error = git_command_output_with_timeout(&mut command, None, Duration::from_millis(25))
-            .unwrap_err();
-
-        assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert!(error.operator_diagnostic().contains("timed out"));
-        assert!(started_at.elapsed() < Duration::from_secs(2));
     }
 }

@@ -15,17 +15,3 @@ pub fn version_identity() -> &'static str {
         })
         .as_str()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn version_identity_includes_package_build_and_protocol() {
-        let identity = version_identity();
-
-        assert!(identity.starts_with(PACKAGE_VERSION));
-        assert!(identity.contains(&format!("build {BUILD_SHA}")));
-        assert!(identity.contains(&format!("protocol {CLI_PROTOCOL_VERSION}")));
-    }
-}

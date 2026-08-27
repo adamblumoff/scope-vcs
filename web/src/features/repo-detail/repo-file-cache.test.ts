@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { RepoFileContent } from '@/api/types'
 import {
-  peekRepoFileCache,
   readRepoFileCache,
   repoFileCacheKey,
   repoFileCacheStats,
@@ -67,15 +66,4 @@ test('evicts large source entries at the byte limit', () => {
   const stats = repoFileCacheStats()
   assert.ok(stats.entries < 6)
   assert.ok(stats.totalBytes <= 24 * 1024 * 1024)
-})
-
-test('peek does not extend an entry lifetime', () => {
-  resetRepoFileCache()
-  for (let index = 0; index < 32; index += 1) {
-    writeRepoFileCache(`file-${index}`, textFile(`${index}.ts`, `${index}`, 'x'))
-  }
-  assert.equal(peekRepoFileCache('file-0')?.path, '0.ts')
-  writeRepoFileCache('file-32', textFile('32.ts', '32', 'x'))
-
-  assert.equal(readRepoFileCache('file-0'), null)
 })

@@ -111,64 +111,45 @@ describe('repository run detail model', () => {
     })
   })
 
-  it('falls back to the currently running step when nothing failed', () => {
-    const jobs = [
-      job({
-        attempts: [{ id: 'a1', number: 1, steps: [{ index: 0, state: 'succeeded' }] }],
-        key: 'lint',
-        state: 'succeeded',
-      }),
-      job({
-        attempts: [{
-          id: 'a2',
-          number: 2,
-          steps: [
-            { index: 0, state: 'succeeded' },
-            { index: 1, state: 'running' },
-          ],
-        }],
-        key: 'backend',
+  it('falls back to the final eligible step when nothing failed', () => {
+    for (const testCase of [
+      {
+        name: 'currently running step',
         state: 'running',
-      }),
-    ]
-    assert.deepEqual(selectInitialView(jobs), {
-      selectedJobKey: 'backend',
-      selection: {
-        attemptId: 'a2',
-        jobKey: 'backend',
-        stepIndex: 1,
       },
-    })
-  })
-
-  it('falls back to the last step of the last job when the run is idle', () => {
-    const jobs = [
-      job({
-        attempts: [{ id: 'a1', number: 1, steps: [{ index: 0, state: 'succeeded' }] }],
-        key: 'lint',
+      {
+        name: 'last step of the last job when the run is idle',
         state: 'succeeded',
-      }),
-      job({
-        attempts: [{
-          id: 'a2',
-          number: 2,
-          steps: [
-            { index: 0, state: 'succeeded' },
-            { index: 1, state: 'succeeded' },
-          ],
-        }],
-        key: 'backend',
-        state: 'succeeded',
-      }),
-    ]
-    assert.deepEqual(selectInitialView(jobs), {
-      selectedJobKey: 'backend',
-      selection: {
-        attemptId: 'a2',
-        jobKey: 'backend',
-        stepIndex: 1,
       },
-    })
+    ] as const) {
+      const jobs = [
+        job({
+          attempts: [{ id: 'a1', number: 1, steps: [{ index: 0, state: 'succeeded' }] }],
+          key: 'lint',
+          state: 'succeeded',
+        }),
+        job({
+          attempts: [{
+            id: 'a2',
+            number: 2,
+            steps: [
+              { index: 0, state: 'succeeded' },
+              { index: 1, state: testCase.state },
+            ],
+          }],
+          key: 'backend',
+          state: testCase.state,
+        }),
+      ]
+      assert.deepEqual(selectInitialView(jobs), {
+        selectedJobKey: 'backend',
+        selection: {
+          attemptId: 'a2',
+          jobKey: 'backend',
+          stepIndex: 1,
+        },
+      }, testCase.name)
+    }
   })
 
   it('selects nothing when there are no steps to show', () => {
