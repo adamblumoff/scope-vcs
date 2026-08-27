@@ -5,19 +5,15 @@ export type ReplyPageState = {
   loaded: boolean
   loading: boolean
   nextBeforePosition: number | null
-}
-
-export type ReplyBranchState = ReplyPageState & {
-  knownChildCount: number
+  newestLoadedPosition: number | null
 }
 
 export type DiscussionRepliesState = {
-  branches: ReadonlyMap<string, ReplyBranchState>
+  page: ReplyPageState
   replies: RequestDiscussionReplyView[]
-  root: ReplyPageState
 }
 
-type ReplyPage = {
+export type ReplyPage = {
   next_before_position: number | null
   replies: RequestDiscussionReplyView[]
 }
@@ -27,46 +23,68 @@ const unloadedPage: ReplyPageState = {
   loaded: false,
   loading: false,
   nextBeforePosition: null,
+  newestLoadedPosition: null,
 }
 
 export function createDiscussionRepliesState(
   replies: RequestDiscussionReplyView[] = [],
 ): DiscussionRepliesState {
   return {
-    branches: new Map(),
+    page: unloadedPage,
     replies: mergeDiscussionReplies([], replies),
-    root: unloadedPage,
   }
 }
 
 export function mergeReplyPage(
   state: DiscussionRepliesState,
-  parentReplyId: string | null,
   page: ReplyPage,
   latest: RequestDiscussionReplyView[] = [],
+  newestPage = false,
 ): DiscussionRepliesState {
   const replies = mergeDiscussionReplies(
     state.replies,
     [...latest, ...page.replies],
   )
-  const pageState: ReplyPageState = {
-    error: null,
-    loaded: true,
-    loading: false,
-    nextBeforePosition: page.next_before_position,
+  return {
+    page: {
+      error: null,
+      loaded: true,
+      loading: false,
+      nextBeforePosition: page.next_before_position,
+      newestLoadedPosition: newestPage
+        ? page.replies.at(-1)?.position ?? state.page.newestLoadedPosition
+        : state.page.newestLoadedPosition,
+    },
+    replies,
   }
-  if (parentReplyId === null) {
-    return { ...state, replies, root: pageState }
-  }
+}
 
-  const parent = replies.find((reply) => reply.id === parentReplyId)
-  const knownChildCount = Math.max(
-    parent?.child_reply_count ?? 0,
-    directDiscussionReplies(replies, parentReplyId).length,
-  )
-  const branches = new Map(state.branches)
-  branches.set(parentReplyId, { ...pageState, knownChildCount })
-  return { ...state, branches, replies }
+export function beforePositionForNextReplyPage(
+  state: DiscussionRepliesState,
+  latest: RequestDiscussionReplyView[],
+) {
+  const newestPreviewPosition = latest.at(-1)?.position
+  const newestPageIsStale =
+    newestPreviewPosition !== undefined &&
+    (state.page.newestLoadedPosition === null ||
+      newestPreviewPosition > state.page.newestLoadedPosition)
+
+  if (!state.page.loaded || newestPageIsStale) return undefined
+  return state.page.nextBeforePosition ?? undefined
+}
+
+export function mergeReplyTarget(
+  state: DiscussionRepliesState,
+  page: ReplyPage,
+  latest: RequestDiscussionReplyView[] = [],
+): DiscussionRepliesState {
+  return {
+    page: { ...state.page, error: null, loading: false },
+    replies: mergeDiscussionReplies(
+      state.replies,
+      [...latest, ...page.replies],
+    ),
+  }
 }
 
 export function insertOptimisticReply(
@@ -74,22 +92,11 @@ export function insertOptimisticReply(
   reply: RequestDiscussionReplyView,
   latest: RequestDiscussionReplyView[] = [],
 ): DiscussionRepliesState {
-  const currentParent = reply.reply_to_reply_id === null
-    ? undefined
-    : state.replies.find((existing) => existing.id === reply.reply_to_reply_id)
   const replies = mergeDiscussionReplies(state.replies, latest)
-  const alreadyPresent = replies.some((existing) => existing.id === reply.id)
-  const withParentCount = replies.map((existing) => {
-    if (existing.id !== reply.reply_to_reply_id) return existing
-    const childReplyCount = alreadyPresent
-      ? Math.max(existing.child_reply_count, currentParent?.child_reply_count ?? 0)
-      : existing.child_reply_count + 1
-    return { ...existing, child_reply_count: childReplyCount }
-  })
   return {
     ...state,
-    replies: mergeDiscussionReplies(withParentCount, [reply]),
-    root: { ...state.root, error: null },
+    page: { ...state.page, error: null },
+    replies: mergeDiscussionReplies(replies, [reply]),
   }
 }
 
@@ -131,57 +138,33 @@ export function mergeDiscussionReplies(
   return orderReplies(byId.values())
 }
 
-export function directDiscussionReplies(
+export function countVisibleUnreadReplies(
   replies: RequestDiscussionReplyView[],
-  parentReplyId: string | null,
+  readThroughPosition: number,
 ) {
   return replies.filter(
-    (reply) => reply.reply_to_reply_id === parentReplyId,
-  )
+    (reply) => !reply.pending && reply.position > readThroughPosition,
+  ).length
 }
 
-export function replyTreeFullyExposed({
-  expandedReplyIds,
-  replyCount,
-  rootRepliesLoaded,
-  state,
-}: {
-  expandedReplyIds: ReadonlySet<string>
-  replyCount: number
-  rootRepliesLoaded: boolean
-  state: DiscussionRepliesState
-}) {
+export function hasLoadedAllUnreadContent(
+  replies: RequestDiscussionReplyView[],
+  readThroughPosition: number,
+  unreadCount: number,
+  rootUnread: boolean,
+) {
   return (
-    rootRepliesLoaded &&
-    state.root.nextBeforePosition === null &&
-    state.replies.length >= replyCount &&
-    state.replies.every((reply) =>
-      reply.child_reply_count === 0 ||
-      (
-        expandedReplyIds.has(reply.id) &&
-        state.branches.get(reply.id)?.loaded === true &&
-        state.branches.get(reply.id)?.nextBeforePosition === null
-      ),
-    )
+    countVisibleUnreadReplies(replies, readThroughPosition) +
+      Number(rootUnread) >=
+    unreadCount
   )
 }
 
 export function updateReplyPage(
   state: DiscussionRepliesState,
-  parentReplyId: string | null,
   patch: Partial<ReplyPageState>,
 ): DiscussionRepliesState {
-  if (parentReplyId === null) {
-    return { ...state, root: { ...state.root, ...patch } }
-  }
-  const branches = new Map(state.branches)
-  branches.set(parentReplyId, {
-    ...unloadedPage,
-    knownChildCount: 0,
-    ...branches.get(parentReplyId),
-    ...patch,
-  })
-  return { ...state, branches }
+  return { ...state, page: { ...state.page, ...patch } }
 }
 
 function orderReplies(replies: Iterable<RequestDiscussionReplyView>) {

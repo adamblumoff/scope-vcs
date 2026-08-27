@@ -15,7 +15,7 @@ use scope_domain::{
         RequestDiscussionReply, RequestViewer, request_actor_role, request_policy,
     },
 };
-use scope_postgres::db::RequestDiscussionReadModel;
+use scope_postgres::db::{RequestDiscussionReadModel, RequestDiscussionReplyReadModel};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod anchor;
@@ -90,9 +90,8 @@ pub(crate) struct DiscussionMutationResult {
 
 pub(crate) struct ReplyMutationResult {
     pub(crate) discussion: DiscussionMutationResult,
-    pub(crate) reply: RequestDiscussionReply,
+    pub(crate) reply: RequestDiscussionReplyReadModel,
     pub(crate) reply_users: BTreeMap<String, UserAccount>,
-    pub(crate) child_reply_count: u64,
 }
 
 pub(crate) struct MarkDiscussionReadResult {
@@ -390,22 +389,16 @@ async fn reply_mutation_result(
         actor_user_id,
     )
     .await?;
-    let reply_users = state
+    let (reply, reply_users) = state
         .metadata
         .requests()
-        .users_by_ids([reply.author_user_id.clone()])
+        .request_discussion_reply_read_model(reply)
         .await?;
-    let child_reply_count = state
-        .metadata
-        .requests()
-        .request_discussion_reply_child_count(&reply.id)
-        .await?;
-    publish_timeline_change(state, context, discussion_id, reply.position).await;
+    publish_timeline_change(state, context, discussion_id, reply.reply.position).await;
     Ok(ReplyMutationResult {
         discussion,
         reply,
         reply_users,
-        child_reply_count,
     })
 }
 

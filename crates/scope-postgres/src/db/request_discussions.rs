@@ -2,11 +2,12 @@ use super::{
     RequestStore,
     request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
     request_discussion_rows::{
-        DiscussionPageFilter, RequestDiscussionReplyReadModel, changed_discussions_for_request,
+        DiscussionPageFilter, RequestDiscussionReplyReadModel,
+        RequestDiscussionReplyReferenceReadModel, changed_discussions_for_request,
         discussion_by_client_id, discussion_by_id, discussions_page_for_request, insert_discussion,
         insert_reply, read_state, read_states_for_user, replies_for_discussion, reply_by_client_id,
-        reply_by_id, reply_child_count, reply_previews_for_discussions, save_discussion,
-        save_read_state, unread_content_counts, users_by_ids as load_users_by_ids,
+        reply_by_id, reply_previews_for_discussions, save_discussion, save_read_state,
+        unread_content_counts, users_by_ids as load_users_by_ids,
     },
     request_revision_rows::{
         RequestRevisionWindow, revision_by_id, revision_positions_for_request,
@@ -37,10 +38,8 @@ pub struct RequestDiscussionReadModel {
     pub discussion: RequestDiscussion,
     pub anchor_revision_position: Option<u64>,
     pub reply_count: u64,
-    /// Replies that answer the discussion itself. The thread's reply control
-    /// reveals these, so it counts them rather than the whole tree.
-    pub root_reply_count: u64,
     pub latest_replies: Vec<RequestDiscussionReplyReadModel>,
+    pub read_through_position: u64,
     pub unread_count: u64,
 }
 
@@ -182,20 +181,30 @@ impl RequestStore {
                         })
                 })
                 .transpose()?;
-            let (reply_count, root_reply_count, latest_replies) =
+            let (reply_count, latest_replies) =
                 previews.get(&discussion.id).cloned().unwrap_or_default();
-            user_ids.extend(
-                latest_replies
-                    .iter()
-                    .map(|model| model.reply.author_user_id.clone()),
-            );
+            user_ids.extend(latest_replies.iter().flat_map(|model| {
+                [
+                    Some(model.reply.author_user_id.clone()),
+                    model
+                        .reply_to
+                        .as_ref()
+                        .map(|target| target.author_user_id.clone()),
+                ]
+                .into_iter()
+                .flatten()
+            }));
+            let read_through_position = read_states
+                .get(&discussion.id)
+                .map(|state| state.read_through_position)
+                .unwrap_or(0);
             let unread_count = unread_counts.get(&discussion.id).copied().unwrap_or(0);
             models.push(RequestDiscussionReadModel {
                 discussion,
                 anchor_revision_position,
                 reply_count,
-                root_reply_count,
                 latest_replies,
+                read_through_position,
                 unread_count,
             });
         }
@@ -209,7 +218,6 @@ impl RequestStore {
     pub async fn request_discussion_replies(
         &self,
         discussion_id: &str,
-        parent_reply_id: Option<&str>,
         before_position: Option<u64>,
         limit: u64,
     ) -> Result<
@@ -219,22 +227,46 @@ impl RequestStore {
         ),
         PostgresError,
     > {
-        let replies = replies_for_discussion(
-            self.db.as_ref(),
-            discussion_id,
-            parent_reply_id,
-            before_position,
-            limit,
-        )
-        .await?;
+        let replies =
+            replies_for_discussion(self.db.as_ref(), discussion_id, before_position, limit).await?;
         let users = load_users_by_ids(
             self.db.as_ref(),
-            replies
-                .iter()
-                .map(|model| model.reply.author_user_id.clone()),
+            replies.iter().flat_map(|model| {
+                [
+                    Some(model.reply.author_user_id.clone()),
+                    model
+                        .reply_to
+                        .as_ref()
+                        .map(|target| target.author_user_id.clone()),
+                ]
+                .into_iter()
+                .flatten()
+            }),
         )
         .await?;
         Ok((replies, users))
+    }
+
+    pub async fn request_discussion_reply(
+        &self,
+        discussion_id: &str,
+        reply_id: &str,
+    ) -> Result<
+        Option<(
+            RequestDiscussionReplyReadModel,
+            BTreeMap<String, UserAccount>,
+        )>,
+        PostgresError,
+    > {
+        let Some(reply) = reply_by_id(self.db.as_ref(), reply_id).await? else {
+            return Ok(None);
+        };
+        if reply.discussion_id != discussion_id {
+            return Ok(None);
+        }
+        self.request_discussion_reply_read_model(reply)
+            .await
+            .map(Some)
     }
 
     pub async fn users_by_ids(
@@ -244,11 +276,54 @@ impl RequestStore {
         load_users_by_ids(self.db.as_ref(), user_ids).await
     }
 
-    pub async fn request_discussion_reply_child_count(
+    pub async fn request_discussion_reply_read_model(
         &self,
-        reply_id: &str,
-    ) -> Result<u64, PostgresError> {
-        reply_child_count(self.db.as_ref(), reply_id).await
+        reply: scope_domain::requests::RequestDiscussionReply,
+    ) -> Result<
+        (
+            RequestDiscussionReplyReadModel,
+            BTreeMap<String, UserAccount>,
+        ),
+        PostgresError,
+    > {
+        let reply_to = match reply.reply_to_reply_id.as_deref() {
+            Some(reply_id) => {
+                let target = reply_by_id(self.db.as_ref(), reply_id)
+                    .await?
+                    .ok_or_else(|| {
+                        PostgresError::internal_message(format!(
+                            "discussion reply references missing reply {reply_id}"
+                        ))
+                    })?;
+                if target.discussion_id != reply.discussion_id || target.position >= reply.position
+                {
+                    return Err(PostgresError::internal_message(format!(
+                        "discussion reply {} has an invalid reply target",
+                        reply.id
+                    )));
+                }
+                Some(RequestDiscussionReplyReferenceReadModel {
+                    id: target.id,
+                    position: target.position,
+                    author_user_id: target.author_user_id,
+                    body_markdown: target.body_markdown,
+                })
+            }
+            None => None,
+        };
+        let users = load_users_by_ids(
+            self.db.as_ref(),
+            [
+                Some(reply.author_user_id.clone()),
+                reply_to
+                    .as_ref()
+                    .map(|target| target.author_user_id.clone()),
+            ]
+            .into_iter()
+            .flatten(),
+        )
+        .await?;
+        Ok((RequestDiscussionReplyReadModel { reply, reply_to }, users))
     }
 
     pub async fn request_revision(

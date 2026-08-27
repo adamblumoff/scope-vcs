@@ -2,6 +2,7 @@ import type { RequestParams, RequestSummary } from '@/api/types'
 import { EmptyState } from '@/components/empty-state'
 import { Button } from '@/components/ui/button'
 import { CircleAlert, MessageSquare } from 'lucide-react'
+import { domAnimation, LazyMotion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import {
   readRequestDiscussionScroll,
@@ -103,27 +104,29 @@ export function RequestDiscussionWorkbench({
       ) : null}
 
       {store.discussions.length > 0 ? (
-        <div>
-          {store.discussions.map((discussion) => (
-            <RequestDiscussionThread
-              actions={threadActions}
-              actor={actor}
-              canReply={permissions.canReply}
-              canResolve={canResolve(discussion)}
-              composerOpen={activeComposer === discussion.id}
-              discussion={discussion}
-              key={discussion.id}
-              onExpandedChange={store.setExpanded}
-              onMarkRead={store.markRead}
-              onCloseComposer={() => setActiveComposer(null)}
-              onOpenComposer={() => setActiveComposer(discussion.id)}
-              onPatch={store.patch}
-              onRetryRoot={store.retry}
-              onResolve={store.resolve}
-              params={params}
-            />
-          ))}
-        </div>
+        <LazyMotion features={domAnimation}>
+          <div>
+            {store.discussions.map((discussion) => (
+              <RequestDiscussionThread
+                actions={threadActions}
+                actor={actor}
+                canReply={permissions.canReply}
+                canResolve={canResolve(discussion)}
+                composerOpen={activeComposer === discussion.id}
+                discussion={discussion}
+                key={discussion.id}
+                onExpandedChange={store.setExpanded}
+                onMarkRead={store.markRead}
+                onCloseComposer={() => setActiveComposer(null)}
+                onOpenComposer={() => setActiveComposer(discussion.id)}
+                onPatch={store.patch}
+                onRetryRoot={store.retry}
+                onResolve={store.resolve}
+                params={params}
+              />
+            ))}
+          </div>
+        </LazyMotion>
       ) : (
         <EmptyState
           description="Open one to ask a question or leave review notes."

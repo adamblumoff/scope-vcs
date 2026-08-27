@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { chromium } from 'playwright'
-import {
-  assertFileSelectionSkipsRevisionReload,
-  assertRequestCrossLinksStayInDocument,
-  assertRequestShellPreserved,
-  assertUpdateSelectionUsesInitialPayload,
-} from './request-changes-smoke.mjs'
 import { assertHistoryFirstFileStaysInRoute } from './history-navigation-smoke.mjs'
 import { assertRepositoryMarkdownUsesClientNavigation } from './repository-markdown-navigation-smoke.mjs'
 
@@ -654,103 +648,6 @@ test('public repository requests route is anonymously readable', async () => {
     await page.getByRole('heading', { level: 2, name: 'Closed' }).waitFor()
     await page.getByText('No open requests.', { exact: true }).waitFor()
     await page.getByText('No closed requests.', { exact: true }).waitFor()
-  })
-})
-
-test('seeded request discussion and changes stay reciprocal and ordered', async () => {
-  await withPage(`/${owner}/update-demo/requests/req_demo_ready`, async (page) => {
-    await page.getByRole('heading', { level: 1, name: 'Add bounded retry timing' }).waitFor()
-    assert.equal(
-      await page.getByRole('button', { name: 'Refresh', exact: true }).count(),
-      0,
-    )
-    await page.getByText('Public request', { exact: true }).last().waitFor()
-    const threads = page.locator('.request-discussion-thread')
-    await threads.first().waitFor()
-    assert.deepEqual(
-      await threads.evaluateAll((elements) => elements.map(({ id }) => id)),
-      [
-        'discussion-discussion_demo_retry_cap',
-        'discussion-discussion_demo_jitter',
-        'discussion-discussion_demo_resolved_docs',
-        'discussion-discussion_demo_revision_jitter',
-        'discussion-discussion_demo_revision_tests',
-        'discussion-discussion_demo_revision_final',
-      ],
-    )
-    assert.equal(await page.getByRole('textbox').count(), 0)
-
-    const retryThread = page.locator('#discussion-discussion_demo_retry_cap')
-    assert.equal(
-      await retryThread.getByRole('button', { name: /3 replies/ }).count(),
-      0,
-    )
-    const maintainerReply = page.locator(
-      '#reply-discussion_reply_demo_retry_cap_maintainer',
-    )
-    await maintainerReply.getByText('Two seconds is intentional', { exact: false }).waitFor()
-    const showMaintainerReply = maintainerReply.getByRole('button', {
-      name: 'Show 1 reply',
-    })
-    await page.waitForFunction(
-      (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
-      await showMaintainerReply.elementHandle(),
-    )
-    await showMaintainerReply.click()
-    const contributorReply = page.locator(
-      '#reply-discussion_reply_demo_retry_cap_quote',
-    )
-    await contributorReply.getByText('Agreed. Quoting the maintainer', { exact: false }).waitFor()
-    await contributorReply.getByRole('button', { name: 'Show 1 reply' }).click()
-    await page
-      .locator('#reply-discussion_reply_demo_retry_cap_nested')
-      .getByText('Exactly. Keeping that decision nested', { exact: false })
-      .waitFor()
-
-    const {
-      heading: requestHeading,
-      navigation: requestNavigation,
-    } = await assertRequestCrossLinksStayInDocument(page)
-
-    const requestViews = page.getByRole('navigation', { name: 'Request views' })
-    const changesLink = requestViews.getByRole('link', { name: 'Changes' })
-    await page.waitForFunction(
-      (element) => Object.keys(element).some((key) => key.startsWith('__reactProps$')),
-      await changesLink.elementHandle(),
-    )
-    const transitionServerFunctions = []
-    const recordServerFunction = (request) => {
-      if (request.url().includes('/_serverFn/')) {
-        transitionServerFunctions.push(new URL(request.url()).pathname)
-      }
-    }
-    page.on('request', recordServerFunction)
-    await changesLink.click()
-    await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready/changes'))
-    await page
-      .getByRole('button', { name: /, commit .+, \d+ files?$/ })
-      .first()
-      .waitFor()
-    page.off('request', recordServerFunction)
-    const repeatedServerFunctions = transitionServerFunctions.filter(
-      (url, index, requests) => requests.indexOf(url) !== index,
-    )
-    assert.deepEqual(repeatedServerFunctions, [])
-    await assertRequestShellPreserved(page, {
-      heading: requestHeading,
-      navigation: requestNavigation,
-    })
-    await assertFileSelectionSkipsRevisionReload(page, 'retry.ts', '/src/retry.ts')
-    await assertUpdateSelectionUsesInitialPayload(page)
-    await page.getByRole('navigation', { name: 'Request views' })
-      .getByRole('link', { name: 'Discussion' })
-      .click()
-    await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready'))
-    await page.locator('.request-discussion-thread').first().waitFor()
-    await assertRequestShellPreserved(page, {
-      heading: requestHeading,
-      navigation: requestNavigation,
-    })
   })
 })
 

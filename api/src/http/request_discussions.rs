@@ -20,7 +20,8 @@ use scope_api_contract::{
     RequestDiscussionAnchor, RequestDiscussionChangesResponse, RequestDiscussionMutationResponse,
     RequestDiscussionPageResponse, RequestDiscussionReadResponse,
     RequestDiscussionRepliesPageResponse, RequestDiscussionReplyMutationResponse,
-    RequestDiscussionReplyResponse, RequestDiscussionSummaryResponse,
+    RequestDiscussionReplyReferenceResponse, RequestDiscussionReplyResponse,
+    RequestDiscussionSummaryResponse,
 };
 use scope_domain::requests::{REQUEST_ACTIVITY_PAGE_MAX_EVENTS, RequestViewer, request_policy};
 use serde::Deserialize;
@@ -51,7 +52,7 @@ pub(crate) struct DiscussionChangesQuery {
 pub(crate) struct DiscussionRepliesQuery {
     before: Option<u64>,
     limit: Option<u64>,
-    parent_reply_id: Option<String>,
+    reply: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,6 +194,28 @@ pub(crate) async fn list_replies(
     )
     .await?;
     ensure_discussion_in_request(&state, &request_id, &discussion_id).await?;
+    if let Some(reply_id) = query.reply.as_deref() {
+        if query.before.is_some() {
+            return Err(ApiError::bad_request(
+                "reply and before cannot be used together",
+            ));
+        }
+        let Some((reply, users)) = state
+            .metadata
+            .requests()
+            .request_discussion_reply(&discussion_id, reply_id)
+            .await?
+        else {
+            return Ok(Json(RequestDiscussionRepliesPageResponse {
+                replies: Vec::new(),
+                next_before_position: None,
+            }));
+        };
+        return Ok(Json(RequestDiscussionRepliesPageResponse {
+            replies: vec![reply_response(reply, &users)?],
+            next_before_position: None,
+        }));
+    }
     let limit = query
         .limit
         .unwrap_or(DEFAULT_REPLY_LIMIT)
@@ -200,12 +223,7 @@ pub(crate) async fn list_replies(
     let (mut replies, users) = state
         .metadata
         .requests()
-        .request_discussion_replies(
-            &discussion_id,
-            query.parent_reply_id.as_deref(),
-            query.before,
-            limit + 1,
-        )
+        .request_discussion_replies(&discussion_id, query.before, limit + 1)
         .await?;
     let has_more = replies.len() as u64 > limit;
     if has_more {
@@ -216,7 +234,7 @@ pub(crate) async fn list_replies(
         .flatten();
     let replies = replies
         .into_iter()
-        .map(|reply| reply_read_response(reply, &users))
+        .map(|reply| reply_response(reply, &users))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(RequestDiscussionRepliesPageResponse {
         replies,
@@ -499,7 +517,7 @@ fn reply_mutation_response(
     result: ReplyMutationResult,
 ) -> Result<RequestDiscussionReplyMutationResponse, ApiError> {
     let discussion = mutation_discussion_response(result.discussion)?;
-    let reply = reply_response(result.reply, result.child_reply_count, &result.reply_users)?;
+    let reply = reply_response(result.reply, &result.reply_users)?;
     Ok(RequestDiscussionReplyMutationResponse { discussion, reply })
 }
 
@@ -533,12 +551,12 @@ fn discussion_summary(
         anchor,
         status: model.discussion.status.into(),
         reply_count: model.reply_count,
-        root_reply_count: model.root_reply_count,
+        read_through_position: model.read_through_position,
         unread_count: model.unread_count,
         latest_replies: model
             .latest_replies
             .into_iter()
-            .map(|reply| reply_read_response(reply, users))
+            .map(|reply| reply_response(reply, users))
             .collect::<Result<Vec<_>, _>>()?,
         created_at_unix: model.discussion.created_at_unix,
         resolved_at_unix: model.discussion.resolved_at_unix,
@@ -663,28 +681,30 @@ fn project_discussion_anchor(
 }
 
 fn reply_response(
-    reply: scope_domain::requests::RequestDiscussionReply,
-    child_reply_count: u64,
+    model: scope_postgres::db::RequestDiscussionReplyReadModel,
     users: &BTreeMap<String, scope_domain::account::UserAccount>,
 ) -> Result<RequestDiscussionReplyResponse, ApiError> {
+    let reply_to = model
+        .reply_to
+        .map(|target| {
+            Ok::<_, ApiError>(RequestDiscussionReplyReferenceResponse {
+                id: target.id,
+                position: target.position,
+                author: request_actor_summary_response(&target.author_user_id, users)?,
+                body_markdown: target.body_markdown,
+            })
+        })
+        .transpose()?;
+    let reply = model.reply;
     Ok(RequestDiscussionReplyResponse {
         id: reply.id,
         discussion_id: reply.discussion_id,
         position: reply.position,
         author: request_actor_summary_response(&reply.author_user_id, users)?,
         body_markdown: reply.body_markdown,
-        reply_to_reply_id: reply.reply_to_reply_id,
-        child_reply_count,
-        can_reply: reply.depth < scope_domain::requests::REQUEST_DISCUSSION_REPLY_MAX_DEPTH,
+        reply_to,
         created_at_unix: reply.created_at_unix,
     })
-}
-
-fn reply_read_response(
-    model: scope_postgres::db::RequestDiscussionReplyReadModel,
-    users: &BTreeMap<String, scope_domain::account::UserAccount>,
-) -> Result<RequestDiscussionReplyResponse, ApiError> {
-    reply_response(model.reply, model.child_reply_count, users)
 }
 
 #[derive(Debug)]

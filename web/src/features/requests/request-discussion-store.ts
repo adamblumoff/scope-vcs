@@ -382,8 +382,11 @@ function collectionWithCachedUi(
   const byId = new Map(collection.byId)
   for (const [discussionId, discussion] of byId) {
     const cachedDiscussion = cached.byId.get(discussionId)
-    if (cachedDiscussion?.expanded) {
-      byId.set(discussionId, { ...discussion, expanded: true })
+    if (cachedDiscussion?.expanded !== undefined) {
+      byId.set(discussionId, {
+        ...discussion,
+        expanded: cachedDiscussion.expanded,
+      })
     }
   }
   return { ...collection, byId }
@@ -412,8 +415,8 @@ function optimisticDiscussion({
     latest_replies: [],
     opened_position: position,
     pending: 'sending',
+    read_through_position: position,
     reply_count: 0,
-    root_reply_count: 0,
     request_id: requestId,
     resolved_at_unix: null,
     resolved_by: null,

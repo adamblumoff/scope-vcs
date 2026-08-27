@@ -477,15 +477,22 @@ pub struct RequestActorSummaryResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RequestDiscussionReplyReferenceResponse {
+    pub id: String,
+    pub position: u64,
+    pub author: RequestActorSummaryResponse,
+    pub body_markdown: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RequestDiscussionReplyResponse {
     pub id: String,
     pub discussion_id: String,
     pub position: u64,
     pub author: RequestActorSummaryResponse,
     pub body_markdown: String,
-    pub reply_to_reply_id: Option<String>,
-    pub child_reply_count: u64,
-    pub can_reply: bool,
+    pub reply_to: Option<RequestDiscussionReplyReferenceResponse>,
     pub created_at_unix: u64,
 }
 
@@ -502,7 +509,7 @@ pub struct RequestDiscussionSummaryResponse {
     pub anchor: Option<RequestDiscussionAnchor>,
     pub status: RequestDiscussionStatus,
     pub reply_count: u64,
-    pub root_reply_count: u64,
+    pub read_through_position: u64,
     pub unread_count: u64,
     pub latest_replies: Vec<RequestDiscussionReplyResponse>,
     pub created_at_unix: u64,

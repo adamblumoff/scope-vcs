@@ -57,6 +57,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0029_exact_compatible_caches",
     "m0030_cache_preparation_timings",
     "m0031_provider_neutral_run_attempts",
+    "m0032_flat_discussion_replies",
 ];
 
 pub(super) async fn isolated_database() -> (

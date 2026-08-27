@@ -409,41 +409,29 @@ mod tests {
             .unwrap();
         assert_eq!(retry_cap.reply_count, 3);
         assert_eq!(retry_cap.latest_replies.len(), 3);
-        assert_eq!(retry_cap.latest_replies[0].child_reply_count, 1);
+        assert!(retry_cap.latest_replies[0].reply_to.is_none());
+        assert_eq!(
+            retry_cap.latest_replies[1].reply_to.as_ref().unwrap().id,
+            RETRY_CAP_MAINTAINER_REPLY_ID
+        );
 
         let (replies, users) = metadata
             .requests()
-            .request_discussion_replies(RETRY_CAP_ID, None, None, 10)
+            .request_discussion_replies(RETRY_CAP_ID, None, 10)
             .await
             .unwrap();
-        assert_eq!(replies.len(), 1);
-        assert_eq!(replies[0].child_reply_count, 1);
+        assert_eq!(replies.len(), 3);
         assert_eq!(replies[0].reply.id, RETRY_CAP_MAINTAINER_REPLY_ID);
-        let (child_replies, child_users) = metadata
-            .requests()
-            .request_discussion_replies(RETRY_CAP_ID, Some(RETRY_CAP_MAINTAINER_REPLY_ID), None, 10)
-            .await
-            .unwrap();
-        assert_eq!(child_replies.len(), 1);
-        assert_eq!(child_replies[0].child_reply_count, 1);
         assert_eq!(
-            child_replies[0].reply.reply_to_reply_id.as_deref(),
+            replies[1].reply.reply_to_reply_id.as_deref(),
             Some(RETRY_CAP_MAINTAINER_REPLY_ID)
         );
-        let (grandchild_replies, _) = metadata
-            .requests()
-            .request_discussion_replies(
-                RETRY_CAP_ID,
-                Some(RETRY_CAP_CONTRIBUTOR_REPLY_ID),
-                None,
-                10,
-            )
-            .await
-            .unwrap();
-        assert_eq!(grandchild_replies.len(), 1);
-        assert_eq!(grandchild_replies[0].child_reply_count, 0);
         assert_eq!(
-            child_users.get(CONTRIBUTOR_ID).unwrap().handle,
+            replies[2].reply_to.as_ref().unwrap().id,
+            RETRY_CAP_CONTRIBUTOR_REPLY_ID
+        );
+        assert_eq!(
+            users.get(CONTRIBUTOR_ID).unwrap().handle,
             "river-contributor"
         );
         assert_eq!(users.get(MAINTAINER_ID).unwrap().handle, "maya-maintainer");

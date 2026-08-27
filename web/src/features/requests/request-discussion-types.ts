@@ -18,20 +18,11 @@ export type { RequestDiscussionStatus }
 
 export type RequestDiscussionReply = RequestDiscussionReplyResponse
 export type RequestDiscussion = RequestDiscussionSummaryResponse
-export type RequestDiscussionPage = Omit<RequestDiscussionPageResponse, 'discussions'> & {
-  discussions: RequestDiscussion[]
-}
-export type RequestDiscussionChanges = Omit<RequestDiscussionChangesResponse, 'discussions'> & {
-  discussions: RequestDiscussion[]
-}
+export type RequestDiscussionPage = RequestDiscussionPageResponse
+export type RequestDiscussionChanges = RequestDiscussionChangesResponse
 export type RequestDiscussionReadState = RequestDiscussionReadResponse
-export type RequestDiscussionMutation = Omit<RequestDiscussionMutationResponse, 'discussion'> & {
-  discussion: RequestDiscussion
-}
-export type RequestDiscussionReplyMutation =
-  Omit<RequestDiscussionReplyMutationResponse, 'discussion'> & {
-    discussion: RequestDiscussion
-  }
+export type RequestDiscussionMutation = RequestDiscussionMutationResponse
+export type RequestDiscussionReplyMutation = RequestDiscussionReplyMutationResponse
 export type RequestActivityPage = RequestActivityPageResponse
 
 export type DiscussionPendingState = 'failed' | 'sending'
@@ -43,6 +34,7 @@ export type RequestDiscussionView = RequestDiscussion & {
 }
 
 export type RequestDiscussionReplyView = RequestDiscussionReply & {
+  optimistic_reply_to_reply_id?: string
   pending?: DiscussionPendingState
 }
 

@@ -134,6 +134,41 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     let reply = response_json(reply).await;
     assert_eq!(reply["discussion"]["reply_count"], 1);
     assert_eq!(reply["discussion"]["unread_count"], 0);
+    let first_reply_id = reply["reply"]["id"].as_str().unwrap().to_string();
+    let first_reply_position = reply["reply"]["position"].as_u64().unwrap();
+    assert_eq!(
+        reply["discussion"]["read_through_position"],
+        first_reply_position
+    );
+    assert!(reply["reply"]["reply_to"].is_null());
+    assert!(reply["reply"].get("child_reply_count").is_none());
+    assert!(reply["reply"].get("can_reply").is_none());
+
+    let exact_reply = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/threads/{discussion_id}/replies?reply={first_reply_id}"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(exact_reply.status(), StatusCode::OK);
+    let exact_reply = response_json(exact_reply).await;
+    assert_eq!(exact_reply["next_before_position"], serde_json::Value::Null);
+    assert_eq!(exact_reply["replies"].as_array().unwrap().len(), 1);
+    assert_eq!(exact_reply["replies"][0]["id"], first_reply_id);
+
+    let missing_reply = api_request(
+        app.clone(),
+        "GET",
+        &format!("{base}/threads/{discussion_id}/replies?reply=missing"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(missing_reply.status(), StatusCode::OK);
+    let missing_reply = response_json(missing_reply).await;
+    assert_eq!(missing_reply["replies"].as_array().unwrap().len(), 0);
 
     let resolved = api_request(
         app.clone(),
@@ -163,7 +198,9 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
         "POST",
         &format!("{base}/threads/{discussion_id}/reopen-and-reply"),
         Some(&bearer),
-        Some(r#"{"body_markdown":"One more point.","client_reply_id":"reply-2","reply_to_reply_id":null}"#),
+        Some(&format!(
+            r#"{{"body_markdown":"One more point.","client_reply_id":"reply-2","reply_to_reply_id":"{first_reply_id}"}}"#
+        )),
     )
     .await;
     assert_eq!(reopened.status(), StatusCode::OK);
@@ -171,7 +208,20 @@ async fn threaded_discussion_http_workflow_preserves_activity_and_read_contracts
     assert_eq!(reopened["discussion"]["status"], "Open");
     assert_eq!(reopened["discussion"]["reply_count"], 2);
     assert_eq!(reopened["discussion"]["unread_count"], 0);
+    assert_eq!(reopened["reply"]["reply_to"]["id"], first_reply_id);
+    assert_eq!(
+        reopened["reply"]["reply_to"]["position"],
+        first_reply_position
+    );
+    assert_eq!(
+        reopened["reply"]["reply_to"]["body_markdown"],
+        "The parser module should own it."
+    );
     let through_position = reopened["reply"]["position"].as_u64().unwrap();
+    assert_eq!(
+        reopened["discussion"]["read_through_position"],
+        through_position
+    );
 
     let read = api_request(
         app.clone(),

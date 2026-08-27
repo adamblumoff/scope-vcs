@@ -246,6 +246,11 @@ export function orderedDiscussions(collection: DiscussionCollection) {
   })
 }
 
+export function discussionRepliesAreCollapsed(discussion: RequestDiscussionView) {
+  if (discussion.expanded !== undefined) return !discussion.expanded
+  return discussion.status === 'Resolved' && Boolean(discussion.initiallyResolved)
+}
+
 function unique(values: string[]) {
   return [...new Set(values)]
 }

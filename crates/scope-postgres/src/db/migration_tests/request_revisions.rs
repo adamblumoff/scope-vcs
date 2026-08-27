@@ -97,18 +97,40 @@ async fn promotes_replied_threads_and_deletes_empty_synthetics() {
     let reply = db
         .query_one(Statement::from_string(
             DatabaseBackend::Postgres,
-            "SELECT id, depth, reply_to_reply_id FROM scope_request_discussion_replies".to_string(),
+            "SELECT id, reply_to_reply_id FROM scope_request_discussion_replies".to_string(),
         ))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(reply.try_get::<String>("", "id").unwrap(), "child");
-    assert_eq!(reply.try_get::<i64>("", "depth").unwrap(), 0);
     assert_eq!(
         reply
             .try_get::<Option<String>>("", "reply_to_reply_id")
             .unwrap(),
         None
+    );
+    let schema = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT
+                NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'scope_request_discussion_replies'
+                      AND column_name = 'depth'
+                ) AS depth_removed,
+                to_regclass('idx_scope_request_discussion_replies_chronological') IS NOT NULL
+                    AS chronological_index_exists"
+                .to_string(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(schema.try_get::<bool>("", "depth_removed").unwrap());
+    assert!(
+        schema
+            .try_get::<bool>("", "chronological_index_exists")
+            .unwrap()
     );
     let reference = db
         .query_one(Statement::from_string(

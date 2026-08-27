@@ -2,18 +2,20 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   acknowledgeReply,
+  beforePositionForNextReplyPage,
+  countVisibleUnreadReplies,
   createDiscussionRepliesState,
-  directDiscussionReplies,
+  hasLoadedAllUnreadContent,
   insertOptimisticReply,
   markReplyFailed,
   mergeDiscussionReplies,
   mergeReplyPage,
-  replyTreeFullyExposed,
+  mergeReplyTarget,
   updateReplyPage,
 } from './request-discussion-replies-model'
 import type { RequestDiscussionReplyView } from './request-discussion-types'
 
-test('posting from a collapsed reply preview preserves existing replies', () => {
+test('posting from a preview preserves existing replies', () => {
   const preview = reply('preview', 1)
   const optimistic = { ...reply('optimistic', 2), pending: 'sending' as const }
   const state = insertOptimisticReply(
@@ -25,7 +27,7 @@ test('posting from a collapsed reply preview preserves existing replies', () => 
   assert.deepEqual(ids(state.replies), ['preview', 'optimistic'])
 })
 
-test('posting after loading older replies preserves chronological order', () => {
+test('posting after loading earlier replies preserves chronological order', () => {
   const current = [reply('one', 1), reply('two', 2), reply('three', 3)]
   const latest = [reply('two', 2), reply('three', 3)]
   const state = insertOptimisticReply(
@@ -37,224 +39,230 @@ test('posting after loading older replies preserves chronological order', () => 
   assert.deepEqual(ids(state.replies), ['one', 'two', 'three', 'four'])
 })
 
-test('expanded replies merge new realtime previews in order', () => {
-  const replies = mergeDiscussionReplies(
-    [reply('one', 1), reply('two', 2)],
-    [reply('two', 2), reply('three', 3)],
+test('flat pages merge realtime previews without duplicates', () => {
+  const state = mergeReplyPage(
+    createDiscussionRepliesState([reply('three', 3)]),
+    {
+      next_before_position: null,
+      replies: [reply('one', 1), reply('two', 2)],
+    },
+    [reply('three', 3), reply('four', 4)],
   )
 
-  assert.deepEqual(ids(replies), ['one', 'two', 'three'])
-})
-
-test('reply trees expose only the requested direct children', () => {
-  const root = reply('root', 1)
-  const child = nestedReply('child', 2, root.id)
-  const grandchild = nestedReply('grandchild', 3, child.id)
-  const replies = [root, child, grandchild]
-
-  assert.deepEqual(ids(directDiscussionReplies(replies, null)), ['root'])
-  assert.deepEqual(ids(directDiscussionReplies(replies, root.id)), ['child'])
-  assert.deepEqual(ids(directDiscussionReplies(replies, child.id)), [
-    'grandchild',
-  ])
-})
-
-test('root pages merge previews and track the exhausted cursor', () => {
-  const initial = updateReplyPage(createDiscussionRepliesState(), null, {
-    error: null,
-    loading: true,
-  })
-  const loaded = mergeReplyPage(
-    initial,
-    null,
-    { next_before_position: null, replies: [reply('older', 1)] },
-    [reply('preview', 3)],
-  )
-
-  assert.deepEqual(ids(loaded.replies), ['older', 'preview'])
-  assert.deepEqual(loaded.root, {
+  assert.deepEqual(ids(state.replies), ['one', 'two', 'three', 'four'])
+  assert.deepEqual(state.page, {
     error: null,
     loaded: true,
     loading: false,
     nextBeforePosition: null,
+    newestLoadedPosition: null,
   })
+})
+
+test('new preview activity refreshes the newest page before older pagination', () => {
+  const loaded = mergeReplyPage(
+    createDiscussionRepliesState(),
+    {
+      next_before_position: 51,
+      replies: [reply('fifty-one', 51), reply('one-hundred', 100)],
+    },
+    [],
+    true,
+  )
+
+  assert.equal(
+    beforePositionForNextReplyPage(loaded, [
+      reply('one-hundred-two', 102),
+      reply('one-hundred-three', 103),
+      reply('one-hundred-four', 104),
+    ]),
+    undefined,
+  )
+
+  const refreshed = mergeReplyPage(
+    loaded,
+    {
+      next_before_position: 55,
+      replies: [reply('fifty-five', 55), reply('one-hundred-four', 104)],
+    },
+    [],
+    true,
+  )
+  assert.equal(
+    beforePositionForNextReplyPage(refreshed, [
+      reply('one-hundred-four', 104),
+    ]),
+    55,
+  )
+})
+
+test('an exhausted page refreshes from the newest edge when preview activity advances', () => {
+  const exhausted = mergeReplyPage(
+    createDiscussionRepliesState(),
+    {
+      next_before_position: null,
+      replies: [reply('one', 1), reply('three', 3)],
+    },
+    [],
+    true,
+  )
+
+  assert.equal(
+    beforePositionForNextReplyPage(exhausted, [
+      reply('five', 5),
+      reply('six', 6),
+      reply('seven', 7),
+    ]),
+    undefined,
+  )
+})
+
+test('fragment resolution merges one exact target without changing pagination', () => {
+  const loaded = mergeReplyPage(
+    createDiscussionRepliesState(),
+    {
+      next_before_position: 51,
+      replies: [reply('newest', 100)],
+    },
+    [],
+    true,
+  )
+  const resolved = mergeReplyTarget(loaded, {
+    next_before_position: null,
+    replies: [reply('target', 25)],
+  })
+
+  assert.deepEqual(ids(resolved.replies), ['target', 'newest'])
+  assert.equal(resolved.page.nextBeforePosition, 51)
+  assert.equal(resolved.page.newestLoadedPosition, 100)
 })
 
 test('failed page loads preserve their cursor and can restart', () => {
-  const loaded = mergeReplyPage(
-    createDiscussionRepliesState(),
-    null,
-    { next_before_position: 10, replies: [reply('newer', 11)] },
-  )
-  const loading = updateReplyPage(loaded, null, {
-    error: null,
-    loading: true,
+  const loaded = mergeReplyPage(createDiscussionRepliesState(), {
+    next_before_position: 10,
+    replies: [reply('newer', 11)],
   })
-  const failed = updateReplyPage(loading, null, {
-    error: 'Older replies could not be loaded.',
+  const loading = updateReplyPage(loaded, { error: null, loading: true })
+  const failed = updateReplyPage(loading, {
+    error: 'Earlier replies could not be loaded.',
     loading: false,
   })
-  const restarted = updateReplyPage(failed, null, {
-    error: null,
-    loading: true,
-  })
+  const restarted = updateReplyPage(failed, { error: null, loading: true })
 
-  assert.equal(failed.root.nextBeforePosition, 10)
-  assert.equal(failed.root.loading, false)
-  assert.equal(failed.root.error, 'Older replies could not be loaded.')
-  assert.equal(restarted.root.loading, true)
-  assert.equal(restarted.root.error, null)
+  assert.equal(failed.page.nextBeforePosition, 10)
+  assert.equal(failed.page.loading, false)
+  assert.equal(failed.page.error, 'Earlier replies could not be loaded.')
+  assert.equal(restarted.page.loading, true)
+  assert.equal(restarted.page.error, null)
 })
 
-test('page updates clear errors without disturbing pagination state', () => {
-  const loaded = mergeReplyPage(
-    createDiscussionRepliesState(),
-    null,
-    { next_before_position: 10, replies: [reply('newer', 11)] },
+test('reply references remain attached while pages merge', () => {
+  const parent = reply('parent', 1)
+  const child = referencedReply('child', 2, parent)
+  const state = mergeReplyPage(createDiscussionRepliesState([child]), {
+    next_before_position: null,
+    replies: [parent],
+  })
+
+  assert.deepEqual(find(state, child.id).reply_to, {
+    author: parent.author,
+    body_markdown: parent.body_markdown,
+    id: parent.id,
+    position: parent.position,
+  })
+})
+
+test('an eight-message reply chain remains one chronological collection', () => {
+  const chain = [reply('one', 1)]
+  for (let position = 2; position <= 8; position += 1) {
+    chain.push(
+      referencedReply(String(position), position, chain.at(-1)!),
+    )
+  }
+
+  const state = mergeReplyPage(createDiscussionRepliesState(chain.slice(-3)), {
+    next_before_position: null,
+    replies: chain.slice(0, -3).reverse(),
+  })
+
+  assert.deepEqual(ids(state.replies), [
+    'one',
+    '2',
+    '3',
+    '4',
+    '5',
+    '6',
+    '7',
+    '8',
+  ])
+  assert.deepEqual(
+    state.replies.slice(1).map((reply) => reply.reply_to?.id),
+    ['one', '2', '3', '4', '5', '6', '7'],
   )
-  const failed = updateReplyPage(loaded, null, {
-    error: 'Replies could not be loaded.',
-  })
-  const cleared = updateReplyPage(failed, null, { error: null })
-
-  assert.deepEqual(cleared.root, { ...failed.root, error: null })
 })
 
-test('branch pages merge children and record the known child count', () => {
-  const parent = { ...reply('parent', 1), child_reply_count: 3 }
-  const loaded = mergeReplyPage(
-    createDiscussionRepliesState([parent]),
-    parent.id,
-    {
-      next_before_position: 2,
-      replies: [nestedReply('child', 3, parent.id)],
-    },
-  )
-
-  assert.deepEqual(ids(loaded.replies), ['parent', 'child'])
-  assert.deepEqual(loaded.branches.get(parent.id), {
-    error: null,
-    knownChildCount: 3,
-    loaded: true,
-    loading: false,
-    nextBeforePosition: 2,
-  })
-})
-
-test('optimistic nested replies increment their parent exactly once', () => {
+test('failure, retry insertion, and acknowledgment replace one optimistic row', () => {
   const parent = reply('parent', 1)
   const optimistic = {
-    ...nestedReply('client-child', Number.MAX_SAFE_INTEGER, parent.id),
+    ...referencedReply('client-child', Number.MAX_SAFE_INTEGER, parent),
     pending: 'sending' as const,
   }
   const inserted = insertOptimisticReply(
     createDiscussionRepliesState([parent]),
     optimistic,
   )
-  const duplicate = insertOptimisticReply(
-    inserted,
-    optimistic,
-    [parent],
-  )
-
-  assert.equal(find(inserted, parent.id).child_reply_count, 1)
-  assert.equal(find(duplicate, parent.id).child_reply_count, 1)
-  assert.deepEqual(ids(duplicate.replies), ['parent', 'client-child'])
-})
-
-test('failure, retry, and acknowledgment preserve the parent count', () => {
-  const parent = reply('parent', 1)
-  const optimistic = {
-    ...nestedReply('client-child', Number.MAX_SAFE_INTEGER, parent.id),
-    pending: 'sending' as const,
-  }
-  const inserted = insertOptimisticReply(
-    createDiscussionRepliesState([parent]),
-    optimistic,
-  )
-  const failed = updateReplyPage(
-    markReplyFailed(inserted, optimistic.id),
-    null,
-    { error: 'Reply could not be posted.' },
-  )
+  const failed = updateReplyPage(markReplyFailed(inserted, optimistic.id), {
+    error: 'Reply could not be posted.',
+  })
   const retried = insertOptimisticReply(failed, optimistic)
   const acknowledged = acknowledgeReply(
     retried,
     optimistic.id,
-    nestedReply('server-child', 2, parent.id),
+    referencedReply('server-child', 2, parent),
   )
 
   assert.equal(find(failed, optimistic.id).pending, 'failed')
   assert.equal(find(retried, optimistic.id).pending, 'sending')
-  assert.equal(retried.root.error, null)
-  assert.equal(find(acknowledged, parent.id).child_reply_count, 1)
+  assert.equal(retried.page.error, null)
   assert.equal(find(acknowledged, 'server-child').pending, undefined)
   assert.deepEqual(ids(acknowledged.replies), ['parent', 'server-child'])
 })
 
-test('the full tree requires every root and branch cursor to end', () => {
-  const parent = { ...reply('parent', 1), child_reply_count: 1 }
-  const child = nestedReply('child', 2, parent.id)
-  const rootPaged = mergeReplyPage(
-    createDiscussionRepliesState(),
-    null,
-    { next_before_position: 1, replies: [parent, child] },
+test('newer projections replace stale reply data', () => {
+  const replies = mergeDiscussionReplies(
+    [reply('one', 1, 'Old body')],
+    [reply('one', 1, 'New body')],
   )
-  const rootLoaded = mergeReplyPage(
-    rootPaged,
-    null,
-    { next_before_position: null, replies: [parent, child] },
-  )
-  const branchPaged = mergeReplyPage(rootLoaded, parent.id, {
-    next_before_position: 1,
-    replies: [child],
-  })
-  const branchExhausted = mergeReplyPage(branchPaged, parent.id, {
-    next_before_position: null,
-    replies: [child],
-  })
 
-  assert.equal(fullyExposed(rootPaged, new Set([parent.id]), 2), false)
-  assert.equal(fullyExposed(rootLoaded, new Set(), 2), false)
-  assert.equal(fullyExposed(branchPaged, new Set([parent.id]), 2), false)
-  assert.equal(fullyExposed(branchExhausted, new Set([parent.id]), 2), true)
+  assert.equal(replies[0]?.body_markdown, 'New body')
 })
 
-test('complete nested previews can establish root exposure explicitly', () => {
-  const parent = { ...reply('parent', 1), child_reply_count: 1 }
-  const child = nestedReply('child', 2, parent.id)
-  const previewState = mergeReplyPage(
-    createDiscussionRepliesState([parent, child]),
-    parent.id,
-    {
-      next_before_position: null,
-      replies: [child],
-    },
-  )
-
+test('counts only loaded replies beyond the read position', () => {
   assert.equal(
-    replyTreeFullyExposed({
-      expandedReplyIds: new Set([parent.id]),
-      replyCount: 2,
-      rootRepliesLoaded: true,
-      state: previewState,
-    }),
-    true,
+    countVisibleUnreadReplies(
+      [
+        reply('read', 10),
+        reply('new-one', 11),
+        reply('new-two', 12),
+        { ...reply('pending', Number.MAX_SAFE_INTEGER), pending: 'sending' },
+      ],
+      10,
+    ),
+    2,
   )
 })
 
-function fullyExposed(
-  state: ReturnType<typeof createDiscussionRepliesState>,
-  expandedReplyIds: ReadonlySet<string>,
-  replyCount: number,
-) {
-  return replyTreeFullyExposed({
-    expandedReplyIds,
-    replyCount,
-    rootRepliesLoaded: state.root.loaded,
-    state,
-  })
-}
+test('unread content is incomplete while earlier unread replies are hidden', () => {
+  const visible = [
+    reply('new-three', 13),
+    reply('new-four', 14),
+    reply('new-five', 15),
+  ]
+
+  assert.equal(hasLoadedAllUnreadContent(visible, 10, 5, false), false)
+  assert.equal(hasLoadedAllUnreadContent(visible, 10, 3, false), true)
+  assert.equal(hasLoadedAllUnreadContent(visible, 10, 4, true), true)
+})
 
 function ids(replies: RequestDiscussionReplyView[]) {
   return replies.map(({ id }) => id)
@@ -269,20 +277,34 @@ function find(
   return found
 }
 
-function nestedReply(id: string, position: number, parentId: string) {
-  return { ...reply(id, position), reply_to_reply_id: parentId }
+function referencedReply(
+  id: string,
+  position: number,
+  parent: RequestDiscussionReplyView,
+): RequestDiscussionReplyView {
+  return {
+    ...reply(id, position),
+    reply_to: {
+      author: parent.author,
+      body_markdown: parent.body_markdown,
+      id: parent.id,
+      position: parent.position,
+    },
+  }
 }
 
-function reply(id: string, position: number): RequestDiscussionReplyView {
+function reply(
+  id: string,
+  position: number,
+  body = `Reply ${id}`,
+): RequestDiscussionReplyView {
   return {
     author: { handle: 'maya', id: 'user-maya' },
-    body_markdown: `Reply ${id}`,
-    child_reply_count: 0,
-    can_reply: true,
+    body_markdown: body,
     created_at_unix: position,
     discussion_id: 'one',
     id,
     position,
-    reply_to_reply_id: null,
+    reply_to: null,
   }
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type {
   CreateReplyInput,
   LoadRepliesInput,
@@ -6,13 +6,14 @@ import type {
 } from './request-discussion-api'
 import {
   acknowledgeReply,
+  beforePositionForNextReplyPage,
   createDiscussionRepliesState,
-  directDiscussionReplies,
+  hasLoadedAllUnreadContent,
   insertOptimisticReply,
   markReplyFailed,
   mergeDiscussionReplies,
   mergeReplyPage,
-  replyTreeFullyExposed,
+  mergeReplyTarget,
   updateReplyPage,
 } from './request-discussion-replies-model'
 import type {
@@ -54,28 +55,30 @@ export function useRequestDiscussionReplies({
   const [replyState, setReplyState] = useState(() =>
     createDiscussionRepliesState(),
   )
-  const [expandedReplies, setExpandedReplies] = useState(false)
-  const [expandedReplyIds, setExpandedReplyIds] = useState<Set<string>>(
-    new Set(),
-  )
   const [quoteId, setQuoteId] = useState<string | null>(null)
+  const targetLoadRef = useRef<{
+    promise: Promise<boolean>
+    replyId: string
+  } | null>(null)
 
   const availableReplies = mergeDiscussionReplies(
     replyState.replies,
     discussion.latest_replies,
   )
-  const loadingReplies = replyState.root.loading
-  const nextBeforePosition = replyState.root.nextBeforePosition
-  const replyBranches = replyState.branches
-  const replyError = replyState.root.error
+  const loadingReplies = replyState.page.loading
+  const replyError = replyState.page.error
+  const loadedReplyCount = availableReplies.filter(
+    (reply) => !reply.pending,
+  ).length
+  const olderReplyCount = Math.max(
+    discussion.reply_count - loadedReplyCount,
+    0,
+  )
+  const hasOlderReplies = olderReplyCount > 0
 
-  async function loadReplyPage(
-    parentReplyId: string | null,
-    before: number | undefined,
-    failureMessage: string,
-  ) {
+  async function loadReplyPage(before: number | undefined) {
     setReplyState((current) =>
-      updateReplyPage(current, parentReplyId, {
+      updateReplyPage(current, {
         error: null,
         loading: true,
       }),
@@ -85,82 +88,100 @@ export function useRequestDiscussionReplies({
         ...params,
         before,
         discussion_id: discussion.id,
-        parent_reply_id: parentReplyId ?? undefined,
       })
       setReplyState((current) =>
         mergeReplyPage(
           current,
-          parentReplyId,
           page,
           discussion.latest_replies,
+          before === undefined,
         ),
       )
     } catch (error) {
       setReplyState((current) =>
-        updateReplyPage(current, parentReplyId, {
-          error: messageFor(error, failureMessage),
+        updateReplyPage(current, {
+          error: messageFor(error, 'Earlier replies could not be loaded.'),
           loading: false,
         }),
       )
     }
   }
 
-  function toggleReplies() {
-    if (expandedReplies) {
-      setExpandedReplies(false)
-      return
-    }
-    onExpandedChange(discussion.id, true)
-    setExpandedReplies(true)
-    if (
-      replyState.root.loaded ||
-      replyState.root.loading ||
-      discussion.reply_count === 0
-    ) return
-    return loadReplyPage(null, undefined, 'Replies could not be loaded.')
-  }
-
   function loadOlderReplies() {
-    if (nextBeforePosition === null || loadingReplies) return
+    if (!hasOlderReplies || loadingReplies) return
     return loadReplyPage(
-      null,
-      nextBeforePosition,
-      'Older replies could not be loaded.',
+      beforePositionForNextReplyPage(
+        replyState,
+        discussion.latest_replies,
+      ),
     )
   }
 
-  function loadReplyChildren(parentReplyId: string, before?: number) {
-    return loadReplyPage(parentReplyId, before, 'Replies could not be loaded.')
-  }
-
-  async function toggleReplyChildren(reply: RequestDiscussionReplyView) {
-    if (expandedReplyIds.has(reply.id)) {
-      setExpandedReplyIds((current) => {
-        const next = new Set(current)
-        next.delete(reply.id)
-        return next
-      })
-      return
+  function loadReplyTarget(replyId: string): Promise<boolean> {
+    if (availableReplies.some((reply) => reply.id === replyId)) {
+      return Promise.resolve(true)
     }
-    setExpandedReplyIds((current) => new Set(current).add(reply.id))
-    const branch = replyBranches.get(reply.id)
-    if (
-      branch?.loaded &&
-      branch.knownChildCount >= reply.child_reply_count
-    ) return
-    await loadReplyChildren(reply.id)
+    if (targetLoadRef.current) {
+      if (targetLoadRef.current.replyId === replyId) {
+        return targetLoadRef.current.promise
+      }
+      return targetLoadRef.current.promise.then(() => loadReplyTarget(replyId))
+    }
+
+    setReplyState((current) =>
+      updateReplyPage(current, { error: null, loading: true }),
+    )
+    const operation = (async () => {
+      try {
+        const page = await actions.loadReplies({
+          ...params,
+          discussion_id: discussion.id,
+          reply: replyId,
+        })
+        setReplyState((current) =>
+          mergeReplyTarget(
+            current,
+            page,
+            discussion.latest_replies,
+          ),
+        )
+        return page.replies.some((reply) => reply.id === replyId)
+      } catch (error) {
+        setReplyState((current) =>
+          updateReplyPage(current, {
+            error: messageFor(error, 'Linked reply could not be loaded.'),
+            loading: false,
+          }),
+        )
+        return false
+      }
+    })()
+    targetLoadRef.current = { promise: operation, replyId }
+    void operation.finally(() => {
+      if (targetLoadRef.current?.promise === operation) {
+        targetLoadRef.current = null
+      }
+    })
+    return operation
   }
 
   async function postReply(
     body: string,
     clientReplyId: string = crypto.randomUUID(),
     replyToReplyId: string | null = quoteId,
+    retryReference?: RequestDiscussionReplyView['reply_to'],
   ) {
+    const replyTarget = retryReference ?? (
+      replyToReplyId
+        ? availableReplies.find((reply) => reply.id === replyToReplyId) ?? null
+        : null
+    )
     const optimistic = optimisticReply({
       actor,
       body,
       clientReplyId,
       discussion,
+      replyTarget,
       replyToReplyId,
     })
     setReplyState((current) =>
@@ -170,10 +191,6 @@ export function useRequestDiscussionReplies({
         discussion.latest_replies,
       ),
     )
-    if (replyToReplyId) {
-      setExpandedReplyIds((current) => new Set(current).add(replyToReplyId))
-    }
-    setExpandedReplies(true)
     const input = {
       ...params,
       body_markdown: body,
@@ -196,56 +213,40 @@ export function useRequestDiscussionReplies({
       return true
     } catch (error) {
       setReplyState((current) =>
-        updateReplyPage(
-          markReplyFailed(current, clientReplyId),
-          null,
-          { error: messageFor(error, 'Reply could not be posted.') },
-        ),
+        updateReplyPage(markReplyFailed(current, clientReplyId), {
+          error: messageFor(error, 'Reply could not be posted.'),
+        }),
       )
       return false
     }
   }
 
-  const visibleReplies = expandedReplies
-    ? directDiscussionReplies(availableReplies, null)
-    : directDiscussionReplies(discussion.latest_replies, null)
   const canPostReply =
     canReply && (discussion.status !== 'Resolved' || canResolve)
-  const entireReplyTreeExposed = replyTreeFullyExposed({
-    expandedReplyIds,
-    replyCount: discussion.reply_count,
-    rootRepliesLoaded:
-      replyState.root.loaded ||
-      discussion.latest_replies.length >= discussion.reply_count,
-    state: { ...replyState, replies: availableReplies },
-  })
-  const previewContentExposed =
-    discussion.reply_count <= discussion.latest_replies.length &&
-    discussion.latest_replies.every(
-      (reply) => reply.reply_to_reply_id === null,
-    )
+  const rootUnread =
+    discussion.opened_position > discussion.read_through_position
 
   return {
     availableReplies,
     canPostReply,
-    entireReplyTreeExposed,
-    expandedReplies,
-    expandedReplyIds,
+    hasOlderReplies,
     loadOlderReplies,
-    loadReplyChildren,
+    loadReplyTarget,
     loadingReplies,
-    nextBeforePosition,
+    olderReplyCount,
     postReply,
-    previewContentExposed,
     quotedReply: quoteId
       ? availableReplies.find((reply) => reply.id === quoteId) ?? null
       : null,
-    replyBranches,
     replyError,
     setQuoteId,
-    toggleReplies,
-    toggleReplyChildren,
-    visibleReplies,
+    unreadContentFullyExposed:
+      hasLoadedAllUnreadContent(
+        availableReplies,
+        discussion.read_through_position,
+        discussion.unread_count,
+        rootUnread,
+      ),
   }
 }
 
@@ -254,25 +255,33 @@ function optimisticReply({
   body,
   clientReplyId,
   discussion,
+  replyTarget,
   replyToReplyId,
 }: {
   actor: { handle: string; id: string }
   body: string
   clientReplyId: string
   discussion: RequestDiscussion
+  replyTarget: RequestDiscussionReplyView | RequestDiscussionReplyView['reply_to']
   replyToReplyId: string | null
 }): RequestDiscussionReplyView {
   return {
     author: actor,
     body_markdown: body,
-    child_reply_count: 0,
-    can_reply: false,
     created_at_unix: Math.floor(Date.now() / 1000),
     discussion_id: discussion.id,
     id: clientReplyId,
+    optimistic_reply_to_reply_id: replyTarget ? undefined : replyToReplyId ?? undefined,
     pending: 'sending',
     position: Number.MAX_SAFE_INTEGER,
-    reply_to_reply_id: replyToReplyId,
+    reply_to: replyTarget
+      ? {
+          author: replyTarget.author,
+          body_markdown: replyTarget.body_markdown,
+          id: replyTarget.id,
+          position: replyTarget.position,
+        }
+      : null,
   }
 }
 

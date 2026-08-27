@@ -29,6 +29,7 @@ mod m0028_repository_workflow_catalogs;
 mod m0029_exact_compatible_caches;
 mod m0030_cache_preparation_timings;
 mod m0031_provider_neutral_run_attempts;
+mod m0032_flat_discussion_replies;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -141,6 +142,10 @@ fn inventory() -> Vec<MigrationSpec> {
         ),
         spec(
             m0031_provider_neutral_run_attempts::Migration,
+            MaintenanceRequired,
+        ),
+        spec(
+            m0032_flat_discussion_replies::Migration,
             MaintenanceRequired,
         ),
     ]
