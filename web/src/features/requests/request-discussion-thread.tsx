@@ -4,7 +4,6 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
-  Link2,
   Reply,
   RotateCcw,
 } from 'lucide-react'
@@ -196,41 +195,28 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
       </div>
 
       <div className="min-w-0">
-        <div className="flex items-start gap-2">
-          <RequestDiscussionByline
-            author={discussion.author}
-            createdAtUnix={discussion.created_at_unix}
-          >
-            {discussion.unread_count > 0 ? (
-              <Badge variant="info">{discussion.unread_count} new</Badge>
-            ) : null}
-            {discussion.status === 'Resolved' ? (
-              <Badge variant="success">
-                <Check />
-                {discussion.resolved_by
-                  ? `Resolved by ${discussion.resolved_by.handle}`
-                  : 'Resolved'}
-              </Badge>
-            ) : null}
-            {discussion.pending === 'sending' ? (
-              <span className="text-xs text-muted-foreground">Posting…</span>
-            ) : null}
-            {discussion.pending === 'failed' ? (
-              <Badge variant="danger">Failed to post</Badge>
-            ) : null}
-          </RequestDiscussionByline>
-          <div className="ml-auto flex shrink-0 items-center gap-1">
-            {!discussion.pending ? (
-              <a
-                aria-label="Link to discussion"
-                className="shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/thread:opacity-100 max-lg:opacity-100"
-                href={`#discussion-${discussion.id}`}
-              >
-                <Link2 className="size-3.5" />
-              </a>
-            ) : null}
-          </div>
-        </div>
+        <RequestDiscussionByline
+          author={discussion.author}
+          createdAtUnix={discussion.created_at_unix}
+        >
+          {discussion.unread_count > 0 ? (
+            <Badge variant="info">{discussion.unread_count} new</Badge>
+          ) : null}
+          {discussion.status === 'Resolved' ? (
+            <Badge variant="success">
+              <Check />
+              {discussion.resolved_by
+                ? `Resolved by ${discussion.resolved_by.handle}`
+                : 'Resolved'}
+            </Badge>
+          ) : null}
+          {discussion.pending === 'sending' ? (
+            <span className="text-xs text-muted-foreground">Posting…</span>
+          ) : null}
+          {discussion.pending === 'failed' ? (
+            <Badge variant="danger">Failed to post</Badge>
+          ) : null}
+        </RequestDiscussionByline>
 
         {discussion.anchor ? (
           <RequestDiscussionAnchor anchor={discussion.anchor} params={params} />

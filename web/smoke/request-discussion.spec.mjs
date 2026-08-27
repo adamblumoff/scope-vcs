@@ -31,6 +31,7 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
     await page.getByText('Public request', { exact: true }).last().waitFor()
     const threads = page.locator('.request-discussion-thread')
     await threads.first().waitFor()
+    assert.equal(await page.getByRole('link', { name: 'Link to discussion' }).count(), 0)
     assert.deepEqual(
       await threads.evaluateAll((elements) => elements.map(({ id }) => id)),
       [
