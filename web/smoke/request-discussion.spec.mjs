@@ -44,11 +44,14 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
     )
     assert.equal(await page.getByRole('textbox').count(), 0)
 
+    const resolvedThread = page.locator('#discussion-discussion_demo_resolved_docs')
+    await resolvedThread.getByRole('button', { name: 'Show 1 reply' }).waitFor()
+    await resolvedThread.getByText('The helper accepts milliseconds', {
+      exact: false,
+    }).waitFor()
+
     const retryThread = page.locator('#discussion-discussion_demo_retry_cap')
-    assert.equal(
-      await retryThread.getByRole('button', { name: /(?:show|hide).*repl/i }).count(),
-      0,
-    )
+    await retryThread.getByRole('button', { name: 'Hide 3 replies' }).waitFor()
     const maintainerReply = page.locator(
       '#reply-discussion_reply_demo_retry_cap_maintainer',
     )
@@ -82,16 +85,47 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       .getByText('Agreed. Quoting the maintainer', { exact: false })
       .waitFor()
 
-    const collapseRetryThread = retryThread.getByRole('button', {
-      name: 'Collapse discussion',
+    const hideRetryReplies = retryThread.getByRole('button', {
+      name: 'Hide 3 replies',
     })
-    await waitForClientHydration(page, collapseRetryThread)
-    await collapseRetryThread.click()
-    await maintainerReply.waitFor({ state: 'hidden' })
-    await retryThread.getByRole('button', { name: 'Expand discussion' }).click()
-    await maintainerReply.waitFor()
-    await retryThread.getByRole('button', { name: 'Collapse discussion' }).click()
-    await maintainerReply.waitFor({ state: 'hidden' })
+    const retryReplies = retryThread.locator(
+      '#discussion-discussion_demo_retry_cap-replies',
+    )
+    await waitForClientHydration(page, hideRetryReplies)
+    const disclosureTop = await hideRetryReplies.evaluate(
+      (element) => element.getBoundingClientRect().top,
+    )
+    const scrollPosition = await page.evaluate(() => ({
+      main: document.getElementById('main-content')?.scrollTop ?? null,
+      window: window.scrollY,
+    }))
+    await hideRetryReplies.click()
+    await assertReplyRegion(page, retryReplies, false)
+    await retryThread
+      .getByText('Should the retry cap remain', { exact: false })
+      .waitFor()
+    assert.equal(
+      Math.round(
+        await retryThread
+          .getByRole('button', { name: 'Show 3 replies' })
+          .evaluate((element) => element.getBoundingClientRect().top),
+      ),
+      Math.round(disclosureTop),
+    )
+    assert.deepEqual(
+      await page.evaluate(() => ({
+        main: document.getElementById('main-content')?.scrollTop ?? null,
+        window: window.scrollY,
+      })),
+      scrollPosition,
+    )
+    await retryThread.getByRole('button', { name: 'Show 3 replies' }).click()
+    await assertReplyRegion(page, retryReplies, true)
+    await retryThread.getByRole('button', { name: 'Hide 3 replies' }).click()
+    await retryThread.getByRole('button', { name: 'Show 3 replies' }).click()
+    await assertReplyRegion(page, retryReplies, true)
+    await retryThread.getByRole('button', { name: 'Hide 3 replies' }).click()
+    await assertReplyRegion(page, retryReplies, false)
 
     const {
       heading: requestHeading,
@@ -131,19 +165,37 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
     await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready'))
     await page.locator('.request-discussion-thread').first().waitFor()
     const restoredRetryThread = page.locator('#discussion-discussion_demo_retry_cap')
-    await restoredRetryThread.getByRole('button', { name: 'Expand discussion' }).waitFor()
-    assert.equal(
-      await page.locator('#reply-discussion_reply_demo_retry_cap_maintainer').count(),
-      0,
+    await restoredRetryThread
+      .getByRole('button', { name: 'Show 3 replies' })
+      .waitFor()
+    const restoredRetryReplies = restoredRetryThread.locator(
+      '#discussion-discussion_demo_retry_cap-replies',
     )
-    await restoredRetryThread.getByRole('button', { name: 'Expand discussion' }).click()
-    await page.locator('#reply-discussion_reply_demo_retry_cap_maintainer').waitFor()
+    await assertReplyRegion(page, restoredRetryReplies, false)
+    await restoredRetryThread.getByRole('button', { name: 'Show 3 replies' }).click()
+    await assertReplyRegion(page, restoredRetryReplies, true)
     await assertRequestShellPreserved(page, {
       heading: requestHeading,
       navigation: requestNavigation,
     })
   })
 })
+
+async function assertReplyRegion(page, region, expanded) {
+  const id = await region.getAttribute('id')
+  assert(id, 'reply region must have an id')
+  await page.waitForFunction(
+    ({ expectedExpanded, regionId }) => {
+      const element = document.getElementById(regionId)
+      if (!element) return false
+      const height = element.getBoundingClientRect().height
+      return expectedExpanded ? height > 0 : height < 1
+    },
+    { expectedExpanded: expanded, regionId: id },
+  )
+  assert.equal(await region.getAttribute('aria-hidden'), String(!expanded))
+  assert.equal(await region.getAttribute('inert'), expanded ? null : '')
+}
 
 async function withPage(path, assertion) {
   const browser = await chromium.launch({ headless: true })

@@ -3,12 +3,12 @@ import { Button } from '@/components/ui/button'
 import {
   Check,
   ChevronDown,
-  ChevronRight,
   CircleAlert,
   Link2,
   Reply,
   RotateCcw,
 } from 'lucide-react'
+import { m, useReducedMotion } from 'motion/react'
 import { memo, useEffect, useRef } from 'react'
 import { compactDiscussionSummary } from './discussion-preview-text'
 import { RequestDiscussionAnchor } from './request-discussion-anchor'
@@ -18,14 +18,16 @@ import {
 } from './request-discussion-byline'
 import { RequestReplyComposer } from './request-discussion-composer'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
-import { discussionIsCollapsed } from './request-discussion-model'
+import { discussionRepliesAreCollapsed } from './request-discussion-model'
 import { replyTargetFromFragment } from './request-discussion-reply-presentation'
 import {
   RequestDiscussionReplyList,
   RequestDiscussionUnreadBoundary,
 } from './request-discussion-reply-list'
+import { RequestTimestamp } from './request-timestamp'
 import type {
   RequestDiscussion,
+  RequestDiscussionReplyView,
   RequestDiscussionView,
 } from './request-discussion-types'
 import { useRequestDiscussionReadMarker } from './use-request-discussion-read-marker'
@@ -65,7 +67,8 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   onResolve: (discussion: RequestDiscussion) => Promise<void>
   params: { owner: string; repo: string; request_id: string }
 }) {
-  const collapsed = discussionIsCollapsed(discussion)
+  const collapsed = discussionRepliesAreCollapsed(discussion)
+  const prefersReducedMotion = useReducedMotion()
   const {
     availableReplies,
     canPostReply,
@@ -97,6 +100,8 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     onMarkRead,
   })
   const attemptedReplyHashRef = useRef<string | null>(null)
+  const disclosureRef = useRef<HTMLButtonElement>(null)
+  const replyRegionRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let active = true
@@ -136,13 +141,17 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
     if (!composerOpen) setQuoteId(null)
   }, [composerOpen, setQuoteId])
 
+  useEffect(() => {
+    if (!collapsed || !replyRegionRef.current?.contains(document.activeElement)) return
+    disclosureRef.current?.focus()
+  }, [collapsed])
+
   function openComposer() {
     onExpandedChange(discussion.id, true)
     onOpenComposer()
   }
 
-  function toggleCollapsed() {
-    if (!collapsed) onCloseComposer()
+  function toggleReplies() {
     onExpandedChange(discussion.id, collapsed)
   }
 
@@ -165,6 +174,11 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   const rootUnread =
     discussion.unread_count > 0 &&
     discussion.opened_position > discussion.read_through_position
+  const replyCount = Math.max(discussion.reply_count, availableReplies.length)
+  const hasReplies = replyCount > 0
+  const latestReply = availableReplies.at(-1)
+  const participantHandles = latestParticipantHandles(availableReplies)
+  const replyRegionId = `discussion-${discussion.id}-replies`
 
   return (
     <article
@@ -215,20 +229,6 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
                 <Link2 className="size-3.5" />
               </a>
             ) : null}
-            <button
-              aria-expanded={!collapsed}
-              aria-label={collapsed ? 'Expand discussion' : 'Collapse discussion'}
-              className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              onClick={toggleCollapsed}
-              title={collapsed ? 'Expand discussion' : 'Collapse discussion'}
-              type="button"
-            >
-              {collapsed ? (
-                <ChevronRight className="size-3.5" />
-              ) : (
-                <ChevronDown className="size-3.5" />
-              )}
-            </button>
           </div>
         </div>
 
@@ -236,23 +236,10 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
           <RequestDiscussionAnchor anchor={discussion.anchor} params={params} />
         ) : null}
 
-        {collapsed ? (
-          <button
-            className="mt-2 flex w-full min-w-0 items-start gap-2 text-left"
-            onClick={() => onExpandedChange(discussion.id, true)}
-            type="button"
-          >
-            <ChevronRight className="mt-1 size-3.5 shrink-0 text-muted-foreground" />
-            <span className="line-clamp-2 text-sm leading-6 text-muted-foreground">
-              {compactDiscussionSummary(discussion.body_markdown)}
-            </span>
-          </button>
-        ) : (
-          <RequestDiscussionMarkdown
-            className="mt-2 max-w-[68ch]"
-            source={discussion.body_markdown}
-          />
-        )}
+        <RequestDiscussionMarkdown
+          className="mt-2 max-w-[68ch]"
+          source={discussion.body_markdown}
+        />
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {canPostReply ? (
@@ -294,86 +281,157 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
           ) : null}
         </div>
 
-        {!collapsed && (availableReplies.length > 0 || hasOlderReplies) ? (
-          <div className="mt-2 pb-3">
-            {hasOlderReplies ? (
-              <button
-                className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground disabled:cursor-wait disabled:opacity-70"
-                disabled={loadingReplies}
-                onClick={() => void loadOlderWithoutJump()}
-                type="button"
-              >
-                {loadingReplies
-                  ? 'Loading…'
-                  : `${olderReplyCount} earlier ${olderReplyCount === 1 ? 'reply' : 'replies'}`}
-              </button>
-            ) : null}
-            <RequestDiscussionReplyList
-              canReply={canPostReply}
-              discussionCreatedAtUnix={discussion.created_at_unix}
-              onQuote={(quoted) => {
-                setQuoteId(quoted.id)
-                openComposer()
-              }}
-              onRetry={(failedReply) =>
-                void postReply(
-                  failedReply.body_markdown,
-                  failedReply.id,
-                  failedReply.reply_to?.id ??
-                    failedReply.optimistic_reply_to_reply_id ??
-                    null,
-                  failedReply.reply_to,
-                )
-              }
-              readThroughPosition={discussion.read_through_position}
-              replies={availableReplies}
-              showUnreadBoundary={
-                discussion.unread_count > 0 &&
-                !rootUnread &&
-                unreadContentFullyExposed
-              }
+        {hasReplies ? (
+          <button
+            aria-controls={replyRegionId}
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? 'Show' : 'Hide'} ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`}
+            className="-ml-2 mt-1 flex min-h-11 max-w-full items-center gap-2 rounded-md px-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/35 hover:text-foreground"
+            onClick={toggleReplies}
+            ref={disclosureRef}
+            type="button"
+          >
+            <ChevronDown
+              aria-hidden="true"
+              className={`size-3.5 shrink-0 transition-transform duration-200 ${collapsed ? '-rotate-90' : ''}`}
             />
-          </div>
+            <span className="shrink-0 font-medium text-foreground">
+              {collapsed ? '' : 'Hide '}
+              {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+            </span>
+            {participantHandles.length > 0 ? (
+              <span aria-hidden="true" className="flex -space-x-1">
+                {participantHandles.map((handle) => (
+                  <RequestDiscussionActorAvatar handle={handle} key={handle} small />
+                ))}
+              </span>
+            ) : null}
+            {latestReply ? (
+              <span className="hidden min-w-0 truncate text-xs text-muted-foreground sm:inline">
+                Last reply{' '}
+                <RequestTimestamp value={latestReply.created_at_unix} />
+              </span>
+            ) : null}
+          </button>
         ) : null}
 
-        {replyError ? (
-          <p
-            className="mt-3 flex items-center gap-2 text-sm text-destructive"
-            role="alert"
-          >
-            <CircleAlert className="size-4" />
-            {replyError}
-          </p>
-        ) : null}
+        <m.div
+          animate={
+            collapsed
+              ? { height: 0, opacity: 0, y: -4 }
+              : { height: 'auto', opacity: 1, y: 0 }
+          }
+          aria-hidden={collapsed}
+          className="overflow-hidden [overflow-anchor:none]"
+          id={replyRegionId}
+          inert={collapsed}
+          initial={false}
+          onAnimationComplete={() => {
+            if (collapsed && composerOpen) onCloseComposer()
+          }}
+          ref={replyRegionRef}
+          transition={{
+            duration: prefersReducedMotion ? 0 : 0.18,
+            ease: [0.2, 0.8, 0.2, 1],
+          }}
+        >
+          {availableReplies.length > 0 || hasOlderReplies ? (
+            <div className="mt-1 ml-0 border-l border-border pb-3 pl-4">
+              {hasOlderReplies ? (
+                <button
+                  className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground disabled:cursor-wait disabled:opacity-70"
+                  disabled={loadingReplies}
+                  onClick={() => void loadOlderWithoutJump()}
+                  type="button"
+                >
+                  {loadingReplies
+                    ? 'Loading…'
+                    : `${olderReplyCount} earlier ${olderReplyCount === 1 ? 'reply' : 'replies'}`}
+                </button>
+              ) : null}
+              <RequestDiscussionReplyList
+                canReply={canPostReply}
+                discussionCreatedAtUnix={discussion.created_at_unix}
+                onQuote={(quoted) => {
+                  setQuoteId(quoted.id)
+                  openComposer()
+                }}
+                onRetry={(failedReply) =>
+                  void postReply(
+                    failedReply.body_markdown,
+                    failedReply.id,
+                    failedReply.reply_to?.id ??
+                      failedReply.optimistic_reply_to_reply_id ??
+                      null,
+                    failedReply.reply_to,
+                  )
+                }
+                readThroughPosition={discussion.read_through_position}
+                replies={availableReplies}
+                showUnreadBoundary={
+                  discussion.unread_count > 0 &&
+                  !rootUnread &&
+                  unreadContentFullyExposed
+                }
+              />
+            </div>
+          ) : null}
+
+          {replyError ? (
+            <p
+              className="mt-3 flex items-center gap-2 text-sm text-destructive"
+              role="alert"
+            >
+              <CircleAlert className="size-4" />
+              {replyError}
+            </p>
+          ) : null}
+
+          {canPostReply && composerOpen ? (
+            <div className="mt-4 border-t border-border pt-3">
+              <RequestReplyComposer
+                onCancel={() => {
+                  setQuoteId(null)
+                  onCloseComposer()
+                }}
+                onCancelQuote={() => setQuoteId(null)}
+                onSubmit={async (body) => {
+                  const posted = await postReply(body)
+                  if (posted) onCloseComposer()
+                  return posted
+                }}
+                quote={
+                  quotedReply
+                    ? {
+                        author: quotedReply.author.handle,
+                        body: compactDiscussionSummary(quotedReply.body_markdown),
+                      }
+                    : null
+                }
+                reopen={discussion.status === 'Resolved'}
+              />
+            </div>
+          ) : null}
+        </m.div>
 
         <span aria-hidden="true" className="block h-px" ref={readMarkerRef} />
-
-        {!collapsed && canPostReply && composerOpen ? (
-          <div className="mt-4 border-t border-border pt-3">
-            <RequestReplyComposer
-              onCancel={() => {
-                setQuoteId(null)
-                onCloseComposer()
-              }}
-              onCancelQuote={() => setQuoteId(null)}
-              onSubmit={async (body) => {
-                const posted = await postReply(body)
-                if (posted) onCloseComposer()
-                return posted
-              }}
-              quote={
-                quotedReply
-                  ? {
-                      author: quotedReply.author.handle,
-                      body: compactDiscussionSummary(quotedReply.body_markdown),
-                    }
-                  : null
-              }
-              reopen={discussion.status === 'Resolved'}
-            />
-          </div>
-        ) : null}
       </div>
     </article>
   )
 })
+
+function latestParticipantHandles(replies: RequestDiscussionReplyView[]) {
+  const handles: string[] = []
+  const seen = new Set<string>()
+  for (
+    let index = replies.length - 1;
+    index >= 0 && handles.length < 2;
+    index -= 1
+  ) {
+    const handle = replies[index]?.author.handle
+    if (!handle || seen.has(handle)) continue
+    seen.add(handle)
+    handles.push(handle)
+  }
+  return handles
+}

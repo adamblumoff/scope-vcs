@@ -4,7 +4,7 @@ import {
   appendDiscussionPage,
   applyDiscussionChanges,
   collectionFromPage,
-  discussionIsCollapsed,
+  discussionRepliesAreCollapsed,
   includeFocusedDiscussion,
   insertOptimisticDiscussion,
   markDiscussionRead,
@@ -34,7 +34,7 @@ test('includes an explicitly focused discussion beyond the first page', () => {
   assert.equal(result?.next_cursor, 'older')
 })
 
-test('open discussions expand by default and explicit thread state wins', () => {
+test('open discussion replies expand by default and explicit thread state wins', () => {
   const open = discussion('open', 1)
   const resolved = {
     ...discussion('resolved', 2),
@@ -42,10 +42,10 @@ test('open discussions expand by default and explicit thread state wins', () => 
     status: 'Resolved' as const,
   }
 
-  assert.equal(discussionIsCollapsed(open), false)
-  assert.equal(discussionIsCollapsed(resolved), true)
-  assert.equal(discussionIsCollapsed({ ...open, expanded: false }), true)
-  assert.equal(discussionIsCollapsed({ ...resolved, expanded: true }), false)
+  assert.equal(discussionRepliesAreCollapsed(open), false)
+  assert.equal(discussionRepliesAreCollapsed(resolved), true)
+  assert.equal(discussionRepliesAreCollapsed({ ...open, expanded: false }), true)
+  assert.equal(discussionRepliesAreCollapsed({ ...resolved, expanded: true }), false)
 })
 
 test('appends cursor pages without duplicating discussions', () => {

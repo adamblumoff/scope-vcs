@@ -246,7 +246,7 @@ export function orderedDiscussions(collection: DiscussionCollection) {
   })
 }
 
-export function discussionIsCollapsed(discussion: RequestDiscussionView) {
+export function discussionRepliesAreCollapsed(discussion: RequestDiscussionView) {
   if (discussion.expanded !== undefined) return !discussion.expanded
   return discussion.status === 'Resolved' && Boolean(discussion.initiallyResolved)
 }
