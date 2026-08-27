@@ -382,8 +382,11 @@ function collectionWithCachedUi(
   const byId = new Map(collection.byId)
   for (const [discussionId, discussion] of byId) {
     const cachedDiscussion = cached.byId.get(discussionId)
-    if (cachedDiscussion?.expanded) {
-      byId.set(discussionId, { ...discussion, expanded: true })
+    if (cachedDiscussion?.expanded !== undefined) {
+      byId.set(discussionId, {
+        ...discussion,
+        expanded: cachedDiscussion.expanded,
+      })
     }
   }
   return { ...collection, byId }

@@ -81,6 +81,13 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       .getByText('Agreed. Quoting the maintainer', { exact: false })
       .waitFor()
 
+    await retryThread.getByRole('button', { name: 'Collapse discussion' }).click()
+    await maintainerReply.waitFor({ state: 'hidden' })
+    await retryThread.getByRole('button', { name: 'Expand discussion' }).click()
+    await maintainerReply.waitFor()
+    await retryThread.getByRole('button', { name: 'Collapse discussion' }).click()
+    await maintainerReply.waitFor({ state: 'hidden' })
+
     const {
       heading: requestHeading,
       navigation: requestNavigation,
@@ -121,6 +128,14 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       .click()
     await page.waitForURL((url) => url.pathname.endsWith('/requests/req_demo_ready'))
     await page.locator('.request-discussion-thread').first().waitFor()
+    const restoredRetryThread = page.locator('#discussion-discussion_demo_retry_cap')
+    await restoredRetryThread.getByRole('button', { name: 'Expand discussion' }).waitFor()
+    assert.equal(
+      await page.locator('#reply-discussion_reply_demo_retry_cap_maintainer').count(),
+      0,
+    )
+    await restoredRetryThread.getByRole('button', { name: 'Expand discussion' }).click()
+    await page.locator('#reply-discussion_reply_demo_retry_cap_maintainer').waitFor()
     await assertRequestShellPreserved(page, {
       heading: requestHeading,
       navigation: requestNavigation,

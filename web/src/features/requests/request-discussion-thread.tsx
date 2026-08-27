@@ -1,6 +1,14 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Check, ChevronRight, CircleAlert, Link2, Reply, RotateCcw } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  Link2,
+  Reply,
+  RotateCcw,
+} from 'lucide-react'
 import { memo, useEffect, useRef } from 'react'
 import { compactDiscussionSummary } from './discussion-preview-text'
 import { RequestDiscussionAnchor } from './request-discussion-anchor'
@@ -10,6 +18,7 @@ import {
 } from './request-discussion-byline'
 import { RequestReplyComposer } from './request-discussion-composer'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
+import { discussionIsCollapsed } from './request-discussion-model'
 import { replyTargetFromFragment } from './request-discussion-reply-presentation'
 import {
   RequestDiscussionReplyList,
@@ -56,10 +65,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   onResolve: (discussion: RequestDiscussion) => Promise<void>
   params: { owner: string; repo: string; request_id: string }
 }) {
-  const collapsed =
-    discussion.status === 'Resolved' &&
-    Boolean(discussion.initiallyResolved) &&
-    !discussion.expanded
+  const collapsed = discussionIsCollapsed(discussion)
   const {
     availableReplies,
     canPostReply,
@@ -98,6 +104,11 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
       const hash = window.location.hash
       const replyTarget = replyTargetFromFragment(hash)
       if (!replyTarget || replyTarget.discussionId !== discussion.id) return
+      const hashHandled = attemptedReplyHashRef.current === hash
+      if (collapsed && !hashHandled) {
+        onExpandedChange(discussion.id, true)
+        return
+      }
       const { replyId } = replyTarget
       const target = document.getElementById(`reply-${replyId}`)
       if (target) {
@@ -105,7 +116,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
         attemptedReplyHashRef.current = hash
         return
       }
-      if (attemptedReplyHashRef.current === hash) return
+      if (hashHandled) return
       attemptedReplyHashRef.current = hash
       void loadReplyTarget(replyId).then(() => {
         if (!active) return
@@ -119,7 +130,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
       active = false
       window.removeEventListener('hashchange', resolveReplyHash)
     }
-  }, [availableReplies, discussion.id, loadReplyTarget])
+  }, [availableReplies, collapsed, discussion.id, loadReplyTarget, onExpandedChange])
 
   useEffect(() => {
     if (!composerOpen) setQuoteId(null)
@@ -128,6 +139,11 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
   function openComposer() {
     onExpandedChange(discussion.id, true)
     onOpenComposer()
+  }
+
+  function toggleCollapsed() {
+    if (!collapsed) onCloseComposer()
+    onExpandedChange(discussion.id, collapsed)
   }
 
   async function loadOlderWithoutJump() {
@@ -152,7 +168,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
 
   return (
     <article
-      className="request-discussion-thread group/thread grid scroll-mt-32 grid-cols-[2rem_minmax(0,1fr)] gap-x-3 border-t border-border px-5 py-5 first:border-t-0 lg:px-7"
+      className="request-discussion-thread group/thread relative grid scroll-mt-32 grid-cols-[2rem_minmax(0,1fr)] gap-x-3 px-5 py-5 before:pointer-events-none before:absolute before:inset-x-5 before:top-0 before:border-t before:border-border before:content-[''] first:before:hidden lg:px-7 lg:before:inset-x-7"
       id={`discussion-${discussion.id}`}
     >
       {rootUnread ? (
@@ -189,15 +205,31 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
               <Badge variant="danger">Failed to post</Badge>
             ) : null}
           </RequestDiscussionByline>
-          {!discussion.pending ? (
-            <a
-              aria-label="Link to discussion"
-              className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/thread:opacity-100 max-lg:opacity-100"
-              href={`#discussion-${discussion.id}`}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            {!discussion.pending ? (
+              <a
+                aria-label="Link to discussion"
+                className="shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/thread:opacity-100 max-lg:opacity-100"
+                href={`#discussion-${discussion.id}`}
+              >
+                <Link2 className="size-3.5" />
+              </a>
+            ) : null}
+            <button
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? 'Expand discussion' : 'Collapse discussion'}
+              className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              onClick={toggleCollapsed}
+              title={collapsed ? 'Expand discussion' : 'Collapse discussion'}
+              type="button"
             >
-              <Link2 className="size-3.5" />
-            </a>
-          ) : null}
+              {collapsed ? (
+                <ChevronRight className="size-3.5" />
+              ) : (
+                <ChevronDown className="size-3.5" />
+              )}
+            </button>
+          </div>
         </div>
 
         {discussion.anchor ? (
