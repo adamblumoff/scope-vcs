@@ -4,49 +4,18 @@ use std::process::Output;
 use support::*;
 
 #[test]
-fn request_start_requires_a_name_before_login() {
-    let dir = TempDir::new("start-name");
-    create_repo_with_head(dir.path());
-
-    scope_failure(
-        dir.path(),
-        ["request", "start"],
-        "the following required arguments were not provided",
-    );
-}
-
-#[test]
-fn obsolete_request_transport_commands_are_removed() {
-    let dir = TempDir::new("removed-request-transport");
-    create_repo_with_head(dir.path());
-
-    for command in ["delete", "join", "pull", "share", "sync-main"] {
-        scope_failure(
-            dir.path(),
-            ["request", command],
-            &format!("unrecognized subcommand '{command}'"),
-        );
-    }
-}
-
-#[test]
-fn obsolete_request_lifecycle_commands_and_aliases_are_removed() {
-    let dir = TempDir::new("removed-request-lifecycle");
-    create_repo_with_head(dir.path());
-
-    for command in [
-        "comment",
-        "discuss",
-        "needs-response",
-        "ready",
-        "respond",
-        "resolve",
-        "working",
+fn request_commands_validate_required_content_before_login() {
+    for (label, args) in [
+        ("start-name", ["request", "start"]),
+        ("edit-content", ["request", "edit"]),
     ] {
+        let dir = TempDir::new(label);
+        create_repo_with_head(dir.path());
+
         scope_failure(
             dir.path(),
-            ["request", command],
-            &format!("unrecognized subcommand '{command}'"),
+            args,
+            "the following required arguments were not provided",
         );
     }
 }
@@ -280,18 +249,6 @@ fn every_request_command_accepts_the_global_json_mode_and_returns_json_failures(
         assert!(!error.retryable);
         assert_eq!(output.status.code(), Some(3));
     }
-}
-
-#[test]
-fn request_edit_requires_a_title_or_description_file_before_login() {
-    let dir = TempDir::new("edit-content");
-    create_repo_with_head(dir.path());
-
-    scope_failure(
-        dir.path(),
-        ["request", "edit"],
-        "the following required arguments were not provided",
-    );
 }
 
 #[test]

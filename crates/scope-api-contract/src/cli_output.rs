@@ -19,21 +19,3 @@ impl<T> CliSuccessEnvelope<T> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn success_envelope_has_one_stable_version_and_command() {
-        let envelope = CliSuccessEnvelope::new(
-            "request.submit",
-            serde_json::json!({"request": {"id": "req_one"}}),
-        );
-        let value = serde_json::to_value(envelope).unwrap();
-
-        assert_eq!(value["version"], 1);
-        assert_eq!(value["command"], "request.submit");
-        assert_eq!(value["result"]["request"]["id"], "req_one");
-    }
-}

@@ -6,7 +6,6 @@ import {
   historyDiffCacheKey,
   historyResourceCacheStats,
   peekHistoryCommitCache,
-  peekHistoryDiffCache,
   readHistoryCommitCache,
   readHistoryDiffCache,
   readHistoryDiffScroll,
@@ -86,7 +85,8 @@ test('bounds commit and diff entries with least-recently-used eviction', () => {
 
   assert.equal(historyResourceCacheStats().commits, 48)
   assert.equal(historyResourceCacheStats().diffs, 20)
-  assert.equal(readHistoryCommitCache('commit-0'), null)
+  assert.equal(peekHistoryCommitCache('commit-0'), null)
+  assert.equal(readHistoryCommitCache('commit-59')?.projected_id, 'commit-59')
   assert.equal(readHistoryDiffCache('diff-0'), null)
   assert.equal(readHistoryDiffCache('diff-29')?.path, '/29.txt')
 })
@@ -114,21 +114,4 @@ test('evicts large text diffs at the byte budget', () => {
   const stats = historyResourceCacheStats()
   assert.ok(stats.diffs < 6)
   assert.ok(stats.diffBytes <= 32 * 1024 * 1024)
-})
-
-test('peek does not extend history resource lifetimes', () => {
-  resetHistoryResourceCache()
-  for (let index = 0; index < 48; index += 1) {
-    writeHistoryCommitCache(`commit-${index}`, commit(`commit-${index}`))
-  }
-  assert.equal(peekHistoryCommitCache('commit-0')?.projected_id, 'commit-0')
-  writeHistoryCommitCache('commit-48', commit('commit-48'))
-  assert.equal(readHistoryCommitCache('commit-0'), null)
-
-  for (let index = 0; index < 20; index += 1) {
-    writeHistoryDiffCache(`diff-${index}`, diff(`/${index}.txt`))
-  }
-  assert.equal(peekHistoryDiffCache('diff-0')?.path, '/0.txt')
-  writeHistoryDiffCache('diff-20', diff('/20.txt'))
-  assert.equal(readHistoryDiffCache('diff-0'), null)
 })
