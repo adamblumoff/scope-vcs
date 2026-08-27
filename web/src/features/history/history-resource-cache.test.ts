@@ -5,6 +5,7 @@ import {
   historyCommitCacheKey,
   historyDiffCacheKey,
   historyResourceCacheStats,
+  peekHistoryCommitCache,
   readHistoryCommitCache,
   readHistoryDiffCache,
   readHistoryDiffScroll,
@@ -84,7 +85,8 @@ test('bounds commit and diff entries with least-recently-used eviction', () => {
 
   assert.equal(historyResourceCacheStats().commits, 48)
   assert.equal(historyResourceCacheStats().diffs, 20)
-  assert.equal(readHistoryCommitCache('commit-0'), null)
+  assert.equal(peekHistoryCommitCache('commit-0'), null)
+  assert.equal(readHistoryCommitCache('commit-59')?.projected_id, 'commit-59')
   assert.equal(readHistoryDiffCache('diff-0'), null)
   assert.equal(readHistoryDiffCache('diff-29')?.path, '/29.txt')
 })
