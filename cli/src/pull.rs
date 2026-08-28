@@ -2,7 +2,7 @@ use crate::{
     api::{api_url, http_client},
     git_repo::{
         GitRepo, current_branch, ensure_git_repo_ready, git_remote_fetch_url,
-        install_scope_fetch_auth, run_git_in_repo,
+        install_scope_fetch_auth, run_git_in_repo, scope_git_origin,
     },
     git_transport::{ScopeRemote, select_scope_fetch_remote},
     login::session_from_cache_or_browser,
@@ -15,7 +15,8 @@ pub fn run(explicit_remote: Option<&str>) -> anyhow::Result<()> {
     let repo = ensure_git_repo_ready("scope pull")?;
     let api_url = api_url();
     let remote = select_scope_fetch_remote(&repo, &api_url, explicit_remote)?;
-    let target = ScopeRemote::parse(&api_url, &remote, &git_remote_fetch_url(&repo, &remote)?)?;
+    let git_origin = scope_git_origin(&repo, &api_url)?;
+    let target = ScopeRemote::parse(&git_origin, &remote, &git_remote_fetch_url(&repo, &remote)?)?;
     let client = http_client()?;
     let _session = session_from_cache_or_browser(&client, &api_url)?;
 
@@ -25,7 +26,7 @@ pub fn run(explicit_remote: Option<&str>) -> anyhow::Result<()> {
         &repo,
         &["remote", "set-url", &remote, &target.permissioned_url],
     )?;
-    install_scope_fetch_auth(&repo.root, &target.permissioned_url)?;
+    install_scope_fetch_auth(&repo.root, &target.permissioned_url, &api_url)?;
 
     let before = remote_refs(&repo, &remote)?;
     run_git_in_repo(&repo, &["fetch", "--prune", &remote])?;

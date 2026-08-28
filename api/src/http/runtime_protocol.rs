@@ -216,7 +216,7 @@ pub(crate) async fn source(
     let _materialization_permit = source
         .logical_git_head()
         .is_some()
-        .then(|| state.runtime_budgets.acquire_git_materialization())
+        .then(|| state.runtime_budgets.try_git_materialization())
         .transpose()?;
     let materialized = tokio::task::spawn_blocking(move || {
         materialize_run_source_bundle(&source_state, &source, MAX_SOURCE_BUNDLE_BYTES)

@@ -209,6 +209,7 @@ pub struct RepoSummaryResponse {
     pub id: String,
     pub owner_handle: String,
     pub name: String,
+    pub git_remote_url: String,
     pub lifecycle_state: RepoLifecycleState,
     pub change_version: u64,
     pub access: RepositoryAccessResponse,

@@ -45,7 +45,7 @@ pub fn run(name: Option<String>) -> anyhow::Result<()> {
             return Err(error);
         }
     };
-    let config_created = match configure_remote(&git_repo.root, &created.init)
+    let config_created = match configure_remote(&git_repo.root, &created.init, &api_url)
         .and_then(|_| ensure_scope_repo_config_exists(&git_repo.root))
         .and_then(|config_created| {
             mark_worktree_scope_repo_config_synced(&git_repo.root, &default_scope_repo_config())?;
@@ -93,7 +93,7 @@ pub fn run(name: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn configure_remote(git_root: &Path, init: &RepoInitResponse) -> anyhow::Result<()> {
+fn configure_remote(git_root: &Path, init: &RepoInitResponse, api_url: &str) -> anyhow::Result<()> {
     let remotes = git_output(git_root, &["remote"])?;
     ensure_git_success(&remotes, "list Git remotes")?;
     let remote_exists = String::from_utf8_lossy(&remotes.stdout)
@@ -109,7 +109,7 @@ fn configure_remote(git_root: &Path, init: &RepoInitResponse) -> anyhow::Result<
         &["remote", "add", &init.remote_name, &init.git_remote_url],
         "add Scope Git remote",
     )?;
-    install_scope_fetch_auth(git_root, &init.git_remote_url)
+    install_scope_fetch_auth(git_root, &init.git_remote_url, api_url)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -150,6 +150,8 @@ fn remote_config_keys(git_root: &Path, init: &RepoInitResponse) -> anyhow::Resul
     keys.extend([
         format!("credential.{}.helper", init.git_remote_url),
         format!("credential.{}.useHttpPath", init.git_remote_url),
+        "scope.apiUrl".to_string(),
+        "scope.gitOrigin".to_string(),
     ]);
     Ok(keys)
 }

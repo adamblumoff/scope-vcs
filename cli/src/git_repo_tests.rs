@@ -86,8 +86,8 @@ fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissione
     let root = dir.path();
     let remote_url = "https://scope.example/git/permissioned/adam/random";
 
-    install_scope_fetch_auth(root, remote_url).unwrap();
-    install_scope_fetch_auth(root, remote_url).unwrap();
+    install_scope_fetch_auth(root, remote_url, "https://api.scope.example").unwrap();
+    install_scope_fetch_auth(root, remote_url, "https://api.scope.example").unwrap();
 
     let helpers = git_config(
         root,
@@ -107,6 +107,14 @@ fn install_scope_fetch_auth_writes_secret_free_credential_helper_for_permissione
             &["--get-urlmatch", "credential.useHttpPath", remote_url]
         ),
         "true"
+    );
+    assert_eq!(
+        git_config(root, &["--get", "scope.apiUrl"]),
+        "https://api.scope.example"
+    );
+    assert_eq!(
+        git_config(root, &["--get", "scope.gitOrigin"]),
+        "https://scope.example"
     );
     let config = fs::read_to_string(root.join(".git/config")).unwrap();
     assert!(
@@ -137,6 +145,7 @@ fn install_scope_fetch_auth_rejects_config_injection() {
         install_scope_fetch_auth(
             root,
             "https://scope.example/git/permissioned/adam/random\n[alias]",
+            "https://api.scope.example",
         )
         .is_err()
     );

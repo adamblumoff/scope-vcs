@@ -89,6 +89,7 @@ jobs:
             cp "$service/railway.json" "$root/railway.json"
             cp -a api "$root/api"
             cp -a cache-service "$root/cache-service"
+            cp -a repo-router "$root/repo-router"
             cp -a worker "$root/worker"
             cp -a crates "$root/crates"
             cp -a runner-runtime "$root/runner-runtime"

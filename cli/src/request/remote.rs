@@ -1,6 +1,7 @@
 use crate::{
     git_repo::{
         GitRepo, branch_config_value, current_branch, git_remote_fetch_url, git_remote_names,
+        scope_git_origin,
     },
     git_transport::{DEFAULT_SCOPE_REMOTE, ScopeRemote},
 };
@@ -34,11 +35,12 @@ pub(super) fn request_remote_name(
 }
 
 fn unambiguous_scope_remote(git_repo: &GitRepo, api_url: &str) -> anyhow::Result<String> {
+    let git_origin = scope_git_origin(git_repo, api_url)?;
     let mut targets = git_remote_names(git_repo)?
         .into_iter()
         .filter_map(|remote| {
             let url = git_remote_fetch_url(git_repo, &remote).ok()?;
-            ScopeRemote::parse(api_url, &remote, &url).ok()
+            ScopeRemote::parse(&git_origin, &remote, &url).ok()
         })
         .collect::<Vec<_>>();
     if targets.is_empty() {
@@ -65,7 +67,7 @@ pub(super) fn load_request_remote(
     remote: &str,
 ) -> anyhow::Result<RequestRemoteTarget> {
     let fetch_url = git_remote_fetch_url(git_repo, remote)?;
-    ScopeRemote::parse(api_url, remote, &fetch_url)
+    ScopeRemote::parse(&scope_git_origin(git_repo, api_url)?, remote, &fetch_url)
 }
 
 fn normalized_remote_arg(remote: Option<&str>) -> Option<String> {

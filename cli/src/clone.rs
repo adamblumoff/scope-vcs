@@ -27,11 +27,8 @@ pub fn clone_repo(repository: &str, destination: Option<&Path>) -> anyhow::Resul
         &target.owner,
         &target.repo,
     )?;
-    let (git_remote_path, repo_config) = match repo.access.actor {
-        RepositoryActor::Public => (
-            public_git_remote_path(&target.owner, &target.repo),
-            default_scope_repo_config(),
-        ),
+    let repo_config = match repo.access.actor {
+        RepositoryActor::Public => default_scope_repo_config(),
         RepositoryActor::Member | RepositoryActor::Owner => {
             let context = get_repo_config(
                 &client,
@@ -40,28 +37,32 @@ pub fn clone_repo(repository: &str, destination: Option<&Path>) -> anyhow::Resul
                 &target.owner,
                 &target.repo,
             )?;
-            (
-                permissioned_git_remote_path(&target.owner, &target.repo),
-                context.config,
-            )
+            context.config
         }
     };
-    let remote_url = git_remote_url(&api_url, &git_remote_path);
+    let remote_url = repo.git_remote_url;
     let checkout_dir = destination
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_clone_dir(&target.repo));
 
-    clone_and_configure(&remote_url, &session_token, &checkout_dir, &repo_config)
+    clone_and_configure(
+        &api_url,
+        &remote_url,
+        &session_token,
+        &checkout_dir,
+        &repo_config,
+    )
 }
 
 fn clone_and_configure(
+    api_url: &str,
     remote_url: &str,
     session_token: &str,
     checkout_dir: &Path,
     config: &RepoConfig,
 ) -> anyhow::Result<()> {
     clone_with_bearer(remote_url, session_token, Some(checkout_dir))?;
-    install_scope_fetch_auth(checkout_dir, remote_url)?;
+    install_scope_fetch_auth(checkout_dir, remote_url, api_url)?;
     write_worktree_scope_repo_config_with_base(checkout_dir, config)
 }
 
@@ -82,22 +83,6 @@ pub fn parse_repo_spec(repository: &str) -> anyhow::Result<RepoSpec> {
         owner: owner.to_string(),
         repo: repo.to_string(),
     })
-}
-
-fn git_remote_url(api_url: &str, git_remote_path: &str) -> String {
-    format!(
-        "{}/{}",
-        api_url.trim_end_matches('/'),
-        git_remote_path.trim_start_matches('/')
-    )
-}
-
-pub fn permissioned_git_remote_path(owner: &str, repo: &str) -> String {
-    format!("/git/permissioned/{owner}/{repo}")
-}
-
-pub fn public_git_remote_path(owner: &str, repo: &str) -> String {
-    format!("/git/public/{owner}/{repo}")
 }
 
 pub fn default_clone_dir(repo: &str) -> PathBuf {
@@ -137,7 +122,14 @@ mod tests {
         let remote_url = format!("file://{}", dir.path().display());
         let config = default_scope_repo_config();
 
-        clone_and_configure(&remote_url, "secret", &checkout, &config).unwrap();
+        clone_and_configure(
+            "https://api.scope.example",
+            &remote_url,
+            "secret",
+            &checkout,
+            &config,
+        )
+        .unwrap();
 
         assert_eq!(load_worktree_scope_repo_config(&checkout).unwrap(), config);
         assert!(repo_config_path(&checkout).unwrap().is_file());
@@ -156,18 +148,6 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&helper.stdout).trim(),
             "!scope git-credential"
-        );
-    }
-
-    #[test]
-    fn projection_paths_are_explicit_for_public_and_repository_actors() {
-        assert_eq!(
-            public_git_remote_path("adam", "sample"),
-            "/git/public/adam/sample"
-        );
-        assert_eq!(
-            permissioned_git_remote_path("adam", "sample"),
-            "/git/permissioned/adam/sample"
         );
     }
 }

@@ -384,8 +384,9 @@ fn scope_target(
     remote: Option<&str>,
 ) -> anyhow::Result<ScopeRemote> {
     let remote = select_scope_fetch_remote(repo, api_url, remote)?;
+    let git_origin = crate::git_repo::scope_git_origin(repo, api_url)?;
     ScopeRemote::parse(
-        api_url,
+        &git_origin,
         &remote,
         &crate::git_repo::git_remote_fetch_url(repo, &remote)?,
     )

@@ -119,7 +119,7 @@ jobs:
             cp candidate/Cargo.toml candidate/Cargo.lock candidate/rust-toolchain.toml "$root/"
             cp "candidate/$service/railpack.json" "$root/railpack.json"
             cp "candidate/$service/railway.json" "$root/railway.json"
-            cp -a candidate/api candidate/cache-service candidate/worker candidate/crates candidate/runner-runtime "$root/"
+            cp -a candidate/api candidate/cache-service candidate/repo-router candidate/worker candidate/crates candidate/runner-runtime "$root/"
             printf '%s\n' "$SOURCE_SHA" > "$root/$service/.scope-deployment-sha"
             printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$root/$service/.scope-deployment-attempt"
           done

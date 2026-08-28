@@ -261,7 +261,7 @@ fn git_read_view_repo(
         &repo_path,
         is_ready,
         || {
-            let _permit = state.runtime_budgets.acquire_git_materialization()?;
+            let _permit = state.runtime_budgets.try_git_materialization()?;
             let attempt = GIT_READ_VIEW_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
             let temp_path = cache_root.join(format!(
                 "read-view-{cache_key}.{}.{}.tmp",

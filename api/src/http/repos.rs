@@ -103,7 +103,7 @@ pub(crate) async fn create_repo(
         .await?;
 
     let user_id = user.id.clone();
-    let summary = repo_summary_for_user(&repo, &user_id, 0)
+    let summary = repo_summary_for_user(&repo, &user_id, 0, &git_origin)
         .ok_or_else(|| ApiError::internal_message("created repository is missing owner role"))?;
     let init = repo_init_response(
         &repo,
@@ -494,8 +494,15 @@ async fn repo_summary_response(
         .filter(|request| request_visible_in_summary(request, summary.access))
         .count();
     let request_permissions = repo_request_permissions_response(summary.access);
+    let git_origin = public_git_origin()?;
     Ok(RepoSummaryResponse {
         id: summary.id,
+        git_remote_url: repository_git_remote_url(
+            &git_origin,
+            summary.access.actor,
+            &summary.owner_handle,
+            &summary.name,
+        ),
         owner_handle: summary.owner_handle,
         name: summary.name,
         lifecycle_state: summary.lifecycle_state.into(),

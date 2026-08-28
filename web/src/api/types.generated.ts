@@ -90,7 +90,7 @@ export type CliSessionsResponse = { sessions: Array<CliSessionResponse>, };
 
 export type CliSessionResponse = { id: string, label: string, created_at_unix: number, last_used_at_unix: number | null, expires_at_unix: number, };
 
-export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, lifecycle_state: RepoLifecycleState, change_version: number, access: RepositoryAccessResponse, open_request_count: number, request_permissions: RepoRequestPermissionsResponse, };
+export type RepoSummaryResponse = { id: string, owner_handle: string, name: string, git_remote_url: string, lifecycle_state: RepoLifecycleState, change_version: number, access: RepositoryAccessResponse, open_request_count: number, request_permissions: RepoRequestPermissionsResponse, };
 
 export type OwnerProfileResponse = { handle: string, repositories: Array<RepoSummaryResponse>, };
 

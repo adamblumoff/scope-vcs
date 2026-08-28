@@ -10,8 +10,8 @@ fn configure_remote_adds_or_updates_the_remote_idempotently() {
     let new_dir = TestDir::git_repo("init-add-remote", "main");
     let init = repo_init("scope", NEW_REMOTE);
 
-    configure_remote(new_dir.path(), &init).unwrap();
-    configure_remote(new_dir.path(), &init).unwrap();
+    configure_remote(new_dir.path(), &init, "https://api.scope.example").unwrap();
+    configure_remote(new_dir.path(), &init, "https://api.scope.example").unwrap();
 
     assert_eq!(
         git_config(new_dir.path(), "remote.scope.url"),
@@ -40,7 +40,7 @@ fn configure_remote_adds_or_updates_the_remote_idempotently() {
     ]);
     existing_dir.run_git(["update-ref", "refs/remotes/scope/legacy", "HEAD"]);
 
-    configure_remote(existing_dir.path(), &init).unwrap();
+    configure_remote(existing_dir.path(), &init, "https://api.scope.example").unwrap();
 
     assert_eq!(
         git_config(existing_dir.path(), "remote.scope.url"),
@@ -82,7 +82,7 @@ fn remote_snapshot_restores_existing_and_absent_remote_state() {
     let before = config_snapshot(existing_dir.path(), &init);
     let snapshot = RemoteConfigSnapshot::capture(existing_dir.path(), &init).unwrap();
 
-    configure_remote(existing_dir.path(), &init).unwrap();
+    configure_remote(existing_dir.path(), &init, "https://api.scope.example").unwrap();
     snapshot.restore(existing_dir.path()).unwrap();
 
     assert_eq!(config_snapshot(existing_dir.path(), &init), before);
@@ -95,7 +95,7 @@ fn remote_snapshot_restores_existing_and_absent_remote_state() {
 
     let absent_dir = TestDir::git_repo("init-restore-absent-remote", "main");
     let snapshot = RemoteConfigSnapshot::capture(absent_dir.path(), &init).unwrap();
-    configure_remote(absent_dir.path(), &init).unwrap();
+    configure_remote(absent_dir.path(), &init, "https://api.scope.example").unwrap();
     snapshot.restore(absent_dir.path()).unwrap();
 
     assert!(git_remotes(absent_dir.path()).is_empty());
@@ -112,6 +112,7 @@ fn repo_init(remote_name: &str, git_remote_url: &str) -> RepoInitResponse {
             "id": "repo_test",
             "owner_handle": "adam",
             "name": "sample",
+            "git_remote_url": git_remote_url,
             "lifecycle_state": "AwaitingFirstPush",
             "change_version": 1,
             "access": {
