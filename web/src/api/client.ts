@@ -1,4 +1,9 @@
-export { HttpError, loadJson, stripTrailingSlash } from './http'
+export {
+  HttpError,
+  InvalidApiResponseError,
+  loadJson,
+  stripTrailingSlash,
+} from './http'
 import { loadJson, stripTrailingSlash } from './http'
 
 const localApiBase = 'http://localhost:8080'

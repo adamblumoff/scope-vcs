@@ -9,12 +9,45 @@ export class HttpError extends Error {
   }
 }
 
+export class InvalidApiResponseError extends Error {
+  constructor(
+    readonly requestMethod: string,
+    readonly requestPath: string,
+    readonly status: number,
+    readonly contentType: string | null,
+  ) {
+    super(
+      `${requestMethod} ${requestPath} returned invalid JSON ` +
+        `(${status}, ${contentType ?? 'unknown content type'})`,
+    )
+    this.name = 'InvalidApiResponseError'
+  }
+}
+
 export async function loadJson<T>(
   url: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<T> {
   const response = await fetch(url, init)
-  const payload = await response.json().catch(() => null)
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T
+  }
+
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    if (!response.ok) {
+      payload = null
+    } else {
+      throw new InvalidApiResponseError(
+        requestMethod(url, init),
+        requestPath(url),
+        response.status,
+        response.headers.get('content-type'),
+      )
+    }
+  }
 
   if (!response.ok) {
     throw new HttpError(
@@ -25,6 +58,22 @@ export async function loadJson<T>(
   }
 
   return payload as T
+}
+
+function requestMethod(url: RequestInfo | URL, init?: RequestInit) {
+  return (init?.method ?? (url instanceof Request ? url.method : 'GET')).toUpperCase()
+}
+
+function requestPath(url: RequestInfo | URL) {
+  const value = url instanceof Request ? url.url : String(url)
+  try {
+    const parsed = new URL(value, 'http://scope.invalid')
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+      ? parsed.pathname
+      : '[non-HTTP URL]'
+  } catch {
+    return '[invalid URL]'
+  }
 }
 
 function errorReference(payload: unknown) {
