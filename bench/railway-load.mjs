@@ -450,6 +450,8 @@ export function stageResult(name, concurrency, samples, elapsedSeconds, startedA
 export function evaluateStage(stage, baselineP95Ms, pushBaselineP95Ms = null) {
   const reasons = [];
   if (stage.errorRate > 0.01) reasons.push(`error rate ${(stage.errorRate * 100).toFixed(2)}% > 1%`);
+  const killed = stage.failureBreakdown?.killed || 0;
+  if (killed > 0) reasons.push(`${killed} operation(s) hit the client timeout`);
   if (baselineP95Ms > 0 && stage.stats.p95Ms > baselineP95Ms * 2) reasons.push(`p95 ${stage.stats.p95Ms}ms > 2x baseline ${baselineP95Ms}ms`);
   if (pushBaselineP95Ms && ['mixed', 'consistency'].includes(stage.name)) {
     const pushP95Ms = Math.max(0, ...stage.landingFileSizeSlope.points.map(({ p95Ms }) => p95Ms));

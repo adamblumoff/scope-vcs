@@ -239,6 +239,18 @@ test('stage gate rejects errors and latency above twice baseline', () => {
   assert.equal(evaluateStage({ name: 'blob-read', errorRate: 0.01, stats: { p95Ms: 100, scheduleDelayP95Ms: 0 }, landingFileSizeSlope: { points: [] } }, 100).healthy, true);
 });
 
+test('stage gate rejects even a low-rate killed operation', () => {
+  const stage = {
+    name: 'warm-fetch', errorRate: 0.001,
+    stats: { p95Ms: 100, scheduleDelayP95Ms: 0 },
+    failureBreakdown: { killed: 1 }, landingFileSizeSlope: { points: [] },
+  };
+  assert.deepEqual(evaluateStage(stage, 100), {
+    healthy: false,
+    reasons: ['1 operation(s) hit the client timeout'],
+  });
+});
+
 test('push stage gate enforces the optional fifteen-percent regression budget', () => {
   const stage = {
     name: 'mixed', errorRate: 0, stats: { p95Ms: 100, scheduleDelayP95Ms: 0 },
