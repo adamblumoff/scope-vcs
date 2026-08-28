@@ -12,6 +12,7 @@ pub fn router(config: RouterConfig) -> anyhow::Result<Router> {
     let discovery = BackendDiscovery::new(&config);
     let http = reqwest::Client::builder()
         .connect_timeout(config.connect_timeout)
+        .read_timeout(config.read_timeout)
         .build()?;
     let selector = BackendSelector::new(config.read_replicas);
     Ok(router_with_state(RouterState {

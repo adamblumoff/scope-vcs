@@ -109,7 +109,10 @@ fn upstream_unavailable(repository: &str, error: impl std::fmt::Display) -> Resp
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{test_router, test_router_with_read_replicas};
+    use crate::{
+        RouterConfig,
+        app::{test_router, test_router_with_read_replicas},
+    };
     use axum::http::Method;
     use axum::{Router, routing::any};
     use std::collections::BTreeSet;
@@ -177,6 +180,35 @@ mod tests {
                 .unwrap(),
             "pack request"
         );
+    }
+
+    #[tokio::test]
+    async fn ends_an_upstream_read_that_stops_making_progress() {
+        let upstream =
+            Router::new().fallback(any(|| async { std::future::pending::<String>().await }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let router = crate::router(RouterConfig {
+            backend_authority: address.to_string(),
+            dns_refresh: std::time::Duration::from_secs(1),
+            connect_timeout: std::time::Duration::from_secs(1),
+            read_timeout: std::time::Duration::from_millis(20),
+            read_replicas: 1,
+        })
+        .unwrap();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/git/public/scope/router/info/refs?service=git-upload-pack")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

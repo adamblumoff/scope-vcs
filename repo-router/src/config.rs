@@ -4,10 +4,12 @@ use std::time::Duration;
 const BACKEND_ENV: &str = "SCOPE_REPO_ROUTER_BACKEND";
 const DNS_REFRESH_MILLIS_ENV: &str = "SCOPE_REPO_ROUTER_DNS_REFRESH_MILLIS";
 const CONNECT_TIMEOUT_MILLIS_ENV: &str = "SCOPE_REPO_ROUTER_CONNECT_TIMEOUT_MILLIS";
+const READ_TIMEOUT_MILLIS_ENV: &str = "SCOPE_REPO_ROUTER_READ_TIMEOUT_MILLIS";
 const READ_REPLICAS_ENV: &str = "SCOPE_REPO_ROUTER_READ_REPLICAS";
 
 const DEFAULT_DNS_REFRESH_MILLIS: u64 = 1_000;
 const DEFAULT_CONNECT_TIMEOUT_MILLIS: u64 = 2_000;
+const DEFAULT_READ_TIMEOUT_MILLIS: u64 = 60_000;
 const DEFAULT_READ_REPLICAS: usize = 1;
 
 #[derive(Clone, Debug)]
@@ -15,6 +17,7 @@ pub struct RouterConfig {
     pub backend_authority: String,
     pub dns_refresh: Duration,
     pub connect_timeout: Duration,
+    pub read_timeout: Duration,
     pub read_replicas: usize,
 }
 
@@ -32,6 +35,7 @@ impl RouterConfig {
                 CONNECT_TIMEOUT_MILLIS_ENV,
                 DEFAULT_CONNECT_TIMEOUT_MILLIS,
             )?,
+            read_timeout: duration_from_env(READ_TIMEOUT_MILLIS_ENV, DEFAULT_READ_TIMEOUT_MILLIS)?,
             read_replicas: positive_usize_from_env(READ_REPLICAS_ENV, DEFAULT_READ_REPLICAS)?,
         })
     }
