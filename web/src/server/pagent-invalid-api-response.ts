@@ -19,13 +19,12 @@ const invalidApiResponse = defineEvent<InvalidApiResponseContext>({
 })
 
 const enabled = process.env.PAGENT_ENABLED === 'true'
-const environment = process.env.PAGENT_ENV?.trim() || undefined
-const active = enabled && environment !== undefined
+const environment = enabled ? requiredEnvironment('PAGENT_ENV') : undefined
 
 const pagent = createPagent({
   enabled,
   environment,
-  ...(active
+  ...(enabled
     ? {
         encryption: {
           keyId: requiredEnvironment('PAGENT_ENCRYPTION_KEY_ID'),
@@ -53,6 +52,7 @@ const reportInvalidApiResponse = pagent.observe(
     triggerWhen: () => true,
     group: ({ result }) => [
       result.requestMethod,
+      result.requestPath,
       result.status,
       result.contentType ?? 'unknown',
     ].join(':'),

@@ -70,6 +70,24 @@ test('loadJson preserves its error when the observer fails', async () => {
   )
 })
 
+test('loadJson replaces sensitive and dynamic path segments with the API template', async () => {
+  globalThis.fetch = async () => new Response('not json', { status: 200 })
+
+  await assert.rejects(
+    loadJson('/v1/repository-invites/invite-bearer-secret/accept'),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.requestPath === '/v1/repository-invites/{token}/accept' &&
+      !error.message.includes('invite-bearer-secret'),
+  )
+  await assert.rejects(
+    loadJson('/v1/repos/acme/widgets/requests/request_123'),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.requestPath === '/v1/repos/{owner}/{repo}/requests/{request_id}' &&
+      !error.message.includes('acme') &&
+      !error.message.includes('request_123'),
+  )
+})
+
 test('loadJson rejects an empty JSON response unless the status allows no content', async () => {
   globalThis.fetch = async () => new Response(null, { status: 200 })
   await assert.rejects(

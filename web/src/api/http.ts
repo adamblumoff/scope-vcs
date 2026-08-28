@@ -1,3 +1,5 @@
+import { ApiRouteTemplates } from './types.generated'
+
 export class HttpError extends Error {
   constructor(
     message: string,
@@ -31,6 +33,17 @@ type InvalidApiResponseObserver = (error: InvalidApiResponseError) => void
 const invalidApiResponseObserverKey = Symbol.for(
   'scope.api.invalid-api-response-observer',
 )
+
+const apiRouteMatchers = Object.values(ApiRouteTemplates)
+  .map((template) => {
+    const segments = routeSegments(template)
+    return {
+      segments,
+      staticSegments: segments.filter((segment) => !isRouteParameter(segment)).length,
+      template,
+    }
+  })
+  .sort((left, right) => right.staticSegments - left.staticSegments)
 
 export function setInvalidApiResponseObserver(
   observer: InvalidApiResponseObserver | undefined,
@@ -100,11 +113,29 @@ function requestPath(url: RequestInfo | URL) {
   try {
     const parsed = new URL(value, 'http://scope.invalid')
     return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-      ? parsed.pathname
+      ? apiRouteTemplate(parsed.pathname)
       : '[non-HTTP URL]'
   } catch {
     return '[invalid URL]'
   }
+}
+
+function apiRouteTemplate(pathname: string) {
+  const segments = routeSegments(pathname)
+  const matcher = apiRouteMatchers.find((candidate) =>
+    candidate.segments.length === segments.length &&
+    candidate.segments.every((segment, index) =>
+      isRouteParameter(segment) || segment === segments[index],
+    ))
+  return matcher?.template ?? '[unrecognized API route]'
+}
+
+function routeSegments(path: string) {
+  return path.split('/').filter(Boolean)
+}
+
+function isRouteParameter(segment: string) {
+  return segment.startsWith('{') && segment.endsWith('}')
 }
 
 function errorReference(payload: unknown) {
