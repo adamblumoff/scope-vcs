@@ -13,6 +13,7 @@ commands:
   validate-workflow-catalogs  validate pre-migration workflow inputs
   apply                       apply all pending migrations behind the writer fence
   backfill-git-segments-v2    rewrite legacy Git segments before the v2 migration
+  cleanup-git-segments-v1     delete retired Git segment objects after the v2 migration
   backfill-landing-files      idempotently rebuild repository landing-file metadata
   backfill-workflow-catalogs  idempotently rebuild repository workflow catalogs
   help                        show this help
@@ -49,6 +50,10 @@ async fn main() -> anyhow::Result<()> {
         "backfill-git-segments-v2" => {
             let migrated = api::backfill_git_segments_v2_for_maintenance(database_url).await?;
             println!(r#"{{"gitSegmentsBackfilled":{migrated}}}"#);
+        }
+        "cleanup-git-segments-v1" => {
+            let deleted = api::cleanup_git_segments_v1_for_maintenance(database_url).await?;
+            println!(r#"{{"legacyGitSegmentObjectsDeleted":{deleted}}}"#);
         }
         "backfill-landing-files" => {
             verify_schema(database_url).await?;

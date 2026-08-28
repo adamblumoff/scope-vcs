@@ -68,6 +68,80 @@ pub struct GitSegmentV2Backfill {
     _fence: ExclusiveWriterFence,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LegacyGitSegmentObject {
+    pub object_key: String,
+    pub sha256: String,
+}
+
+pub struct GitSegmentV1Cleanup {
+    db: DatabaseConnection,
+}
+
+impl GitSegmentV1Cleanup {
+    pub async fn begin(database_url: String) -> anyhow::Result<Self> {
+        let db = Database::connect(database_url).await?;
+        let migrated = scalar_i64(
+            &db,
+            "SELECT count(*) AS value FROM seaql_migrations WHERE version = 'm0033_git_segment_streaming_v2'",
+        )
+        .await?;
+        if migrated != 1 {
+            anyhow::bail!("refusing legacy Git segment cleanup before m0033 commits");
+        }
+        Ok(Self { db })
+    }
+
+    pub async fn legacy_objects(&self) -> anyhow::Result<Vec<LegacyGitSegmentObject>> {
+        let referenced = scalar_i64(
+            &self.db,
+            "SELECT count(*) AS value FROM scope_object_references
+             WHERE object_key::jsonb ? 'GitSegmentSha256'",
+        )
+        .await?;
+        if referenced != 0 {
+            anyhow::bail!("refusing to delete referenced legacy Git segment objects");
+        }
+        self.db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"
+                SELECT object_key, sha256
+                FROM scope_orphan_object_jobs
+                WHERE object_key::jsonb =
+                      jsonb_build_object('GitSegmentSha256', sha256)
+                ORDER BY object_key
+                "#
+                .to_string(),
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok(LegacyGitSegmentObject {
+                    object_key: required(&row, "object_key")?,
+                    sha256: required(&row, "sha256")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn remove_record(&self, object: &LegacyGitSegmentObject) -> anyhow::Result<()> {
+        self.db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "DELETE FROM scope_orphan_object_jobs
+                 WHERE object_key = $1 AND sha256 = $2
+                   AND object_key::jsonb = jsonb_build_object('GitSegmentSha256', sha256)",
+                [
+                    object.object_key.clone().into(),
+                    object.sha256.clone().into(),
+                ],
+            ))
+            .await?;
+        Ok(())
+    }
+}
+
 impl GitSegmentV2Backfill {
     pub async fn begin(database_url: String) -> anyhow::Result<Option<Self>> {
         let fence = ExclusiveWriterFence::acquire(&database_url).await?;

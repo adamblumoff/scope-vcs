@@ -37,7 +37,9 @@ pub mod test_support;
 mod workflow_tests;
 
 pub use app::router;
-pub use git_segment_v2_backfill::backfill_git_segments_v2_for_maintenance;
+pub use git_segment_v2_backfill::{
+    backfill_git_segments_v2_for_maintenance, cleanup_git_segments_v1_for_maintenance,
+};
 pub use state::AppState;
 pub use workflow_catalog_backfill::validate_repository_workflow_catalogs_for_maintenance;
 

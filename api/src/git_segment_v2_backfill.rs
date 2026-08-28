@@ -3,7 +3,9 @@ use scope_git_storage::{
     ENCODING_VERSION, GitSegmentReservation, GitSegmentStore, StagedGitSegment,
 };
 use scope_object_store::{EncryptedObjectStore, ObjectStore};
-use scope_postgres::db::{GitSegmentV2Backfill, GitSegmentV2BackfillRecord, LegacyGitSegment};
+use scope_postgres::db::{
+    GitSegmentV1Cleanup, GitSegmentV2Backfill, GitSegmentV2BackfillRecord, LegacyGitSegment,
+};
 use sha2::{Digest, Sha256};
 use std::{io::Cursor, path::PathBuf, sync::Arc, time::SystemTime};
 
@@ -31,6 +33,21 @@ pub async fn backfill_git_segments_v2_for_maintenance(
     }
     cleanup?;
     result
+}
+
+pub async fn cleanup_git_segments_v1_for_maintenance(
+    database_url: String,
+) -> anyhow::Result<usize> {
+    let cleanup = GitSegmentV1Cleanup::begin(database_url).await?;
+    let encryption_key = object_store_config::encryption_key_from_env()?;
+    let legacy_s3 = tokio::task::spawn_blocking(object_store_config::s3_from_env).await??;
+    let legacy_store = EncryptedObjectStore::new(Arc::new(legacy_s3), encryption_key);
+    let objects = cleanup.legacy_objects().await?;
+    for object in &objects {
+        legacy_store.delete(&format!("objects/git-segments/{}", object.sha256))?;
+        cleanup.remove_record(object).await?;
+    }
+    Ok(objects.len())
 }
 
 async fn backfill_segments(

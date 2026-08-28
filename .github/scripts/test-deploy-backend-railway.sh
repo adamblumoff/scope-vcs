@@ -65,6 +65,10 @@ case "${1:-}" in
     touch "$FAKE_RAILWAY_STATE/git-segments-v2-backfilled"
     echo '{"gitSegmentsBackfilled":1}'
     ;;
+  cleanup-git-segments-v1)
+    [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
+    echo '{"legacyGitSegmentObjectsDeleted":1}'
+    ;;
   backfill-landing-files)
     [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
     touch "$FAKE_RAILWAY_STATE/landing-files-backfilled"
@@ -439,6 +443,7 @@ assert_in_order "$test_dir/success-trace" \
   "$test_dir/maintenance backfill-git-segments-v2" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance verify" \
+  "$test_dir/maintenance cleanup-git-segments-v1" \
   "$test_dir/maintenance backfill-landing-files" \
   "$test_dir/maintenance backfill-workflow-catalogs" \
   "up $test_dir/cache" \

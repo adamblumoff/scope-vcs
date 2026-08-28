@@ -473,6 +473,7 @@ deploy_selected_releases() {
 
 deploy_and_reopen() {
   maintenance_read verify
+  run_api_maintenance cleanup-git-segments-v1
   backfill_repository_snapshots
   deploy_cache_release
   cache_closed=0
@@ -545,6 +546,7 @@ case "$plan_status" in
       exit 1
     fi
     maintenance_read verify
+    run_api_maintenance cleanup-git-segments-v1
     deploy_selected_releases
     trap - EXIT
     discard_pending_evidence

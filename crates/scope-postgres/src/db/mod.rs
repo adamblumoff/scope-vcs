@@ -133,7 +133,8 @@ pub use fast_push::ApplyContentOnlyPushCommand;
 pub use git_compaction::{GitCompactionCandidate, GitCompactionClaim};
 pub use git_push_reads::GitPushContext;
 pub use git_segment_v2_backfill::{
-    GitSegmentV2Backfill, GitSegmentV2BackfillRecord, LegacyGitSegment,
+    GitSegmentV1Cleanup, GitSegmentV2Backfill, GitSegmentV2BackfillRecord, LegacyGitSegment,
+    LegacyGitSegmentObject,
 };
 pub use git_segments::RepositoryGitWriteLease;
 use history_rows::load_repository_histories;
