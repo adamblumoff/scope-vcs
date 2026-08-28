@@ -16,6 +16,8 @@ const DEFAULT_GIT_MATERIALIZATION_CONCURRENCY: usize = 2;
 const DEFAULT_GIT_SEGMENT_INGEST_CONCURRENCY: usize = 4;
 const DEFAULT_OBJECT_STORE_CONCURRENCY: usize = 16;
 const DEFAULT_GIT_COMMAND_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_GIT_MATERIALIZATION_WAIT_MILLIS: u64 = 1_000;
+const MAX_GIT_MATERIALIZATION_WAIT_MILLIS: u64 = 5_000;
 
 const RECEIVE_PACK_CONCURRENCY_ENV: &str = "SCOPE_GIT_RECEIVE_PACK_CONCURRENCY";
 const UPLOAD_PACK_CONCURRENCY_ENV: &str = "SCOPE_GIT_UPLOAD_PACK_CONCURRENCY";
@@ -23,6 +25,7 @@ const GIT_MATERIALIZATION_CONCURRENCY_ENV: &str = "SCOPE_GIT_MATERIALIZATION_CON
 const GIT_SEGMENT_INGEST_CONCURRENCY_ENV: &str = "SCOPE_GIT_SEGMENT_INGEST_CONCURRENCY";
 const OBJECT_STORE_CONCURRENCY_ENV: &str = "SCOPE_OBJECT_STORE_CONCURRENCY";
 const GIT_COMMAND_TIMEOUT_SECS_ENV: &str = "SCOPE_GIT_COMMAND_TIMEOUT_SECS";
+const GIT_MATERIALIZATION_WAIT_MILLIS_ENV: &str = "SCOPE_GIT_MATERIALIZATION_WAIT_MILLIS";
 
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeBudgetConfig {
@@ -31,6 +34,7 @@ pub(crate) struct RuntimeBudgetConfig {
     pub(crate) git_materialization_concurrency: usize,
     pub(crate) git_segment_ingest_concurrency: usize,
     pub(crate) object_store_concurrency: usize,
+    pub(crate) git_materialization_wait: Duration,
     pub(crate) git_command_timeout: Duration,
     pub(crate) git_storage_limits: GitStorageLimits,
 }
@@ -58,6 +62,7 @@ impl RuntimeBudgetConfig {
                 OBJECT_STORE_CONCURRENCY_ENV,
                 DEFAULT_OBJECT_STORE_CONCURRENCY,
             )?,
+            git_materialization_wait: git_materialization_wait_from_env()?,
             git_command_timeout: Duration::from_secs(parse_u64_env(
                 GIT_COMMAND_TIMEOUT_SECS_ENV,
                 DEFAULT_GIT_COMMAND_TIMEOUT_SECS,
@@ -75,6 +80,9 @@ impl Default for RuntimeBudgetConfig {
             git_materialization_concurrency: DEFAULT_GIT_MATERIALIZATION_CONCURRENCY,
             git_segment_ingest_concurrency: DEFAULT_GIT_SEGMENT_INGEST_CONCURRENCY,
             object_store_concurrency: DEFAULT_OBJECT_STORE_CONCURRENCY,
+            git_materialization_wait: Duration::from_millis(
+                DEFAULT_GIT_MATERIALIZATION_WAIT_MILLIS,
+            ),
             git_command_timeout: Duration::from_secs(DEFAULT_GIT_COMMAND_TIMEOUT_SECS),
             git_storage_limits: default_git_storage_limits(),
         }
@@ -87,6 +95,7 @@ pub(crate) struct RuntimeBudgets {
     git_materialization: Arc<Semaphore>,
     git_segment_ingest: Arc<Semaphore>,
     object_store: Arc<Semaphore>,
+    git_materialization_wait: Duration,
     git_command_timeout: Duration,
     git_storage_limits: GitStorageLimits,
 }
@@ -103,6 +112,7 @@ impl RuntimeBudgets {
             git_materialization: Arc::new(Semaphore::new(config.git_materialization_concurrency)),
             git_segment_ingest: Arc::new(Semaphore::new(config.git_segment_ingest_concurrency)),
             object_store: Arc::new(Semaphore::new(config.object_store_concurrency)),
+            git_materialization_wait: config.git_materialization_wait,
             git_command_timeout: config.git_command_timeout,
             git_storage_limits: config.git_storage_limits,
         }
@@ -116,8 +126,40 @@ impl RuntimeBudgets {
         self.try_acquire(&self.upload_pack, "Git upload-pack")
     }
 
-    pub(crate) fn try_git_materialization(&self) -> Result<RuntimePermit, ApiError> {
-        self.try_acquire(&self.git_materialization, "Git materialization")
+    pub(crate) fn acquire_git_materialization(&self) -> Result<RuntimePermit, ApiError> {
+        let started_at = Instant::now();
+        let mut backoff = Duration::from_millis(2);
+        loop {
+            match self.git_materialization.clone().try_acquire_owned() {
+                Ok(permit) => {
+                    let waited = started_at.elapsed();
+                    if !waited.is_zero() {
+                        tracing::debug!(
+                            waited_us = waited.as_micros(),
+                            "Git materialization capacity acquired"
+                        );
+                    }
+                    return Ok(RuntimePermit { _permit: permit });
+                }
+                Err(_) if started_at.elapsed() < self.git_materialization_wait => {
+                    let remaining = self
+                        .git_materialization_wait
+                        .saturating_sub(started_at.elapsed());
+                    std::thread::sleep(backoff.min(remaining));
+                    backoff = (backoff * 2).min(Duration::from_millis(25));
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        operation = "Git materialization",
+                        waited_us = started_at.elapsed().as_micros(),
+                        "runtime capacity permit rejected"
+                    );
+                    return Err(ApiError::too_many_requests(
+                        "Git materialization capacity is exhausted; retry later",
+                    ));
+                }
+            }
+        }
     }
 
     pub(crate) fn try_git_segment_ingest(&self) -> Result<RuntimePermit, ApiError> {
@@ -177,6 +219,19 @@ impl RuntimeBudgets {
             self.git_storage_limits.max_object_bytes(),
         )
     }
+}
+
+fn git_materialization_wait_from_env() -> anyhow::Result<Duration> {
+    let millis = parse_u64_env(
+        GIT_MATERIALIZATION_WAIT_MILLIS_ENV,
+        DEFAULT_GIT_MATERIALIZATION_WAIT_MILLIS,
+    )?;
+    if millis > MAX_GIT_MATERIALIZATION_WAIT_MILLIS {
+        anyhow::bail!(
+            "{GIT_MATERIALIZATION_WAIT_MILLIS_ENV} must be at most {MAX_GIT_MATERIALIZATION_WAIT_MILLIS}"
+        );
+    }
+    Ok(Duration::from_millis(millis))
 }
 
 pub(crate) struct RuntimePermit {

@@ -115,7 +115,7 @@ impl RepositoryEngine {
         let materialization_path = AtomicU8::new(MATERIALIZATION_PATH_HIT);
         let result = self.coordinate_repository(repository_id, is_ready, || {
             built.store(true, Ordering::Relaxed);
-            let _permit = state.runtime_budgets.try_git_materialization()?;
+            let _permit = state.runtime_budgets.acquire_git_materialization()?;
             match self.cache.applied_sequence(&repo_path) {
                 Some(applied) if applied < head.push_sequence && repo_path.is_dir() => {
                     materialization_path.store(MATERIALIZATION_PATH_CATCH_UP, Ordering::Relaxed);

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "watchPatterns": [
+      "/repo-router/**",
+      "/Cargo.toml",
+      "/Cargo.lock",
+      "/rust-toolchain.toml"
+    ]
+  },
+  "deploy": {
+    "startCommand": "exec ./bin/scope-repo-router",
+    "healthcheckPath": "/readyz",
+    "healthcheckTimeout": 60
+  }
+}

@@ -1,16 +1,16 @@
 use crate::{
     config::{
-        LOCAL_API_ORIGIN, LOCAL_APP_ORIGIN, SCOPE_API_PUBLIC_URL_ENV, SCOPE_APP_ORIGIN_ENV,
+        LOCAL_API_ORIGIN, LOCAL_APP_ORIGIN, SCOPE_APP_ORIGIN_ENV, SCOPE_GIT_PUBLIC_URL_ENV,
         non_empty_env,
     },
     error::ApiError,
 };
 
-pub(crate) fn public_api_origin() -> Result<String, ApiError> {
+pub(crate) fn public_git_origin() -> Result<String, ApiError> {
     public_origin(
-        SCOPE_API_PUBLIC_URL_ENV,
+        SCOPE_GIT_PUBLIC_URL_ENV,
         LOCAL_API_ORIGIN,
-        "create repository init metadata",
+        "create repository Git remote metadata",
     )
 }
 

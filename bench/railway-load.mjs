@@ -33,6 +33,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 async function main() {
   const config = configuration();
   for (const api of config.apiUrls) assertSafeTarget(api);
+  if (config.gitUrl) assertSafeTarget(config.gitUrl);
   await ready(config);
   const runRoot = join(config.outputRoot, new Date().toISOString().replaceAll(':', '-'));
   await mkdir(runRoot, { recursive: true });
@@ -52,7 +53,7 @@ async function main() {
   process.once('SIGINT', interrupt);
   process.once('SIGTERM', interrupt);
   try {
-    console.log(`targets: ${config.apiUrls.join(', ')} · routing: ${config.routingMode} · topology: ${config.topologyLabel} · repeat: ${config.repeatIndex}`);
+    console.log(`targets: ${config.apiUrls.join(', ')} · Git: ${config.gitUrl || 'same endpoints'} · routing: ${config.routingMode} · topology: ${config.topologyLabel} · repeat: ${config.repeatIndex}`);
     console.log(config.rates ? `rates: ${config.rates.join(', ')}/s` : `concurrency: ${config.stages.join(', ')}`);
     console.log('seeding public repositories for read and mixed workloads...');
     const needsReadFixtures = config.workloads.some((name) => [
@@ -131,7 +132,8 @@ function configuration() {
   const landingFileBytes = parseByteSizes(process.env.SCOPE_LOAD_LANDING_FILE_BYTES || '0');
   const changedFileCounts = parseChangedFileCounts(process.env.SCOPE_LOAD_CHANGED_FILE_COUNTS || '0');
   return {
-    apiUrls, token, stages, routingMode, routingSeed,
+    apiUrls, gitUrl: process.env.SCOPE_BENCH_GIT_URL?.trim().replace(/\/$/, '') || null,
+    token, stages, routingMode, routingSeed,
     endpointRouter: createEndpointRouter(apiUrls, routingMode, routingSeed),
     rates: process.env.SCOPE_LOAD_RATES ? parseRates(process.env.SCOPE_LOAD_RATES) : null,
     workloads: list('SCOPE_LOAD_WORKLOADS', DEFAULT_WORKLOADS),
@@ -290,7 +292,7 @@ function operationFor(name, context) {
     const endpoint = endpointFor(context.config, fixture, routeKey(worker, iteration));
     const result = await command(
       context.config,
-      ['git', 'ls-remote', '--refs', publicRemoteUrl(endpoint, fixture)],
+      ['git', 'ls-remote', '--refs', publicRemoteUrl(context.config, endpoint, fixture)],
       undefined,
       undefined,
       scheduledAt,
@@ -345,12 +347,12 @@ function remoteUrl(endpoint, path) {
   return new URL(path, `${endpoint}/`).toString();
 }
 
-function publicRemoteUrl(endpoint, fixture) {
-  return remoteUrl(endpoint, fixture.publicRemotePath);
+function publicRemoteUrl(config, endpoint, fixture) {
+  return remoteUrl(config.gitUrl || endpoint, fixture.publicRemotePath);
 }
 
-function pushRemoteUrl(endpoint, fixture) {
-  return remoteUrl(endpoint, fixture.pushRemotePath);
+function pushRemoteUrl(config, endpoint, fixture) {
+  return remoteUrl(config.gitUrl || endpoint, fixture.pushRemotePath);
 }
 
 function pooled(items) {
@@ -530,7 +532,7 @@ async function createFetchClients(config, runRoot, fixtures) {
     const endpoint = endpointFor(config, fixture);
     const initial = await command(
       config,
-      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(endpoint, fixture), dir],
+      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(config, endpoint, fixture), dir],
     );
     if (!initial.ok) {
       await rm(parent, { recursive: true, force: true });
@@ -652,7 +654,7 @@ async function pushCurrentHead(config, fixture, started = performance.now(), rou
     method: 'POST',
     body: { head_oid: head, base_config_hash: repoConfig.config_hash, config: proposedConfig },
   });
-  const destination = pushRemoteUrl(endpoint, fixture);
+  const destination = pushRemoteUrl(config, endpoint, fixture);
   return command(
     config,
     ['git', '-c', 'push.recurseSubmodules=no', 'push', destination, `HEAD:${fixture.branch}`],
@@ -667,7 +669,7 @@ async function gitFetch(config, pair, scheduledAt = performance.now(), routeKey 
   const endpoint = endpointFor(config, pair.fixture, routeKey);
   const result = await command(
     config,
-    ['git', 'fetch', '--quiet', publicRemoteUrl(endpoint, pair.fixture)],
+    ['git', 'fetch', '--quiet', publicRemoteUrl(config, endpoint, pair.fixture)],
     pair.dir,
     undefined,
     scheduledAt,
@@ -690,7 +692,7 @@ async function clone(config, runRoot, fixture, scheduledAt = performance.now(), 
     const endpoint = endpointFor(config, fixture, routeKey);
     const result = await command(
       config,
-      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(endpoint, fixture), destination],
+      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(config, endpoint, fixture), destination],
       undefined,
       undefined,
       scheduledAt,
@@ -876,6 +878,10 @@ async function ready(config) {
   for (const endpoint of config.apiUrls) {
     const response = await fetch(`${endpoint}/readyz`, { signal: AbortSignal.timeout(config.timeoutMs) });
     if (!response.ok) throw new Error(`API is not ready at ${endpoint}: HTTP ${response.status}`);
+  }
+  if (config.gitUrl) {
+    const response = await fetch(`${config.gitUrl}/readyz`, { signal: AbortSignal.timeout(config.timeoutMs) });
+    if (!response.ok) throw new Error(`Git router is not ready at ${config.gitUrl}: HTTP ${response.status}`);
   }
 }
 

@@ -6,7 +6,7 @@ use crate::{
     error::ApiError,
     http::responses::*,
     http::{
-        origins::public_api_origin,
+        origins::public_git_origin,
         projection_preview::{ensure_projection_preview_access, projection_preview_repo},
     },
     persistence::unix_now,
@@ -78,7 +78,7 @@ pub(crate) async fn create_repo(
         .file_default_visibility
         .map(Into::into)
         .unwrap_or(Visibility::Private);
-    let api_origin = public_api_origin()?;
+    let git_origin = public_git_origin()?;
     let cleanup_state = state.clone();
     let (secret, token) = generate_first_push_token(&user.id)?;
     let (push_secret, push_token) = generate_git_push_token(&user.id)?;
@@ -108,7 +108,7 @@ pub(crate) async fn create_repo(
     let init = repo_init_response(
         &repo,
         &user_id,
-        &api_origin,
+        &git_origin,
         now,
         Some(secret),
         Some(push_secret),

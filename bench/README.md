@@ -9,6 +9,8 @@ Keep both results. A fast component result with a slow black-box result points a
 
 All fixtures and reports live under the ignored `.tmp/bench/` directory. The scripts remove fixture repositories and local clients after each run. They never add benchmark-only production endpoints.
 
+Set `SCOPE_BENCH_GIT_URL` when Git traffic enters through a separate router. Fixture creation, push intents, reads, and cleanup still use `SCOPE_BENCH_API_URL`; clones, fetches, and pushes use the Git URL.
+
 ## 1. Measure local Git and disk
 
 `git-physics.mjs` creates disposable repositories and measures:

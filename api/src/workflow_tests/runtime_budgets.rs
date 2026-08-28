@@ -1,7 +1,7 @@
 use super::*;
 use scope_git::GitStorageLimits;
 use scope_object_store::ObjectStore;
-use std::{process::Command, time::Duration};
+use std::{process::Command, thread, time::Duration};
 
 fn budgeted_store(config: RuntimeBudgetConfig) -> (Arc<MemoryObjectStore>, BudgetedObjectStore) {
     let raw = Arc::new(MemoryObjectStore::new());
@@ -86,10 +86,11 @@ async fn upload_pack_capacity_exhaustion_happens_before_materialization() {
 fn git_materialization_capacity_returns_backpressure() {
     let budgets = RuntimeBudgets::from_config(RuntimeBudgetConfig {
         git_materialization_concurrency: 0,
+        git_materialization_wait: Duration::ZERO,
         ..Default::default()
     });
 
-    let error = match budgets.try_git_materialization() {
+    let error = match budgets.acquire_git_materialization() {
         Ok(_) => panic!("zero-capacity Git materialization unexpectedly acquired a permit"),
         Err(error) => error,
     };
@@ -99,6 +100,27 @@ fn git_materialization_capacity_returns_backpressure() {
         error.public_message(),
         "Git materialization capacity is exhausted; retry later"
     );
+}
+
+#[test]
+fn git_materialization_wait_absorbs_short_capacity_bursts() {
+    let budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
+        git_materialization_concurrency: 1,
+        git_materialization_wait: Duration::from_millis(250),
+        ..Default::default()
+    }));
+    let held = budgets.acquire_git_materialization().unwrap();
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(30));
+        drop(held);
+    });
+    let started_at = std::time::Instant::now();
+
+    let acquired = budgets.acquire_git_materialization().unwrap();
+
+    assert!(started_at.elapsed() >= Duration::from_millis(20));
+    drop(acquired);
+    release.join().unwrap();
 }
 
 #[tokio::test]

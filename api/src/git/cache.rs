@@ -897,6 +897,7 @@ mod tests {
         let budgets = Arc::new(crate::runtime_budgets::RuntimeBudgets::from_config(
             crate::runtime_budgets::RuntimeBudgetConfig {
                 git_materialization_concurrency: 1,
+                git_materialization_wait: Duration::ZERO,
                 ..Default::default()
             },
         ));
@@ -913,7 +914,7 @@ mod tests {
                     "shared-value".to_string(),
                     || projection_ready.load(Ordering::SeqCst),
                     || {
-                        let _permit = budgets.try_git_materialization()?;
+                        let _permit = budgets.acquire_git_materialization()?;
                         leader_started_tx.send(()).unwrap();
                         release_leader_rx.recv().unwrap();
                         projection_ready.store(true, Ordering::SeqCst);
@@ -930,7 +931,7 @@ mod tests {
                 "shared-value".to_string(),
                 || false,
                 || {
-                    let _permit = budgets.try_git_materialization()?;
+                    let _permit = budgets.acquire_git_materialization()?;
                     Ok(())
                 },
             )

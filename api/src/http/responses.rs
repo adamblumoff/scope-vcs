@@ -401,7 +401,7 @@ pub(crate) fn session_capabilities_response(
 pub(crate) fn repo_init_response(
     repo: &Repository,
     user_id: &str,
-    api_origin: &str,
+    git_origin: &str,
     now_unix: u64,
     secret: Option<String>,
     push_secret: Option<String>,
@@ -424,7 +424,7 @@ pub(crate) fn repo_init_response(
         &repo_summary.name,
     );
     Ok(RepoInitResponse {
-        git_remote_url: format!("{}{}", api_origin.trim_end_matches('/'), git_remote_path),
+        git_remote_url: format!("{}{}", git_origin.trim_end_matches('/'), git_remote_path),
         remote_name: "scope".to_string(),
         push_branch: DEFAULT_GIT_BRANCH.to_string(),
         repo: repo_summary,
