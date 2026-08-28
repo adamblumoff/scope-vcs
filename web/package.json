@@ -41,6 +41,7 @@
     "github-slugger": "2.0.0",
     "lucide-react": "^0.562.0",
     "motion": "^12.42.2",
+    "pagent": "file:vendor/pagent-v0.1.0.tgz",
     "posthog-js": "1.417.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

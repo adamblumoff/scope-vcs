@@ -24,6 +24,20 @@ export class InvalidApiResponseError extends Error {
   }
 }
 
+type InvalidApiResponseObserver = (error: InvalidApiResponseError) => void
+
+// Nitro can bundle the plugin and API client in separate chunks. This key keeps
+// one process-wide observer shared by both copies of the module.
+const invalidApiResponseObserverKey = Symbol.for(
+  'scope.api.invalid-api-response-observer',
+)
+
+export function setInvalidApiResponseObserver(
+  observer: InvalidApiResponseObserver | undefined,
+) {
+  invalidApiResponseObservers()[invalidApiResponseObserverKey] = observer
+}
+
 export async function loadJson<T>(
   url: RequestInfo | URL,
   init?: RequestInit,
@@ -40,12 +54,14 @@ export async function loadJson<T>(
     if (!response.ok) {
       payload = null
     } else {
-      throw new InvalidApiResponseError(
+      const error = new InvalidApiResponseError(
         requestMethod(url, init),
         requestPath(url),
         response.status,
         response.headers.get('content-type'),
       )
+      observeInvalidApiResponse(error)
+      throw error
     }
   }
 
@@ -58,6 +74,21 @@ export async function loadJson<T>(
   }
 
   return payload as T
+}
+
+function observeInvalidApiResponse(error: InvalidApiResponseError) {
+  try {
+    invalidApiResponseObservers()[invalidApiResponseObserverKey]?.(error)
+  } catch {
+    // Observability must not replace the API error seen by the caller.
+  }
+}
+
+function invalidApiResponseObservers() {
+  return globalThis as unknown as Record<
+    symbol,
+    InvalidApiResponseObserver | undefined
+  >
 }
 
 function requestMethod(url: RequestInfo | URL, init?: RequestInit) {

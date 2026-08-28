@@ -1,9 +1,17 @@
 import * as assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { HttpError, InvalidApiResponseError, loadJson } from './http'
+import {
+  HttpError,
+  InvalidApiResponseError,
+  loadJson,
+  setInvalidApiResponseObserver,
+} from './http'
 
 const originalFetch = globalThis.fetch
-afterEach(() => { globalThis.fetch = originalFetch })
+afterEach(() => {
+  globalThis.fetch = originalFetch
+  setInvalidApiResponseObserver(undefined)
+})
 
 test('loadJson parses success and preserves request init', async () => {
   let captured: RequestInit | undefined
@@ -18,14 +26,20 @@ test('loadJson parses success and preserves request init', async () => {
 })
 
 test('loadJson surfaces structured and malformed API errors', async () => {
+  let observed = 0
+  setInvalidApiResponseObserver(() => { observed += 1 })
+
   globalThis.fetch = async () => jsonResponse({ message: 'repo is private' }, 403)
   await assert.rejects(loadJson('/v1/repos/private'), hasHttpError(403, 'repo is private'))
 
   globalThis.fetch = async () => new Response('not json', { status: 502 })
   await assert.rejects(loadJson('/v1/repos'), hasHttpError(502, 'request failed: 502'))
+  assert.equal(observed, 0)
 })
 
 test('loadJson rejects malformed successful responses with safe diagnostics', async () => {
+  let observed: InvalidApiResponseError | undefined
+  setInvalidApiResponseObserver((error) => { observed = error })
   globalThis.fetch = async () => new Response('<h1>secret response</h1>', {
     headers: { 'content-type': 'text/html; charset=utf-8' },
     status: 200,
@@ -41,6 +55,18 @@ test('loadJson rejects malformed successful responses with safe diagnostics', as
       error.message ===
         'POST /v1/repos returned invalid JSON (200, text/html; charset=utf-8)' &&
       !error.message.includes('secret'),
+  )
+  assert.ok(observed instanceof InvalidApiResponseError)
+  assert.equal(observed.requestPath, '/v1/repos')
+})
+
+test('loadJson preserves its error when the observer fails', async () => {
+  setInvalidApiResponseObserver(() => { throw new Error('observer failed') })
+  globalThis.fetch = async () => new Response('not json', { status: 200 })
+
+  await assert.rejects(
+    loadJson('/v1/repos'),
+    (error: unknown) => error instanceof InvalidApiResponseError,
   )
 })
 
