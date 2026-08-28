@@ -7,6 +7,16 @@
       "reason": "Materialization coordination, leases, pruning, and their concurrency and eviction tests define one cache lifecycle."
     },
     {
+      "path": "api/src/git/import/repo_io.rs",
+      "owner": "Git push repository ingestion",
+      "reason": "Pack production, segment upload state, content fencing, and prepared-push assembly form one bounded ingestion transaction."
+    },
+    {
+      "path": "api/src/git/repository_engine.rs",
+      "owner": "repository Git materialization engine",
+      "reason": "Replica selection, local cache synchronization, cold restoration, and projection materialization coordinate one repository view."
+    },
+    {
       "path": "api/src/git/request_ref_public_safety.rs",
       "owner": "public request-ref safety",
       "reason": "Commit reachability, path disclosure checks, and adversarial fixtures jointly enforce one public-request invariant."
@@ -25,6 +35,11 @@
       "path": "api/src/http/requests.rs",
       "owner": "request HTTP delivery",
       "reason": "Request list, lifecycle, identity, and participant endpoints share request lookup, visibility, and response projection."
+    },
+    {
+      "path": "api/src/use_cases/request_merge.rs",
+      "owner": "request merge application",
+      "reason": "Merge validation, Git segment staging, content fencing, write leasing, persistence, and cleanup form one atomic merge use case."
     },
     {
       "path": "cache-service/src/handlers.rs",
@@ -57,6 +72,16 @@
       "reason": "Discussion creation, replies, transitions, read state, validation, and transition tests enforce one aggregate."
     },
     {
+      "path": "crates/scope-git-process/src/lib.rs",
+      "owner": "bounded Git child-process adapter",
+      "reason": "Process groups, streaming input and output, timeouts, cancellation, and failure diagnostics jointly own child-process lifetime."
+    },
+    {
+      "path": "crates/scope-git-storage/src/lib.rs",
+      "owner": "durable Git segment store",
+      "reason": "Reservation, bounded dual-write ingestion, verified local and remote restore, and exact cleanup define one segment lifecycle facade."
+    },
+    {
       "path": "crates/scope-git/src/projection_identity.rs",
       "owner": "Git projection identity",
       "reason": "Tree construction, native-range validation, deterministic object identity, and identity fixtures are one algorithm."
@@ -77,6 +102,11 @@
       "reason": "Scheduling, claiming, replacement validation, completion, retry state, and transaction tests form one durable workflow."
     },
     {
+      "path": "crates/scope-postgres/src/db/git_segments.rs",
+      "owner": "Git segment lifecycle persistence",
+      "reason": "Upload transitions, publication checks, reference pins, retirement eligibility, and recovery queries enforce one durable ledger."
+    },
+    {
       "path": "crates/scope-postgres/src/db/outbox.rs",
       "owner": "projection read-model outbox",
       "reason": "Enqueue, claim, execute, lease, retry, completion, pruning, and queue tests implement one durable outbox."
@@ -90,6 +120,11 @@
       "path": "crates/scope-run-config/src/lib.rs",
       "owner": "workflow configuration compiler",
       "reason": "YAML decoding, validation, domain compilation, repository catalog parsing, and grammar fixtures define one compiler."
+    },
+    {
+      "path": "worker/src/git_repo.rs",
+      "owner": "Git compaction process adapter",
+      "reason": "Segment restoration, repository indexing, pack construction, and bounded replacement ingestion form one compaction workspace lifecycle."
     }
   ]
 }
