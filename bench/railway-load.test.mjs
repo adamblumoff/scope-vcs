@@ -12,7 +12,7 @@ import {
   abortTimeoutMs, apiHeaders, capacityRejectionBreakdown, changedFileCountSlope, chooseWrite,
   consistencyStats, evaluateStage, failureBreakdown,
   historySizeSlope, landingFileSizeSlope, parseByteSizes, parseRates, parseStages, stageResult, stats,
-  toggleBenchmarkVisibilityRule, WRITE_DELTA_FILE_BYTES, writeChunkedRandomPayload, writeSizeSlope,
+  rotating, toggleBenchmarkVisibilityRule, WRITE_DELTA_FILE_BYTES, writeChunkedRandomPayload, writeSizeSlope,
 } from './railway-load.mjs';
 import { parseChangedFileCounts, writeChangedFiles } from './write-shape.mjs';
 
@@ -154,6 +154,14 @@ test('history slope groups exact fixture depths and reports p95 growth', () => {
 
 test('mixed workload is deterministic at the requested 80/20 split', () => {
   assert.deepEqual(Array.from({ length: 10 }, (_, index) => chooseWrite(index, 20)), [true, false, false, false, false, true, false, false, false, false]);
+});
+
+test('mixed workload reads rotate across the mixed repository set', () => {
+  const mixedRead = rotating([{ repo: 'mixed-1' }, { repo: 'mixed-2' }, { repo: 'mixed-3' }]);
+  assert.deepEqual(
+    Array.from({ length: 5 }, () => mixedRead().repo),
+    ['mixed-1', 'mixed-2', 'mixed-3', 'mixed-1', 'mixed-2'],
+  );
 });
 
 test('stage results preserve node labels, byte rate, and errors', () => {

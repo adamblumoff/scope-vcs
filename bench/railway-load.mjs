@@ -280,6 +280,7 @@ function operationFor(name, context) {
   const churn = rotating(context.churnFixtures);
   const pairs = pooled(context.fetchClients);
   const writes = pooled(context.mixedFixtures);
+  const mixedRead = rotating(context.mixedFixtures);
   const routeKey = (worker, iteration) => `${name}:${worker}:${iteration}`;
   if (name === 'warm-fetch') return (worker, iteration, scheduledAt) => withResource(
     pairs,
@@ -329,9 +330,9 @@ function operationFor(name, context) {
     return (worker, iteration, scheduledAt) => {
       const operationKey = routeKey(worker, iteration);
       const write = chooseWrite(index++, context.config.mixedWritePercent);
-      if (write) return withResource(writes, (fixture) => updateAndPush(context.config, fixture, iteration, scheduledAt, operationKey));
-      const fixture = read();
-      return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture, operationKey);
+      if (write) return withResource(writes, (fixture) => tagOperation(updateAndPush(context.config, fixture, iteration, scheduledAt, operationKey), 'push'));
+      const fixture = mixedRead();
+      return tagOperation(apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture, operationKey), 'read');
     };
   }
   if (name === 'consistency') return (worker, iteration, scheduledAt) => withResource(
@@ -341,9 +342,13 @@ function operationFor(name, context) {
   throw new Error(`unsupported workload: ${name}`);
 }
 
-function rotating(items) {
+export function rotating(items) {
   let index = 0;
   return () => items[index++ % items.length];
+}
+
+async function tagOperation(operation, operationKind) {
+  return { ...await operation, operationKind };
 }
 
 function endpointFor(config, fixture, operationKey) {
