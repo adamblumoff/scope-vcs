@@ -1,4 +1,4 @@
-use crate::{app::RouterState, rank_backends, repository_key};
+use crate::{app::RouterState, backend_selection::GitRequestKind, rank_backends, repository_key};
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -22,7 +22,12 @@ pub(crate) async fn repository_request(
         .iter()
         .map(|backend| backend.identity.clone())
         .collect::<Vec<_>>();
-    let selected = rank_backends(&repository, &identities)[0];
+    let kind = GitRequestKind::classify(request.method(), request.uri());
+    let ranked = rank_backends(&repository, &identities);
+    let Some(rank) = state.selector.select_index(kind, ranked.len()) else {
+        return upstream_unavailable(&repository, "no API replicas are available");
+    };
+    let selected = ranked[rank];
     let backend = backends
         .iter()
         .find(|backend| backend.identity == selected)
@@ -38,7 +43,7 @@ pub(crate) async fn repository_request(
     let headers = forwarded_headers(request.headers());
     let body = reqwest::Body::wrap_stream(request.into_body().into_data_stream());
 
-    tracing::info!(repository, backend = selected, %method, "routing Git request");
+    tracing::info!(repository, backend = selected, backend_rank = rank + 1, ?kind, %method, "routing Git request");
     let upstream = match state
         .http
         .request(method, url)
@@ -104,9 +109,44 @@ fn upstream_unavailable(repository: &str, error: impl std::fmt::Display) -> Resp
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::test_router;
+    use crate::app::{test_router, test_router_with_read_replicas};
+    use axum::http::Method;
     use axum::{Router, routing::any};
+    use std::collections::BTreeSet;
     use tower::ServiceExt;
+
+    async fn identified_backend() -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let identity = address.to_string();
+        let upstream = Router::new().fallback(any(move || {
+            let identity = identity.clone();
+            async move { identity }
+        }));
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        address
+    }
+
+    async fn selected_backend(router: &Router, method: Method, uri: &str) -> String {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        String::from_utf8(
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
 
     #[tokio::test]
     async fn streams_git_requests_and_responses_through_the_selected_backend() {
@@ -151,5 +191,72 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn spreads_upload_pack_reads_across_the_ranked_prefix() {
+        let first = identified_backend().await;
+        let second = identified_backend().await;
+        let third = identified_backend().await;
+        let addresses = vec![first, second, third];
+        let identities = addresses
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let expected = rank_backends("scope/router", &identities)
+            .into_iter()
+            .take(2)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let router = test_router_with_read_replicas(addresses, 2);
+
+        let actual = [
+            (
+                Method::GET,
+                "/git/public/scope/router/info/refs?service=git-upload-pack",
+            ),
+            (Method::POST, "/git/public/scope/router/git-upload-pack"),
+            (
+                Method::GET,
+                "/git/permissioned/scope/router/info/refs?service=git-upload-pack",
+            ),
+            (
+                Method::POST,
+                "/git/permissioned/scope/router/git-upload-pack",
+            ),
+        ];
+        let mut selected = BTreeSet::new();
+        for (method, uri) in actual {
+            selected.insert(selected_backend(&router, method, uri).await);
+        }
+
+        assert_eq!(selected, expected);
+    }
+
+    #[tokio::test]
+    async fn pins_receive_pack_operations_to_rendezvous_rank_one() {
+        let first = identified_backend().await;
+        let second = identified_backend().await;
+        let third = identified_backend().await;
+        let addresses = vec![first, second, third];
+        let identities = addresses
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let expected = rank_backends("scope/router", &identities)[0];
+        let router = test_router_with_read_replicas(addresses, 3);
+
+        for (method, uri) in [
+            (
+                Method::GET,
+                "/git/permissioned/scope/router/info/refs?service=git-receive-pack",
+            ),
+            (
+                Method::POST,
+                "/git/permissioned/scope/router/git-receive-pack",
+            ),
+        ] {
+            assert_eq!(selected_backend(&router, method, uri).await, expected);
+        }
     }
 }

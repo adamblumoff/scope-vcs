@@ -1,11 +1,11 @@
-use crate::{BackendDiscovery, RouterConfig, proxy};
+use crate::{BackendDiscovery, RouterConfig, backend_selection::BackendSelector, proxy};
 use axum::{Router, routing::get};
 use std::sync::Arc;
 
-#[derive(Clone)]
 pub(crate) struct RouterState {
     pub(crate) discovery: BackendDiscovery,
     pub(crate) http: reqwest::Client,
+    pub(crate) selector: BackendSelector,
 }
 
 pub fn router(config: RouterConfig) -> anyhow::Result<Router> {
@@ -13,7 +13,12 @@ pub fn router(config: RouterConfig) -> anyhow::Result<Router> {
     let http = reqwest::Client::builder()
         .connect_timeout(config.connect_timeout)
         .build()?;
-    Ok(router_with_state(RouterState { discovery, http }))
+    let selector = BackendSelector::new(config.read_replicas);
+    Ok(router_with_state(RouterState {
+        discovery,
+        http,
+        selector,
+    }))
 }
 
 fn router_with_state(state: RouterState) -> Router {
@@ -44,8 +49,17 @@ async fn ready(
 
 #[cfg(test)]
 pub(crate) fn test_router(backends: Vec<std::net::SocketAddr>) -> Router {
+    test_router_with_read_replicas(backends, 1)
+}
+
+#[cfg(test)]
+pub(crate) fn test_router_with_read_replicas(
+    backends: Vec<std::net::SocketAddr>,
+    read_replicas: usize,
+) -> Router {
     router_with_state(RouterState {
         discovery: BackendDiscovery::fixed(backends),
         http: reqwest::Client::new(),
+        selector: BackendSelector::new(read_replicas),
     })
 }

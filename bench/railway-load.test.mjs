@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import test from 'node:test';
 
 import { createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
+import { fetchClientCount, validateRepositoryMode } from './repository-mode.mjs';
 
 import {
   abortTimeoutMs, apiHeaders, assertSafeTarget, capacityRejectionBreakdown, changedFileCountSlope, chooseWrite,
@@ -59,6 +60,30 @@ test('changed-file fixtures preserve count and exact file size', async (context)
   const files = await readdir(root);
   assert.equal(files.length, 65);
   assert.deepEqual(await Promise.all(files.map(async (file) => (await stat(join(root, file))).size)), Array(65).fill(32));
+});
+
+test('hot repository mode accepts only clone and warm fetch workloads', () => {
+  assert.doesNotThrow(() => validateRepositoryMode('hot', ['full-clone', 'warm-fetch'], [1000], '3'));
+  assert.throws(
+    () => validateRepositoryMode('hot', ['full-clone', 'mixed'], [1], '3'),
+    /hot repository mode supports only warm-fetch, full-clone; received mixed/,
+  );
+  assert.throws(
+    () => validateRepositoryMode('hot', ['full-clone'], [1, 16], '3'),
+    /requires one SCOPE_LOAD_HISTORY_DEPTHS value/,
+  );
+  assert.throws(
+    () => validateRepositoryMode('hot', ['full-clone'], [1]),
+    /requires SCOPE_LOAD_READ_REPLICA_COUNT/,
+  );
+  assert.throws(() => validateRepositoryMode('unknown', ['full-clone'], [1]), /must be one of spread, hot/);
+});
+
+test('hot warm fetch allocates enough independent clients for the load shape', () => {
+  const base = { repositoryMode: 'hot', mixedRepos: 8, stages: [1, 8, 32], rates: null, maxInFlight: 256 };
+  assert.equal(fetchClientCount(base), 32);
+  assert.equal(fetchClientCount({ ...base, rates: [50, 100] }), 256);
+  assert.equal(fetchClientCount({ ...base, repositoryMode: 'spread', rates: [50, 100] }), 32);
 });
 
 test('endpoint pools are normalized without duplicate primaries', () => {

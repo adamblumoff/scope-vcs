@@ -4,15 +4,18 @@ use std::time::Duration;
 const BACKEND_ENV: &str = "SCOPE_REPO_ROUTER_BACKEND";
 const DNS_REFRESH_MILLIS_ENV: &str = "SCOPE_REPO_ROUTER_DNS_REFRESH_MILLIS";
 const CONNECT_TIMEOUT_MILLIS_ENV: &str = "SCOPE_REPO_ROUTER_CONNECT_TIMEOUT_MILLIS";
+const READ_REPLICAS_ENV: &str = "SCOPE_REPO_ROUTER_READ_REPLICAS";
 
 const DEFAULT_DNS_REFRESH_MILLIS: u64 = 1_000;
 const DEFAULT_CONNECT_TIMEOUT_MILLIS: u64 = 2_000;
+const DEFAULT_READ_REPLICAS: usize = 1;
 
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
     pub backend_authority: String,
     pub dns_refresh: Duration,
     pub connect_timeout: Duration,
+    pub read_replicas: usize,
 }
 
 impl RouterConfig {
@@ -29,8 +32,26 @@ impl RouterConfig {
                 CONNECT_TIMEOUT_MILLIS_ENV,
                 DEFAULT_CONNECT_TIMEOUT_MILLIS,
             )?,
+            read_replicas: positive_usize_from_env(READ_REPLICAS_ENV, DEFAULT_READ_REPLICAS)?,
         })
     }
+}
+
+fn positive_usize_from_env(name: &str, default: usize) -> anyhow::Result<usize> {
+    match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => parse_positive_usize(name, &value),
+        _ => Ok(default),
+    }
+}
+
+fn parse_positive_usize(name: &str, value: &str) -> anyhow::Result<usize> {
+    let value = value
+        .parse::<usize>()
+        .with_context(|| format!("{name} must be an integer"))?;
+    if value == 0 {
+        anyhow::bail!("{name} must be greater than zero");
+    }
+    Ok(value)
 }
 
 fn validate_authority(authority: &str) -> anyhow::Result<()> {
@@ -65,5 +86,12 @@ mod tests {
         assert!(validate_authority("scope-api.railway.internal").is_err());
         assert!(validate_authority("https://scope-api.invalid:8080").is_err());
         assert!(validate_authority("scope-api.invalid:8080/path").is_err());
+    }
+
+    #[test]
+    fn read_replica_count_must_be_positive() {
+        assert_eq!(parse_positive_usize(READ_REPLICAS_ENV, "3").unwrap(), 3);
+        assert!(parse_positive_usize(READ_REPLICAS_ENV, "0").is_err());
+        assert!(parse_positive_usize(READ_REPLICAS_ENV, "many").is_err());
     }
 }

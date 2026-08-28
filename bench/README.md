@@ -98,6 +98,27 @@ node bench/railway-load.mjs
 
 `single` always uses the first endpoint, `random` chooses a seeded endpoint for each logical operation, and `repository-affine` hashes `owner/repository` to one endpoint. Run three repeats of single-node, three-node random, and three-node affine in a shuffled order. Keep build SHA, service resources, region, Postgres, object storage, fixtures, warmup, and stage controls identical.
 
+To compare read replica counts on one busy repository, use hot repository mode. It creates one fixture and sends every full clone or warm fetch to that repository. Set the router's `SCOPE_REPO_ROUTER_READ_REPLICAS` value before each run, then copy that value into `SCOPE_LOAD_READ_REPLICA_COUNT` to label the result. The benchmark label does not configure the router.
+
+```bash
+SCOPE_BENCH_API_URL=https://scope-api-loadtest.up.railway.app \
+SCOPE_BENCH_GIT_URL=https://scope-git-loadtest.up.railway.app \
+SCOPE_BENCH_AUTH_TOKEN=scope_cli_... \
+SCOPE_LOAD_REPOSITORY_MODE=hot \
+SCOPE_LOAD_WORKLOADS=full-clone,warm-fetch \
+SCOPE_LOAD_READ_BYTES=268435456 \
+SCOPE_LOAD_HISTORY_DEPTHS=1000 \
+SCOPE_LOAD_READ_REPLICA_COUNT=3 \
+SCOPE_LOAD_STAGES=1,4,8,16,32,64 \
+SCOPE_LOAD_STAGE_SECONDS=120 \
+SCOPE_LOAD_CONFIRM_SECONDS=0 \
+SCOPE_LOAD_TIMEOUT_MS=600000 \
+SCOPE_BENCH_RUN_LABEL=hot-repo-k3 \
+node bench/railway-load.mjs
+```
+
+Run the same test at replica counts 1, 2, and 3. Keep the fixture size, history depth, deployment resources, and concurrency stages fixed. For open-loop rates, set `SCOPE_LOAD_RATES` and raise `SCOPE_LOAD_MAX_IN_FLIGHT` high enough to hold slow clones. Hot warm-fetch clients share a local read-only Git object store, so increasing concurrency does not duplicate the large fixture once per client on the load generator. Full clones still write one temporary repository per active operation, so watch the generator's disk and network limits.
+
 Then run the write-size matrix and longer staircase:
 
 ```bash

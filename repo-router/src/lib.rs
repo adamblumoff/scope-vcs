@@ -1,4 +1,5 @@
 mod app;
+mod backend_selection;
 mod config;
 mod discovery;
 mod proxy;
