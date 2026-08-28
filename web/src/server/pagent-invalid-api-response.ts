@@ -4,6 +4,7 @@ import {
 } from '@/api/http'
 import { definePlugin } from 'nitro'
 import { createPagent, defineEvent } from 'pagent'
+import { invalidApiResponseGroup } from './pagent-invalid-api-response-group'
 
 type InvalidApiResponseContext = {
   contentType: string | null
@@ -50,12 +51,7 @@ const reportInvalidApiResponse = pagent.observe(
     event: invalidApiResponse,
     on: 'result',
     triggerWhen: () => true,
-    group: ({ result }) => [
-      result.requestMethod,
-      result.requestPath,
-      result.status,
-      result.contentType ?? 'unknown',
-    ].join(':'),
+    group: ({ result }) => invalidApiResponseGroup(result),
     context: ({ result }) => ({
       contentType: result.contentType,
       method: result.requestMethod,
