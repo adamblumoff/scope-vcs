@@ -103,6 +103,29 @@ impl RepositoryStore {
         require_one_transition(result.rows_affected(), &segment.segment_id, "ready")
     }
 
+    pub async fn touch_git_segment_upload(
+        &self,
+        segment_id: &str,
+        now_unix: u64,
+    ) -> Result<bool, PostgresError> {
+        require_text(segment_id, "Git segment id")?;
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "UPDATE scope_git_segment_uploads
+                 SET updated_at_unix = GREATEST(updated_at_unix, $2)
+                 WHERE segment_id = $1 AND state IN ('uploading', 'ready')",
+                [
+                    segment_id.into(),
+                    timestamp(now_unix, "Git segment upload heartbeat time")?.into(),
+                ],
+            ))
+            .await
+            .map_err(PostgresError::internal)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn mark_git_segment_upload_published(
         &self,
         segment_id: &str,

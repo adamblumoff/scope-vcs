@@ -1,7 +1,7 @@
 use super::repo_io::{
-    FencedGitPush, GitTreeFile, describe_refs, git_changed_tree_entries, git_push_from_repo,
-    git_refs, git_tree_entries_under, pushed_commit_message, queue_failed_git_objects,
-    run_git_output_bounded, validate_pushed_commit_range,
+    FencedGitPush, GitSegmentUploadHeartbeat, GitTreeFile, describe_refs, git_changed_tree_entries,
+    git_push_from_repo, git_refs, git_tree_entries_under, pushed_commit_message,
+    queue_failed_git_objects, run_git_output_bounded, validate_pushed_commit_range,
 };
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
@@ -36,6 +36,7 @@ pub(crate) struct PreparedReceivePackUpdate {
     pub(crate) fence: ContentRefFence,
     pub(crate) staged_segment: StagedGitSegment,
     pub(crate) write_lease: RepositoryGitWriteLease,
+    pub(crate) upload_heartbeat: GitSegmentUploadHeartbeat,
 }
 
 impl std::fmt::Debug for PreparedReceivePackUpdate {
@@ -171,6 +172,7 @@ async fn reviewed_update_from_staging_repo_mode(
         stored: mut created_push,
         fence,
         staged_segment,
+        upload_heartbeat,
     } = match git_push_from_repo(state, &repo.repo_id, staging_repo, repo.git_head.as_ref()).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -263,6 +265,7 @@ async fn reviewed_update_from_staging_repo_mode(
         },
         fence,
         staged_segment,
+        upload_heartbeat,
         write_lease,
     })
 }

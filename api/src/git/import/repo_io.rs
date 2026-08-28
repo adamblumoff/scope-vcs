@@ -19,7 +19,11 @@ use scope_git_storage::{ENCODING_VERSION, StagedGitSegment};
 use scope_object_store::{ContentObjectKind, content_object_for_bytes, object_key};
 use scope_postgres::db::ContentRefFence;
 use sha2::{Digest, Sha256};
-use std::{path::Path as FsPath, process::Command, time::Instant};
+use std::{
+    path::Path as FsPath,
+    process::Command,
+    time::{Duration, Instant},
+};
 
 pub(super) fn pushed_commit_message(
     staging_repo: &FsPath,
@@ -321,6 +325,49 @@ pub(crate) struct FencedGitPush {
     pub(crate) stored: StoredGitPush,
     pub(crate) fence: ContentRefFence,
     pub(crate) staged_segment: StagedGitSegment,
+    pub(crate) upload_heartbeat: GitSegmentUploadHeartbeat,
+}
+
+pub(crate) struct GitSegmentUploadHeartbeat {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl GitSegmentUploadHeartbeat {
+    pub(crate) fn start(state: &AppState, segment_id: String) -> Self {
+        let metadata = state.metadata.clone();
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                let now = match crate::persistence::unix_now() {
+                    Ok(now) => now,
+                    Err(error) => {
+                        tracing::warn!(segment_id, error = %error.into_operator_diagnostic(), "Git segment upload heartbeat clock failed");
+                        continue;
+                    }
+                };
+                match metadata
+                    .repositories()
+                    .touch_git_segment_upload(&segment_id, now)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => return,
+                    Err(error) => {
+                        tracing::warn!(segment_id, error = %error.message, "Git segment upload heartbeat failed")
+                    }
+                }
+            }
+        });
+        Self { task }
+    }
+}
+
+impl Drop for GitSegmentUploadHeartbeat {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 pub(crate) async fn git_push_from_repo(
@@ -358,6 +405,7 @@ pub(crate) async fn git_push_from_repo(
             crate::persistence::unix_now()?,
         )
         .await?;
+    let upload_heartbeat = GitSegmentUploadHeartbeat::start(state, segment_id.clone());
 
     let pack_started = Instant::now();
     let segment_store = state.git_segment_store.clone();
@@ -496,6 +544,7 @@ pub(crate) async fn git_push_from_repo(
             stored,
             fence,
             staged_segment,
+            upload_heartbeat,
         }),
         Err(error) => {
             fence.release().await;

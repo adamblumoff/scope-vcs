@@ -319,6 +319,7 @@ pub(crate) async fn prepare_request_merge(
             fence,
             staged_segment,
             write_lease,
+            upload_heartbeat: _upload_heartbeat,
         } = request_merge_update_from_staging_repo(
             state,
             owner,

@@ -4,6 +4,8 @@ use crate::config::{
     SCOPE_OBJECT_ENCRYPTION_KEY_ENV, non_empty_env,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+#[cfg(feature = "local-dev")]
+use scope_git_storage::FileMultipartStore;
 use scope_git_storage::{
     GitSegmentStore, S3MultipartSettings, S3MultipartStore, SegmentEncryptionKey,
 };
@@ -69,10 +71,23 @@ pub(crate) fn git_segment_store_from_env(
 
 #[cfg(feature = "local-dev")]
 pub(crate) fn file_from_env(default_root: &Path) -> FileObjectStore {
-    let root = non_empty_env(SCOPE_OBJECT_STORE_DIR_ENV)
+    FileObjectStore::new(FileObjectStoreSettings::new(filesystem_root_from_env(
+        default_root,
+    )))
+}
+
+#[cfg(feature = "local-dev")]
+pub(crate) fn git_segment_file_store_from_env(
+    default_root: &Path,
+) -> anyhow::Result<FileMultipartStore> {
+    FileMultipartStore::new(filesystem_root_from_env(default_root)).map_err(anyhow::Error::from)
+}
+
+#[cfg(feature = "local-dev")]
+fn filesystem_root_from_env(default_root: &Path) -> PathBuf {
+    non_empty_env(SCOPE_OBJECT_STORE_DIR_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| default_root.to_path_buf());
-    FileObjectStore::new(FileObjectStoreSettings::new(root))
+        .unwrap_or_else(|| default_root.to_path_buf())
 }
 
 fn required_env(name: &str) -> anyhow::Result<String> {

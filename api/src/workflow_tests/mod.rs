@@ -618,11 +618,16 @@ async fn persist_and_promote_test_update(
                 .repositories()
                 .acquire_git_write_lease(TEST_REPO_ID)
                 .await?;
+            let upload_heartbeat = crate::git::import::GitSegmentUploadHeartbeat::start(
+                state,
+                staged_segment.segment.segment_id.clone(),
+            );
             PreparedReceivePackUpdate {
                 update,
                 fence,
                 staged_segment,
                 write_lease,
+                upload_heartbeat,
             }
         }
     };

@@ -6,7 +6,9 @@ use crate::{
     auth::{clerk::ClerkVerifier, cli::CliAuthService},
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     error::ApiError,
-    object_store_config::{encryption_key_from_env, file_from_env},
+    object_store_config::{
+        encryption_key_from_env, file_from_env, git_segment_file_store_from_env,
+    },
     persistence::{ensure_private_dir, unix_now},
     product_analytics::ProductAnalytics,
     push_intents::push_intent_signing_key,
@@ -18,7 +20,7 @@ use axum::{
     extract::{Path, State},
 };
 use scope_api_contract::CliSessionTokenResponse;
-use scope_git_storage::{FileMultipartStore, GitSegmentStore, SegmentEncryptionKey};
+use scope_git_storage::{GitSegmentStore, SegmentEncryptionKey};
 use scope_object_store::{EncryptedObjectStore, ObjectStore};
 use scope_postgres::db::MetadataStore;
 use std::sync::Arc;
@@ -39,17 +41,17 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let push_intent_signing_key = push_intent_signing_key(&data_dir, Some(&object_encryption_key))
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
 
+    let filesystem_root = data_dir.join("objects");
     let raw_object_store = Arc::new(EncryptedObjectStore::new(
-        Arc::new(file_from_env(&data_dir.join("objects"))),
+        Arc::new(file_from_env(&filesystem_root)),
         object_encryption_key,
     ));
     let git_segment_store = Arc::new(GitSegmentStore::new(
-        Arc::new(FileMultipartStore::new(
-            data_dir.join("git-segment-objects"),
-        )?),
+        Arc::new(git_segment_file_store_from_env(&filesystem_root)?),
         SegmentEncryptionKey::new("primary", object_encryption_key)?,
         crate::config::git_segment_store_config_from_env(data_dir.join("git-segments"))?,
     )?);
+    git_segment_store.cleanup_all_local().await?;
     let catalog = seed::catalog(
         raw_object_store.as_ref(),
         git_segment_store.as_ref(),

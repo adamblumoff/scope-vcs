@@ -268,6 +268,12 @@ impl RepositoryEngine {
                     ],
                     "advancing repository Git cache from accepted segment",
                 )?;
+            } else if push_sequence > 1 {
+                // Later segments exclude objects reachable from the previous head.
+                // A reader can rebuild the absent cache from the durable pack layout.
+                return Err(ApiError::internal_message(
+                    "incremental Git segment cannot seed a missing repository cache",
+                ));
             } else {
                 let attempt = REPOSITORY_MATERIALIZATION_ATTEMPT.fetch_add(1, Ordering::Relaxed);
                 let temp = self.cache_root().join(format!(
@@ -460,6 +466,7 @@ fn materialization_path_name(path: u8, cache_hit: bool, built: bool) -> &'static
 mod tests {
     use super::*;
     use std::{
+        io::Cursor,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc,
@@ -610,13 +617,18 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn delayed_post_push_sync_cannot_regress_a_newer_replica() {
-        let engine = test_engine("repository-engine-monotonic-sync");
-        let root = engine.cache_root().to_path_buf();
+    struct IncrementalPushFixture {
+        first_head: String,
+        second_head: String,
+        first_pack: PathBuf,
+        second_pack: PathBuf,
+    }
+
+    fn incremental_push_fixture(engine: &RepositoryEngine) -> IncrementalPushFixture {
+        let root = engine.cache_root();
         let work = root.join("work");
-        let older = root.join("older.pack");
-        let newer = root.join("newer.pack");
+        let first_pack = root.join("first.pack");
+        let second_pack = root.join("second.pack");
         run_git(
             None,
             &["init", work.to_string_lossy().as_ref()],
@@ -650,14 +662,7 @@ mod tests {
         )
         .unwrap();
         let first_head = git_head(&work);
-        let older_pack = run_git_output(
-            Some(&work),
-            &["pack-objects", "--all", "--stdout"],
-            "snapshot older source",
-        )
-        .unwrap();
-        assert!(older_pack.status.success());
-        fs::write(&older, older_pack.stdout).unwrap();
+        write_revision_pack(&work, &first_pack, format!("{first_head}\n"));
 
         fs::write(work.join("README.md"), "second\n").unwrap();
         run_git(
@@ -667,24 +672,77 @@ mod tests {
         )
         .unwrap();
         let second_head = git_head(&work);
-        let newer_pack = run_git_output(
-            Some(&work),
-            &["pack-objects", "--all", "--stdout"],
-            "snapshot newer source",
+        write_revision_pack(
+            &work,
+            &second_pack,
+            format!("{second_head}\n^{first_head}\n"),
+        );
+        IncrementalPushFixture {
+            first_head,
+            second_head,
+            first_pack,
+            second_pack,
+        }
+    }
+
+    fn write_revision_pack(repo: &Path, destination: &Path, revisions: String) {
+        let output = run_with_stdin_reader(
+            Command::new("git")
+                .current_dir(repo)
+                .args(["pack-objects", "--revs", "--stdout"]),
+            Cursor::new(revisions.into_bytes()),
+            ProcessLimits::new(
+                crate::runtime_budgets::RuntimeBudgets::default_git_command_timeout(),
+            ),
+            "creating test Git pack",
         )
         .unwrap();
-        assert!(newer_pack.status.success());
-        fs::write(&newer, newer_pack.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::write(destination, output.stdout).unwrap();
+    }
+
+    #[test]
+    fn missing_cache_is_not_seeded_from_an_incremental_push() {
+        let engine = test_engine("repository-engine-missing-incremental-base");
+        let root = engine.cache_root().to_path_buf();
+        let fixture = incremental_push_fixture(&engine);
+        let error = engine
+            .sync_after_push("owner/repo", &fixture.second_pack, &fixture.second_head, 2)
+            .unwrap_err();
+
+        let replica = engine.repository_path("owner/repo");
+        assert!(!replica.exists());
+        assert_eq!(engine.cache.applied_sequence(&replica), None);
+        assert!(
+            error
+                .operator_diagnostic()
+                .contains("incremental Git segment cannot seed a missing repository cache")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delayed_post_push_sync_cannot_regress_a_newer_replica() {
+        let engine = test_engine("repository-engine-monotonic-sync");
+        let root = engine.cache_root().to_path_buf();
+        let fixture = incremental_push_fixture(&engine);
 
         engine
-            .sync_after_push("owner/repo", &newer, &second_head, 2)
+            .sync_after_push("owner/repo", &fixture.first_pack, &fixture.first_head, 1)
             .unwrap();
         engine
-            .sync_after_push("owner/repo", &older, &first_head, 1)
+            .sync_after_push("owner/repo", &fixture.second_pack, &fixture.second_head, 2)
+            .unwrap();
+        engine
+            .sync_after_push("owner/repo", &fixture.first_pack, &fixture.first_head, 1)
             .unwrap();
 
         let replica = engine.repository_path("owner/repo");
-        assert_eq!(git_head(&replica), second_head);
+        assert_eq!(git_head(&replica), fixture.second_head);
         assert_eq!(engine.cache.applied_sequence(&replica), Some(2));
         fs::remove_dir_all(root).unwrap();
     }

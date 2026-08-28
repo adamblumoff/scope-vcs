@@ -51,6 +51,7 @@ impl AppState {
             data_dir.join("git-segments"),
             object_encryption_key,
         )?);
+        git_segment_store.cleanup_all_local().await?;
         let push_intent_signing_key =
             push_intent_signing_key(&data_dir, Some(&object_encryption_key))
                 .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;

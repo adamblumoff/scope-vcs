@@ -287,6 +287,21 @@ async fn cleanup_local_removes_exact_temp_and_completed_pack() {
 }
 
 #[tokio::test]
+async fn startup_cleanup_removes_only_the_local_staging_root() {
+    let fixture = Fixture::new(8, 64, 1);
+    let staged = fixture
+        .store
+        .ingest(REPOSITORY_ID, &b"published object"[..])
+        .await
+        .unwrap();
+
+    fixture.store.cleanup_all_local().await.unwrap();
+
+    assert!(!fixture.local_root.exists());
+    assert!(fixture.backend.object(&staged.object_key).is_some());
+}
+
+#[tokio::test]
 async fn failed_complete_is_followed_by_abort() {
     let fixture = Fixture::new(8, 64, 1);
     fixture.backend.fail_complete.store(true, Ordering::SeqCst);

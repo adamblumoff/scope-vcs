@@ -58,9 +58,23 @@ async fn upload_ledger_enforces_publication_and_recovery_states() {
         .mark_git_segment_upload_ready(&segment, 1_100, 11)
         .await
         .unwrap();
+    assert!(
+        repositories
+            .touch_git_segment_upload(&segment.segment_id, 20)
+            .await
+            .unwrap()
+    );
+
+    assert!(
+        repositories
+            .load_stale_git_segment_uploads(19, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let stale = repositories
-        .load_stale_git_segment_uploads(11, 10)
+        .load_stale_git_segment_uploads(20, 10)
         .await
         .unwrap();
     assert_eq!(stale.len(), 1);

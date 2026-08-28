@@ -138,6 +138,9 @@ pub(crate) async fn compact_one_git_repository(
     let mut renewal = tokio::time::interval(renewal_interval);
     renewal.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     renewal.tick().await;
+    let mut upload_heartbeat = tokio::time::interval(Duration::from_secs(60));
+    upload_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    upload_heartbeat.tick().await;
     let built = loop {
         tokio::select! {
             result = &mut build => {
@@ -164,6 +167,19 @@ pub(crate) async fn compact_one_git_repository(
                         target_sequence = claim.target_sequence,
                         "Git compaction lease renewal failed"
                     ),
+                }
+            }
+            _ = upload_heartbeat.tick() => {
+                if let Err(error) = metadata
+                    .repositories()
+                    .touch_git_segment_upload(&reservation.segment_id, super::unix_now()?)
+                    .await
+                {
+                    tracing::warn!(
+                        error = %error.message,
+                        segment_id = reservation.segment_id,
+                        "Git compaction upload heartbeat failed"
+                    );
                 }
             }
         }

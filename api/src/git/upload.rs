@@ -42,7 +42,7 @@ use std::{
     path::Path as FsPath,
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 const GIT_READ_VIEW_CACHE_SEMANTICS_VERSION: &str = "named-request-read-view-v2";
 static GIT_READ_VIEW_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
@@ -442,6 +442,7 @@ pub(crate) async fn git_upload_pack_response(
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let _repo = repo;
+            let deadline = Instant::now() + timeout;
             let mut command = Command::new("git");
             command
                 .arg("upload-pack")
@@ -459,14 +460,11 @@ pub(crate) async fn git_upload_pack_response(
                         if read == 0 {
                             return Ok::<_, std::io::Error>(());
                         }
-                        sender
-                            .blocking_send(Ok(Bytes::copy_from_slice(&buffer[..read])))
-                            .map_err(|_| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::BrokenPipe,
-                                    "Git upload-pack client disconnected",
-                                )
-                            })?;
+                        send_upload_pack_chunk(
+                            &sender,
+                            Bytes::copy_from_slice(&buffer[..read]),
+                            deadline,
+                        )?;
                     }
                 },
             )
@@ -487,7 +485,7 @@ pub(crate) async fn git_upload_pack_response(
             Err(error) => Some(format!("Git upload-pack task failed: {error}")),
         };
         if let Some(message) = stream_error {
-            let _ = error_sender.send(Err(std::io::Error::other(message))).await;
+            let _ = error_sender.try_send(Err(std::io::Error::other(message)));
         }
     });
 
@@ -500,6 +498,37 @@ pub(crate) async fn git_upload_pack_response(
         Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(receiver)),
     )
         .into_response())
+}
+
+fn send_upload_pack_chunk(
+    sender: &tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>,
+    chunk: Bytes,
+    deadline: Instant,
+) -> std::io::Result<()> {
+    let mut item = Ok(chunk);
+    loop {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Git upload-pack client stopped reading before the command deadline",
+            ));
+        }
+        match sender.try_send(item) {
+            Ok(()) => return Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "Git upload-pack client disconnected",
+                ));
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => item = returned,
+        }
+        std::thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(1)),
+        );
+    }
 }
 
 pub(crate) fn git_upload_pack_advertisement(repo_path: &FsPath, timeout: Duration) -> Response {
@@ -585,5 +614,39 @@ mod tests {
                 .operator_diagnostic()
                 .contains("stdout exceeded 4 bytes")
         );
+    }
+
+    #[test]
+    fn upload_pack_chunk_send_stops_at_deadline_when_live_receiver_is_full() {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        sender
+            .try_send(Ok(Bytes::from_static(b"already full")))
+            .unwrap();
+        let started_at = Instant::now();
+
+        let error = send_upload_pack_chunk(
+            &sender,
+            Bytes::from_static(b"blocked"),
+            started_at + Duration::from_millis(25),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started_at.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn upload_pack_chunk_send_stops_when_receiver_is_closed() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        drop(receiver);
+
+        let error = send_upload_pack_chunk(
+            &sender,
+            Bytes::from_static(b"orphaned"),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
     }
 }

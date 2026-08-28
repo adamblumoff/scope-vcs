@@ -3,6 +3,16 @@ use std::path::PathBuf;
 use tokio::fs;
 
 impl GitSegmentStore {
+    /// Removes process-local staging packs left by an earlier process. The
+    /// remote multipart backend remains the durable source of truth.
+    pub async fn cleanup_all_local(&self) -> Result<(), GitStorageError> {
+        match fs::remove_dir_all(&self.config.local_root).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(GitStorageError::Local(error)),
+        }
+    }
+
     pub async fn delete_remote(&self, object_key: &str) -> Result<(), GitStorageError> {
         self.backend.delete(object_key).await.map_err(Into::into)
     }

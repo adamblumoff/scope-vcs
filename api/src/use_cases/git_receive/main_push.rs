@@ -117,6 +117,7 @@ pub(crate) async fn persist_main_push(
         fence,
         staged_segment,
         write_lease,
+        upload_heartbeat: _upload_heartbeat,
     } = prepared;
     let repository_id = scope_domain::repository::repo_id(owner, repo_name);
     let durable_objects = update.durable_objects.clone();
