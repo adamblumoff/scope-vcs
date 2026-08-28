@@ -321,7 +321,7 @@ pub(crate) async fn git_upload_pack_rpc(
     };
 
     match git_upload_pack_response(
-        &repo_path,
+        repo_path,
         &body,
         state.runtime_budgets.git_command_timeout(),
         permit,

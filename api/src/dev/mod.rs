@@ -6,7 +6,9 @@ use crate::{
     auth::{clerk::ClerkVerifier, cli::CliAuthService},
     config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
     error::ApiError,
-    object_store_config::{encryption_key_from_env, file_from_env},
+    object_store_config::{
+        encryption_key_from_env, file_from_env, git_segment_file_store_from_env,
+    },
     persistence::{ensure_private_dir, unix_now},
     product_analytics::ProductAnalytics,
     push_intents::push_intent_signing_key,
@@ -18,6 +20,7 @@ use axum::{
     extract::{Path, State},
 };
 use scope_api_contract::CliSessionTokenResponse;
+use scope_git_storage::{GitSegmentStore, SegmentEncryptionKey};
 use scope_object_store::{EncryptedObjectStore, ObjectStore};
 use scope_postgres::db::MetadataStore;
 use std::sync::Arc;
@@ -38,17 +41,28 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let push_intent_signing_key = push_intent_signing_key(&data_dir, Some(&object_encryption_key))
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
 
+    let filesystem_root = data_dir.join("objects");
     let raw_object_store = Arc::new(EncryptedObjectStore::new(
-        Arc::new(file_from_env(&data_dir.join("objects"))),
+        Arc::new(file_from_env(&filesystem_root)),
         object_encryption_key,
     ));
-    let catalog =
-        seed::catalog(raw_object_store.as_ref(), settings.seed_user.clone()).map_err(|error| {
-            anyhow::anyhow!(
-                "building local dev catalog: {}",
-                error.into_operator_diagnostic()
-            )
-        })?;
+    let git_segment_store = Arc::new(GitSegmentStore::new(
+        Arc::new(git_segment_file_store_from_env(&filesystem_root)?),
+        SegmentEncryptionKey::new("primary", object_encryption_key)?,
+        crate::config::git_segment_store_config_from_env(data_dir.join("git-segments"))?,
+    )?);
+    git_segment_store.cleanup_all_local().await?;
+    let catalog = seed::catalog(
+        raw_object_store.as_ref(),
+        git_segment_store.as_ref(),
+        settings.seed_user.clone(),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "building local dev catalog: {}",
+            error.into_operator_diagnostic()
+        )
+    })?;
     let metadata = MetadataStore::connect(settings.database_url.clone()).await?;
     metadata
         .admin()
@@ -101,6 +115,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         data_dir: Arc::new(data_dir),
         clerk: ClerkVerifier::from_env(),
         object_store,
+        git_segment_store,
         cache_grants: crate::cache_grants::CacheGrantIssuer::test(),
         runtime_budgets,
         operator_token: non_empty_env(SCOPE_OPERATOR_TOKEN_ENV).map(Arc::from),
@@ -116,6 +131,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     repository_engine.start_reaper();
     state.start_run_attempt_recovery();
     state.start_run_retention();
+    state.start_git_segment_recovery();
     Ok(state)
 }
 

@@ -40,6 +40,7 @@ mod fast_push;
 mod file_visibility_migration_tests;
 mod generated_ids;
 mod git_compaction;
+mod git_segments;
 #[cfg(test)]
 mod migration_harness_tests;
 #[cfg(test)]
@@ -130,6 +131,7 @@ pub use clerk_users::scope_user_id_for_auth_identity;
 pub use fast_push::ApplyContentOnlyPushCommand;
 pub use git_compaction::{GitCompactionCandidate, GitCompactionClaim};
 pub use git_push_reads::GitPushContext;
+pub use git_segments::RepositoryGitWriteLease;
 use history_rows::load_repository_histories;
 use locks::acquire_aggregate_lock;
 pub use outbox::{OutboxCreatedRun, OutboxJobCounts, OutboxRunSummary};

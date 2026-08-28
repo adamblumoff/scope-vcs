@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
@@ -19,6 +19,8 @@ const DEFAULT_WORKLOADS = [
 ];
 const SUPPORTED_WORKLOADS = new Set(DEFAULT_WORKLOADS);
 const activeCommands = new Set();
+export const WRITE_DELTA_FILE_BYTES = 16 * 1024 * 1024;
+const RANDOM_WRITE_BUFFER_BYTES = 256 * 1024;
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();
 
@@ -527,6 +529,45 @@ async function writePayload(directory, bytes) {
   }
 }
 
+export async function writeChunkedRandomPayload(
+  directory,
+  bytes,
+  maxFileBytes = WRITE_DELTA_FILE_BYTES,
+  bufferBytes = RANDOM_WRITE_BUFFER_BYTES,
+) {
+  if (![bytes, maxFileBytes, bufferBytes].every(Number.isSafeInteger)
+    || bytes < 0 || maxFileBytes < 1 || bufferBytes < 1) {
+    throw new Error('chunked payload sizes must be non-negative safe integers with positive chunk limits');
+  }
+  await mkdir(directory, { recursive: true });
+  const paths = [];
+  let remaining = bytes;
+  let fileIndex = 0;
+  while (remaining > 0) {
+    const path = join(directory, `${String(fileIndex++).padStart(4, '0')}.bin`);
+    const fileBytes = Math.min(remaining, maxFileBytes);
+    const file = await open(path, 'w');
+    try {
+      let unwritten = fileBytes;
+      while (unwritten > 0) {
+        const chunkBytes = Math.min(unwritten, bufferBytes);
+        const chunk = randomBytes(chunkBytes);
+        let offset = 0;
+        while (offset < chunk.length) {
+          const { bytesWritten } = await file.write(chunk, offset);
+          offset += bytesWritten;
+        }
+        unwritten -= chunkBytes;
+      }
+    } finally {
+      await file.close();
+    }
+    paths.push(path);
+    remaining -= fileBytes;
+  }
+  return paths;
+}
+
 async function writeLandingFile(directory, bytes, update) {
   const marker = Buffer.from(`<p>Scope load-test README update ${update}</p>\n`);
   const content = Buffer.alloc(bytes, 'x');
@@ -539,11 +580,13 @@ async function updateAndPush(config, fixture, iteration, scheduledAt = performan
     fixture.update += 1;
     const marker = `${fixture.update}:${iteration}:${Date.now()}`;
     await writeFile(join(fixture.dir, 'load-update.txt'), `${marker}\n`);
-    if (fixture.writeDeltaBytes > 0) await writeFile(join(fixture.dir, 'load-delta.bin'), randomBytes(fixture.writeDeltaBytes));
+    if (fixture.writeDeltaBytes > 0) {
+      await writeChunkedRandomPayload(join(fixture.dir, 'load-delta'), fixture.writeDeltaBytes);
+    }
     if (fixture.landingFileBytes > 0) await writeLandingFile(fixture.dir, fixture.landingFileBytes, fixture.update);
     await checkedGit(config, [
       'add', 'load-update.txt',
-      ...(fixture.writeDeltaBytes > 0 ? ['load-delta.bin'] : []),
+      ...(fixture.writeDeltaBytes > 0 ? ['load-delta'] : []),
       ...(fixture.landingFileBytes > 0 ? ['README.html'] : []),
     ], fixture.dir);
     await checkedGit(config, ['commit', '-m', `Load update ${fixture.update}`], fixture.dir);

@@ -290,7 +290,12 @@ fn reviewed_update(
             geometric_tier: 0,
             base_oid: None,
             head_oid: head_oid.to_string(),
-            object: blob("segment v2"),
+            segment: scope_domain::repository::git::GitSegmentRef {
+                segment_id: "segment-v2".to_string(),
+                sha256: "sha256:segment v2".to_string(),
+                plaintext_bytes: 10,
+                encoding_version: 2,
+            },
         },
         changes,
         previous_config,

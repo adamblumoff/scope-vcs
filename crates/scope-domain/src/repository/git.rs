@@ -16,7 +16,39 @@ pub struct GitPackSpan {
     pub geometric_tier: u32,
     pub base_oid: Option<String>,
     pub head_oid: String,
-    pub object: SourceBlob,
+    pub segment: GitSegmentRef,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitSegmentRef {
+    pub segment_id: String,
+    pub sha256: String,
+    pub plaintext_bytes: u64,
+    pub encoding_version: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitSegmentUploadState {
+    Uploading,
+    Ready,
+    Published,
+    Deleting,
+    Deleted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitSegmentUpload {
+    pub segment_id: String,
+    pub repository_id: String,
+    pub object_key: String,
+    pub state: GitSegmentUploadState,
+    pub sha256: Option<String>,
+    pub plaintext_bytes: Option<u64>,
+    pub encrypted_bytes: Option<u64>,
+    pub encoding_version: u32,
+    pub created_at_unix: u64,
+    pub updated_at_unix: u64,
 }
 
 impl GitPackSpan {
@@ -155,8 +187,6 @@ pub fn validate_git_pack_span_run(spans: &[GitPackSpan]) -> Result<(), GitPackLa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{content::DEFAULT_GIT_FILE_MODE, content_ref::ContentRef};
-
     fn pack_span(first_sequence: u64, last_sequence: u64, geometric_tier: u32) -> GitPackSpan {
         GitPackSpan {
             first_sequence,
@@ -164,12 +194,11 @@ mod tests {
             geometric_tier,
             base_oid: (first_sequence > 1).then(|| format!("head-{}", first_sequence - 1)),
             head_oid: format!("head-{last_sequence}"),
-            object: SourceBlob {
-                content_ref: ContentRef::git_segment_sha256(format!("pack-{first_sequence}")),
+            segment: GitSegmentRef {
+                segment_id: format!("segment-{first_sequence}"),
                 sha256: format!("pack-{first_sequence}"),
-                git_oid: format!("head-{last_sequence}"),
-                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-                size_bytes: 1,
+                plaintext_bytes: 1,
+                encoding_version: 2,
             },
         }
     }

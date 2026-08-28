@@ -1,14 +1,12 @@
 use crate::{
     config::DEFAULT_GIT_BRANCH,
     error::ApiError,
-    git::{import::run_git, upload::git_process_output_with_timeout},
+    git::{import::run_git, upload::truncated_git_stderr},
     state::AppState,
 };
-use scope_domain::{
-    content::SourceBlob,
-    repository::git::{GitHead, GitPackSpan, validate_git_pack_layout},
-};
-use scope_object_store::source_blob_bytes;
+use scope_domain::repository::git::{GitHead, GitPackSpan, validate_git_pack_layout};
+use scope_git_process::{ProcessLimits, run_with_stdin_reader};
+use sha2::{Digest, Sha256};
 use std::{fs, path::Path, process::Command, time::Instant};
 
 pub(crate) fn restore_git_pack_spans(
@@ -21,7 +19,7 @@ pub(crate) fn restore_git_pack_spans(
     let started_at = Instant::now();
     let total_pack_bytes = pack_spans
         .iter()
-        .map(|span| span.object.size_bytes)
+        .map(|span| span.segment.plaintext_bytes)
         .sum::<u64>();
     let result = restore_git_pack_spans_inner(state, repository_id, head, pack_spans, repo_root);
     tracing::info!(
@@ -114,24 +112,66 @@ pub(crate) fn index_git_pack(
     span_index: usize,
     span_count: usize,
 ) -> Result<(), ApiError> {
-    let bytes = restore_object_bytes(
-        state,
-        &span.object,
+    let temp_name = format!(
+        "scope-segment-{}.pack.tmp",
+        hex::encode(Sha256::digest(span.segment.segment_id.as_bytes()))
+    );
+    let temp_pack = repo_root.join(temp_name);
+    let segment_store = state.git_segment_store.clone();
+    let repository_id_for_restore = repository_id.to_string();
+    let segment = span.segment.clone();
+    let temp_pack_for_restore = temp_pack.clone();
+    let retrieval_started = Instant::now();
+    let restore = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(scope_git_storage::GitStorageError::Local)?;
+        runtime.block_on(async move {
+            let mut output = tokio::fs::File::create(&temp_pack_for_restore)
+                .await
+                .map_err(scope_git_storage::GitStorageError::Local)?;
+            let timings = segment_store
+                .restore_to_prefer_local(&repository_id_for_restore, &segment, &mut output)
+                .await?;
+            output
+                .sync_all()
+                .await
+                .map_err(scope_git_storage::GitStorageError::Local)?;
+            Ok::<_, scope_git_storage::GitStorageError>(timings)
+        })
+    })
+    .join()
+    .map_err(|_| ApiError::internal_message("Git segment restore thread panicked"))?;
+    let retrieval_elapsed = retrieval_started.elapsed();
+    tracing::info!(
+        phase = "verified",
         repository_id,
-        span,
-        span_index,
-        span_count,
-    )?;
-    let size_bytes = bytes.len();
+        segment_id = span.segment.segment_id,
+        source = ?restore.as_ref().ok().map(|timings| timings.source),
+        success = restore.is_ok(),
+        duration_us = retrieval_elapsed.as_micros(),
+        bytes = span.segment.plaintext_bytes,
+        "Git segment restore telemetry"
+    );
+    if let Err(error) = restore {
+        let _ = fs::remove_file(&temp_pack);
+        return Err(ApiError::infrastructure_unavailable(error.to_string()));
+    }
+    let size_bytes = span.segment.plaintext_bytes;
     let started_at = Instant::now();
-    let output = git_process_output_with_timeout(
+    let pack_file = fs::File::open(&temp_pack).map_err(ApiError::internal)?;
+    let output = run_with_stdin_reader(
         Command::new("git")
             .arg("--git-dir")
             .arg(repo_root)
             .args(["index-pack", "--stdin"]),
-        Some(bytes),
-        state.runtime_budgets.git_command_timeout(),
-    );
+        pack_file,
+        ProcessLimits::new(state.runtime_budgets.git_command_timeout()),
+        "restoring Git pack",
+    )
+    .map_err(|error| ApiError::infrastructure_unavailable(error.to_string()));
+    let _ = fs::remove_file(&temp_pack);
     let success = output.as_ref().is_ok_and(|output| output.status.success());
     let duration_ms = started_at.elapsed().as_millis();
     tracing::info!(
@@ -145,7 +185,7 @@ pub(crate) fn index_git_pack(
         first_sequence = span.first_sequence,
         last_sequence = span.last_sequence,
         geometric_tier = span.geometric_tier,
-        object_sha256 = span.object.sha256,
+        object_sha256 = span.segment.sha256,
         success,
         "Git restore operation completed"
     );
@@ -153,44 +193,10 @@ pub(crate) fn index_git_pack(
     if !output.status.success() {
         return Err(ApiError::infrastructure_unavailable(format!(
             "restoring Git pack: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            truncated_git_stderr(&output.stderr).trim()
         )));
     }
     Ok(())
-}
-
-fn restore_object_bytes(
-    state: &AppState,
-    blob: &SourceBlob,
-    repository_id: &str,
-    span: &GitPackSpan,
-    span_index: usize,
-    span_count: usize,
-) -> Result<Vec<u8>, ApiError> {
-    let started_at = Instant::now();
-    let bytes = source_blob_bytes(state.object_store.as_ref(), blob).map_err(ApiError::from);
-    let size_bytes = bytes.as_ref().map_or(blob.size_bytes, |bytes| {
-        u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-    });
-    let duration_ms = started_at.elapsed().as_millis();
-    tracing::info!(
-        repository_id,
-        operation = "object_retrieval",
-        object_kind = "pack",
-        duration_ms,
-        repo_git_object_retrieval_ms = duration_ms,
-        size_bytes,
-        span_index,
-        span_count,
-        first_sequence = span.first_sequence,
-        last_sequence = span.last_sequence,
-        geometric_tier = span.geometric_tier,
-        object_sha256 = blob.sha256,
-        content_ref = ?blob.content_ref,
-        success = bytes.is_ok(),
-        "Git restore operation completed"
-    );
-    bytes
 }
 
 pub(crate) fn run_timed_git_restore_phase(

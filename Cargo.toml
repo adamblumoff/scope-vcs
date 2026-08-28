@@ -9,6 +9,7 @@ members = [
     "crates/scope-domain",
     "crates/scope-postgres",
     "crates/scope-git",
+    "crates/scope-git-storage",
     "crates/scope-object-store",
     "crates/scope-git-process",
     "crates/scope-run-config",
@@ -28,11 +29,14 @@ repository = "https://github.com/adamblumoff/scope-vcs"
 # standalone CLI release stages those two crates outside this workspace.
 [workspace.dependencies]
 anyhow = "1.0.100"
+async-trait = "0.1.89"
 aws-config = { version = "1.11.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
 aws-sdk-ecs = "1.140.0"
+aws-sdk-s3 = { version = "1.144.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "rustls"] }
 aws-sdk-secretsmanager = "1.114.0"
 axum = "0.8.7"
 base64 = "0.22.1"
+bytes = "1.11.0"
 chacha20poly1305 = "0.10.1"
 getrandom = "0.3.4"
 hex = "0.4.3"
@@ -61,6 +65,7 @@ scope_content_lifecycle = { package = "scope-content-lifecycle", path = "crates/
 scope_domain = { package = "scope-domain", path = "crates/scope-domain" }
 scope_git = { package = "scope-git", path = "crates/scope-git", default-features = false }
 scope_git_process = { package = "scope-git-process", path = "crates/scope-git-process" }
+scope_git_storage = { package = "scope-git-storage", path = "crates/scope-git-storage" }
 scope_object_store = { package = "scope-object-store", path = "crates/scope-object-store" }
 scope_postgres = { package = "scope-postgres", path = "crates/scope-postgres" }
 scope_run_config = { package = "scope-run-config", path = "crates/scope-run-config" }

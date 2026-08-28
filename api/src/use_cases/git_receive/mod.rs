@@ -337,19 +337,9 @@ async fn complete_main_push(
     let import_started_at = Instant::now();
     let (prepared, change_count): (PreparedReceivePackUpdate, usize) =
         main_push::prepare_main_push(state, owner, repo_name, staging_repo, &access).await?;
-    let durable_objects = prepared.durable_objects.clone();
-    let committed_git_head =
-        match main_push::persist_main_push(state, owner, repo_name, prepared, &author_id).await {
-            Ok(git_head) => git_head,
-            Err(error) => {
-                crate::use_cases::content_cleanup::best_effort_cleanup_rollback_source_blobs(
-                    state,
-                    &durable_objects,
-                )
-                .await;
-                return Err(error);
-            }
-        };
+    let persisted =
+        main_push::persist_main_push(state, owner, repo_name, prepared, &author_id).await?;
+    let committed_git_head = persisted.head;
     let event = if first_push {
         state
             .product_analytics
@@ -379,10 +369,24 @@ async fn complete_main_push(
         owner,
         repo_name,
         &author_id,
-        staging_repo,
+        persisted.staged_segment.local_pack_path(),
         &committed_git_head,
     )
     .await;
+    if let Err(error) = state
+        .git_segment_store
+        .delete_local(&persisted.staged_segment)
+        .await
+    {
+        tracing::warn!(
+            owner,
+            repo = repo_name,
+            segment_id = persisted.staged_segment.segment.segment_id,
+            error = %error,
+            "published Git segment local staging cleanup failed"
+        );
+    }
+    persisted.write_lease.release().await;
     Ok(())
 }
 
@@ -391,7 +395,7 @@ async fn best_effort_sync_cache(
     owner: &str,
     repo_name: &str,
     author_id: &str,
-    staging_repo: &Path,
+    local_pack: &Path,
     committed_git_head: &scope_domain::repository::git::GitHead,
 ) {
     match state
@@ -407,7 +411,7 @@ async fn best_effort_sync_cache(
             if is_still_current
                 && let Err(error) = state.repository_engine.sync_after_push(
                     &scope_domain::repository::repo_id(owner, repo_name),
-                    staging_repo,
+                    local_pack,
                     &committed_git_head.head_oid,
                     committed_git_head.push_sequence,
                 )

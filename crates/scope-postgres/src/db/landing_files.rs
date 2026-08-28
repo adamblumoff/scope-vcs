@@ -1,4 +1,4 @@
-use super::{RepositoryStore, acquire_aggregate_lock, entities};
+use super::{RepositoryStore, acquire_aggregate_lock, entities, git_segments::load_git_pack_spans};
 use crate::error::PostgresError;
 use scope_domain::{
     content::SourceBlob,
@@ -9,8 +9,8 @@ use scope_domain::{
     repository::git::{GitHead, GitPackSpan},
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-    TransactionTrait, sea_query::OnConflict,
+    ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
+    sea_query::OnConflict,
 };
 use std::collections::BTreeSet;
 
@@ -122,15 +122,7 @@ impl RepositoryStore {
                 .map_err(PostgresError::internal)?
                 .map(entities::git_head::Model::try_into_domain)
                 .transpose()?;
-            let git_pack_spans = entities::git_pack_span::Entity::find()
-                .filter(entities::git_pack_span::Column::RepoId.eq(&row.repo_id))
-                .order_by_asc(entities::git_pack_span::Column::FirstSequence)
-                .all(self.db.as_ref())
-                .await
-                .map_err(PostgresError::internal)?
-                .into_iter()
-                .map(entities::git_pack_span::Model::try_into_domain)
-                .collect::<Result<Vec<_>, _>>()?;
+            let git_pack_spans = load_git_pack_spans(self.db.as_ref(), &row.repo_id).await?;
             candidates.push(RepositoryLandingFileBackfillCandidate {
                 repo_id: row.repo_id,
                 blob,

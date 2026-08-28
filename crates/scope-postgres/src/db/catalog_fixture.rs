@@ -5,7 +5,7 @@ use scope_domain::{
     content::SourceBlob,
     policy::Visibility,
     repo_actions::RepoStorageCleanup,
-    repository::{CatalogError, Repository, repo_id},
+    repository::{CatalogError, Repository, git::GitSegmentUpload, repo_id},
     requests::{
         Request, RequestDiscussion, RequestDiscussionReadState, RequestDiscussionReply,
         RequestEvent, RequestRevision,
@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 pub struct CatalogFixture {
     pub users: BTreeMap<String, UserAccount>,
     pub repositories: BTreeMap<String, Repository>,
+    pub git_segment_uploads: Vec<GitSegmentUpload>,
     pub requests: BTreeMap<String, Request>,
     pub request_revisions: BTreeMap<String, RequestRevision>,
     pub request_discussions: BTreeMap<String, RequestDiscussion>,

@@ -260,6 +260,7 @@ mod tests {
             "/.scope/RULES.md",
             source_blob("rules-content"),
         );
+        stage_segment(&store, &initial_update.git_pack_span.segment).await;
         apply_reviewed_update_to_repo(&mut repo, initial_update).unwrap();
         store
             .repositories()
@@ -293,6 +294,7 @@ mod tests {
             "/README.md",
             source_blob("merged-content"),
         );
+        stage_segment(store, &update.git_pack_span.segment).await;
         let workflow_catalog = RepositoryWorkflowCatalog::captured(
             "owner/repo",
             MERGED_HEAD,
@@ -308,6 +310,27 @@ mod tests {
         }
     }
 
+    async fn stage_segment(
+        store: &super::super::MetadataStore,
+        segment: &scope_domain::repository::git::GitSegmentRef,
+    ) {
+        let repositories = store.repositories();
+        repositories
+            .begin_git_segment_upload(
+                "owner/repo",
+                &segment.segment_id,
+                &format!("git/segments/v2/owner/repo/{}", segment.segment_id),
+                segment.encoding_version,
+                1,
+            )
+            .await
+            .unwrap();
+        repositories
+            .mark_git_segment_upload_ready(segment, 2, 2)
+            .await
+            .unwrap();
+    }
+
     fn reviewed_update(
         repo: &scope_domain::repository::Repository,
         head_oid: &str,
@@ -318,8 +341,12 @@ mod tests {
     ) -> ReviewedUpdateInput {
         let mut manifest = source_blob(&format!("manifest-{head_oid}"));
         manifest.git_oid = head_oid.to_string();
-        let mut segment = source_blob(&format!("segment-{head_oid}"));
-        segment.git_oid = head_oid.to_string();
+        let segment = scope_domain::repository::git::GitSegmentRef {
+            segment_id: format!("segment-{head_oid}"),
+            sha256: "c".repeat(64),
+            plaintext_bytes: 1,
+            encoding_version: 2,
+        };
         ReviewedUpdateInput {
             branch: "refs/heads/main".to_string(),
             author_id: "user_owner".to_string(),
@@ -336,7 +363,7 @@ mod tests {
                 geometric_tier: 0,
                 base_oid: base_oid.map(str::to_string),
                 head_oid: head_oid.to_string(),
-                object: segment,
+                segment,
             },
             changes: vec![ReviewedContentChange {
                 path: ScopePath::parse(path).unwrap(),

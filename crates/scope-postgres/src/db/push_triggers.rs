@@ -3,6 +3,7 @@ use super::{
     cleanup_queue::queue::queue_pending_source_blob_deletion_rows,
     entities,
     generated_ids::generate_id,
+    git_segments::{insert_git_segment_references, release_git_segment_references},
     object_references::{delete_object_reference, insert_object_reference},
     outbox::ClaimedOutboxJob,
     runs::enqueue_run_in_transaction,
@@ -85,6 +86,13 @@ where
     for object in pinned_source.retained_objects() {
         insert_object_reference(conn, "push_trigger_source", &reference_id, object).await?;
     }
+    insert_git_segment_references(
+        conn,
+        "push_trigger_source",
+        &reference_id,
+        pinned_source.retained_git_segments(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -303,12 +311,9 @@ async fn release_push_trigger_sources<C>(
 where
     C: ConnectionTrait,
 {
-    delete_object_reference(
-        conn,
-        "push_trigger_source",
-        &format!("{repo_id}:{change_version}"),
-    )
-    .await?;
+    let reference_id = format!("{repo_id}:{change_version}");
+    delete_object_reference(conn, "push_trigger_source", &reference_id).await?;
+    release_git_segment_references(conn, "push_trigger_source", &reference_id, now_unix).await?;
     let source = RunSource::accepted_git_head(
         repo_id,
         payload.head.clone(),
@@ -512,7 +517,7 @@ jobs:
         );
         assert_eq!(
             object_reference_count(&store, "run_source", &run.id).await,
-            2
+            1
         );
 
         let replay = store
@@ -721,7 +726,7 @@ jobs:
             )
             .await
             .unwrap();
-        assert_eq!(cleanup.pending.len(), 2);
+        assert_eq!(cleanup.pending.len(), 1);
     }
 
     #[tokio::test]
@@ -785,7 +790,7 @@ jobs:
             )
             .await
             .unwrap();
-        assert_eq!(cleanup.pending.len(), 3);
+        assert_eq!(cleanup.pending.len(), 1);
     }
 
     #[tokio::test]
@@ -866,6 +871,20 @@ jobs:
             .create_repository(&owner, "repo", Visibility::Private)
             .unwrap()
             .clone();
+        catalog.git_segment_uploads = (1..=10)
+            .map(|sequence| scope_domain::repository::git::GitSegmentUpload {
+                segment_id: format!("segment-{sequence}"),
+                repository_id: repo.record.id.clone(),
+                object_key: format!("git/segments/v2/{}/segment-{sequence}", repo.record.id),
+                state: scope_domain::repository::git::GitSegmentUploadState::Published,
+                sha256: Some(format!("{sequence:064x}")),
+                plaintext_bytes: Some(1),
+                encrypted_bytes: Some(2),
+                encoding_version: 2,
+                created_at_unix: 1,
+                updated_at_unix: 1,
+            })
+            .collect();
         catalog.users.insert(owner.id.clone(), owner);
         store.admin().seed_catalog_for_tests(catalog).unwrap();
         repo.record.id
@@ -917,12 +936,11 @@ jobs:
                 geometric_tier: width.ilog2(),
                 base_oid: previous_head.clone(),
                 head_oid: span_head.clone(),
-                object: SourceBlob {
-                    content_ref: ContentRef::git_segment_sha256(digest.clone()),
+                segment: scope_domain::repository::git::GitSegmentRef {
+                    segment_id: format!("segment-{first_sequence}"),
                     sha256: digest,
-                    git_oid: span_head.clone(),
-                    git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-                    size_bytes: 1,
+                    plaintext_bytes: 1,
+                    encoding_version: 2,
                 },
             });
             previous_head = Some(span_head);

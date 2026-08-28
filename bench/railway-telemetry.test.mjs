@@ -3,10 +3,44 @@ import test from 'node:test';
 
 import {
   capacityRejectionFields, compactionFields, numericFields, objectStoreFields,
-  gitOperationFields, pushPersistenceFields, railwayMetricArgs, stripAnsi, summarizeCapacityRejections,
-  summarizeCompactions, summarizeGitOperations, summarizeMaterializations, summarizeObjectStore,
-  summarizePushPersistence, summarizeSnapshots,
+  gitOperationFields, gitSegmentTelemetryFields, pushPersistenceFields, railwayMetricArgs, stripAnsi,
+  summarizeCapacityRejections, summarizeCompactions, summarizeGitOperations,
+  summarizeGitSegmentTelemetry, summarizeMaterializations, summarizeObjectStore, summarizePushPersistence,
+  summarizeSnapshots,
 } from './railway-telemetry.mjs';
+
+test('Git segment telemetry parses ingest, restore, pressure, and cleanup fields', () => {
+  const ingest = gitSegmentTelemetryFields('Git segment ingest telemetry phase=local_write repository_id=owner/repo segment_id=seg-1 success=true duration_us=1200 bytes=1048576 blocked_us=30 active_ingests=2 buffered_bytes=2097152 disk_free_bytes=8589934592 ledger_uploading=2 ledger_ready=1 ledger_published=9 orphan_count=0');
+  const restore = gitSegmentTelemetryFields('Git segment restore telemetry phase=frame_decrypt repository_id=owner/repo segment_id=seg-1 success=false duration_us=900 bytes=524288');
+  assert.deepEqual(ingest, {
+    kind: 'ingest', phase: 'local_write', repositoryId: 'owner/repo', segmentId: 'seg-1', success: true,
+    duration_us: 1200, bytes: 1048576, blocked_us: 30, active_ingests: 2,
+    buffered_bytes: 2097152, disk_free_bytes: 8589934592, ledger_uploading: 2,
+    ledger_ready: 1, ledger_published: 9, orphan_count: 0,
+  });
+  assert.equal(restore.kind, 'restore');
+  assert.equal(restore.phase, 'frame_decrypt');
+  assert.equal(restore.success, false);
+  assert.equal(gitSegmentTelemetryFields('ordinary Git log'), null);
+
+  const summary = summarizeGitSegmentTelemetry([
+    ingest,
+    { ...ingest, phase: 'tee_remote_blocked', duration_us: 1500, blocked_us: 70, active_ingests: 3, buffered_bytes: 3145728, disk_free_bytes: 7516192768, ledger_published: 10, orphan_count: 1 },
+    restore,
+  ]);
+  assert.deepEqual(summary.phases['ingest/local_write'], {
+    count: 1,
+    failures: 0,
+    durationUs: { minimum: 1200, p50: 1200, p95: 1200, p99: 1200, maximum: 1200 },
+    blockedUs: { minimum: 30, p50: 30, p95: 30, p99: 30, maximum: 30 },
+    totalBytes: 1048576,
+  });
+  assert.equal(summary.phases['restore/frame_decrypt'].failures, 1);
+  assert.deepEqual(summary.activeIngests, { minimum: 2, maximum: 3, last: 3 });
+  assert.deepEqual(summary.diskFreeBytes, { minimum: 7516192768, maximum: 8589934592, last: 7516192768 });
+  assert.deepEqual(summary.ledgerPublished, { minimum: 9, maximum: 10, last: 10 });
+  assert.deepEqual(summary.orphanCount, { minimum: 0, maximum: 1, last: 1 });
+});
 
 test('resource metrics use the exact requested run window', () => {
   assert.deepEqual(

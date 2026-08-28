@@ -885,8 +885,10 @@ mod tests {
     #[tokio::test]
     async fn gallery_covers_every_run_state_and_both_workflows() {
         let object_store = EncryptedObjectStore::new(Arc::new(MemoryObjectStore::new()), [7; 32]);
+        let git_segment_store = super::super::test_seed_git_segment_store();
         let catalog = super::super::catalog(
             &object_store,
+            &git_segment_store,
             DevSeedUser {
                 email: "dev@example.com".to_string(),
                 handle: "dev".to_string(),

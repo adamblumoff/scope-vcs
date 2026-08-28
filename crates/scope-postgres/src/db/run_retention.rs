@@ -1,6 +1,6 @@
 use super::{
     GeneratedIdSource, RunStore, cleanup_queue::queue::queue_pending_source_blob_deletion_rows,
-    entities,
+    entities, git_segments::release_git_segment_references,
 };
 use crate::error::PostgresError;
 use scope_domain::content::SourceBlob;
@@ -83,6 +83,9 @@ impl RunStore {
             .exec(&tx)
             .await
             .map_err(PostgresError::internal)?;
+        for run_id in &run_ids {
+            release_git_segment_references(&tx, "run_source", run_id, now_unix).await?;
+        }
         entities::run::Entity::delete_many()
             .filter(entities::run::Column::Id.is_in(run_ids))
             .exec(&tx)

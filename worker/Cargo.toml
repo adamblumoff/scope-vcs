@@ -23,8 +23,12 @@ scope_api_contract.workspace = true
 scope_domain.workspace = true
 scope_content_lifecycle.workspace = true
 scope_git = { workspace = true, features = ["storage"] }
+scope_git_storage.workspace = true
 scope_object_store.workspace = true
 scope_git_process.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

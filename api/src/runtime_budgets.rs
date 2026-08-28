@@ -13,12 +13,14 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 const DEFAULT_RECEIVE_PACK_CONCURRENCY: usize = 4;
 const DEFAULT_UPLOAD_PACK_CONCURRENCY: usize = 8;
 const DEFAULT_GIT_MATERIALIZATION_CONCURRENCY: usize = 2;
+const DEFAULT_GIT_SEGMENT_INGEST_CONCURRENCY: usize = 4;
 const DEFAULT_OBJECT_STORE_CONCURRENCY: usize = 16;
 const DEFAULT_GIT_COMMAND_TIMEOUT_SECS: u64 = 30;
 
 const RECEIVE_PACK_CONCURRENCY_ENV: &str = "SCOPE_GIT_RECEIVE_PACK_CONCURRENCY";
 const UPLOAD_PACK_CONCURRENCY_ENV: &str = "SCOPE_GIT_UPLOAD_PACK_CONCURRENCY";
 const GIT_MATERIALIZATION_CONCURRENCY_ENV: &str = "SCOPE_GIT_MATERIALIZATION_CONCURRENCY";
+const GIT_SEGMENT_INGEST_CONCURRENCY_ENV: &str = "SCOPE_GIT_SEGMENT_INGEST_CONCURRENCY";
 const OBJECT_STORE_CONCURRENCY_ENV: &str = "SCOPE_OBJECT_STORE_CONCURRENCY";
 const GIT_COMMAND_TIMEOUT_SECS_ENV: &str = "SCOPE_GIT_COMMAND_TIMEOUT_SECS";
 
@@ -27,6 +29,7 @@ pub(crate) struct RuntimeBudgetConfig {
     pub(crate) receive_pack_concurrency: usize,
     pub(crate) upload_pack_concurrency: usize,
     pub(crate) git_materialization_concurrency: usize,
+    pub(crate) git_segment_ingest_concurrency: usize,
     pub(crate) object_store_concurrency: usize,
     pub(crate) git_command_timeout: Duration,
     pub(crate) git_storage_limits: GitStorageLimits,
@@ -47,6 +50,10 @@ impl RuntimeBudgetConfig {
                 GIT_MATERIALIZATION_CONCURRENCY_ENV,
                 DEFAULT_GIT_MATERIALIZATION_CONCURRENCY,
             )?,
+            git_segment_ingest_concurrency: parse_usize_env(
+                GIT_SEGMENT_INGEST_CONCURRENCY_ENV,
+                DEFAULT_GIT_SEGMENT_INGEST_CONCURRENCY,
+            )?,
             object_store_concurrency: parse_usize_env(
                 OBJECT_STORE_CONCURRENCY_ENV,
                 DEFAULT_OBJECT_STORE_CONCURRENCY,
@@ -66,6 +73,7 @@ impl Default for RuntimeBudgetConfig {
             receive_pack_concurrency: DEFAULT_RECEIVE_PACK_CONCURRENCY,
             upload_pack_concurrency: DEFAULT_UPLOAD_PACK_CONCURRENCY,
             git_materialization_concurrency: DEFAULT_GIT_MATERIALIZATION_CONCURRENCY,
+            git_segment_ingest_concurrency: DEFAULT_GIT_SEGMENT_INGEST_CONCURRENCY,
             object_store_concurrency: DEFAULT_OBJECT_STORE_CONCURRENCY,
             git_command_timeout: Duration::from_secs(DEFAULT_GIT_COMMAND_TIMEOUT_SECS),
             git_storage_limits: default_git_storage_limits(),
@@ -77,6 +85,7 @@ pub(crate) struct RuntimeBudgets {
     receive_pack: Arc<Semaphore>,
     upload_pack: Arc<Semaphore>,
     git_materialization: Arc<Semaphore>,
+    git_segment_ingest: Arc<Semaphore>,
     object_store: Arc<Semaphore>,
     git_command_timeout: Duration,
     git_storage_limits: GitStorageLimits,
@@ -92,6 +101,7 @@ impl RuntimeBudgets {
             receive_pack: Arc::new(Semaphore::new(config.receive_pack_concurrency)),
             upload_pack: Arc::new(Semaphore::new(config.upload_pack_concurrency)),
             git_materialization: Arc::new(Semaphore::new(config.git_materialization_concurrency)),
+            git_segment_ingest: Arc::new(Semaphore::new(config.git_segment_ingest_concurrency)),
             object_store: Arc::new(Semaphore::new(config.object_store_concurrency)),
             git_command_timeout: config.git_command_timeout,
             git_storage_limits: config.git_storage_limits,
@@ -108,6 +118,10 @@ impl RuntimeBudgets {
 
     pub(crate) fn try_git_materialization(&self) -> Result<RuntimePermit, ApiError> {
         self.try_acquire(&self.git_materialization, "Git materialization")
+    }
+
+    pub(crate) fn try_git_segment_ingest(&self) -> Result<RuntimePermit, ApiError> {
+        self.try_acquire(&self.git_segment_ingest, "Git segment ingest")
     }
 
     pub(crate) fn try_object_store(&self, operation: &str) -> Result<RuntimePermit, ApiError> {

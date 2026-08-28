@@ -30,7 +30,9 @@ use scope_domain::{
         RepositoryInvite, RepositoryInviteState, RepositoryMember, RepositoryMemberPermissions,
     },
     repository::credentials::{FirstPushToken, GitPushToken},
-    repository::git::{GitHead, GitPackSpan},
+    repository::git::{
+        GitHead, GitPackSpan, GitSegmentRef, GitSegmentUpload, GitSegmentUploadState,
+    },
     repository::{RepoLifecycleState, RepoRecord, Repository},
 };
 use scope_domain::{
@@ -113,8 +115,9 @@ pub use jobs::{
 };
 pub use read_models::{projection_file, projection_read_model};
 pub use repositories::{
-    git_head, git_pack_span, repository, repository_first_push_token, repository_git_push_token,
-    repository_landing_file, repository_workflow_catalog, repository_workflow_file,
+    git_head, git_pack_span, git_segment_upload, repository, repository_first_push_token,
+    repository_git_push_token, repository_landing_file, repository_workflow_catalog,
+    repository_workflow_file,
 };
 pub use requests::{
     request, request_discussion, request_discussion_read_state, request_discussion_reply,
@@ -279,19 +282,17 @@ mod tests {
 
     #[test]
     fn negative_persisted_values_are_rejected_instead_of_floored() {
-        let row = git_pack_span::Model {
+        let row = git_segment_upload::Model {
+            segment_id: "segment-1".to_string(),
             repo_id: "repo-1".to_string(),
-            first_sequence: 1,
-            last_sequence: 1,
-            geometric_tier: 0,
-            base_oid: None,
-            head_oid: "oid".to_string(),
-            object_key: serde_json::to_string(
-                &scope_domain::content_ref::ContentRef::git_segment_sha256("sha"),
-            )
-            .unwrap(),
-            sha256: "sha".to_string(),
-            size_bytes: -1,
+            object_key: "git/segments/v2/repo-1/segment-1".to_string(),
+            state: "ready".to_string(),
+            sha256: Some("a".repeat(64)),
+            plaintext_bytes: Some(-1),
+            encrypted_bytes: Some(1),
+            encoding_version: 2,
+            created_at_unix: 1,
+            updated_at_unix: 2,
         };
 
         assert!(row.try_into_domain().is_err());
