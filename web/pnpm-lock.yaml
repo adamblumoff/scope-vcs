@@ -63,8 +63,8 @@ importers:
         specifier: ^12.42.2
         version: 12.42.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       pagent:
-        specifier: file:vendor/pagent-v0.1.0-24c8fcd.tgz
-        version: file:vendor/pagent-v0.1.0-24c8fcd.tgz
+        specifier: file:vendor/pagent-v0.1.0-47b796c.tgz
+        version: file:vendor/pagent-v0.1.0-47b796c.tgz
       posthog-js:
         specifier: 1.417.1
         version: 1.417.1
@@ -2839,8 +2839,8 @@ packages:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
     engines: {node: '>=10'}
 
-  pagent@file:vendor/pagent-v0.1.0-24c8fcd.tgz:
-    resolution: {integrity: sha512-uEzDkNgvRRRkvPMdPHEnnXIs22xgXkjZhwotghOR8SuktyfCm8yoW0ytHnHbB+uZF0y01bVVTUx9dlJ14N62Og==, tarball: file:vendor/pagent-v0.1.0-24c8fcd.tgz}
+  pagent@file:vendor/pagent-v0.1.0-47b796c.tgz:
+    resolution: {integrity: sha512-4A2FJa7j5r+My0K18NHydSWQBDTOwf8CJC561tkwtzTn9hE3gnBQn9SIgPA2aZI9TkST/d93szbMSX9kUtS7Vw==, tarball: file:vendor/pagent-v0.1.0-47b796c.tgz}
     version: 0.1.0
     engines: {node: '>=22'}
     hasBin: true
@@ -6111,7 +6111,7 @@ snapshots:
     dependencies:
       p-limit: 3.1.0
 
-  pagent@file:vendor/pagent-v0.1.0-24c8fcd.tgz: {}
+  pagent@file:vendor/pagent-v0.1.0-47b796c.tgz: {}
 
   parse-entities@4.0.2:
     dependencies:
