@@ -72,16 +72,6 @@
       "reason": "Discussion creation, replies, transitions, read state, validation, and transition tests enforce one aggregate."
     },
     {
-      "path": "crates/scope-git-process/src/lib.rs",
-      "owner": "bounded Git child-process adapter",
-      "reason": "Process groups, streaming input and output, timeouts, cancellation, and failure diagnostics jointly own child-process lifetime."
-    },
-    {
-      "path": "crates/scope-git-storage/src/lib.rs",
-      "owner": "durable Git segment store",
-      "reason": "Reservation, bounded dual-write ingestion, verified local and remote restore, and exact cleanup define one segment lifecycle facade."
-    },
-    {
       "path": "crates/scope-git/src/projection_identity.rs",
       "owner": "Git projection identity",
       "reason": "Tree construction, native-range validation, deterministic object identity, and identity fixtures are one algorithm."
@@ -100,11 +90,6 @@
       "path": "crates/scope-postgres/src/db/git_compaction.rs",
       "owner": "Git compaction persistence",
       "reason": "Scheduling, claiming, replacement validation, completion, retry state, and transaction tests form one durable workflow."
-    },
-    {
-      "path": "crates/scope-postgres/src/db/git_segments.rs",
-      "owner": "Git segment lifecycle persistence",
-      "reason": "Upload transitions, publication checks, reference pins, retirement eligibility, and recovery queries enforce one durable ledger."
     },
     {
       "path": "crates/scope-postgres/src/db/outbox.rs",
