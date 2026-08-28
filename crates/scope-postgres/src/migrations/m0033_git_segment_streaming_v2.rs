@@ -12,23 +12,86 @@ impl MigrationName for Migration {
 #[sea_orm_migration::async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .get_connection()
+        let connection = manager.get_connection();
+        connection
+            .execute_unprepared(crate::db::git_segment_v2_backfill::CREATE_BACKFILL_TABLE)
+            .await?;
+        connection
             .execute_unprepared(
-                "LOCK TABLE scope_git_segments, scope_object_references IN ACCESS EXCLUSIVE MODE;
+                r#"
+                LOCK TABLE scope_git_segments, scope_object_references,
+                    scope_runs, scope_outbox_jobs, scope_orphan_object_jobs,
+                    scope_git_segment_v2_backfill
+                    IN ACCESS EXCLUSIVE MODE;
 
                 DO $$
                 BEGIN
-                    IF EXISTS (SELECT 1 FROM scope_git_segments) THEN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM scope_git_segments spans
+                        LEFT JOIN scope_git_segment_v2_backfill prepared
+                          ON prepared.repo_id = spans.repo_id
+                         AND prepared.first_sequence = spans.first_sequence
+                         AND prepared.last_sequence = spans.last_sequence
+                         AND prepared.legacy_object_key = spans.object_key
+                         AND prepared.legacy_sha256 = spans.sha256
+                         AND prepared.legacy_size_bytes = spans.size_bytes
+                        WHERE prepared.repo_id IS NULL
+                    ) THEN
                         RAISE EXCEPTION USING
-                            MESSAGE = 'm0033 requires scope_git_segments to be empty',
-                            HINT = 'Reset staging Git repositories before applying the v2 Git segment cutover.';
+                            MESSAGE = 'm0033 requires every legacy Git segment to be backfilled',
+                            HINT = 'Run scope-maintenance backfill-git-segments-v2 before applying migrations.';
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM scope_git_segment_v2_backfill prepared
+                        LEFT JOIN scope_git_segments spans
+                          ON prepared.repo_id = spans.repo_id
+                         AND prepared.first_sequence = spans.first_sequence
+                         AND prepared.last_sequence = spans.last_sequence
+                         AND prepared.legacy_object_key = spans.object_key
+                         AND prepared.legacy_sha256 = spans.sha256
+                         AND prepared.legacy_size_bytes = spans.size_bytes
+                        WHERE spans.repo_id IS NULL
+                    ) THEN
+                        RAISE EXCEPTION 'm0033 found a stale Git segment backfill record';
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM scope_runs runs
+                        CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
+                        LEFT JOIN scope_git_segment_v2_backfill prepared
+                          ON prepared.repo_id = runs.source->>'repository_id'
+                         AND prepared.first_sequence = (span->>'first_sequence')::bigint
+                         AND prepared.last_sequence = (span->>'last_sequence')::bigint
+                         AND prepared.legacy_sha256 = span#>>'{object,sha256}'
+                         AND prepared.legacy_size_bytes = (span#>>'{object,size_bytes}')::bigint
+                        WHERE runs.source->>'kind' = 'accepted-git-head'
+                          AND prepared.repo_id IS NULL
+                    ) THEN
+                        RAISE EXCEPTION 'm0033 cannot map an accepted Git run source';
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM scope_outbox_jobs jobs
+                        CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
+                        LEFT JOIN scope_git_segment_v2_backfill prepared
+                          ON prepared.repo_id = jobs.repo_id
+                         AND prepared.first_sequence = (span->>'first_sequence')::bigint
+                         AND prepared.last_sequence = (span->>'last_sequence')::bigint
+                         AND prepared.legacy_sha256 = span#>>'{object,sha256}'
+                         AND prepared.legacy_size_bytes = (span#>>'{object,size_bytes}')::bigint
+                        WHERE jobs.kind = 'push_main_trigger_evaluation'
+                          AND jobs.completed_at_unix IS NULL
+                          AND prepared.repo_id IS NULL
+                    ) THEN
+                        RAISE EXCEPTION 'm0033 cannot map a pending push trigger source';
                     END IF;
                 END
                 $$;
-
-                DELETE FROM scope_object_references
-                WHERE ref_kind = 'git_segment';
 
                 CREATE TABLE scope_git_segment_uploads (
                     segment_id text PRIMARY KEY,
@@ -79,16 +142,141 @@ impl MigrationTrait for Migration {
                 CREATE INDEX idx_scope_git_segment_references_owner
                     ON scope_git_segment_references (ref_kind, ref_id, segment_id);
 
+                INSERT INTO scope_git_segment_uploads (
+                    segment_id, repo_id, object_key, state, sha256,
+                    plaintext_bytes, encrypted_bytes, encoding_version,
+                    created_at_unix, updated_at_unix
+                )
+                SELECT segment_id, repo_id, object_key, 'published', sha256,
+                       plaintext_bytes, encrypted_bytes, encoding_version,
+                       completed_at_unix, completed_at_unix
+                FROM scope_git_segment_v2_backfill;
+
                 ALTER TABLE scope_git_segments
+                    ADD COLUMN segment_id text;
+
+                UPDATE scope_git_segments spans
+                SET segment_id = prepared.segment_id
+                FROM scope_git_segment_v2_backfill prepared
+                WHERE prepared.repo_id = spans.repo_id
+                  AND prepared.first_sequence = spans.first_sequence;
+
+                ALTER TABLE scope_git_segments
+                    ALTER COLUMN segment_id SET NOT NULL,
                     DROP COLUMN object_key,
                     DROP COLUMN sha256,
                     DROP COLUMN size_bytes,
-                    ADD COLUMN segment_id text NOT NULL,
                     ADD CONSTRAINT fk_scope_git_segments_upload
                         FOREIGN KEY (segment_id)
                         REFERENCES scope_git_segment_uploads(segment_id),
                     ADD CONSTRAINT uq_scope_git_segments_segment UNIQUE (segment_id);
-                ",
+
+                UPDATE scope_runs runs
+                SET source = jsonb_set(
+                    runs.source,
+                    '{pack_spans}',
+                    (
+                        SELECT jsonb_agg(
+                            (span - 'object') || jsonb_build_object(
+                                'segment', jsonb_build_object(
+                                    'segment_id', prepared.segment_id,
+                                    'sha256', prepared.sha256,
+                                    'plaintext_bytes', prepared.plaintext_bytes,
+                                    'encoding_version', prepared.encoding_version
+                                )
+                            )
+                            ORDER BY ordinal
+                        )
+                        FROM jsonb_array_elements(runs.source->'pack_spans')
+                            WITH ORDINALITY spans(span, ordinal)
+                        JOIN scope_git_segment_v2_backfill prepared
+                          ON prepared.repo_id = runs.source->>'repository_id'
+                         AND prepared.first_sequence = (span->>'first_sequence')::bigint
+                         AND prepared.last_sequence = (span->>'last_sequence')::bigint
+                    )
+                )
+                WHERE runs.source->>'kind' = 'accepted-git-head';
+
+                UPDATE scope_outbox_jobs jobs
+                SET payload = jsonb_set(
+                    jobs.payload,
+                    '{pack_spans}',
+                    (
+                        SELECT jsonb_agg(
+                            (span - 'object') || jsonb_build_object(
+                                'segment', jsonb_build_object(
+                                    'segment_id', prepared.segment_id,
+                                    'sha256', prepared.sha256,
+                                    'plaintext_bytes', prepared.plaintext_bytes,
+                                    'encoding_version', prepared.encoding_version
+                                )
+                            )
+                            ORDER BY ordinal
+                        )
+                        FROM jsonb_array_elements(jobs.payload->'pack_spans')
+                            WITH ORDINALITY spans(span, ordinal)
+                        JOIN scope_git_segment_v2_backfill prepared
+                          ON prepared.repo_id = jobs.repo_id
+                         AND prepared.first_sequence = (span->>'first_sequence')::bigint
+                         AND prepared.last_sequence = (span->>'last_sequence')::bigint
+                    )
+                )
+                WHERE jobs.kind = 'push_main_trigger_evaluation'
+                  AND jobs.completed_at_unix IS NULL;
+
+                INSERT INTO scope_git_segment_references (segment_id, ref_kind, ref_id)
+                SELECT DISTINCT span#>>'{segment,segment_id}', 'run_source', runs.id
+                FROM scope_runs runs
+                CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
+                WHERE runs.source->>'kind' = 'accepted-git-head'
+                ON CONFLICT DO NOTHING;
+
+                INSERT INTO scope_git_segment_references (segment_id, ref_kind, ref_id)
+                SELECT DISTINCT span#>>'{segment,segment_id}', 'push_trigger_source',
+                       jobs.repo_id || ':' || jobs.repo_version::text
+                FROM scope_outbox_jobs jobs
+                CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
+                WHERE jobs.kind = 'push_main_trigger_evaluation'
+                  AND jobs.completed_at_unix IS NULL
+                ON CONFLICT DO NOTHING;
+
+                INSERT INTO scope_orphan_object_jobs (
+                    object_key, generation, sha256, git_oid, size_bytes,
+                    attempts, next_run_at_unix, last_error, completed_at_unix,
+                    created_at_unix, updated_at_unix
+                )
+                SELECT DISTINCT ON (prepared.legacy_object_key)
+                    prepared.legacy_object_key, 'm0033_git_segment_streaming_v2',
+                    prepared.legacy_sha256, spans.head_oid,
+                    prepared.legacy_size_bytes, 0,
+                    EXTRACT(EPOCH FROM clock_timestamp())::bigint,
+                    NULL, NULL, 0, 0
+                FROM scope_git_segment_v2_backfill prepared
+                JOIN scope_git_segments spans
+                  ON spans.repo_id = prepared.repo_id
+                 AND spans.first_sequence = prepared.first_sequence
+                ORDER BY prepared.legacy_object_key, prepared.repo_id,
+                         prepared.first_sequence
+                ON CONFLICT (object_key) DO UPDATE SET
+                    generation = EXCLUDED.generation,
+                    sha256 = EXCLUDED.sha256,
+                    git_oid = EXCLUDED.git_oid,
+                    size_bytes = EXCLUDED.size_bytes,
+                    attempts = 0,
+                    next_run_at_unix = EXCLUDED.next_run_at_unix,
+                    last_error = NULL,
+                    completed_at_unix = NULL,
+                    updated_at_unix = EXCLUDED.updated_at_unix;
+
+                DELETE FROM scope_object_references
+                WHERE ref_kind = 'git_segment'
+                   OR (
+                        ref_kind IN ('run_source', 'push_trigger_source')
+                        AND object_key::jsonb ? 'GitSegmentSha256'
+                   );
+
+                DROP TABLE scope_git_segment_v2_backfill;
+                "#,
             )
             .await?;
         Ok(())

@@ -152,26 +152,29 @@ maintenance_read() {
   return 1
 }
 
-backfill_repository_snapshots() {
-  local database_public_url maintenance_data_dir result backfill_command
+run_api_maintenance() {
+  local command="$1"
+  local database_public_url maintenance_data_dir result
   database_public_url="$(
     railway variable list "${railway_scope[@]}" --service "$database_service" --json |
       jq -er '.DATABASE_PUBLIC_URL | strings | select(length > 0)'
   )"
   maintenance_data_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/scope-repository-snapshot-backfill.XXXXXX")"
   result=0
-  for backfill_command in backfill-landing-files backfill-workflow-catalogs; do
-    SCOPE_MAINTENANCE_DATABASE_URL="$database_public_url" \
-      SCOPE_MAINTENANCE_DATA_DIR="$maintenance_data_dir" \
-      railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
-        sh -c 'DATABASE_URL="$SCOPE_MAINTENANCE_DATABASE_URL" SCOPE_DATA_DIR="$SCOPE_MAINTENANCE_DATA_DIR" exec "$@"' \
-        scope-maintenance "$maintenance_binary" "$backfill_command" || {
-          result=$?
-          break
-        }
-  done
+  SCOPE_MAINTENANCE_DATABASE_URL="$database_public_url" \
+    SCOPE_MAINTENANCE_DATA_DIR="$maintenance_data_dir" \
+    railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
+      sh -c 'DATABASE_URL="$SCOPE_MAINTENANCE_DATABASE_URL" SCOPE_DATA_DIR="$SCOPE_MAINTENANCE_DATA_DIR" exec "$@"' \
+      scope-maintenance "$maintenance_binary" "$command" || result=$?
   rm -rf -- "$maintenance_data_dir"
   return "$result"
+}
+
+backfill_repository_snapshots() {
+  local backfill_command
+  for backfill_command in backfill-landing-files backfill-workflow-catalogs; do
+    run_api_maintenance "$backfill_command"
+  done
 }
 
 wait_for_writer_fence() {
@@ -199,6 +202,14 @@ plan_requires_maintenance() {
 const plan = JSON.parse(process.env.PLAN_JSON || "{}");
 if (!Array.isArray(plan.pending)) process.exit(2);
 process.exit(plan.pending.some((item) => item.impact === "maintenance-required") ? 0 : 1);
+'
+}
+
+plan_includes_migration() {
+  PLAN_JSON="$1" MIGRATION_NAME="$2" node -e '
+const plan = JSON.parse(process.env.PLAN_JSON || "{}");
+if (!Array.isArray(plan.pending)) process.exit(2);
+process.exit(plan.pending.some((item) => item.name === process.env.MIGRATION_NAME) ? 0 : 1);
 '
 }
 
@@ -553,6 +564,9 @@ fi
 
 quiesce_writers
 maintenance validate-workflow-catalogs
+if plan_includes_migration "$plan_json" m0033_git_segment_streaming_v2; then
+  run_api_maintenance backfill-git-segments-v2
+fi
 if ! maintenance apply; then
   # Once apply starts, an error does not prove its transaction rolled back. Fail closed unless a
   # fresh ledger read positively proves that the pre-migration state is unchanged.

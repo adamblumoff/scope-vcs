@@ -40,6 +40,7 @@ mod fast_push;
 mod file_visibility_migration_tests;
 mod generated_ids;
 mod git_compaction;
+pub(crate) mod git_segment_v2_backfill;
 mod git_segments;
 #[cfg(test)]
 mod migration_harness_tests;
@@ -131,6 +132,9 @@ pub use clerk_users::scope_user_id_for_auth_identity;
 pub use fast_push::ApplyContentOnlyPushCommand;
 pub use git_compaction::{GitCompactionCandidate, GitCompactionClaim};
 pub use git_push_reads::GitPushContext;
+pub use git_segment_v2_backfill::{
+    GitSegmentV2Backfill, GitSegmentV2BackfillRecord, LegacyGitSegment,
+};
 pub use git_segments::RepositoryGitWriteLease;
 use history_rows::load_repository_histories;
 use locks::acquire_aggregate_lock;

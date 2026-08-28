@@ -11,6 +11,7 @@ pub(crate) mod demo_seed;
 pub mod dev;
 pub(crate) mod error;
 pub(crate) mod git;
+mod git_segment_v2_backfill;
 pub(crate) mod http;
 mod landing_file_backfill;
 pub(crate) mod object_store_config;
@@ -36,6 +37,7 @@ pub mod test_support;
 mod workflow_tests;
 
 pub use app::router;
+pub use git_segment_v2_backfill::backfill_git_segments_v2_for_maintenance;
 pub use state::AppState;
 pub use workflow_catalog_backfill::validate_repository_workflow_catalogs_for_maintenance;
 

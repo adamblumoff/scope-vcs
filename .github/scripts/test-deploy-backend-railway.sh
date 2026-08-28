@@ -27,7 +27,7 @@ case "${1:-}" in
     if [[ -f "$FAKE_RAILWAY_STATE/exact" ]]; then
       echo '{"exact":true,"pending":[]}'
     else
-      echo '{"exact":false,"pending":[{"name":"m9999_test","impact":"maintenance-required"}]}'
+      echo '{"exact":false,"pending":[{"name":"m0033_git_segment_streaming_v2","impact":"maintenance-required"}]}'
     fi
     ;;
   apply)
@@ -59,6 +59,11 @@ case "${1:-}" in
   verify)
     [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
     echo '{"exact":true}'
+    ;;
+  backfill-git-segments-v2)
+    [[ ! -f "$FAKE_RAILWAY_STATE/apply-attempted" ]]
+    touch "$FAKE_RAILWAY_STATE/git-segments-v2-backfilled"
+    echo '{"gitSegmentsBackfilled":1}'
     ;;
   backfill-landing-files)
     [[ -f "$FAKE_RAILWAY_STATE/exact" ]]
@@ -431,6 +436,7 @@ assert_in_order "$test_dir/success-trace" \
   "graphql stop scope-cache-service old-scope-cache-service" \
   "$test_dir/maintenance fence" \
   "$test_dir/maintenance validate-workflow-catalogs" \
+  "$test_dir/maintenance backfill-git-segments-v2" \
   "$test_dir/maintenance apply" \
   "$test_dir/maintenance verify" \
   "$test_dir/maintenance backfill-landing-files" \
