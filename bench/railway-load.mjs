@@ -15,6 +15,7 @@ import {
 } from './metrics.mjs';
 export { changedFileCountSlope, historySizeSlope, landingFileSizeSlope, writeSizeSlope } from './metrics.mjs';
 import { fetchClientCount, needsFetchClients, validateRepositoryMode } from './repository-mode.mjs';
+import { assertSafeTarget, validateTargetKind } from './target-safety.mjs';
 import { parseChangedFileCounts, writeChangedFiles } from './write-shape.mjs';
 
 // Black-box benchmark: no production-only hooks and never a production target.
@@ -33,8 +34,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 async function main() {
   const config = configuration();
-  for (const api of config.apiUrls) assertSafeTarget(api);
-  if (config.gitUrl) assertSafeTarget(config.gitUrl);
+  for (const api of config.apiUrls) assertSafeTarget(api, config.targetKind);
+  if (config.gitUrl) assertSafeTarget(config.gitUrl, config.targetKind);
   await ready(config);
   const runRoot = join(config.outputRoot, new Date().toISOString().replaceAll(':', '-'));
   await mkdir(runRoot, { recursive: true });
@@ -143,11 +144,13 @@ function configuration() {
   const changedFileCounts = parseChangedFileCounts(process.env.SCOPE_LOAD_CHANGED_FILE_COUNTS || '0');
   const workloads = list('SCOPE_LOAD_WORKLOADS', DEFAULT_WORKLOADS);
   const repositoryMode = nonEmpty('SCOPE_LOAD_REPOSITORY_MODE', 'spread');
+  const targetKind = nonEmpty('SCOPE_BENCH_TARGET_KIND', 'loadtest');
+  validateTargetKind(targetKind);
   const historyDepths = parseStages(process.env.SCOPE_LOAD_HISTORY_DEPTHS || '1,16,64');
   validateRepositoryMode(repositoryMode, workloads, historyDepths, process.env.SCOPE_LOAD_READ_REPLICA_COUNT);
   return {
     apiUrls, gitUrl: process.env.SCOPE_BENCH_GIT_URL?.trim().replace(/\/$/, '') || null,
-    token, stages, routingMode, routingSeed,
+    token, stages, routingMode, routingSeed, targetKind,
     endpointRouter: createEndpointRouter(apiUrls, routingMode, routingSeed),
     rates: process.env.SCOPE_LOAD_RATES ? parseRates(process.env.SCOPE_LOAD_RATES) : null,
     workloads, repositoryMode,
@@ -193,13 +196,6 @@ function configuration() {
 function publicConfig(config) {
   const { token: _token, endpointRouter: _endpointRouter, ...safe } = config;
   return safe;
-}
-
-export function assertSafeTarget(api) {
-  const url = new URL(api);
-  const local = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
-  const loadtest = url.hostname.toLowerCase().split('.').some((label) => label.split('-').includes('loadtest'));
-  if (!local && !loadtest) throw new Error(`refusing non-loadtest target: ${url.hostname}`);
 }
 
 export function parseStages(value) {

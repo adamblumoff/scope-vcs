@@ -113,7 +113,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           rm -rf .railway-staging-upload
-          for service in api worker cache-service; do
+          for service in api worker cache-service repo-router; do
             root=".railway-staging-upload/$service"
             mkdir -p "$root"
             cp candidate/Cargo.toml candidate/Cargo.lock candidate/rust-toolchain.toml "$root/"
@@ -123,6 +123,17 @@ jobs:
             printf '%s\n' "$SOURCE_SHA" > "$root/$service/.scope-deployment-sha"
             printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$root/$service/.scope-deployment-attempt"
           done
+          region="$(jq -er '.railway.regionId' .github/deployment-services.json)"
+          api_replicas="$(jq -er '.railway.staging.apiReplicas' .github/deployment-services.json)"
+          router_replicas="$(jq -er '.railway.staging.routerReplicas' .github/deployment-services.json)"
+          jq --arg region "$region" --argjson replicas "$api_replicas" \
+            '.deploy.multiRegionConfig = {($region): {numReplicas: $replicas}}' \
+            .railway-staging-upload/api/railway.json > .railway-staging-upload/api/railway.json.tmp
+          mv .railway-staging-upload/api/railway.json.tmp .railway-staging-upload/api/railway.json
+          jq --arg region "$region" --argjson replicas "$router_replicas" \
+            '.deploy.multiRegionConfig = {($region): {numReplicas: $replicas}}' \
+            .railway-staging-upload/repo-router/railway.json > .railway-staging-upload/repo-router/railway.json.tmp
+          mv .railway-staging-upload/repo-router/railway.json.tmp .railway-staging-upload/repo-router/railway.json
           mkdir -p .railway-staging-upload/web-root/web
           cp -a candidate/web/. .railway-staging-upload/web-root/web/
           printf '%s\n' "$SOURCE_SHA" > .railway-staging-upload/web-root/web/.scope-deployment-sha
@@ -130,6 +141,7 @@ jobs:
           test -s .railway-staging-upload/api/api/.scope-deployment-sha
           test -s .railway-staging-upload/worker/worker/.scope-deployment-sha
           test -s .railway-staging-upload/cache-service/cache-service/.scope-deployment-sha
+          test -s .railway-staging-upload/repo-router/repo-router/.scope-deployment-sha
           test -s .railway-staging-upload/web-root/web/.scope-deployment-sha
           test -s .railway-staging-upload/web-root/web/package.json
 
@@ -143,7 +155,8 @@ jobs:
           bash .github/scripts/deploy-staging-railway.sh prepare \
             .railway-staging-upload/cache-service \
             .railway-staging-upload/worker \
-            .railway-staging-upload/api
+            .railway-staging-upload/api \
+            .railway-staging-upload/repo-router
 
       - name: Deploy staging web and record evidence
         shell: bash

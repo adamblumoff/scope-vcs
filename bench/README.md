@@ -55,7 +55,7 @@ The first unpressured sample is labeled `first-touch`, not cold. The kernel may 
 
 ## 2. Measure Scope end to end
 
-`railway-load.mjs` runs against an isolated Railway load-test environment or localhost. It refuses any non-local hostname without a `loadtest` label. Fixture creation may retry a transient 5xx twice. Ordinary measured operations are never retried. The consistency workload polls a retryable projection rebuild on purpose and reports visibility p50/p95/p99, poll attempts, and transient read errors.
+`railway-load.mjs` runs against an isolated Railway load-test environment or localhost by default. It refuses any non-local hostname without a `loadtest` label. Set `SCOPE_BENCH_TARGET_KIND=staging` only for an intentional staging run; that mode requires an exact `staging` hostname label and still rejects production. Fixture creation may retry a transient 5xx twice. Ordinary measured operations are never retried. The consistency workload polls a retryable projection rebuild on purpose and reports visibility p50/p95/p99, poll attempts, and transient read errors.
 
 The suite covers:
 

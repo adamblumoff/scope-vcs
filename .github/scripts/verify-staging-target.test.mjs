@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { verifyStagingTarget } from './verify-staging-target.mjs'
+import { verifyStagingTarget, verifyStagingTopology } from './verify-staging-target.mjs'
 
 function fixture() {
   const manifest = {
@@ -9,10 +9,15 @@ function fixture() {
       environmentId: 'production',
       projectId: 'project',
       staging: {
+        apiReplicas: 3,
         apiDomain: 'api-staging.example.test',
         cacheDomain: 'cache-staging.example.test',
         environmentId: 'staging',
         environmentName: 'staging',
+        routerDomain: 'router-staging.example.test',
+        routerReplicas: 1,
+        routerServiceId: 'router',
+        routerServiceName: 'scope-repo-router',
         webDomain: 'web-staging.example.test',
       },
     },
@@ -25,9 +30,10 @@ function fixture() {
   }
   const services = [
     { id: 'database', name: 'scope-postgres' },
-    { id: 'cache', name: 'scope-cache-service' },
-    { id: 'worker', name: 'scope-worker' },
-    { id: 'api', name: 'scope-api' },
+    { id: 'cache', name: 'scope-cache-service', status: 'SUCCESS', replicas: healthyReplicas(1) },
+    { id: 'worker', name: 'scope-worker', status: 'SUCCESS', replicas: healthyReplicas(1) },
+    { id: 'api', name: 'scope-api', status: 'SUCCESS', replicas: healthyReplicas(3) },
+    { id: 'router', name: 'scope-repo-router', status: 'SUCCESS', replicas: healthyReplicas(1) },
     { id: 'web', name: 'scope-web' },
   ]
   const status = {
@@ -37,10 +43,16 @@ function fixture() {
   return { manifest, services, status }
 }
 
+function healthyReplicas(count) {
+  return { configured: count, running: count, crashed: 0 }
+}
+
 test('accepts the reviewed staging target', () => {
   assert.deepEqual(verifyStagingTarget(fixture()), {
+    apiReplicas: 3,
     productionEnvironmentId: 'production',
     projectId: 'project',
+    routerReplicas: 1,
     stagingEnvironmentId: 'staging',
     stagingEnvironmentName: 'staging',
   })
@@ -57,10 +69,33 @@ test('rejects a different project, environment, or service', () => {
     (input) => { input.status.id = 'wrong' },
     (input) => { input.status.environments.edges[0].node.id = 'wrong' },
     (input) => { input.services = input.services.filter(({ id }) => id !== 'api') },
+    (input) => { input.services = input.services.filter(({ id }) => id !== 'router') },
   ]) {
     const input = fixture()
     mutate(input)
     assert.throws(() => verifyStagingTarget(input))
+  }
+})
+
+test('rejects invalid staging replica counts', () => {
+  for (const [key, value] of [['apiReplicas', 0], ['routerReplicas', 1.5]]) {
+    const input = fixture()
+    input.manifest.railway.staging[key] = value
+    assert.throws(() => verifyStagingTarget(input), /positive integer/)
+  }
+})
+
+test('accepts only the reviewed healthy staging topology', () => {
+  assert.doesNotThrow(() => verifyStagingTopology(fixture()))
+  for (const mutate of [
+    (input) => { input.services.find(({ id }) => id === 'api').replicas.running = 2 },
+    (input) => { input.services.find(({ id }) => id === 'router').replicas.configured = 2 },
+    (input) => { input.services.find(({ id }) => id === 'worker').status = 'CRASHED' },
+    (input) => { input.services.find(({ id }) => id === 'cache').replicas.crashed = 1 },
+  ]) {
+    const input = fixture()
+    mutate(input)
+    assert.throws(() => verifyStagingTopology(input), /healthy replicas/)
   }
 })
 

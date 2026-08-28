@@ -6,9 +6,10 @@ import test from 'node:test';
 
 import { createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
 import { fetchClientCount, validateRepositoryMode } from './repository-mode.mjs';
+import { assertSafeTarget, validateTargetKind } from './target-safety.mjs';
 
 import {
-  abortTimeoutMs, apiHeaders, assertSafeTarget, capacityRejectionBreakdown, changedFileCountSlope, chooseWrite,
+  abortTimeoutMs, apiHeaders, capacityRejectionBreakdown, changedFileCountSlope, chooseWrite,
   consistencyStats, evaluateStage, failureBreakdown,
   historySizeSlope, landingFileSizeSlope, parseByteSizes, parseRates, parseStages, stageResult, stats,
   toggleBenchmarkVisibilityRule, WRITE_DELTA_FILE_BYTES, writeChunkedRandomPayload, writeSizeSlope,
@@ -39,6 +40,16 @@ test('load target guard accepts only local or loadtest hosts', () => {
   assert.doesNotThrow(() => assertSafeTarget('https://scope-api-loadtest.up.railway.app'));
   assert.throws(() => assertSafeTarget('https://scope-api-production.up.railway.app'), /refusing non-loadtest target/);
   assert.throws(() => assertSafeTarget('https://notloadtest.example.com'), /refusing non-loadtest target/);
+});
+
+test('load target guard requires an explicit staging opt-in', () => {
+  assert.throws(() => assertSafeTarget('https://scope-api-staging.up.railway.app'), /refusing non-loadtest target/);
+  assert.doesNotThrow(() => assertSafeTarget('https://scope-api-staging.up.railway.app', 'staging'));
+  assert.throws(
+    () => assertSafeTarget('https://scope-api-production.up.railway.app', 'staging'),
+    /refusing non-staging target/,
+  );
+  assert.throws(() => validateTargetKind('production'), /must be loadtest or staging/);
 });
 
 test('numeric workload controls are unique and sorted', () => {
