@@ -16,7 +16,7 @@
         { "step": "packages:mise" },
         {
           "local": true,
-          "include": ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
+          "include": ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "vendor"]
         }
       ],
       "commands": [

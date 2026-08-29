@@ -36,7 +36,10 @@ export default defineConfig(({ mode }) => {
           brotli: true,
           gzip: true,
         },
-        plugins: ['./src/server/compress-responses.ts'],
+        plugins: [
+          './src/server/compress-responses.ts',
+          './src/server/pagent-invalid-api-response.ts',
+        ],
       }),
     ],
   }

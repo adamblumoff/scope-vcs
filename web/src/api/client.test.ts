@@ -1,9 +1,17 @@
 import * as assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { HttpError, loadJson } from './http'
+import {
+  HttpError,
+  InvalidApiResponseError,
+  loadJson,
+  setInvalidApiResponseObserver,
+} from './http'
 
 const originalFetch = globalThis.fetch
-afterEach(() => { globalThis.fetch = originalFetch })
+afterEach(() => {
+  globalThis.fetch = originalFetch
+  setInvalidApiResponseObserver(undefined)
+})
 
 test('loadJson parses success and preserves request init', async () => {
   let captured: RequestInit | undefined
@@ -18,11 +26,82 @@ test('loadJson parses success and preserves request init', async () => {
 })
 
 test('loadJson surfaces structured and malformed API errors', async () => {
+  let observed = 0
+  setInvalidApiResponseObserver(() => { observed += 1 })
+
   globalThis.fetch = async () => jsonResponse({ message: 'repo is private' }, 403)
   await assert.rejects(loadJson('/v1/repos/private'), hasHttpError(403, 'repo is private'))
 
   globalThis.fetch = async () => new Response('not json', { status: 502 })
   await assert.rejects(loadJson('/v1/repos'), hasHttpError(502, 'request failed: 502'))
+  assert.equal(observed, 0)
+})
+
+test('loadJson rejects malformed successful responses with safe diagnostics', async () => {
+  let observed: InvalidApiResponseError | undefined
+  setInvalidApiResponseObserver((error) => { observed = error })
+  globalThis.fetch = async () => new Response('<h1>secret response</h1>', {
+    headers: { 'content-type': 'text/html; charset=utf-8' },
+    status: 200,
+  })
+
+  await assert.rejects(
+    loadJson('https://api.scope.test/v1/repos?token=secret', { method: 'post' }),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.requestMethod === 'POST' &&
+      error.requestPath === '/v1/repos' &&
+      error.status === 200 &&
+      error.contentType === 'text/html; charset=utf-8' &&
+      error.message ===
+        'POST /v1/repos returned invalid JSON (200, text/html; charset=utf-8)' &&
+      !error.message.includes('secret'),
+  )
+  assert.ok(observed instanceof InvalidApiResponseError)
+  assert.equal(observed.requestPath, '/v1/repos')
+})
+
+test('loadJson preserves its error when the observer fails', async () => {
+  setInvalidApiResponseObserver(() => { throw new Error('observer failed') })
+  globalThis.fetch = async () => new Response('not json', { status: 200 })
+
+  await assert.rejects(
+    loadJson('/v1/repos'),
+    (error: unknown) => error instanceof InvalidApiResponseError,
+  )
+})
+
+test('loadJson replaces sensitive and dynamic path segments with the API template', async () => {
+  globalThis.fetch = async () => new Response('not json', { status: 200 })
+
+  await assert.rejects(
+    loadJson('/v1/repository-invites/invite-bearer-secret/accept'),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.requestPath === '/v1/repository-invites/{token}/accept' &&
+      !error.message.includes('invite-bearer-secret'),
+  )
+  await assert.rejects(
+    loadJson('/v1/repos/acme/widgets/requests/request_123'),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.requestPath === '/v1/repos/{owner}/{repo}/requests/{request_id}' &&
+      !error.message.includes('acme') &&
+      !error.message.includes('request_123'),
+  )
+})
+
+test('loadJson rejects an empty JSON response unless the status allows no content', async () => {
+  globalThis.fetch = async () => new Response(null, { status: 200 })
+  await assert.rejects(
+    loadJson('/v1/repos'),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.contentType === null &&
+      error.message ===
+        'GET /v1/repos returned invalid JSON (200, unknown content type)',
+  )
+
+  globalThis.fetch = async () => new Response(null, { status: 204 })
+  assert.equal(await loadJson<void>('/v1/cli/sessions/session_1', {
+    method: 'DELETE',
+  }), undefined)
 })
 
 test('loadJson keeps the opaque server reference with a diagnostic error', async () => {
