@@ -2,6 +2,7 @@
 members = [
     "api",
     "cache-service",
+    "repo-router",
     "crates/scope-api-contract",
     "crates/scope-cache-contract",
     "crates/scope-cache-domain",

@@ -85,6 +85,10 @@ async fn create_repo_route_creates_user_and_lists_repo() {
     assert_eq!(body["repo"]["id"], "owner/scope_app");
     assert_eq!(body["repo"]["access"]["actor"], "Owner");
     assert_eq!(
+        body["repo"]["git_remote_url"],
+        "http://localhost:8080/git/permissioned/owner/scope_app"
+    );
+    assert_eq!(
         body["init"]["git_remote_url"],
         "http://localhost:8080/git/permissioned/owner/scope_app"
     );

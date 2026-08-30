@@ -1554,14 +1554,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scope-cache-domain"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror",
-]
-
-[[package]]
 name = "scope-cli"
 version = "0.1.0"
 dependencies = [
@@ -1591,7 +1583,6 @@ name = "scope-domain"
 version = "0.1.0"
 dependencies = [
  "hex",
- "scope-cache-domain",
  "serde",
  "serde_json",
  "sha1",

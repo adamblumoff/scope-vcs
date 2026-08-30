@@ -328,6 +328,7 @@ pub(crate) fn repo_summary_for_user(
     repo: &Repository,
     user_id: &str,
     open_request_count: usize,
+    git_origin: &str,
 ) -> Option<RepoSummaryResponse> {
     let access = repo.access_for_user_id(user_id);
     if access.actor == RepositoryActor::Public {
@@ -347,6 +348,12 @@ pub(crate) fn repo_summary_for_user(
         id: repo.record.id.clone(),
         owner_handle: repo.record.owner_handle.clone(),
         name: repo.record.name.clone(),
+        git_remote_url: repository_git_remote_url(
+            git_origin,
+            access.actor,
+            &repo.record.owner_handle,
+            &repo.record.name,
+        ),
         lifecycle_state: repo.record.lifecycle_state.into(),
         change_version: repo_change_version_for_access(repo, access),
         access: repository_access_response(access),
@@ -401,13 +408,13 @@ pub(crate) fn session_capabilities_response(
 pub(crate) fn repo_init_response(
     repo: &Repository,
     user_id: &str,
-    api_origin: &str,
+    git_origin: &str,
     now_unix: u64,
     secret: Option<String>,
     push_secret: Option<String>,
 ) -> Result<RepoInitResponse, ApiError> {
     ensure_repo_init_access(repo, user_id)?;
-    let repo_summary = repo_summary_for_user(repo, user_id, 0)
+    let repo_summary = repo_summary_for_user(repo, user_id, 0, git_origin)
         .ok_or_else(|| ApiError::internal_message("init repository is not readable"))?;
     let token = repo
         .first_push_token
@@ -418,19 +425,31 @@ pub(crate) fn repo_init_response(
         .as_ref()
         .map(|stored_token| git_push_token_response(stored_token, push_secret));
 
-    let git_remote_path = scope_api_contract::routes::git_repo(
-        "permissioned",
-        &repo_summary.owner_handle,
-        &repo_summary.name,
-    );
     Ok(RepoInitResponse {
-        git_remote_url: format!("{}{}", api_origin.trim_end_matches('/'), git_remote_path),
+        git_remote_url: repo_summary.git_remote_url.clone(),
         remote_name: "scope".to_string(),
         push_branch: DEFAULT_GIT_BRANCH.to_string(),
         repo: repo_summary,
         token,
         push_token,
     })
+}
+
+pub(crate) fn repository_git_remote_url(
+    git_origin: &str,
+    actor: RepositoryActor,
+    owner: &str,
+    repo: &str,
+) -> String {
+    let mode = match actor {
+        RepositoryActor::Public => "public",
+        RepositoryActor::Owner | RepositoryActor::Member => "permissioned",
+    };
+    format!(
+        "{}{}",
+        git_origin.trim_end_matches('/'),
+        scope_api_contract::routes::git_repo(mode, owner, repo)
+    )
 }
 
 fn ensure_repo_init_access(repo: &Repository, user_id: &str) -> Result<(), ApiError> {

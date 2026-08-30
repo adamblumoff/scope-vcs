@@ -5,12 +5,14 @@ import { basename, join } from 'node:path';
 import test from 'node:test';
 
 import { createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
+import { fetchClientCount, validateRepositoryMode } from './repository-mode.mjs';
+import { assertSafeTarget, validateTargetKind } from './target-safety.mjs';
 
 import {
-  abortTimeoutMs, apiHeaders, assertSafeTarget, capacityRejectionBreakdown, changedFileCountSlope, chooseWrite,
+  abortTimeoutMs, apiHeaders, capacityRejectionBreakdown, changedFileCountSlope, chooseWrite,
   consistencyStats, evaluateStage, failureBreakdown,
   historySizeSlope, landingFileSizeSlope, parseByteSizes, parseRates, parseStages, stageResult, stats,
-  toggleBenchmarkVisibilityRule, WRITE_DELTA_FILE_BYTES, writeChunkedRandomPayload, writeSizeSlope,
+  rotating, toggleBenchmarkVisibilityRule, WRITE_DELTA_FILE_BYTES, writeChunkedRandomPayload, writeSizeSlope,
 } from './railway-load.mjs';
 import { parseChangedFileCounts, writeChangedFiles } from './write-shape.mjs';
 
@@ -40,6 +42,16 @@ test('load target guard accepts only local or loadtest hosts', () => {
   assert.throws(() => assertSafeTarget('https://notloadtest.example.com'), /refusing non-loadtest target/);
 });
 
+test('load target guard requires an explicit staging opt-in', () => {
+  assert.throws(() => assertSafeTarget('https://scope-api-staging.up.railway.app'), /refusing non-loadtest target/);
+  assert.doesNotThrow(() => assertSafeTarget('https://scope-api-staging.up.railway.app', 'staging'));
+  assert.throws(
+    () => assertSafeTarget('https://scope-api-production.up.railway.app', 'staging'),
+    /refusing non-staging target/,
+  );
+  assert.throws(() => validateTargetKind('production'), /must be loadtest or staging/);
+});
+
 test('numeric workload controls are unique and sorted', () => {
   assert.deepEqual(parseStages('4,1,2,4'), [1, 2, 4]);
   assert.deepEqual(parseRates('1,0.25,2,1'), [0.25, 1, 2]);
@@ -59,6 +71,30 @@ test('changed-file fixtures preserve count and exact file size', async (context)
   const files = await readdir(root);
   assert.equal(files.length, 65);
   assert.deepEqual(await Promise.all(files.map(async (file) => (await stat(join(root, file))).size)), Array(65).fill(32));
+});
+
+test('hot repository mode accepts only clone and warm fetch workloads', () => {
+  assert.doesNotThrow(() => validateRepositoryMode('hot', ['full-clone', 'warm-fetch'], [1000], '3'));
+  assert.throws(
+    () => validateRepositoryMode('hot', ['full-clone', 'mixed'], [1], '3'),
+    /hot repository mode supports only warm-fetch, full-clone; received mixed/,
+  );
+  assert.throws(
+    () => validateRepositoryMode('hot', ['full-clone'], [1, 16], '3'),
+    /requires one SCOPE_LOAD_HISTORY_DEPTHS value/,
+  );
+  assert.throws(
+    () => validateRepositoryMode('hot', ['full-clone'], [1]),
+    /requires SCOPE_LOAD_READ_REPLICA_COUNT/,
+  );
+  assert.throws(() => validateRepositoryMode('unknown', ['full-clone'], [1]), /must be one of spread, hot/);
+});
+
+test('hot warm fetch allocates enough independent clients for the load shape', () => {
+  const base = { repositoryMode: 'hot', mixedRepos: 8, stages: [1, 8, 32], rates: null, maxInFlight: 256 };
+  assert.equal(fetchClientCount(base), 32);
+  assert.equal(fetchClientCount({ ...base, rates: [50, 100] }), 256);
+  assert.equal(fetchClientCount({ ...base, repositoryMode: 'spread', rates: [50, 100] }), 32);
 });
 
 test('endpoint pools are normalized without duplicate primaries', () => {
@@ -118,6 +154,14 @@ test('history slope groups exact fixture depths and reports p95 growth', () => {
 
 test('mixed workload is deterministic at the requested 80/20 split', () => {
   assert.deepEqual(Array.from({ length: 10 }, (_, index) => chooseWrite(index, 20)), [true, false, false, false, false, true, false, false, false, false]);
+});
+
+test('mixed workload reads rotate across the mixed repository set', () => {
+  const mixedRead = rotating([{ repo: 'mixed-1' }, { repo: 'mixed-2' }, { repo: 'mixed-3' }]);
+  assert.deepEqual(
+    Array.from({ length: 5 }, () => mixedRead().repo),
+    ['mixed-1', 'mixed-2', 'mixed-3', 'mixed-1', 'mixed-2'],
+  );
 });
 
 test('stage results preserve node labels, byte rate, and errors', () => {
@@ -201,6 +245,18 @@ test('stage gate rejects errors and latency above twice baseline', () => {
   const stage = { name: 'blob-read', errorRate: 0.02, stats: { p95Ms: 210, scheduleDelayP95Ms: 0 }, landingFileSizeSlope: { points: [] } };
   assert.equal(evaluateStage(stage, 100).healthy, false);
   assert.equal(evaluateStage({ name: 'blob-read', errorRate: 0.01, stats: { p95Ms: 100, scheduleDelayP95Ms: 0 }, landingFileSizeSlope: { points: [] } }, 100).healthy, true);
+});
+
+test('stage gate rejects even a low-rate killed operation', () => {
+  const stage = {
+    name: 'warm-fetch', errorRate: 0.001,
+    stats: { p95Ms: 100, scheduleDelayP95Ms: 0 },
+    failureBreakdown: { killed: 1 }, landingFileSizeSlope: { points: [] },
+  };
+  assert.deepEqual(evaluateStage(stage, 100), {
+    healthy: false,
+    reasons: ['1 operation(s) hit the client timeout'],
+  });
 });
 
 test('push stage gate enforces the optional fifteen-percent regression budget', () => {

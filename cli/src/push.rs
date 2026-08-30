@@ -8,7 +8,7 @@ use crate::{
     git_repo::{
         GitRepo, changed_paths_since_scope_base_at_commit, ensure_git_repo_ready,
         fetch_scope_remote_with_bearer, git_remote_push_url, head_oid, mark_scope_remote_pushed,
-        push_head_with_bearer, scope_remote_head_oid, warn_if_dirty_working_tree,
+        push_head_with_bearer, scope_git_origin, scope_remote_head_oid, warn_if_dirty_working_tree,
     },
     git_transport::{GitAccess, ScopeRemote, select_scope_push_remote},
     login::session_from_cache_or_browser,
@@ -322,7 +322,8 @@ pub fn load_scope_remote(
     remote: &str,
 ) -> anyhow::Result<ScopeRemote> {
     let push_url = git_remote_push_url(git_repo, remote)?;
-    let target = ScopeRemote::parse(api_url, remote, &push_url)?;
+    let git_origin = scope_git_origin(git_repo, api_url)?;
+    let target = ScopeRemote::parse(&git_origin, remote, &push_url)?;
     if target.access != GitAccess::Permissioned {
         bail!("Scope remote must have path /git/permissioned/owner/repo");
     }

@@ -1,4 +1,5 @@
 use anyhow::{Context, bail};
+use reqwest::Url;
 use std::{
     collections::BTreeSet,
     env,
@@ -24,6 +25,8 @@ pub struct GitChangedPath {
 }
 
 const SCOPE_GIT_CREDENTIAL_HELPER: &str = "!scope git-credential";
+const SCOPE_API_URL_CONFIG_KEY: &str = "scope.apiUrl";
+const SCOPE_GIT_ORIGIN_CONFIG_KEY: &str = "scope.gitOrigin";
 
 pub fn discover_git_repo(command_name: &str) -> anyhow::Result<GitRepo> {
     let root_output = Command::new("git")
@@ -513,9 +516,14 @@ pub fn clone_with_bearer(
     )
 }
 
-pub fn install_scope_fetch_auth(repo_root: &Path, remote_url: &str) -> anyhow::Result<()> {
+pub fn install_scope_fetch_auth(
+    repo_root: &Path,
+    remote_url: &str,
+    api_url: &str,
+) -> anyhow::Result<()> {
     let helper_key = credential_config_key(remote_url, "helper")?;
     let use_http_path_key = credential_config_key(remote_url, "useHttpPath")?;
+    let git_origin = transport_origin(remote_url)?;
     let unset = Command::new("git")
         .current_dir(repo_root)
         .args(["config", "--local", "--unset-all", &helper_key])
@@ -530,7 +538,57 @@ pub fn install_scope_fetch_auth(repo_root: &Path, remote_url: &str) -> anyhow::R
         &["--add", &helper_key, SCOPE_GIT_CREDENTIAL_HELPER],
     )?;
     run_git_config(repo_root, &["--replace-all", &use_http_path_key, "true"])?;
+    run_git_config(
+        repo_root,
+        &["--replace-all", SCOPE_API_URL_CONFIG_KEY, api_url],
+    )?;
+    run_git_config(
+        repo_root,
+        &["--replace-all", SCOPE_GIT_ORIGIN_CONFIG_KEY, &git_origin],
+    )?;
     Ok(())
+}
+
+pub fn scope_git_origin(repo: &GitRepo, fallback_url: &str) -> anyhow::Result<String> {
+    let output = git_output_in_repo(
+        repo,
+        &["config", "--local", "--get", SCOPE_GIT_ORIGIN_CONFIG_KEY],
+    )?;
+    if output.status.success() {
+        let origin = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !origin.is_empty() {
+            return Ok(origin);
+        }
+    } else if output.status.code() != Some(1) {
+        bail!("read configured Scope Git origin failed");
+    }
+    transport_origin(fallback_url)
+}
+
+pub fn scope_api_url_from_git_config(repo_root: &Path) -> anyhow::Result<Option<String>> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["config", "--local", "--get", SCOPE_API_URL_CONFIG_KEY])
+        .output()
+        .context("read configured Scope API URL")?;
+    if output.status.success() {
+        let api_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok((!api_url.is_empty()).then_some(api_url));
+    }
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    bail!("read configured Scope API URL failed")
+}
+
+fn transport_origin(value: &str) -> anyhow::Result<String> {
+    let mut url = Url::parse(value).context("parse Scope transport URL")?;
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_path("");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
 fn run_git_config(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {

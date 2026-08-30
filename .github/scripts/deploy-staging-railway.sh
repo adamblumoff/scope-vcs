@@ -18,11 +18,14 @@ project_id="$(jq -er '.railway.projectId' "$manifest_path")"
 production_environment_id="$(jq -er '.railway.environmentId' "$manifest_path")"
 staging_environment_id="$(jq -er '.railway.staging.environmentId' "$manifest_path")"
 staging_environment_name="$(jq -er '.railway.staging.environmentName' "$manifest_path")"
+staging_api_replicas="$(jq -er '.railway.staging.apiReplicas' "$manifest_path")"
 staging_cache_url="https://$(jq -er '.railway.staging.cacheDomain' "$manifest_path")"
+staging_router_url="https://$(jq -er '.railway.staging.routerDomain' "$manifest_path")"
 database_service="$(jq -er '.railway.databaseServiceId' "$manifest_path")"
 cache_service="$(jq -er '.services.cache.id' "$manifest_path")"
 worker_service="$(jq -er '.services.worker.id' "$manifest_path")"
 api_service="$(jq -er '.services.api.id' "$manifest_path")"
+router_service="$(jq -er '.railway.staging.routerServiceId' "$manifest_path")"
 web_service="$(jq -er '.services.web.id' "$manifest_path")"
 
 if [[ "$staging_environment_id" == "$production_environment_id" ]]; then
@@ -41,10 +44,31 @@ SCOPE_DEPLOYMENT_MANIFEST_JSON="$manifest_json" \
   SCOPE_RAILWAY_SERVICES_JSON="$services_json" \
   node .github/scripts/verify-staging-target.mjs >/dev/null
 
+railway variable set "${railway_scope[@]}" --service "$api_service" --skip-deploys \
+  "SCOPE_GIT_PUBLIC_URL=$staging_router_url" >/dev/null
+railway variable set "${railway_scope[@]}" --service "$router_service" --skip-deploys \
+  "SCOPE_REPO_ROUTER_BACKEND=scope-api.railway.internal:8080" \
+  "SCOPE_REPO_ROUTER_READ_REPLICAS=$staging_api_replicas" >/dev/null
+
 api_variables="$(railway variable list "${railway_scope[@]}" --service "$api_service" --json)"
 if ! jq -e --arg expected "$staging_cache_url" '.SCOPE_CACHE_URL == $expected' \
   <<< "$api_variables" >/dev/null; then
   echo "Staging API SCOPE_CACHE_URL does not match the reviewed staging cache domain." >&2
+  exit 1
+fi
+if ! jq -e --arg expected "$staging_router_url" '.SCOPE_GIT_PUBLIC_URL == $expected' \
+  <<< "$api_variables" >/dev/null; then
+  echo "Staging API SCOPE_GIT_PUBLIC_URL does not match the reviewed staging router domain." >&2
+  exit 1
+fi
+
+router_variables="$(railway variable list "${railway_scope[@]}" --service "$router_service" --json)"
+if ! jq -e \
+  --arg backend 'scope-api.railway.internal:8080' \
+  --arg replicas "$staging_api_replicas" \
+  '.SCOPE_REPO_ROUTER_BACKEND == $backend and .SCOPE_REPO_ROUTER_READ_REPLICAS == $replicas' \
+  <<< "$router_variables" >/dev/null; then
+  echo "Staging router variables do not match the reviewed API topology." >&2
   exit 1
 fi
 
@@ -76,6 +100,16 @@ for (const id of [process.env.API_SERVICE, process.env.CACHE_SERVICE, process.en
 '
 }
 
+assert_staging_topology() {
+  local current_services
+  current_services="$(railway service list "${railway_scope[@]}" --json)"
+  SCOPE_DEPLOYMENT_MANIFEST_JSON="$manifest_json" \
+    SCOPE_RAILWAY_STATUS_JSON="$status_json" \
+    SCOPE_RAILWAY_SERVICES_JSON="$current_services" \
+    SCOPE_VERIFY_STAGING_TOPOLOGY=1 \
+    node .github/scripts/verify-staging-target.mjs >/dev/null
+}
+
 record_deployment() {
   local service="$1"
   railway deployment list "${railway_scope[@]}" --service "$service" --limit 1 --json |
@@ -87,8 +121,8 @@ record_deployment() {
 
 case "$action" in
   prepare)
-    if [[ "$#" -ne 3 || ! -x "$maintenance_binary" || ! -x "$seed_binary" ]]; then
-      echo "usage: deploy-staging-railway.sh prepare <cache-root> <worker-root> <api-root>" >&2
+    if [[ "$#" -ne 4 || ! -x "$maintenance_binary" || ! -x "$seed_binary" ]]; then
+      echo "usage: deploy-staging-railway.sh prepare <cache-root> <worker-root> <api-root> <router-root>" >&2
       exit 2
     fi
     assert_writer_state 0
@@ -126,17 +160,18 @@ case "$action" in
     bash .github/scripts/deploy-railway.sh "$cache_service" "$1"
     bash .github/scripts/deploy-railway.sh "$worker_service" "$2"
     bash .github/scripts/deploy-railway.sh "$api_service" "$3"
+    bash .github/scripts/deploy-railway.sh "$router_service" "$4"
     ;;
   finish)
     if [[ "$#" -ne 1 ]]; then
       echo "usage: deploy-staging-railway.sh finish <web-root>" >&2
       exit 2
     fi
-    assert_writer_state 1
+    assert_staging_topology
     bash .github/scripts/deploy-railway.sh "$web_service" "$1"
     evidence_lines="$(mktemp)"
     trap 'rm -f "$evidence_lines"' EXIT
-    for service in "$cache_service" "$worker_service" "$api_service" "$web_service"; do
+    for service in "$cache_service" "$worker_service" "$api_service" "$router_service" "$web_service"; do
       record_deployment "$service" >> "$evidence_lines"
     done
     jq -s \

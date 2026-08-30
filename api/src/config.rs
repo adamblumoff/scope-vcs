@@ -6,7 +6,9 @@ use std::{
 use scope_git::{DEFAULT_GIT_STORAGE_MAX_OBJECT_BYTES, GitStorageLimits};
 
 pub const SCOPE_APP_ORIGIN_ENV: &str = "SCOPE_APP_ORIGIN";
+#[cfg(feature = "local-dev")]
 pub const SCOPE_API_PUBLIC_URL_ENV: &str = "SCOPE_API_PUBLIC_URL";
+pub const SCOPE_GIT_PUBLIC_URL_ENV: &str = "SCOPE_GIT_PUBLIC_URL";
 pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
 pub const SCOPE_REPO_ROOT_ENV: &str = "SCOPE_REPO_ROOT";
 pub const SCOPE_DATA_DIR_ENV: &str = "SCOPE_DATA_DIR";

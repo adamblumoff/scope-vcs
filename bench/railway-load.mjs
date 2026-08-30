@@ -14,6 +14,8 @@ import {
   sampleStats, writeSizeSlope,
 } from './metrics.mjs';
 export { changedFileCountSlope, historySizeSlope, landingFileSizeSlope, writeSizeSlope } from './metrics.mjs';
+import { fetchClientCount, needsFetchClients, validateRepositoryMode } from './repository-mode.mjs';
+import { assertSafeTarget, validateTargetKind } from './target-safety.mjs';
 import { parseChangedFileCounts, writeChangedFiles } from './write-shape.mjs';
 
 // Black-box benchmark: no production-only hooks and never a production target.
@@ -32,14 +34,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
 async function main() {
   const config = configuration();
-  for (const api of config.apiUrls) assertSafeTarget(api);
+  for (const api of config.apiUrls) assertSafeTarget(api, config.targetKind);
+  if (config.gitUrl) assertSafeTarget(config.gitUrl, config.targetKind);
   await ready(config);
   const runRoot = join(config.outputRoot, new Date().toISOString().replaceAll(':', '-'));
   await mkdir(runRoot, { recursive: true });
   const fixtures = [];
   const clients = [];
   const report = {
-    version: 5, generatedAt: new Date().toISOString(), apiUrls: config.apiUrls,
+    version: 6, generatedAt: new Date().toISOString(), apiUrls: config.apiUrls,
     config: publicConfig(config),
     workloads: [], faultHook: null,
     cleanup: { attemptedRepositories: 0, attemptedClients: 0, failed: [] },
@@ -52,44 +55,53 @@ async function main() {
   process.once('SIGINT', interrupt);
   process.once('SIGTERM', interrupt);
   try {
-    console.log(`targets: ${config.apiUrls.join(', ')} · routing: ${config.routingMode} · topology: ${config.topologyLabel} · repeat: ${config.repeatIndex}`);
+    console.log(`targets: ${config.apiUrls.join(', ')} · Git: ${config.gitUrl || 'same endpoints'} · routing: ${config.routingMode} · topology: ${config.topologyLabel} · read replicas: ${config.readReplicaCount} · repeat: ${config.repeatIndex}`);
     console.log(config.rates ? `rates: ${config.rates.join(', ')}/s` : `concurrency: ${config.stages.join(', ')}`);
     console.log('seeding public repositories for read and mixed workloads...');
     const needsReadFixtures = config.workloads.some((name) => [
       'full-clone', 'code-read', 'repo-read', 'projection-read', 'tree-read', 'blob-read', 'history-read',
     ].includes(name));
     const readFixtures = [];
-    if (needsReadFixtures) for (const depth of config.historyDepths) {
-      const fixture = await seedRepository(config, runRoot, `history-${depth}`, config.readBytes, depth);
+    const churnFixtures = [];
+    const mixedFixtures = [];
+    if (config.repositoryMode === 'hot') {
+      const depth = config.historyDepths[0];
+      const fixture = await seedRepository(config, runRoot, 'hot', config.readBytes, depth);
       fixtures.push(fixture);
       readFixtures.push(fixture);
-      console.log(`  history fixture: ${depth} commits`);
-    }
-    const churnFixtures = [];
-    for (let index = 0; config.workloads.includes('cold-churn') && index < config.churnRepos; index += 1) {
-      const fixture = await seedRepository(config, runRoot, `churn-${index + 1}`, config.readBytes, config.historyDepths[0]);
-      fixtures.push(fixture);
-      churnFixtures.push(fixture);
-    }
-    const mixedFixtures = [];
-    const needsMixedFixtures = config.workloads.some((name) => [
-      'warm-fetch', 'incremental-fetch', 'mixed', 'consistency', 'push-persistence',
-    ].includes(name));
-    for (let index = 0; needsMixedFixtures && index < config.mixedRepos; index += 1) {
-      const fixture = await seedRepository(
-        config,
-        runRoot,
-        `mixed-${index + 1}`,
-        config.readBytes,
-        config.historyDepths[0],
-        config.writeDeltaBytes[index % config.writeDeltaBytes.length],
-        config.landingFileBytes[index % config.landingFileBytes.length],
-        config.changedFileCounts[index % config.changedFileCounts.length],
-      );
-      fixtures.push(fixture);
       mixedFixtures.push(fixture);
+      console.log(`  hot fixture: ${config.readBytes} bytes, ${depth} commits`);
+    } else {
+      if (needsReadFixtures) for (const depth of config.historyDepths) {
+        const fixture = await seedRepository(config, runRoot, `history-${depth}`, config.readBytes, depth);
+        fixtures.push(fixture);
+        readFixtures.push(fixture);
+        console.log(`  history fixture: ${depth} commits`);
+      }
+      for (let index = 0; config.workloads.includes('cold-churn') && index < config.churnRepos; index += 1) {
+        const fixture = await seedRepository(config, runRoot, `churn-${index + 1}`, config.readBytes, config.historyDepths[0]);
+        fixtures.push(fixture);
+        churnFixtures.push(fixture);
+      }
+      const needsMixedFixtures = config.workloads.some((name) => [
+        'warm-fetch', 'incremental-fetch', 'mixed', 'consistency', 'push-persistence',
+      ].includes(name));
+      for (let index = 0; needsMixedFixtures && index < config.mixedRepos; index += 1) {
+        const fixture = await seedRepository(
+          config,
+          runRoot,
+          `mixed-${index + 1}`,
+          config.readBytes,
+          config.historyDepths[0],
+          config.writeDeltaBytes[index % config.writeDeltaBytes.length],
+          config.landingFileBytes[index % config.landingFileBytes.length],
+          config.changedFileCounts[index % config.changedFileCounts.length],
+        );
+        fixtures.push(fixture);
+        mixedFixtures.push(fixture);
+      }
     }
-    const fetchClients = config.workloads.some((name) => ['warm-fetch', 'incremental-fetch'].includes(name))
+    const fetchClients = needsFetchClients(config.workloads)
       ? await createFetchClients(config, runRoot, mixedFixtures)
       : [];
     clients.push(...fetchClients);
@@ -130,11 +142,18 @@ function configuration() {
   const writeDeltaBytes = parseByteSizes(process.env.SCOPE_LOAD_WRITE_DELTA_BYTES || String(64 * 1024));
   const landingFileBytes = parseByteSizes(process.env.SCOPE_LOAD_LANDING_FILE_BYTES || '0');
   const changedFileCounts = parseChangedFileCounts(process.env.SCOPE_LOAD_CHANGED_FILE_COUNTS || '0');
+  const workloads = list('SCOPE_LOAD_WORKLOADS', DEFAULT_WORKLOADS);
+  const repositoryMode = nonEmpty('SCOPE_LOAD_REPOSITORY_MODE', 'spread');
+  const targetKind = nonEmpty('SCOPE_BENCH_TARGET_KIND', 'loadtest');
+  validateTargetKind(targetKind);
+  const historyDepths = parseStages(process.env.SCOPE_LOAD_HISTORY_DEPTHS || '1,16,64');
+  validateRepositoryMode(repositoryMode, workloads, historyDepths, process.env.SCOPE_LOAD_READ_REPLICA_COUNT);
   return {
-    apiUrls, token, stages, routingMode, routingSeed,
+    apiUrls, gitUrl: process.env.SCOPE_BENCH_GIT_URL?.trim().replace(/\/$/, '') || null,
+    token, stages, routingMode, routingSeed, targetKind,
     endpointRouter: createEndpointRouter(apiUrls, routingMode, routingSeed),
     rates: process.env.SCOPE_LOAD_RATES ? parseRates(process.env.SCOPE_LOAD_RATES) : null,
-    workloads: list('SCOPE_LOAD_WORKLOADS', DEFAULT_WORKLOADS),
+    workloads, repositoryMode,
     stageSeconds: positiveNumber('SCOPE_LOAD_STAGE_SECONDS', 120),
     warmupSeconds: nonNegativeNumber('SCOPE_LOAD_WARMUP_SECONDS', 0),
     warmupConcurrency: positiveInteger('SCOPE_LOAD_WARMUP_CONCURRENCY', 4),
@@ -153,7 +172,7 @@ function configuration() {
     pushBaselineP95Ms: process.env.SCOPE_LOAD_PUSH_BASELINE_P95_MS
       ? positiveNumber('SCOPE_LOAD_PUSH_BASELINE_P95_MS', 1)
       : null,
-    historyDepths: parseStages(process.env.SCOPE_LOAD_HISTORY_DEPTHS || '1,16,64'),
+    historyDepths,
     mixedWritePercent: boundedNumber('SCOPE_LOAD_MIXED_WRITE_PERCENT', 20, 0, 100),
     apiPermitLimits: {
       receivePack: positiveInteger('SCOPE_BENCH_RECEIVE_PACK_CONCURRENCY', 4),
@@ -162,6 +181,7 @@ function configuration() {
       objectStore: positiveInteger('SCOPE_BENCH_OBJECT_STORE_CONCURRENCY', 16),
     },
     nodeScaleLabel: nonEmpty('SCOPE_LOAD_NODE_SCALE_LABEL', 'unspecified'),
+    readReplicaCount: positiveInteger('SCOPE_LOAD_READ_REPLICA_COUNT', 1),
     protocolLabel: nonEmpty('SCOPE_LOAD_PROTOCOL_LABEL', 'current'),
     runLabel: nonEmpty('SCOPE_BENCH_RUN_LABEL', 'unlabeled'),
     topologyLabel: nonEmpty('SCOPE_LOAD_TOPOLOGY_LABEL', routingMode),
@@ -176,13 +196,6 @@ function configuration() {
 function publicConfig(config) {
   const { token: _token, endpointRouter: _endpointRouter, ...safe } = config;
   return safe;
-}
-
-export function assertSafeTarget(api) {
-  const url = new URL(api);
-  const local = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
-  const loadtest = url.hostname.toLowerCase().split('.').some((label) => label.split('-').includes('loadtest'));
-  if (!local && !loadtest) throw new Error(`refusing non-loadtest target: ${url.hostname}`);
 }
 
 export function parseStages(value) {
@@ -251,7 +264,8 @@ async function runStaircase(name, context) {
   return {
     name, status: healthy ? 'measured' : 'failed', nodeScaleLabel: context.config.nodeScaleLabel,
     protocolLabel: context.config.protocolLabel, topologyLabel: context.config.topologyLabel,
-    routingMode: context.config.routingMode, repeatIndex: context.config.repeatIndex, warmup,
+    routingMode: context.config.routingMode, readReplicaCount: context.config.readReplicaCount,
+    repeatIndex: context.config.repeatIndex, warmup,
     baselineP95Ms: baselineP95, stages, confirmations,
     firstUnhealthy: firstUnhealthy ? firstUnhealthy.targetRate ?? firstUnhealthy.concurrency : null,
     lastHealthyConcurrency: healthy?.concurrency ?? null,
@@ -266,6 +280,7 @@ function operationFor(name, context) {
   const churn = rotating(context.churnFixtures);
   const pairs = pooled(context.fetchClients);
   const writes = pooled(context.mixedFixtures);
+  const mixedRead = rotating(context.mixedFixtures);
   const routeKey = (worker, iteration) => `${name}:${worker}:${iteration}`;
   if (name === 'warm-fetch') return (worker, iteration, scheduledAt) => withResource(
     pairs,
@@ -290,7 +305,7 @@ function operationFor(name, context) {
     const endpoint = endpointFor(context.config, fixture, routeKey(worker, iteration));
     const result = await command(
       context.config,
-      ['git', 'ls-remote', '--refs', publicRemoteUrl(endpoint, fixture)],
+      ['git', 'ls-remote', '--refs', publicRemoteUrl(context.config, endpoint, fixture)],
       undefined,
       undefined,
       scheduledAt,
@@ -315,9 +330,9 @@ function operationFor(name, context) {
     return (worker, iteration, scheduledAt) => {
       const operationKey = routeKey(worker, iteration);
       const write = chooseWrite(index++, context.config.mixedWritePercent);
-      if (write) return withResource(writes, (fixture) => updateAndPush(context.config, fixture, iteration, scheduledAt, operationKey));
-      const fixture = read();
-      return apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture, operationKey);
+      if (write) return withResource(writes, (fixture) => tagOperation(updateAndPush(context.config, fixture, iteration, scheduledAt, operationKey), 'push'));
+      const fixture = mixedRead();
+      return tagOperation(apiRead(context.config, `${repoPath(fixture)}/files/content?path=load-update.txt`, scheduledAt, fixture, operationKey), 'read');
     };
   }
   if (name === 'consistency') return (worker, iteration, scheduledAt) => withResource(
@@ -327,9 +342,13 @@ function operationFor(name, context) {
   throw new Error(`unsupported workload: ${name}`);
 }
 
-function rotating(items) {
+export function rotating(items) {
   let index = 0;
   return () => items[index++ % items.length];
+}
+
+async function tagOperation(operation, operationKind) {
+  return { ...await operation, operationKind };
 }
 
 function endpointFor(config, fixture, operationKey) {
@@ -345,12 +364,12 @@ function remoteUrl(endpoint, path) {
   return new URL(path, `${endpoint}/`).toString();
 }
 
-function publicRemoteUrl(endpoint, fixture) {
-  return remoteUrl(endpoint, fixture.publicRemotePath);
+function publicRemoteUrl(config, endpoint, fixture) {
+  return remoteUrl(config.gitUrl || endpoint, fixture.publicRemotePath);
 }
 
-function pushRemoteUrl(endpoint, fixture) {
-  return remoteUrl(endpoint, fixture.pushRemotePath);
+function pushRemoteUrl(config, endpoint, fixture) {
+  return remoteUrl(config.gitUrl || endpoint, fixture.pushRemotePath);
 }
 
 function pooled(items) {
@@ -436,6 +455,8 @@ export function stageResult(name, concurrency, samples, elapsedSeconds, startedA
 export function evaluateStage(stage, baselineP95Ms, pushBaselineP95Ms = null) {
   const reasons = [];
   if (stage.errorRate > 0.01) reasons.push(`error rate ${(stage.errorRate * 100).toFixed(2)}% > 1%`);
+  const killed = stage.failureBreakdown?.killed || 0;
+  if (killed > 0) reasons.push(`${killed} operation(s) hit the client timeout`);
   if (baselineP95Ms > 0 && stage.stats.p95Ms > baselineP95Ms * 2) reasons.push(`p95 ${stage.stats.p95Ms}ms > 2x baseline ${baselineP95Ms}ms`);
   if (pushBaselineP95Ms && ['mixed', 'consistency'].includes(stage.name)) {
     const pushP95Ms = Math.max(0, ...stage.landingFileSizeSlope.points.map(({ p95Ms }) => p95Ms));
@@ -521,22 +542,29 @@ async function addFixtureHistory(config, repo, count) {
 }
 
 async function createFetchClients(config, runRoot, fixtures) {
-  const count = Math.max(config.mixedRepos, ...config.stages);
+  const count = fetchClientCount(config);
   const clients = [];
+  const references = new Map();
   for (let index = 0; index < count; index += 1) {
     const fixture = fixtures[index % fixtures.length];
     const parent = await mkdtemp(join(runRoot, 'fetch-client-'));
     const dir = join(parent, 'repo.git');
     const endpoint = endpointFor(config, fixture);
+    const reference = references.get(repositoryKey(fixture));
     const initial = await command(
       config,
-      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(endpoint, fixture), dir],
+      [
+        'git', 'clone', '--quiet', '--bare',
+        ...(reference ? ['--reference-if-able', reference] : []),
+        publicRemoteUrl(config, endpoint, fixture), dir,
+      ],
     );
     if (!initial.ok) {
       await rm(parent, { recursive: true, force: true });
       throw new Error(initial.error || 'initial fetch client clone failed');
     }
     clients.push({ fixture, dir, parent });
+    references.set(repositoryKey(fixture), reference || dir);
   }
   return clients;
 }
@@ -652,7 +680,7 @@ async function pushCurrentHead(config, fixture, started = performance.now(), rou
     method: 'POST',
     body: { head_oid: head, base_config_hash: repoConfig.config_hash, config: proposedConfig },
   });
-  const destination = pushRemoteUrl(endpoint, fixture);
+  const destination = pushRemoteUrl(config, endpoint, fixture);
   return command(
     config,
     ['git', '-c', 'push.recurseSubmodules=no', 'push', destination, `HEAD:${fixture.branch}`],
@@ -667,7 +695,7 @@ async function gitFetch(config, pair, scheduledAt = performance.now(), routeKey 
   const endpoint = endpointFor(config, pair.fixture, routeKey);
   const result = await command(
     config,
-    ['git', 'fetch', '--quiet', publicRemoteUrl(endpoint, pair.fixture)],
+    ['git', 'fetch', '--quiet', publicRemoteUrl(config, endpoint, pair.fixture)],
     pair.dir,
     undefined,
     scheduledAt,
@@ -690,7 +718,7 @@ async function clone(config, runRoot, fixture, scheduledAt = performance.now(), 
     const endpoint = endpointFor(config, fixture, routeKey);
     const result = await command(
       config,
-      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(endpoint, fixture), destination],
+      ['git', 'clone', '--quiet', '--bare', publicRemoteUrl(config, endpoint, fixture), destination],
       undefined,
       undefined,
       scheduledAt,
@@ -877,6 +905,10 @@ async function ready(config) {
     const response = await fetch(`${endpoint}/readyz`, { signal: AbortSignal.timeout(config.timeoutMs) });
     if (!response.ok) throw new Error(`API is not ready at ${endpoint}: HTTP ${response.status}`);
   }
+  if (config.gitUrl) {
+    const response = await fetch(`${config.gitUrl}/readyz`, { signal: AbortSignal.timeout(config.timeoutMs) });
+    if (!response.ok) throw new Error(`Git router is not ready at ${config.gitUrl}: HTTP ${response.status}`);
+  }
 }
 
 async function invokeFaultHook(config) {
@@ -938,7 +970,7 @@ function markdown(report) {
     Object.entries(stage.capacityRejections || {}).map(([operation, count]) =>
       `| ${workload.name} | ${stage.concurrency ?? stage.targetRate} | ${operation} | ${count} |`,
     ))).join('\n') || '| none | n/a | none | 0 |';
-  return `# Scope Railway Git storage load test\n\nGenerated: ${report.generatedAt}\n\nTargets: ${report.apiUrls.join(', ')}\n\nTopology: ${report.config.topologyLabel} (${report.config.routingMode}), repeat ${report.config.repeatIndex}\n\nNode scale label: ${report.config.nodeScaleLabel}\n\nProtocol label: ${report.config.protocolLabel}\n\nAPI permit labels per process: receive-pack ${permits.receivePack}, upload-pack ${permits.uploadPack}, Git materialization ${permits.gitMaterialization}, object store ${permits.objectStore}.\n\n| Workload | Status | Operations/s | Logical MiB/s | Completion p95 ms | TTFB p95 ms | Completion p99 ms | Observed MiB/s |\n|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\n## Capacity rejections\n\n| Workload | Concurrency or rate | Operation | Count |\n|---|---:|---|---:|\n${rejectionRows}\n\nLogical MiB/s uses fixture payload sizes for writes and clones, and response or received-object bytes for reads. Observed MiB/s uses response bytes or local Git object deltas. Neither is a wire-level counter. TTFB for JSON reads is time to response headers. Quiet Git commands commonly emit no output, so their completion time is reported as TTFB. Compare topology repeats only when repository fixture sizes, stage controls, and Railway deployment shape are identical.\n`;
+  return `# Scope Railway Git storage load test\n\nGenerated: ${report.generatedAt}\n\nTargets: ${report.apiUrls.join(', ')}\n\nTopology: ${report.config.topologyLabel} (${report.config.routingMode}), repeat ${report.config.repeatIndex}\n\nRepository mode: ${report.config.repositoryMode}\n\nRead replica count: ${report.config.readReplicaCount}\n\nNode scale label: ${report.config.nodeScaleLabel}\n\nProtocol label: ${report.config.protocolLabel}\n\nAPI permit labels per process: receive-pack ${permits.receivePack}, upload-pack ${permits.uploadPack}, Git materialization ${permits.gitMaterialization}, object store ${permits.objectStore}.\n\n| Workload | Status | Operations/s | Logical MiB/s | Completion p95 ms | TTFB p95 ms | Completion p99 ms | Observed MiB/s |\n|---|---|---:|---:|---:|---:|---:|---:|\n${rows}\n\n## Capacity rejections\n\n| Workload | Concurrency or rate | Operation | Count |\n|---|---:|---|---:|\n${rejectionRows}\n\nLogical MiB/s uses fixture payload sizes for writes and clones, and response or received-object bytes for reads. Observed MiB/s uses response bytes or local Git object deltas. Neither is a wire-level counter. TTFB for JSON reads is time to response headers. Quiet Git commands commonly emit no output, so their completion time is reported as TTFB. Compare topology repeats only when repository fixture sizes, stage controls, and Railway deployment shape are identical.\n`;
 }
 
 function required(name) { const value = process.env[name]?.trim(); if (!value) throw new Error(`${name} is required`); return value; }

@@ -7,6 +7,7 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates crates
 COPY api api
 COPY cache-service cache-service
+COPY repo-router repo-router
 COPY worker worker
 COPY runner-runtime runner-runtime
 RUN cargo build --locked --release -p scope-runner-runtime

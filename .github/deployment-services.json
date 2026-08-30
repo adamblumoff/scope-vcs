@@ -6,8 +6,13 @@
     "staging": {
       "environmentId": "8743c2e9-5d9b-4161-a047-9617e6d199b9",
       "environmentName": "staging",
+      "apiReplicas": 3,
       "apiDomain": "scope-api-staging.up.railway.app",
       "cacheDomain": "scope-cache-service-staging.up.railway.app",
+      "routerDomain": "scope-repo-router-staging.up.railway.app",
+      "routerReplicas": 1,
+      "routerServiceId": "30f8e9d2-6d66-4f88-ad96-a65e1bba503c",
+      "routerServiceName": "scope-repo-router",
       "webDomain": "scope-web-staging.up.railway.app"
     },
     "databaseServiceId": "44c41a90-2d1a-4a1b-85c9-6af85d179be3",

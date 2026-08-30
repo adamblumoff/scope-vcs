@@ -22,6 +22,14 @@ export function verifyStagingTarget({ manifest, services, status }) {
     railway.staging.environmentName,
     'Railway staging environment name',
   )
+  const apiReplicas = requiredPositiveInteger(
+    railway.staging.apiReplicas,
+    'staging API replicas',
+  )
+  const routerReplicas = requiredPositiveInteger(
+    railway.staging.routerReplicas,
+    'staging router replicas',
+  )
   assert.notEqual(
     stagingEnvironmentId,
     productionEnvironmentId,
@@ -53,6 +61,10 @@ export function verifyStagingTarget({ manifest, services, status }) {
         name: requiredString(service.name, `${key} service name`),
       }
     }),
+    {
+      id: requiredString(railway.staging.routerServiceId, 'staging router service ID'),
+      name: requiredString(railway.staging.routerServiceName, 'staging router service name'),
+    },
   ]
 
   assert(Array.isArray(services), 'Railway service state must be an array')
@@ -63,7 +75,7 @@ export function verifyStagingTarget({ manifest, services, status }) {
     )
   }
 
-  for (const key of ['apiDomain', 'cacheDomain', 'webDomain']) {
+  for (const key of ['apiDomain', 'cacheDomain', 'routerDomain', 'webDomain']) {
     const domain = requiredString(railway.staging[key], `staging ${key}`)
     assert.match(
       domain,
@@ -73,10 +85,40 @@ export function verifyStagingTarget({ manifest, services, status }) {
   }
 
   return {
+    apiReplicas,
     productionEnvironmentId,
     projectId,
+    routerReplicas,
     stagingEnvironmentId,
     stagingEnvironmentName,
+  }
+}
+
+export function verifyStagingTopology({ manifest, services }) {
+  const railway = manifest?.railway
+  assertObject(railway, 'manifest.railway')
+  assertObject(railway.staging, 'manifest.railway.staging')
+  assertObject(manifest?.services, 'manifest.services')
+  assert(Array.isArray(services), 'Railway service state must be an array')
+
+  const expected = [
+    ['api', manifest.services.api?.id, railway.staging.apiReplicas],
+    ['cache', manifest.services.cache?.id, 1],
+    ['router', railway.staging.routerServiceId, railway.staging.routerReplicas],
+    ['worker', manifest.services.worker?.id, 1],
+  ]
+  for (const [name, id, count] of expected) {
+    const serviceId = requiredString(id, `${name} service ID`)
+    const replicaCount = requiredPositiveInteger(count, `${name} replicas`)
+    const service = services.find((candidate) => candidate.id === serviceId)
+    const replicas = service?.replicas ?? {}
+    assert(
+      service?.status === 'SUCCESS' &&
+        replicas.configured === replicaCount &&
+        replicas.running === replicaCount &&
+        (replicas.crashed ?? 0) === 0,
+      `Staging ${name} must have exactly ${replicaCount} healthy replicas`,
+    )
   }
 }
 
@@ -89,12 +131,19 @@ function requiredString(value, name) {
   return value
 }
 
+function requiredPositiveInteger(value, name) {
+  assert(Number.isInteger(value) && value > 0, `${name} must be a positive integer`)
+  return value
+}
+
 if (import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const result = verifyStagingTarget({
+  const input = {
     manifest: parseEnvironmentJson('SCOPE_DEPLOYMENT_MANIFEST_JSON'),
     services: parseEnvironmentJson('SCOPE_RAILWAY_SERVICES_JSON'),
     status: parseEnvironmentJson('SCOPE_RAILWAY_STATUS_JSON'),
-  })
+  }
+  const result = verifyStagingTarget(input)
+  if (process.env.SCOPE_VERIFY_STAGING_TOPOLOGY === '1') verifyStagingTopology(input)
   process.stdout.write(`${JSON.stringify(result)}\n`)
 }
 

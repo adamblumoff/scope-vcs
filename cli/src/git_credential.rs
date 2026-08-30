@@ -1,7 +1,11 @@
-use crate::auth::read_stored_session_token;
+use crate::{
+    api::api_url, auth::read_stored_session_token, git_repo::scope_api_url_from_git_config,
+};
 use anyhow::Context;
-use reqwest::Url;
-use std::io::{self, BufRead, Write};
+use std::{
+    env,
+    io::{self, BufRead, Write},
+};
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct GitCredentialRequest {
@@ -21,13 +25,24 @@ fn write_git_credential_response(
     reader: impl BufRead,
     writer: impl Write,
 ) -> anyhow::Result<()> {
-    write_git_credential_response_with(operation, reader, writer, read_stored_session_token)
+    let configured_api_url = env::current_dir()
+        .ok()
+        .and_then(|directory| scope_api_url_from_git_config(&directory).ok().flatten())
+        .unwrap_or_else(api_url);
+    write_git_credential_response_with(
+        operation,
+        reader,
+        writer,
+        &configured_api_url,
+        read_stored_session_token,
+    )
 }
 
 fn write_git_credential_response_with(
     operation: &str,
     reader: impl BufRead,
     mut writer: impl Write,
+    configured_api_url: &str,
     read_token: impl FnOnce(&str) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<()> {
     let request = parse_git_credential_request(reader)?;
@@ -35,7 +50,7 @@ fn write_git_credential_response_with(
         return Ok(());
     }
 
-    let Some(api_url) = scope_api_url_for_credential_request(&request) else {
+    let Some(api_url) = scope_api_url_for_credential_request(&request, configured_api_url) else {
         return Ok(());
     };
     let Some(session_token) = read_token(&api_url)? else {
@@ -69,7 +84,10 @@ fn parse_git_credential_request(reader: impl BufRead) -> anyhow::Result<GitCrede
     Ok(request)
 }
 
-fn scope_api_url_for_credential_request(request: &GitCredentialRequest) -> Option<String> {
+fn scope_api_url_for_credential_request(
+    request: &GitCredentialRequest,
+    configured_api_url: &str,
+) -> Option<String> {
     let protocol = request.protocol.as_deref()?;
     if protocol != "http" && protocol != "https" {
         return None;
@@ -87,10 +105,7 @@ fn scope_api_url_for_credential_request(request: &GitCredentialRequest) -> Optio
     repo_segments.next()?;
     repo_segments.next()?;
 
-    let api_path = path[..marker_start].trim_end_matches('/');
-    let api_url = format!("{protocol}://{host}{api_path}");
-    let parsed = Url::parse(&api_url).ok()?;
-    Some(parsed.as_str().trim_end_matches('/').to_string())
+    Some(configured_api_url.trim_end_matches('/').to_string())
 }
 
 #[cfg(test)]
@@ -116,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn scope_api_url_for_credential_request_derives_scope_api_url() {
+    fn scope_api_url_for_credential_request_uses_configured_api_url() {
         let request = GitCredentialRequest {
             protocol: Some("https".to_string()),
             host: Some("scope.example:8443".to_string()),
@@ -124,8 +139,8 @@ mod tests {
         };
 
         assert_eq!(
-            scope_api_url_for_credential_request(&request),
-            Some("https://scope.example:8443/api".to_string())
+            scope_api_url_for_credential_request(&request, "https://api.scope.example/v1/"),
+            Some("https://api.scope.example/v1".to_string())
         );
     }
 
@@ -141,7 +156,10 @@ mod tests {
                 host: Some("scope.example".to_string()),
                 path: Some(path.to_string()),
             };
-            assert_eq!(scope_api_url_for_credential_request(&request), None);
+            assert_eq!(
+                scope_api_url_for_credential_request(&request, "https://api.scope.example"),
+                None
+            );
         }
     }
 
@@ -164,11 +182,12 @@ mod tests {
         write_git_credential_response_with(
             "get",
             Cursor::new(
-                "protocol=https\nhost=scope.example\npath=api/git/permissioned/adam/repo\n\n",
+                "protocol=https\nhost=git.scope.example\npath=git/permissioned/adam/repo\n\n",
             ),
             &mut output,
+            "https://api.scope.example",
             |api_url| {
-                assert_eq!(api_url, "https://scope.example/api");
+                assert_eq!(api_url, "https://api.scope.example");
                 Ok(Some("scope_cli_secret".to_string()))
             },
         )

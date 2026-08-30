@@ -1,4 +1,6 @@
-use crate::git_repo::{GitRepo, git_remote_fetch_url, git_remote_names, git_remote_push_url};
+use crate::git_repo::{
+    GitRepo, git_remote_fetch_url, git_remote_names, git_remote_push_url, scope_git_origin,
+};
 use anyhow::{Context, bail};
 use reqwest::Url;
 
@@ -77,8 +79,9 @@ pub fn select_scope_fetch_remote(
     api_url: &str,
     explicit_remote: Option<&str>,
 ) -> anyhow::Result<String> {
+    let git_origin = scope_git_origin(repo, api_url)?;
     if let Some(remote) = normalized_remote(explicit_remote) {
-        ScopeRemote::parse(api_url, &remote, &git_remote_fetch_url(repo, &remote)?)?;
+        ScopeRemote::parse(&git_origin, &remote, &git_remote_fetch_url(repo, &remote)?)?;
         return Ok(remote);
     }
 
@@ -86,7 +89,7 @@ pub fn select_scope_fetch_remote(
         let Ok(url) = git_remote_fetch_url(repo, &candidate) else {
             continue;
         };
-        if ScopeRemote::parse(api_url, &candidate, &url).is_ok() {
+        if ScopeRemote::parse(&git_origin, &candidate, &url).is_ok() {
             return Ok(candidate);
         }
     }
@@ -98,8 +101,9 @@ pub fn select_scope_push_remote(
     api_url: &str,
     explicit_remote: Option<&str>,
 ) -> anyhow::Result<String> {
+    let git_origin = scope_git_origin(repo, api_url)?;
     if let Some(remote) = normalized_remote(explicit_remote) {
-        ScopeRemote::parse(api_url, &remote, &git_remote_push_url(repo, &remote)?)?;
+        ScopeRemote::parse(&git_origin, &remote, &git_remote_push_url(repo, &remote)?)?;
         return Ok(remote);
     }
 
@@ -107,7 +111,7 @@ pub fn select_scope_push_remote(
         let Ok(push_url) = git_remote_push_url(repo, &candidate) else {
             continue;
         };
-        let Ok(push_target) = ScopeRemote::parse(api_url, &candidate, &push_url) else {
+        let Ok(push_target) = ScopeRemote::parse(&git_origin, &candidate, &push_url) else {
             continue;
         };
         if push_target.access != GitAccess::Permissioned {
@@ -116,7 +120,7 @@ pub fn select_scope_push_remote(
         let Ok(fetch_url) = git_remote_fetch_url(repo, &candidate) else {
             continue;
         };
-        let Ok(fetch_target) = ScopeRemote::parse(api_url, &candidate, &fetch_url) else {
+        let Ok(fetch_target) = ScopeRemote::parse(&git_origin, &candidate, &fetch_url) else {
             continue;
         };
         if fetch_target.owner == push_target.owner && fetch_target.repo == push_target.repo {
@@ -274,6 +278,30 @@ mod tests {
         assert!(select_scope_push_remote(&repo, "https://scope.example", None).is_err());
         assert_eq!(
             select_scope_push_remote(&repo, "https://scope.example", Some("origin")).unwrap(),
+            "origin"
+        );
+    }
+
+    #[test]
+    fn configured_git_origin_can_differ_from_the_api_origin() {
+        let dir = TestDir::git_repo("separate-scope-git-origin", "main");
+        dir.run_git([
+            "remote",
+            "add",
+            "origin",
+            "https://git.scope.example/git/permissioned/adam/repo",
+        ]);
+        dir.run_git(["config", "scope.gitOrigin", "https://git.scope.example"]);
+        let repo = GitRepo {
+            root: dir.path().to_path_buf(),
+        };
+
+        assert_eq!(
+            select_scope_fetch_remote(&repo, "https://api.scope.example", None).unwrap(),
+            "origin"
+        );
+        assert_eq!(
+            select_scope_push_remote(&repo, "https://api.scope.example", None).unwrap(),
             "origin"
         );
     }

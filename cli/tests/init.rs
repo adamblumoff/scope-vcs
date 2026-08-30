@@ -265,6 +265,7 @@ fn create_repo_response() -> serde_json::Value {
         "id": "repo_test",
         "owner_handle": "adam",
         "name": "sample",
+        "git_remote_url": REMOTE_URL,
         "lifecycle_state": "AwaitingFirstPush",
         "change_version": 1,
         "access": {
