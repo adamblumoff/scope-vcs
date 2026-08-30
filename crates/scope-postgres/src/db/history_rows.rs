@@ -13,6 +13,8 @@ use sea_orm::{
 };
 use std::collections::BTreeMap;
 
+const PERSISTENCE_BATCH_SIZE: usize = 500;
+
 pub struct RepositoryHistory {
     pub graph: SourceGraph,
     pub visibility_change_sets: Vec<VisibilityChangeSet>,
@@ -103,15 +105,15 @@ where
             replace_live_files(conn, &after_graph.repo_id, after_live_files).await?;
         }
     } else if let Some(commit) = after_graph.commits.last() {
-        for change in &commit.changes {
-            save_live_file(
-                conn,
-                &after_graph.repo_id,
-                &change.path,
-                after_live_files.get(&change.path),
-            )
-            .await?;
-        }
+        save_live_files(
+            conn,
+            &after_graph.repo_id,
+            commit
+                .changes
+                .iter()
+                .map(|change| (&change.path, after_live_files.get(&change.path))),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -260,10 +262,14 @@ pub async fn insert_repository_live_files<C>(
 where
     C: ConnectionTrait,
 {
-    for (path, content) in live_files {
-        save_live_file(conn, repo_id, path, Some(content)).await?;
-    }
-    Ok(())
+    save_live_files(
+        conn,
+        repo_id,
+        live_files
+            .iter()
+            .map(|(path, content)| (path, Some(content))),
+    )
+    .await
 }
 
 async fn replace_live_files<C>(
@@ -282,29 +288,44 @@ where
     insert_repository_live_files(conn, repo_id, live_files).await
 }
 
-pub(super) async fn save_live_file<C>(
+pub(super) async fn save_live_files<'a, C, I>(
     conn: &C,
     repo_id: &str,
-    path: &ScopePath,
-    content: Option<&SourceBlob>,
+    files: I,
 ) -> Result<(), PostgresError>
 where
     C: ConnectionTrait,
+    I: IntoIterator<Item = (&'a ScopePath, Option<&'a SourceBlob>)>,
 {
-    entities::live_file::Entity::delete_by_id((repo_id.to_string(), path.as_str().to_string()))
-        .exec(conn)
-        .await
-        .map_err(PostgresError::internal)?;
-    if let Some(content) = content {
-        entities::live_file::Model {
-            repo_id: repo_id.to_string(),
-            path: path.as_str().to_string(),
-            content: serde_json::to_value(content).map_err(PostgresError::internal)?,
-        }
-        .into_active_model()
-        .insert(conn)
-        .await
-        .map_err(PostgresError::internal)?;
+    let files = files.into_iter().collect::<Vec<_>>();
+    let rows = files
+        .iter()
+        .filter_map(|(path, content)| content.map(|content| (*path, content)))
+        .map(|(path, content)| {
+            Ok(entities::live_file::Model {
+                repo_id: repo_id.to_string(),
+                path: path.as_str().to_string(),
+                content: serde_json::to_value(content).map_err(PostgresError::internal)?,
+            }
+            .into_active_model())
+        })
+        .collect::<Result<Vec<_>, PostgresError>>()?;
+    for batch in files.chunks(PERSISTENCE_BATCH_SIZE) {
+        entities::live_file::Entity::delete_many()
+            .filter(entities::live_file::Column::RepoId.eq(repo_id.to_string()))
+            .filter(
+                entities::live_file::Column::Path
+                    .is_in(batch.iter().map(|(path, _)| path.as_str().to_string())),
+            )
+            .exec(conn)
+            .await
+            .map_err(PostgresError::internal)?;
+    }
+    for batch in rows.chunks(PERSISTENCE_BATCH_SIZE) {
+        entities::live_file::Entity::insert_many(batch.iter().cloned())
+            .exec(conn)
+            .await
+            .map_err(PostgresError::internal)?;
     }
     Ok(())
 }
@@ -346,33 +367,56 @@ pub(super) async fn insert_commits<C>(
 where
     C: ConnectionTrait,
 {
-    for (offset, commit) in commits.iter().enumerate() {
-        entities::logical_commit::Model {
-            id: commit.id.clone(),
-            repo_id: repo_id.to_string(),
-            ordinal: usize_to_i64(ordinal_offset + offset)?,
-            origin: serde_json::to_value(&commit.origin).map_err(PostgresError::internal)?,
-            author_id: commit.author_id.clone(),
-            message: commit.message.clone(),
-        }
-        .into_active_model()
-        .insert(conn)
-        .await
-        .map_err(PostgresError::internal)?;
-        for (ordinal, change) in commit.changes.iter().enumerate() {
-            entities::file_change::Model {
+    let commit_rows = commits
+        .iter()
+        .enumerate()
+        .map(|(offset, commit)| {
+            Ok(entities::logical_commit::Model {
+                id: commit.id.clone(),
                 repo_id: repo_id.to_string(),
-                commit_id: commit.id.clone(),
-                ordinal: usize_to_i64(ordinal)?,
-                path: change.path.as_str().to_string(),
-                old_content: encode_optional(change.old_content.as_ref())?,
-                new_content: encode_optional(change.new_content.as_ref())?,
-                visibility: encode_enum(&change.visibility)?,
+                ordinal: usize_to_i64(ordinal_offset + offset)?,
+                origin: serde_json::to_value(&commit.origin).map_err(PostgresError::internal)?,
+                author_id: commit.author_id.clone(),
+                message: commit.message.clone(),
             }
-            .into_active_model()
-            .insert(conn)
+            .into_active_model())
+        })
+        .collect::<Result<Vec<_>, PostgresError>>()?;
+    for batch in commit_rows.chunks(PERSISTENCE_BATCH_SIZE) {
+        entities::logical_commit::Entity::insert_many(batch.iter().cloned())
+            .exec(conn)
             .await
             .map_err(PostgresError::internal)?;
+    }
+    let change_rows = commits
+        .iter()
+        .flat_map(|commit| {
+            commit
+                .changes
+                .iter()
+                .enumerate()
+                .map(move |(ordinal, change)| {
+                    Ok(entities::file_change::Model {
+                        repo_id: repo_id.to_string(),
+                        commit_id: commit.id.clone(),
+                        ordinal: usize_to_i64(ordinal)?,
+                        path: change.path.as_str().to_string(),
+                        old_content: encode_optional(change.old_content.as_ref())?,
+                        new_content: encode_optional(change.new_content.as_ref())?,
+                        visibility: encode_enum(&change.visibility)?,
+                    }
+                    .into_active_model())
+                })
+        })
+        .collect::<Result<Vec<_>, PostgresError>>()?;
+    for batch in change_rows.chunks(PERSISTENCE_BATCH_SIZE) {
+        entities::file_change::Entity::insert_many(batch.iter().cloned())
+            .exec(conn)
+            .await
+            .map_err(PostgresError::internal)?;
+    }
+    for commit in commits {
+        for (ordinal, change) in commit.changes.iter().enumerate() {
             for (side, content) in [
                 ("old", change.old_content.as_ref()),
                 ("new", change.new_content.as_ref()),

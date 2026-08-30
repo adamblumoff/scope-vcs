@@ -150,6 +150,24 @@ node bench/railway-load.mjs
 
 `SCOPE_LOAD_LANDING_FILE_BYTES=0` means the push changes only an unrelated file. Positive values create and update an exact-size `README.html`. Reports group push latency by landing-file size and include its p95 milliseconds-per-MiB slope.
 
+To isolate metadata-persistence scaling from pack size, use the `push-persistence` workload. It updates a fixed number of 4 KiB files on every push and reports p95 milliseconds per changed file. `focused` holds the repository config constant. `aggregate` toggles an equivalent visibility rule on each push so the full repository mutation path runs without changing effective visibility.
+
+```bash
+SCOPE_LOAD_WORKLOADS=push-persistence \
+SCOPE_LOAD_CHANGED_FILE_COUNTS=1,10,100,441,1000 \
+SCOPE_LOAD_CHANGED_FILE_BYTES=4096 \
+SCOPE_LOAD_WRITE_DELTA_BYTES=0 \
+SCOPE_LOAD_LANDING_FILE_BYTES=0 \
+SCOPE_LOAD_PUSH_PATH=focused \
+SCOPE_LOAD_MIXED_REPOS=5 \
+SCOPE_LOAD_STAGES=1 \
+SCOPE_LOAD_STAGE_SECONDS=30 \
+SCOPE_LOAD_CONFIRM_SECONDS=0 \
+node bench/railway-load.mjs
+```
+
+Repeat the same run with `SCOPE_LOAD_PUSH_PATH=aggregate`. Keep the environment, deployment resources, history depth, file counts, file size, and stage duration identical when comparing builds. The persistence telemetry report includes hydration, domain, history-row, live-file-row, side-effect, lock-wait, and commit timings for the two paths.
+
 Use `SCOPE_LOAD_RATES=1,2,4` for an open-loop arrival-rate staircase. The runner stops above 1% errors, twice the first-stage p95, or one arrival interval of client scheduling delay. `safeMaxPerSecond` is 70% of the last confirmed healthy throughput. It is a test result, not a production capacity promise.
 
 Reports contain operations/s, logical MiB/s, observed MiB/s, p50/p95/p99 completion and TTFB, error classes, history-size slope, write-size slope, and landing-file-size slope. API bytes are response bytes. Git bytes are local received-object deltas or cloned directory sizes. These are not wire-level counters.

@@ -9,7 +9,12 @@ import { pathToFileURL } from 'node:url';
 
 import { writeLinearHistoryStream } from './git-history.mjs';
 import { ROUTING_MODES, createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
-import { normalizedRates, percentile, round, sampleStats } from './metrics.mjs';
+import {
+  changedFileCountSlope, historySizeSlope, landingFileSizeSlope, normalizedRates, percentile, round,
+  sampleStats, writeSizeSlope,
+} from './metrics.mjs';
+export { changedFileCountSlope, historySizeSlope, landingFileSizeSlope, writeSizeSlope } from './metrics.mjs';
+import { parseChangedFileCounts, writeChangedFiles } from './write-shape.mjs';
 
 // Black-box benchmark: no production-only hooks and never a production target.
 const DEFAULT_STAGES = [1, 2, 4, 8];
@@ -18,6 +23,7 @@ const DEFAULT_WORKLOADS = [
   'projection-read', 'tree-read', 'blob-read', 'history-read', 'cold-churn', 'mixed', 'consistency',
 ];
 const SUPPORTED_WORKLOADS = new Set(DEFAULT_WORKLOADS);
+SUPPORTED_WORKLOADS.add('push-persistence');
 const activeCommands = new Set();
 export const WRITE_DELTA_FILE_BYTES = 16 * 1024 * 1024;
 const RANDOM_WRITE_BUFFER_BYTES = 256 * 1024;
@@ -49,21 +55,27 @@ async function main() {
     console.log(`targets: ${config.apiUrls.join(', ')} · routing: ${config.routingMode} · topology: ${config.topologyLabel} · repeat: ${config.repeatIndex}`);
     console.log(config.rates ? `rates: ${config.rates.join(', ')}/s` : `concurrency: ${config.stages.join(', ')}`);
     console.log('seeding public repositories for read and mixed workloads...');
+    const needsReadFixtures = config.workloads.some((name) => [
+      'full-clone', 'code-read', 'repo-read', 'projection-read', 'tree-read', 'blob-read', 'history-read',
+    ].includes(name));
     const readFixtures = [];
-    for (const depth of config.historyDepths) {
+    if (needsReadFixtures) for (const depth of config.historyDepths) {
       const fixture = await seedRepository(config, runRoot, `history-${depth}`, config.readBytes, depth);
       fixtures.push(fixture);
       readFixtures.push(fixture);
       console.log(`  history fixture: ${depth} commits`);
     }
     const churnFixtures = [];
-    for (let index = 0; index < config.churnRepos; index += 1) {
+    for (let index = 0; config.workloads.includes('cold-churn') && index < config.churnRepos; index += 1) {
       const fixture = await seedRepository(config, runRoot, `churn-${index + 1}`, config.readBytes, config.historyDepths[0]);
       fixtures.push(fixture);
       churnFixtures.push(fixture);
     }
     const mixedFixtures = [];
-    for (let index = 0; index < config.mixedRepos; index += 1) {
+    const needsMixedFixtures = config.workloads.some((name) => [
+      'warm-fetch', 'incremental-fetch', 'mixed', 'consistency', 'push-persistence',
+    ].includes(name));
+    for (let index = 0; needsMixedFixtures && index < config.mixedRepos; index += 1) {
       const fixture = await seedRepository(
         config,
         runRoot,
@@ -72,11 +84,14 @@ async function main() {
         config.historyDepths[0],
         config.writeDeltaBytes[index % config.writeDeltaBytes.length],
         config.landingFileBytes[index % config.landingFileBytes.length],
+        config.changedFileCounts[index % config.changedFileCounts.length],
       );
       fixtures.push(fixture);
       mixedFixtures.push(fixture);
     }
-    const fetchClients = await createFetchClients(config, runRoot, mixedFixtures);
+    const fetchClients = config.workloads.some((name) => ['warm-fetch', 'incremental-fetch'].includes(name))
+      ? await createFetchClients(config, runRoot, mixedFixtures)
+      : [];
     clients.push(...fetchClients);
     if (config.faultHookUrl) report.faultHook = await invokeFaultHook(config);
     const context = { config, runRoot, readFixtures, churnFixtures, mixedFixtures, fetchClients, interrupted: () => interrupted };
@@ -114,6 +129,7 @@ function configuration() {
   const stages = parseStages(process.env.SCOPE_LOAD_STAGES || DEFAULT_STAGES.join(','));
   const writeDeltaBytes = parseByteSizes(process.env.SCOPE_LOAD_WRITE_DELTA_BYTES || String(64 * 1024));
   const landingFileBytes = parseByteSizes(process.env.SCOPE_LOAD_LANDING_FILE_BYTES || '0');
+  const changedFileCounts = parseChangedFileCounts(process.env.SCOPE_LOAD_CHANGED_FILE_COUNTS || '0');
   return {
     apiUrls, token, stages, routingMode, routingSeed,
     endpointRouter: createEndpointRouter(apiUrls, routingMode, routingSeed),
@@ -127,10 +143,13 @@ function configuration() {
     cleanupTimeoutMs: positiveNumber('SCOPE_LOAD_CLEANUP_TIMEOUT_MS', 10_000),
     maxInFlight: positiveInteger('SCOPE_LOAD_MAX_IN_FLIGHT', 128),
     churnRepos: positiveInteger('SCOPE_LOAD_CHURN_REPOS', 16),
-    mixedRepos: Math.max(writeDeltaBytes.length, landingFileBytes.length, positiveInteger('SCOPE_LOAD_MIXED_REPOS', Math.max(8, ...stages))),
+    mixedRepos: Math.max(writeDeltaBytes.length, landingFileBytes.length, changedFileCounts.length, positiveInteger('SCOPE_LOAD_MIXED_REPOS', Math.max(8, ...stages))),
     readBytes: positiveInteger('SCOPE_LOAD_READ_BYTES', 384 * 1024),
     writeDeltaBytes,
     landingFileBytes,
+    changedFileCounts,
+    changedFileBytes: positiveInteger('SCOPE_LOAD_CHANGED_FILE_BYTES', 4096),
+    pushPath: enumValue('SCOPE_LOAD_PUSH_PATH', 'focused', new Set(['focused', 'aggregate'])),
     pushBaselineP95Ms: process.env.SCOPE_LOAD_PUSH_BASELINE_P95_MS
       ? positiveNumber('SCOPE_LOAD_PUSH_BASELINE_P95_MS', 1)
       : null,
@@ -261,6 +280,10 @@ function operationFor(name, context) {
   });
   if (name === 'full-clone') return (worker, iteration, scheduledAt) => clone(
     context.config, context.runRoot, read(), scheduledAt, routeKey(worker, iteration),
+  );
+  if (name === 'push-persistence') return (worker, iteration, scheduledAt) => withResource(
+    writes,
+    (fixture) => updateAndPush(context.config, fixture, iteration, scheduledAt, routeKey(worker, iteration)),
   );
   if (name === 'code-read') return async (worker, iteration, scheduledAt) => {
     const fixture = read();
@@ -402,6 +425,7 @@ export function stageResult(name, concurrency, samples, elapsedSeconds, startedA
     historySizeSlope: historySizeSlope(samples),
     writeSizeSlope: writeSizeSlope(samples),
     landingFileSizeSlope: landingFileSizeSlope(samples),
+    changedFileCountSlope: changedFileCountSlope(samples),
     consistency: consistencyStats(samples),
     failureBreakdown: failureBreakdown(samples),
     capacityRejections: capacityRejectionBreakdown(samples),
@@ -448,7 +472,7 @@ function printStage(stage) {
   console.log(`  ${target} · ${stage.throughputPerSecond}/s · completion p95 ${stage.stats.p95Ms}ms · TTFB p95 ${stage.stats.ttfbP95Ms}ms · ${(stage.errorRate * 100).toFixed(2)}% errors · ${gate}`);
 }
 
-async function seedRepository(config, runRoot, label, bytes, historyDepth, writeDeltaBytes = 0, landingFileBytes = 0, attempt = 1) {
+async function seedRepository(config, runRoot, label, bytes, historyDepth, writeDeltaBytes = 0, landingFileBytes = 0, changedFileCount = 0, attempt = 1) {
   const created = await apiJson(config, '/v1/repos', { method: 'POST', body: { name: `loadtest-${label}-${Date.now()}-${randomBytes(3).toString('hex')}`, file_default_visibility: 'Public' } });
   const issuedPushToken = created.init.token ?? created.init.push_token;
   const fixture = {
@@ -457,7 +481,7 @@ async function seedRepository(config, runRoot, label, bytes, historyDepth, write
     publicRemotePath: `/git/public/${encodeURIComponent(created.repo.owner_handle)}/${encodeURIComponent(created.repo.name)}`,
     branch: created.init.push_branch || 'main', pushToken: issuedPushToken?.secret,
     dir: await mkdtemp(join(runRoot, `${label}-`)), historyDepth, logicalBytes: bytes,
-    writeDeltaBytes, landingFileBytes, update: 0,
+    writeDeltaBytes, landingFileBytes, changedFileCount, update: 0,
   };
   try {
     for (const args of [['init'], ['symbolic-ref', 'HEAD', 'refs/heads/main'], ['config', 'user.email', 'loadtest@scope.local'], ['config', 'user.name', 'Scope Load Test']]) await checkedGit(config, args, fixture.dir);
@@ -479,7 +503,7 @@ async function seedRepository(config, runRoot, label, bytes, historyDepth, write
     if (attempt < 3 && /(?:HTTP |error: )5\d\d/i.test(message(error))) {
       console.warn(`  retrying ${label} fixture after transient service failure (${attempt}/3)`);
       await sleep(250 * attempt);
-      return seedRepository(config, runRoot, label, bytes, historyDepth, writeDeltaBytes, landingFileBytes, attempt + 1);
+      return seedRepository(config, runRoot, label, bytes, historyDepth, writeDeltaBytes, landingFileBytes, changedFileCount, attempt + 1);
     }
     throw error;
   }
@@ -583,10 +607,19 @@ async function updateAndPush(config, fixture, iteration, scheduledAt = performan
     if (fixture.writeDeltaBytes > 0) {
       await writeChunkedRandomPayload(join(fixture.dir, 'load-delta'), fixture.writeDeltaBytes);
     }
+    if (fixture.changedFileCount > 1) {
+      await writeChangedFiles(
+        join(fixture.dir, 'load-files'),
+        fixture.changedFileCount - 1,
+        config.changedFileBytes,
+        fixture.update,
+      );
+    }
     if (fixture.landingFileBytes > 0) await writeLandingFile(fixture.dir, fixture.landingFileBytes, fixture.update);
     await checkedGit(config, [
       'add', 'load-update.txt',
       ...(fixture.writeDeltaBytes > 0 ? ['load-delta'] : []),
+      ...(fixture.changedFileCount > 1 ? ['load-files'] : []),
       ...(fixture.landingFileBytes > 0 ? ['README.html'] : []),
     ], fixture.dir);
     await checkedGit(config, ['commit', '-m', `Load update ${fixture.update}`], fixture.dir);
@@ -594,9 +627,12 @@ async function updateAndPush(config, fixture, iteration, scheduledAt = performan
     return {
       ...pushed,
       historyDepth: fixture.historyDepth,
-      logicalBytes: fixture.writeDeltaBytes + fixture.landingFileBytes + Buffer.byteLength(`${marker}\n`),
+      logicalBytes: fixture.writeDeltaBytes + fixture.landingFileBytes
+        + Math.max(0, fixture.changedFileCount - 1) * config.changedFileBytes
+        + Buffer.byteLength(`${marker}\n`),
       writeDeltaBytes: fixture.writeDeltaBytes,
       landingFileBytes: fixture.landingFileBytes,
+      ...(fixture.changedFileCount > 0 ? { changedFileCount: fixture.changedFileCount } : {}),
       marker,
     };
   } catch (error) {
@@ -608,10 +644,13 @@ async function pushCurrentHead(config, fixture, started = performance.now(), rou
   const endpoint = endpointFor(config, fixture, routeKey);
   const repoConfig = await apiJson(config, `${repoPath(fixture)}/config`, { endpoint });
   const head = await gitOutput(config, ['rev-parse', 'HEAD'], fixture.dir);
+  const proposedConfig = config.pushPath === 'aggregate'
+    ? toggleBenchmarkVisibilityRule(repoConfig.config)
+    : repoConfig.config;
   const intent = await apiJson(config, `${repoPath(fixture)}/push-intents`, {
     endpoint,
     method: 'POST',
-    body: { head_oid: head, base_config_hash: repoConfig.config_hash, config: repoConfig.config },
+    body: { head_oid: head, base_config_hash: repoConfig.config_hash, config: proposedConfig },
   });
   const destination = pushRemoteUrl(endpoint, fixture);
   return command(
@@ -715,6 +754,7 @@ async function writeThenVerify(config, fixture, iteration, scheduledAt = perform
     staleReads: reads.filter((sample) => sample.ok && sample.json?.content?.text !== `${pushed.marker}\n`).length,
     writeDeltaBytes: pushed.writeDeltaBytes,
     landingFileBytes: pushed.landingFileBytes,
+    changedFileCount: pushed.changedFileCount,
   };
 }
 
@@ -856,55 +896,13 @@ function sample(ok, started, status, bytes, error, ttfbMs = null) {
 
 export function stats(values) { return sampleStats(values); }
 
-export function historySizeSlope(samples) {
-  const groups = new Map();
-  for (const entry of samples) {
-    if (!Number.isInteger(entry.historyDepth)) continue;
-    const values = groups.get(entry.historyDepth) || [];
-    values.push(entry);
-    groups.set(entry.historyDepth, values);
-  }
-  const points = [...groups.entries()].sort(([left], [right]) => left - right).map(([historyDepth, values]) => ({ historyDepth, ...stats(values) }));
-  if (points.length < 2) return { points, p95MsPerCommit: null };
-  const first = points[0];
-  const last = points.at(-1);
-  return { points, p95MsPerCommit: round((last.p95Ms - first.p95Ms) / (last.historyDepth - first.historyDepth)) };
-}
-
-export function writeSizeSlope(samples) {
-  const groups = new Map();
-  for (const entry of samples) {
-    if (!Number.isSafeInteger(entry.writeDeltaBytes)) continue;
-    const values = groups.get(entry.writeDeltaBytes) || [];
-    values.push(entry);
-    groups.set(entry.writeDeltaBytes, values);
-  }
-  const points = [...groups.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([writeDeltaBytes, values]) => ({ writeDeltaBytes, ...stats(values) }));
-  if (points.length < 2) return { points, p95MsPerMiB: null };
-  const first = points[0];
-  const last = points.at(-1);
-  const deltaMiB = (last.writeDeltaBytes - first.writeDeltaBytes) / 1024 / 1024;
-  return { points, p95MsPerMiB: deltaMiB > 0 ? round((last.p95Ms - first.p95Ms) / deltaMiB) : null };
-}
-
-export function landingFileSizeSlope(samples) {
-  const groups = new Map();
-  for (const entry of samples) {
-    if (!Number.isSafeInteger(entry.landingFileBytes)) continue;
-    const values = groups.get(entry.landingFileBytes) || [];
-    values.push(entry);
-    groups.set(entry.landingFileBytes, values);
-  }
-  const points = [...groups.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([landingFileBytes, values]) => ({ landingFileBytes, ...stats(values) }));
-  if (points.length < 2) return { points, p95MsPerMiB: null };
-  const first = points[0];
-  const last = points.at(-1);
-  const deltaMiB = (last.landingFileBytes - first.landingFileBytes) / 1024 / 1024;
-  return { points, p95MsPerMiB: deltaMiB > 0 ? round((last.p95Ms - first.p95Ms) / deltaMiB) : null };
+export function toggleBenchmarkVisibilityRule(repoConfig) {
+  const config = structuredClone(repoConfig);
+  const path = '/load-files/**';
+  const index = config.visibility.rules.findIndex((rule) => rule.path === path);
+  if (index === -1) config.visibility.rules.push({ path, visibility: config.visibility.default });
+  else config.visibility.rules.splice(index, 1);
+  return config;
 }
 
 export function consistencyStats(samples) {
@@ -961,5 +959,10 @@ function positiveNumber(name, fallback) { const value = Number(process.env[name]
 function nonNegativeNumber(name, fallback) { const value = Number(process.env[name] || String(fallback)); if (!Number.isFinite(value) || value < 0) throw new Error(`${name} must be non-negative`); return value; }
 function boundedNumber(name, fallback, minimum, maximum) { const value = Number(process.env[name] || String(fallback)); if (!Number.isFinite(value) || value < minimum || value > maximum) throw new Error(`${name} must be between ${minimum} and ${maximum}`); return value; }
 function nonEmpty(name, fallback) { return process.env[name]?.trim() || fallback; }
+function enumValue(name, fallback, allowed) {
+  const value = nonEmpty(name, fallback);
+  if (!allowed.has(value)) throw new Error(`${name} must be one of ${[...allowed].join(', ')}`);
+  return value;
+}
 function sleep(milliseconds) { return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds)); }
 function message(error) { return error instanceof Error ? error.message : String(error); }

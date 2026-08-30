@@ -32,6 +32,43 @@ export function sampleStats(samples) {
   };
 }
 
+export function historySizeSlope(samples) {
+  return groupedSlope(samples, 'historyDepth', 'p95MsPerCommit');
+}
+
+export function writeSizeSlope(samples) {
+  return groupedSlope(samples, 'writeDeltaBytes', 'p95MsPerMiB', MIB);
+}
+
+export function landingFileSizeSlope(samples) {
+  return groupedSlope(samples, 'landingFileBytes', 'p95MsPerMiB', MIB);
+}
+
+export function changedFileCountSlope(samples) {
+  return groupedSlope(samples, 'changedFileCount', 'p95MsPerFile');
+}
+
+function groupedSlope(samples, field, slopeField, divisor = 1) {
+  const groups = new Map();
+  for (const entry of samples) {
+    if (!Number.isSafeInteger(entry[field])) continue;
+    const values = groups.get(entry[field]) || [];
+    values.push(entry);
+    groups.set(entry[field], values);
+  }
+  const points = [...groups.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([value, values]) => ({ [field]: value, ...sampleStats(values) }));
+  if (points.length < 2) return { points, [slopeField]: null };
+  const first = points[0];
+  const last = points.at(-1);
+  const delta = (last[field] - first[field]) / divisor;
+  return {
+    points,
+    [slopeField]: delta > 0 ? round((last.p95Ms - first.p95Ms) / delta) : null,
+  };
+}
+
 export function normalizedRates(samples, elapsedSeconds) {
   const successful = samples.filter(({ ok }) => ok);
   const bytes = successful.reduce((total, sample) => total + (sample.bytes || 0), 0);

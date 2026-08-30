@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import {
   capacityRejectionFields, compactionFields, numericFields, objectStoreFields,
-  gitOperationFields, gitSegmentTelemetryFields, pushPersistenceFields, railwayMetricArgs, stripAnsi,
+  gitOperationFields, gitSegmentTelemetryFields, isPushPersistenceMessage, pushPersistenceFields, railwayMetricArgs, stripAnsi,
   summarizeCapacityRejections, summarizeCompactions, summarizeGitOperations,
   summarizeGitSegmentTelemetry, summarizeMaterializations, summarizeObjectStore, summarizePushPersistence,
   summarizeSnapshots,
@@ -114,21 +114,23 @@ test('capacity rejection telemetry names each fixed API permit', () => {
 });
 
 test('push persistence timings retain protocol and lock-held phases', () => {
-  const parsed = pushPersistenceFields('Git push persistence timing repository_id=repo-1 protocol="transaction" lock_wait_us=7 serialized_us=11 body_us=13 commit_us=17 total_us=48');
+  const parsed = pushPersistenceFields('Git push persistence timing repository_id=repo-1 protocol="transaction" config_changed=false changed_file_count=441 live_file_count=500 lock_wait_us=7 domain_apply_us=5 history_rows_us=6 serialized_us=11 body_us=13 commit_us=17 total_us=48');
   assert.deepEqual(parsed, {
-    repositoryId: 'repo-1', protocol: 'transaction', lock_wait_us: 7, serialized_us: 11,
-    body_us: 13, commit_us: 17, total_us: 48,
+    repositoryId: 'repo-1', protocol: 'transaction', configChanged: false,
+    changed_file_count: 441, live_file_count: 500, lock_wait_us: 7, domain_apply_us: 5,
+    history_rows_us: 6, serialized_us: 11, body_us: 13, commit_us: 17, total_us: 48,
   });
-  assert.deepEqual(summarizePushPersistence([parsed, { ...parsed, lock_wait_us: 9, total_us: 60 }]), {
-    transaction: {
-      count: 2,
-      lockWaitUs: { minimum: 7, p50: 7, p95: 9, p99: 9, maximum: 9 },
-      serializedUs: { minimum: 11, p50: 11, p95: 11, p99: 11, maximum: 11 },
-      bodyUs: { minimum: 13, p50: 13, p95: 13, p99: 13, maximum: 13 },
-      commitUs: { minimum: 17, p50: 17, p95: 17, p99: 17, maximum: 17 },
-      totalUs: { minimum: 48, p50: 48, p95: 60, p99: 60, maximum: 60 },
-    },
-  });
+  const summary = summarizePushPersistence([parsed, { ...parsed, lock_wait_us: 9, total_us: 60 }]).transaction;
+  assert.equal(summary.count, 2);
+  assert.equal(summary.configChanges, 0);
+  assert.deepEqual(summary.changedFileCount, { minimum: 441, maximum: 441, last: 441 });
+  assert.deepEqual(summary.lockWaitUs, { minimum: 7, p50: 7, p95: 9, p99: 9, maximum: 9 });
+  assert.deepEqual(summary.domainApplyUs, { minimum: 5, p50: 5, p95: 5, p99: 5, maximum: 5 });
+  assert.deepEqual(summary.historyRowsUs, { minimum: 6, p50: 6, p95: 6, p99: 6, maximum: 6 });
+  assert.deepEqual(summary.totalUs, { minimum: 48, p50: 48, p95: 60, p99: 60, maximum: 60 });
+  assert.equal(summary.cloneUs, null);
+  assert.equal(isPushPersistenceMessage('repository mutation persistence timing protocol=aggregate-mutation'), true);
+  assert.equal(isPushPersistenceMessage('ordinary log'), false);
 });
 
 test('object-store timings report failures and successful service-time byte rate', () => {
