@@ -452,14 +452,10 @@ discard_pending_evidence() {
   [[ -z "$pending_evidence_path" ]] || rm -f -- "$pending_evidence_path"
 }
 
-deploy_cache_release() {
-  activate_release cache "$cache_service" "$cache_upload_root"
-  promote_pending_evidence
-}
-
 deploy_selected_releases() {
   if [[ "$deploy_cache_requested" == "1" ]]; then
-    deploy_cache_release
+    activate_release cache "$cache_service" "$cache_upload_root"
+    promote_pending_evidence
   fi
   if [[ "$deploy_worker_requested" == "1" ]]; then
     deploy_release worker "$worker_service" "$worker_upload_root"
@@ -475,8 +471,9 @@ deploy_and_reopen() {
   maintenance_read verify
   run_api_maintenance cleanup-git-segments-v1
   backfill_repository_snapshots
-  deploy_cache_release
+  activate_release cache "$cache_service" "$cache_upload_root"
   cache_closed=0
+  promote_pending_evidence
   activate_release worker "$worker_service" "$worker_upload_root"
   worker_closed=0
   activate_release api "$api_service" "$api_upload_root"

@@ -553,6 +553,36 @@ if grep -F "up $test_dir/worker" "$test_dir/crashed-cache-trace" \
   exit 1
 fi
 
+mkdir "$test_dir/cache-evidence-promotion-evidence.jsonl"
+run_cutover cache-evidence-promotion 0 2> "$test_dir/cache-evidence-promotion-stderr"
+[[ "$(cat "$test_dir/cache-evidence-promotion-result")" != "0" ]]
+[[ -f "$test_dir/cache-evidence-promotion-state/up-scope-cache-service" ]]
+[[ -f "$test_dir/cache-evidence-promotion-state/stopped-scope-cache-service" ]]
+assert_in_order "$test_dir/cache-evidence-promotion-trace" \
+  "$test_dir/maintenance apply" \
+  "up $test_dir/cache" \
+  "graphql stop scope-cache-service new-scope-cache-service" \
+  "$test_dir/maintenance fence"
+[[ "$(grep -F -c "graphql stop scope-cache-service new-scope-cache-service" \
+  "$test_dir/cache-evidence-promotion-trace")" == "1" ]]
+if grep -E "up $test_dir/(worker|api)" "$test_dir/cache-evidence-promotion-trace"; then
+  echo "failed cache evidence promotion must stop before worker or API activation" >&2
+  exit 1
+fi
+if compgen -G "$test_dir/cache-evidence-promotion-evidence.jsonl.pending.*" > /dev/null; then
+  echo "failed cache evidence promotion must discard pending evidence" >&2
+  exit 1
+fi
+[[ -z "$(find "$test_dir/cache-evidence-promotion-evidence.jsonl" -mindepth 1 -print -quit)" ]]
+grep -F \
+  "Migration committed; writers remain closed. Rerun this workflow to finish the forward-only deployment." \
+  "$test_dir/cache-evidence-promotion-stderr"
+if grep -F "Failed to re-close metadata writers after the committed cutover." \
+  "$test_dir/cache-evidence-promotion-stderr"; then
+  echo "cache evidence promotion recovery must report successful writer closure" >&2
+  exit 1
+fi
+
 run_cutover rollback rollback
 [[ "$(cat "$test_dir/rollback-result")" != "0" ]]
 assert_in_order "$test_dir/rollback-trace" \
