@@ -15,7 +15,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-const REPOSITORY_GIT_CACHE_MAX_IDLE: Duration = Duration::from_secs(30 * 60);
+const STALE_MATERIALIZATION_MAX_IDLE: Duration = Duration::from_secs(30 * 60);
 const REPOSITORY_GIT_CACHE_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
 const APPLIED_SEQUENCE_FILE: &str = "scope-cache-applied-sequence";
 const LAST_USED_FILE: &str = "scope-cache-last-used";
@@ -257,7 +257,7 @@ impl RepositoryGitCache {
             .map_err(|_| ApiError::internal_message("repository Git cache registry is poisoned"))?;
         let mut caches = repository_cache_directories(&self.root)?;
         let now = SystemTime::now();
-        prune_stale_materializations(&self.root, now)?;
+        prune_stale_materializations(&self.root, now, STALE_MATERIALIZATION_MAX_IDLE)?;
         caches.sort_by_key(|entry| entry.last_used);
 
         let mut retained_bytes = caches
@@ -265,17 +265,28 @@ impl RepositoryGitCache {
             .try_fold(0_u64, |total, entry| total.checked_add(entry.size_bytes))
             .ok_or_else(|| ApiError::internal_message("repository Git cache size overflow"))?;
         let max_bytes = self.max_bytes as u64;
+        let mut evicted_bytes = 0_u64;
+        let mut evicted_repositories = 0_u64;
         for entry in caches {
             if users.get(&entry.path).copied().unwrap_or_default() > 0 {
                 continue;
             }
-            let expired = now
-                .duration_since(entry.last_used)
-                .is_ok_and(|idle| idle >= REPOSITORY_GIT_CACHE_MAX_IDLE);
-            if expired || retained_bytes > max_bytes {
+            if retained_bytes > max_bytes {
                 remove_dir_if_exists(&entry.path)?;
                 retained_bytes = retained_bytes.saturating_sub(entry.size_bytes);
+                evicted_bytes += entry.size_bytes;
+                evicted_repositories += 1;
             }
+        }
+        if evicted_repositories > 0 {
+            tracing::info!(
+                reason = "size_pressure",
+                evicted_repositories,
+                evicted_bytes,
+                retained_bytes,
+                max_bytes,
+                "repository Git caches evicted"
+            );
         }
         Ok(())
     }
@@ -326,7 +337,11 @@ pub(crate) fn sanitize_repository_git_cache_repo(
     Ok(())
 }
 
-fn prune_stale_materializations(root: &Path, now: SystemTime) -> Result<(), ApiError> {
+fn prune_stale_materializations(
+    root: &Path,
+    now: SystemTime,
+    max_idle: Duration,
+) -> Result<(), ApiError> {
     for entry in fs::read_dir(root).map_err(ApiError::internal)? {
         let entry = entry.map_err(ApiError::internal)?;
         let path = entry.path();
@@ -341,7 +356,7 @@ fn prune_stale_materializations(root: &Path, now: SystemTime) -> Result<(), ApiE
             .unwrap_or(SystemTime::UNIX_EPOCH);
         if now
             .duration_since(modified)
-            .is_ok_and(|idle| idle >= REPOSITORY_GIT_CACHE_MAX_IDLE)
+            .is_ok_and(|idle| idle >= max_idle)
         {
             remove_dir_if_exists(&path)?;
         }
@@ -526,6 +541,40 @@ mod tests {
     }
 
     #[test]
+    fn idle_repository_is_retained_while_the_cache_fits_its_byte_budget() {
+        let root = temp_cache_root("git-cache-idle-retention");
+        let registry = RepositoryGitCache::new(root.clone(), 100).unwrap();
+        let repo_path = registry.path_for("owner/idle");
+        fs::create_dir_all(&repo_path).unwrap();
+        fs::write(repo_path.join("pack"), [0_u8; 40]).unwrap();
+        registry.note_applied(&repo_path, 1).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(repo_path.join(LAST_USED_FILE))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
+            .unwrap();
+
+        registry.prune().unwrap();
+
+        assert!(repo_path.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stale_temporary_materialization_is_removed() {
+        let root = temp_cache_root("git-cache-stale-materialization");
+        fs::create_dir_all(&root).unwrap();
+        let materialization = root.join("repo-materializing.tmp");
+        fs::create_dir_all(&materialization).unwrap();
+
+        prune_stale_materializations(&root, SystemTime::now(), Duration::ZERO).unwrap();
+
+        assert!(!materialization.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn derived_repository_counts_toward_the_budget_and_is_leased_while_in_use() {
         let root = temp_cache_root("git-cache-derived");
         let registry = RepositoryGitCache::new(root.clone(), 50).unwrap();
@@ -546,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_frontier_updates_do_not_run_global_eviction() {
+    fn least_recently_used_repository_is_evicted_when_cache_exceeds_byte_budget() {
         let root = temp_cache_root("git-cache-lru");
         let registry = RepositoryGitCache::new(root.clone(), 50).unwrap();
         let old_path = registry.path_for("owner/old");
