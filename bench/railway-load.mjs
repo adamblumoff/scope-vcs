@@ -9,7 +9,11 @@ import { pathToFileURL } from 'node:url';
 
 import { writeLinearHistoryStream } from './git-history.mjs';
 import { ROUTING_MODES, createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
-import { normalizedRates, percentile, round, sampleStats } from './metrics.mjs';
+import {
+  changedFileCountSlope, historySizeSlope, landingFileSizeSlope, normalizedRates, percentile, round,
+  sampleStats, writeSizeSlope,
+} from './metrics.mjs';
+export { changedFileCountSlope, historySizeSlope, landingFileSizeSlope, writeSizeSlope } from './metrics.mjs';
 import { parseChangedFileCounts, writeChangedFiles } from './write-shape.mjs';
 
 // Black-box benchmark: no production-only hooks and never a production target.
@@ -891,75 +895,6 @@ function sample(ok, started, status, bytes, error, ttfbMs = null) {
 }
 
 export function stats(values) { return sampleStats(values); }
-
-export function historySizeSlope(samples) {
-  const groups = new Map();
-  for (const entry of samples) {
-    if (!Number.isInteger(entry.historyDepth)) continue;
-    const values = groups.get(entry.historyDepth) || [];
-    values.push(entry);
-    groups.set(entry.historyDepth, values);
-  }
-  const points = [...groups.entries()].sort(([left], [right]) => left - right).map(([historyDepth, values]) => ({ historyDepth, ...stats(values) }));
-  if (points.length < 2) return { points, p95MsPerCommit: null };
-  const first = points[0];
-  const last = points.at(-1);
-  return { points, p95MsPerCommit: round((last.p95Ms - first.p95Ms) / (last.historyDepth - first.historyDepth)) };
-}
-
-export function writeSizeSlope(samples) {
-  const groups = new Map();
-  for (const entry of samples) {
-    if (!Number.isSafeInteger(entry.writeDeltaBytes)) continue;
-    const values = groups.get(entry.writeDeltaBytes) || [];
-    values.push(entry);
-    groups.set(entry.writeDeltaBytes, values);
-  }
-  const points = [...groups.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([writeDeltaBytes, values]) => ({ writeDeltaBytes, ...stats(values) }));
-  if (points.length < 2) return { points, p95MsPerMiB: null };
-  const first = points[0];
-  const last = points.at(-1);
-  const deltaMiB = (last.writeDeltaBytes - first.writeDeltaBytes) / 1024 / 1024;
-  return { points, p95MsPerMiB: deltaMiB > 0 ? round((last.p95Ms - first.p95Ms) / deltaMiB) : null };
-}
-
-export function landingFileSizeSlope(samples) {
-  const groups = new Map();
-  for (const entry of samples) {
-    if (!Number.isSafeInteger(entry.landingFileBytes)) continue;
-    const values = groups.get(entry.landingFileBytes) || [];
-    values.push(entry);
-    groups.set(entry.landingFileBytes, values);
-  }
-  const points = [...groups.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([landingFileBytes, values]) => ({ landingFileBytes, ...stats(values) }));
-  if (points.length < 2) return { points, p95MsPerMiB: null };
-  const first = points[0];
-  const last = points.at(-1);
-  const deltaMiB = (last.landingFileBytes - first.landingFileBytes) / 1024 / 1024;
-  return { points, p95MsPerMiB: deltaMiB > 0 ? round((last.p95Ms - first.p95Ms) / deltaMiB) : null };
-}
-
-export function changedFileCountSlope(samples) {
-  const groups = new Map();
-  for (const entry of samples) {
-    if (!Number.isSafeInteger(entry.changedFileCount)) continue;
-    const values = groups.get(entry.changedFileCount) || [];
-    values.push(entry);
-    groups.set(entry.changedFileCount, values);
-  }
-  const points = [...groups.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([changedFileCount, values]) => ({ changedFileCount, ...stats(values) }));
-  if (points.length < 2) return { points, p95MsPerFile: null };
-  const first = points[0];
-  const last = points.at(-1);
-  const deltaFiles = last.changedFileCount - first.changedFileCount;
-  return { points, p95MsPerFile: deltaFiles > 0 ? round((last.p95Ms - first.p95Ms) / deltaFiles) : null };
-}
 
 export function toggleBenchmarkVisibilityRule(repoConfig) {
   const config = structuredClone(repoConfig);
