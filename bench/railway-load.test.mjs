@@ -7,11 +7,12 @@ import test from 'node:test';
 import { createEndpointRouter, parseApiUrls } from './endpoint-routing.mjs';
 
 import {
-  abortTimeoutMs, apiHeaders, assertSafeTarget, capacityRejectionBreakdown, chooseWrite,
+  abortTimeoutMs, apiHeaders, assertSafeTarget, capacityRejectionBreakdown, changedFileCountSlope, chooseWrite,
   consistencyStats, evaluateStage, failureBreakdown,
   historySizeSlope, landingFileSizeSlope, parseByteSizes, parseRates, parseStages, stageResult, stats,
-  WRITE_DELTA_FILE_BYTES, writeChunkedRandomPayload, writeSizeSlope,
+  toggleBenchmarkVisibilityRule, WRITE_DELTA_FILE_BYTES, writeChunkedRandomPayload, writeSizeSlope,
 } from './railway-load.mjs';
+import { parseChangedFileCounts, writeChangedFiles } from './write-shape.mjs';
 
 test('large write deltas use bounded files and buffers', async (context) => {
   const root = await mkdtemp(join(tmpdir(), 'scope-load-delta-'));
@@ -46,6 +47,18 @@ test('numeric workload controls are unique and sorted', () => {
   assert.throws(() => parseRates('0,1'), /positive numbers/);
   assert.deepEqual(parseByteSizes('8388608,4096,262144,4096'), [4096, 262144, 8388608]);
   assert.throws(() => parseByteSizes('-1,1'), /non-negative byte counts/);
+  assert.deepEqual(parseChangedFileCounts('500,1,100,1'), [1, 100, 500]);
+  assert.throws(() => parseChangedFileCounts('-1,1'), /non-negative integers/);
+});
+
+test('changed-file fixtures preserve count and exact file size', async (context) => {
+  const root = await mkdtemp(join(tmpdir(), 'scope-load-files-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeChangedFiles(root, 65, 32, 7);
+  const files = await readdir(root);
+  assert.equal(files.length, 65);
+  assert.deepEqual(await Promise.all(files.map(async (file) => (await stat(join(root, file))).size)), Array(65).fill(32));
 });
 
 test('endpoint pools are normalized without duplicate primaries', () => {
@@ -145,6 +158,27 @@ test('landing-file slope separates unrelated pushes from bounded README updates'
     ],
     p95MsPerMiB: 20,
   });
+});
+
+test('changed-file slope reports p95 cost per file', () => {
+  assert.deepEqual(changedFileCountSlope([
+    { ok: true, durationMs: 10, ttfbMs: 10, bytes: 1, changedFileCount: 1 },
+    { ok: true, durationMs: 109, ttfbMs: 109, bytes: 1, changedFileCount: 100 },
+  ]), {
+    points: [
+      { changedFileCount: 1, count: 1, ok: 1, meanMs: 10, p50Ms: 10, p95Ms: 10, p99Ms: 10, ttfbP50Ms: 10, ttfbP95Ms: 10, ttfbP99Ms: 10, scheduleDelayP95Ms: 0, bytes: 1, logicalBytes: 0 },
+      { changedFileCount: 100, count: 1, ok: 1, meanMs: 109, p50Ms: 109, p95Ms: 109, p99Ms: 109, ttfbP50Ms: 109, ttfbP95Ms: 109, ttfbP99Ms: 109, scheduleDelayP95Ms: 0, bytes: 1, logicalBytes: 0 },
+    ],
+    p95MsPerFile: 1,
+  });
+});
+
+test('aggregate benchmark pushes toggle an equivalent visibility rule', () => {
+  const original = { visibility: { default: 'public', rules: [] } };
+  const added = toggleBenchmarkVisibilityRule(original);
+  assert.deepEqual(original.visibility.rules, []);
+  assert.deepEqual(added.visibility.rules, [{ path: '/load-files/**', visibility: 'public' }]);
+  assert.deepEqual(toggleBenchmarkVisibilityRule(added).visibility.rules, []);
 });
 
 test('consistency statistics expose projection convergence instead of hiding polls', () => {

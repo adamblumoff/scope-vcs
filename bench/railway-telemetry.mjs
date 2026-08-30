@@ -17,6 +17,41 @@ const PROCESS_FIELDS = [
   'cgroup_pids_max',
 ];
 
+const PUSH_PERSISTENCE_TIMINGS = [
+  ['lockWaitUs', 'lock_wait_us'],
+  ['metadataUs', 'metadata_us'],
+  ['repositoryRowUs', 'repository_row_us'],
+  ['hydrateUs', 'hydrate_us'],
+  ['cloneUs', 'clone_us'],
+  ['loadLiveFilesUs', 'load_live_files_us'],
+  ['loadPreviousCommitUs', 'load_previous_commit_us'],
+  ['loadGitHeadUs', 'load_git_head_us'],
+  ['domainApplyUs', 'domain_apply_us'],
+  ['catalogVerifyUs', 'catalog_verify_us'],
+  ['repositoryFactsUs', 'repository_facts_us'],
+  ['loadPackSpansUs', 'load_pack_spans_us'],
+  ['historyRowsUs', 'history_rows_us'],
+  ['liveFileRowsUs', 'live_file_rows_us'],
+  ['saveDeltaUs', 'save_delta_us'],
+  ['landingFileUs', 'landing_file_us'],
+  ['workflowCatalogUs', 'workflow_catalog_us'],
+  ['projectionUs', 'projection_us'],
+  ['pushTriggerUs', 'push_trigger_us'],
+  ['orphanQueueUs', 'orphan_queue_us'],
+  ['serializedUs', 'serialized_us'],
+  ['bodyUs', 'body_us'],
+  ['commitUs', 'commit_us'],
+  ['totalUs', 'total_us'],
+];
+const PUSH_PERSISTENCE_COUNTS = [
+  'changed_file_count',
+  'live_file_count',
+  'logical_commit_count',
+  'visibility_change_set_count',
+  'policy_rule_count',
+  'config_rule_count',
+];
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   await main();
 }
@@ -66,7 +101,7 @@ async function main() {
     });
     const pushPersistence = logs.flatMap((entry) => {
       const message = stripAnsi(entry.message || '');
-      if (!message.includes('Git push persistence timing')) return [];
+      if (!isPushPersistenceMessage(message)) return [];
       return [{ timestamp: entry.timestamp, ...pushPersistenceFields(message) }];
     });
     const objectStoreOperations = logs.flatMap((entry) => {
@@ -244,8 +279,17 @@ export function pushPersistenceFields(message) {
   return {
     repositoryId: textField(message, 'repository_id'),
     protocol: textField(message, 'protocol') || 'unknown',
-    ...numericFields(message, ['lock_wait_us', 'serialized_us', 'body_us', 'commit_us', 'total_us']),
+    configChanged: booleanField(message, 'config_changed'),
+    ...numericFields(message, [
+      ...PUSH_PERSISTENCE_COUNTS,
+      ...PUSH_PERSISTENCE_TIMINGS.map(([, field]) => field),
+    ]),
   };
+}
+
+export function isPushPersistenceMessage(message) {
+  return message.includes('Git push persistence timing')
+    || message.includes('repository mutation persistence timing');
 }
 
 export function objectStoreFields(message) {
@@ -345,11 +389,13 @@ export function summarizeGitSegmentTelemetry(events) {
 export function summarizePushPersistence(events) {
   return Object.fromEntries(groupBy(events, ({ protocol }) => protocol).map(([protocol, values]) => [protocol, {
     count: values.length,
-    lockWaitUs: timingSummary(values, 'lock_wait_us'),
-    serializedUs: timingSummary(values, 'serialized_us'),
-    bodyUs: timingSummary(values, 'body_us'),
-    commitUs: timingSummary(values, 'commit_us'),
-    totalUs: timingSummary(values, 'total_us'),
+    configChanges: values.filter(({ configChanged }) => configChanged === true).length,
+    changedFileCount: gaugeSummary(values, 'changed_file_count'),
+    liveFileCount: gaugeSummary(values, 'live_file_count'),
+    ...Object.fromEntries(PUSH_PERSISTENCE_TIMINGS.map(([name, field]) => [
+      name,
+      timingSummary(values, field),
+    ])),
   }]));
 }
 
