@@ -133,6 +133,11 @@ if [[ "$1" == "run" ]]; then
 fi
 
 if [[ "$1 $2" == "domain list" ]]; then
+  if [[ "${FAKE_ROUTER_INSTANCE_EXISTS:-1}" == "0" \
+    && ! -f "$FAKE_RAILWAY_STATE/router-instance-created" ]]; then
+    echo "ServiceInstance not found" >&2
+    exit 1
+  fi
   if [[ "${FAKE_ROUTER_DOMAIN_STATE:-valid}" == "invalid" ]]; then
     echo '{"domains":[{"domain":"scope-repo-router-production.test","type":"service","syncStatus":"ACTIVE","targetPort":9090}]}'
   elif [[ "${FAKE_ROUTER_CONFIGURED:-1}" == "1" || -f "$FAKE_RAILWAY_STATE/router-domain" ]]; then
@@ -300,7 +305,12 @@ if [[ "$1 $2" == "service list" ]]; then
     worker_status=CRASHED
     worker_replicas='{"configured":1,"running":0,"crashed":1,"exited":0,"total":1}'
   fi
-  printf '[{"id":"scope-api","name":"scope-api","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-worker","name":"scope-worker","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-cache-service","name":"scope-cache-service","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s},{"id":"scope-repo-router","name":"scope-repo-router","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s}]\n' "$api_status" "$api_deployment" "$api_stopped" "$api_replicas" "$api_regions" "$worker_status" "$worker_deployment" "$worker_stopped" "$worker_replicas" "$worker_regions" "$cache_status" "$cache_deployment" "$cache_stopped" "$cache_replicas" "$router_status" "$router_deployment" "$router_stopped" "$router_replicas" "$router_regions"
+  router_json=""
+  if [[ "${FAKE_ROUTER_INSTANCE_EXISTS:-1}" == "1" \
+    || -f "$FAKE_RAILWAY_STATE/router-instance-created" ]]; then
+    router_json=",{\"id\":\"scope-repo-router\",\"name\":\"scope-repo-router\",\"status\":\"${router_status}\",\"deploymentId\":${router_deployment},\"deploymentStopped\":${router_stopped},\"replicas\":${router_replicas},\"regions\":${router_regions}}"
+  fi
+  printf '[{"id":"scope-api","name":"scope-api","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-worker","name":"scope-worker","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-cache-service","name":"scope-cache-service","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s}%s]\n' "$api_status" "$api_deployment" "$api_stopped" "$api_replicas" "$api_regions" "$worker_status" "$worker_deployment" "$worker_stopped" "$worker_replicas" "$worker_regions" "$cache_status" "$cache_deployment" "$cache_stopped" "$cache_replicas" "$router_json"
   exit 0
 fi
 
@@ -355,10 +365,26 @@ done
 read -r action deployment_id < <(
   REQUEST_JSON="$request" node -e '
 const request = JSON.parse(process.env.REQUEST_JSON || "{}");
+if (request.query?.includes("environmentPatchCommit")) {
+  const services = request.variables?.patch?.services || {};
+  const ids = Object.keys(services);
+  const valid = request.variables?.environmentId === "production" &&
+    ids.length === 1 && ids[0] === "scope-repo-router" &&
+    services[ids[0]]?.isCreated === true;
+  console.log(`${valid ? "create-instance" : "invalid-instance"} scope-repo-router`);
+  process.exit(0);
+}
 const match = request.query?.match(/deployment(Stop|Restart)/);
 console.log(`${match?.[1]?.toLowerCase() || ""} ${request.variables?.id || ""}`);
 '
 )
+if [[ "$action" == "create-instance" ]]; then
+  touch "$FAKE_RAILWAY_STATE/router-instance-created"
+  printf 'graphql create-instance scope-repo-router\n' >> "$FAKE_RAILWAY_TRACE"
+  echo '{"data":{"environmentPatchCommit":"router-instance-commit"}}'
+  exit 0
+fi
+[[ "$action" != "invalid-instance" ]]
 service="${deployment_id#old-}"
 service="${service#new-}"
 printf 'graphql %s %s %s\n' "$action" "$service" "$deployment_id" >> "$FAKE_RAILWAY_TRACE"
@@ -411,6 +437,7 @@ run_cutover() {
   local deploy_router="${25:-0}"
   local router_configured="${26:-1}"
   local router_domain_state="${27:-valid}"
+  local router_instance_exists="${28:-1}"
   [[ -n "$successful_revisions" ]] || successful_revisions='{}'
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
@@ -445,6 +472,7 @@ run_cutover() {
     FAKE_FAIL_WORKFLOW_VALIDATION="$fail_workflow_validation" \
     FAKE_ROUTER_CONFIGURED="$router_configured" \
     FAKE_ROUTER_DOMAIN_STATE="$router_domain_state" \
+    FAKE_ROUTER_INSTANCE_EXISTS="$router_instance_exists" \
     FAKE_DENY_DEPLOYMENT_ACTION_SERVICE="$deny_deployment_action_service" \
     RAILWAY_PROJECT_ID="project-test" \
     RAILWAY_API_TOKEN="token-graphql" \
@@ -734,16 +762,26 @@ if grep -E "up $test_dir/(cache|worker)" "$test_dir/rolling-api-trace"; then
 fi
 
 run_cutover router-bootstrap 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
-  us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 1 0
+  us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 1 0 valid 0
 [[ "$(cat "$test_dir/router-bootstrap-result")" == "0" ]]
 assert_evidence_components router-bootstrap router,api
 assert_in_order "$test_dir/router-bootstrap-trace" \
+  "graphql create-instance scope-repo-router" \
   "domain --project project-test --environment production --service scope-repo-router --port 8080 --json" \
   "variable set --project project-test --environment production --service scope-api --skip-deploys SCOPE_GIT_PUBLIC_URL=https://scope-repo-router-production.test" \
   "variable set --project project-test --environment production --service scope-repo-router --skip-deploys SCOPE_REPO_ROUTER_BACKEND=scope-api.railway.internal:8080 SCOPE_REPO_ROUTER_READ_REPLICAS=1" \
   "up $test_dir/router" \
   "$test_dir/maintenance plan" \
   "up $test_dir/api"
+
+run_cutover router-instance-refused 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 0 0 valid 0
+[[ "$(cat "$test_dir/router-instance-refused-result")" != "0" ]]
+if grep -E "graphql create-instance|domain --|variable set|up |maintenance" \
+  "$test_dir/router-instance-refused-trace"; then
+  echo "an absent router instance without a selected router must fail before mutation" >&2
+  exit 1
+fi
 
 run_cutover router-drift-refused 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
   us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 0 0

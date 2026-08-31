@@ -319,6 +319,79 @@ router_public_domain() {
   ' <<< "$1"
 }
 
+production_service_exists() {
+  local service_id="$1"
+  local services_json
+  services_json="$(railway service list "${railway_scope[@]}" --json)"
+  SERVICES_JSON="$services_json" SERVICE_ID="$service_id" node -e '
+const services = JSON.parse(process.env.SERVICES_JSON || "[]");
+process.exit(services.some(({id}) => id === process.env.SERVICE_ID) ? 0 : 1);
+'
+}
+
+ensure_production_router_instance() {
+  local request response deadline
+  if production_service_exists "$router_service"; then
+    return 0
+  fi
+  if [[ "$deploy_router_requested" != "1" ]]; then
+    echo "Production router has no service instance; select the router deployment." >&2
+    return 1
+  fi
+
+  request="$(
+    ENVIRONMENT_ID="$environment" ROUTER_SERVICE_ID="$router_service" node -e '
+console.log(JSON.stringify({
+  query: `mutation BootstrapRouterInstance(
+    $environmentId: String!,
+    $patch: EnvironmentConfig!,
+    $commitMessage: String,
+  ) {
+    environmentPatchCommit(
+      environmentId: $environmentId,
+      patch: $patch,
+      commitMessage: $commitMessage,
+    )
+  }`,
+  variables: {
+    environmentId: process.env.ENVIRONMENT_ID,
+    patch: {services: {[process.env.ROUTER_SERVICE_ID]: {isCreated: true}}},
+    commitMessage: "Create production Git router instance",
+  },
+}));
+'
+  )"
+  response="$(
+    printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "$railway_api_token" \
+      | curl --silent --show-error --fail-with-body \
+        --request POST \
+        --url https://backboard.railway.com/graphql/v2 \
+        --header @- \
+        --data-binary "$request"
+  )"
+  RAILWAY_GRAPHQL_RESPONSE="$response" node -e '
+const response = JSON.parse(process.env.RAILWAY_GRAPHQL_RESPONSE || "{}");
+if (typeof response.data?.environmentPatchCommit !== "string" ||
+    response.data.environmentPatchCommit.length === 0) {
+  const messages = Array.isArray(response.errors)
+    ? response.errors.map(({message}) => message).filter(Boolean).join("; ")
+    : "";
+  console.error(`Railway router instance creation failed${messages ? `: ${messages}` : "."}`);
+  process.exit(1);
+}
+'
+
+  deadline=$((SECONDS + 60))
+  while (( SECONDS < deadline )); do
+    if production_service_exists "$router_service"; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Production router service instance did not appear after creation." >&2
+  return 1
+}
+
 configure_production_router() {
   local domains router_domain router_url api_replicas api_variables router_variables
   domains="$(railway domain list "${railway_scope[@]}" --service "$router_service" --json)"
@@ -616,6 +689,7 @@ leave_failure_state() {
 trap 'leave_failure_state $?' EXIT
 
 validate_production_target
+ensure_production_router_instance
 configure_production_router
 if [[ "$deploy_router_requested" == "1" ]]; then
   activate_release router "$router_service" "$router_upload_root"
