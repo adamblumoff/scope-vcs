@@ -1,103 +1,13 @@
 use crate::{
-    FileChangeKind, FirstPushTokenStatus, RepoConfig, RepoLifecycleState, RepositoryActor,
+    FileChangeKind, FirstPushTokenStatus, GitOid, RepoConfig, RepoLifecycleState, RepositoryActor,
     RequestActorRole, RequestAudience, RequestDiscussionStatus, RequestEventKind,
     RequestEventPayload, RequestMergeabilityStatus, RequestState, SessionIdentity, Visibility,
 };
-use serde::{Deserialize, Deserializer, Serialize, de};
-use std::{fmt, ops::Deref};
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts", ts(type = "string"))]
-pub struct GitOid(String);
-
-impl GitOid {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GitOidParseError;
-
-impl fmt::Display for GitOidParseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Git OID must be exactly 40 hexadecimal characters")
-    }
-}
-
-impl std::error::Error for GitOidParseError {}
-
-impl TryFrom<&str> for GitOid {
-    type Error = GitOidParseError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(GitOidParseError);
-        }
-        Ok(Self(value.to_ascii_lowercase()))
-    }
-}
-
-impl TryFrom<String> for GitOid {
-    type Error = GitOidParseError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for GitOid {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::try_from(value).map_err(de::Error::custom)
-    }
-}
-
-impl From<GitOid> for String {
-    fn from(value: GitOid) -> Self {
-        value.0
-    }
-}
-
-impl Deref for GitOid {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
-    }
-}
-
-impl fmt::Display for GitOid {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn git_oid_accepts_and_normalizes_canonical_sha1() {
-        let oid = GitOid::try_from("ABCDEF0123456789ABCDEF0123456789ABCDEF01").unwrap();
-        assert_eq!(oid.as_str(), "abcdef0123456789abcdef0123456789abcdef01");
-        assert_eq!(
-            serde_json::to_string(&oid).unwrap(),
-            "\"abcdef0123456789abcdef0123456789abcdef01\""
-        );
-    }
-
-    #[test]
-    fn git_oid_rejects_non_sha1_values_at_construction_and_deserialization() {
-        assert!(GitOid::try_from("head-1").is_err());
-        assert!(GitOid::try_from(" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_err());
-        assert!(GitOid::try_from("abcdef0123456789abcdef0123456789abcdef0g").is_err());
-        assert!(serde_json::from_str::<GitOid>("\"head-1\"").is_err());
-    }
 
     #[test]
     fn lifecycle_request_payloads_preserve_optional_fields() {
@@ -112,14 +22,14 @@ mod tests {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct AccountSessionResponse {
     pub identity: Option<SessionIdentity>,
     pub user: Option<UserResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct UserResponse {
     pub id: String,
     pub handle: String,
@@ -128,14 +38,14 @@ pub struct UserResponse {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub enum DeviceLoginStatus {
     Pending,
     Complete,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct DeviceLoginStartResponse {
     pub device_code: String,
     pub user_code: String,
@@ -145,7 +55,7 @@ pub struct DeviceLoginStartResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct DeviceLoginPollResponse {
     pub status: DeviceLoginStatus,
     pub session_token: Option<String>,
@@ -154,13 +64,13 @@ pub struct DeviceLoginPollResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct BrowserLoginStartRequest {
     pub callback_url: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct BrowserLoginStartResponse {
     pub request_id: String,
     pub request_secret: String,
@@ -169,20 +79,20 @@ pub struct BrowserLoginStartResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct BrowserLoginExchangeRequest {
     pub request_secret: String,
     pub callback_code: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CliExchangeGrantExchangeRequest {
     pub exchange_token: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CliSessionTokenResponse {
     pub session_token: String,
     pub expires_at_unix: u64,
@@ -190,21 +100,21 @@ pub struct CliSessionTokenResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CreateRepoRequest {
     pub name: String,
     pub file_default_visibility: Option<Visibility>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CreateRepoResponse {
     pub repo: RepoSummaryResponse,
     pub init: RepoInitResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoSummaryResponse {
     pub id: String,
     pub owner_handle: String,
@@ -218,14 +128,14 @@ pub struct RepoSummaryResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct OwnerProfileResponse {
     pub handle: String,
     pub repositories: Vec<RepoSummaryResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryAccessResponse {
     pub actor: RepositoryActor,
     pub can_read_private_files: bool,
@@ -237,13 +147,13 @@ pub struct RepositoryAccessResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoRequestPermissionsResponse {
     pub can_start_request: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoInitResponse {
     pub repo: RepoSummaryResponse,
     pub git_remote_url: String,
@@ -254,7 +164,7 @@ pub struct RepoInitResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct FirstPushTokenResponse {
     pub status: FirstPushTokenStatus,
     pub created_at_unix: u64,
@@ -264,14 +174,14 @@ pub struct FirstPushTokenResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct GitPushTokenResponse {
     pub created_at_unix: u64,
     pub secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoConfigResponse {
     pub config: RepoConfig,
     pub config_hash: String,
@@ -281,7 +191,7 @@ pub struct RepoConfigResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CreatePushIntentRequest {
     pub head_oid: String,
     pub base_config_hash: String,
@@ -289,7 +199,7 @@ pub struct CreatePushIntentRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CreatePushIntentResponse {
     pub token: String,
     pub base_head_oid: Option<GitOid>,
@@ -297,27 +207,27 @@ pub struct CreatePushIntentResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestListResponse {
     pub requests: Vec<RequestListItemResponse>,
     pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDetailResponse {
     pub request: RequestSummaryResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CreateRequestRatingRequest {
     pub score: u8,
     pub reason: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestRatingResponse {
     pub id: String,
     pub request_id: String,
@@ -329,7 +239,7 @@ pub struct RequestRatingResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestRatingParticipantResponse {
     pub id: String,
     pub handle: String,
@@ -338,27 +248,27 @@ pub struct RequestRatingParticipantResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestRatingsResponse {
     pub ratings: Vec<RequestRatingResponse>,
     pub eligible_subject: Option<RequestRatingParticipantResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestMutationResponse {
     pub request: RequestSummaryResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestCloseResponse {
     pub deleted: bool,
     pub request: Option<RequestSummaryResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestSummaryResponse {
     pub id: String,
     pub name: String,
@@ -386,7 +296,7 @@ pub struct RequestSummaryResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestInviteeResponse {
     pub user: RequestActorSummaryResponse,
     pub invited_by_user_id: String,
@@ -394,32 +304,32 @@ pub struct RequestInviteeResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct AddRequestInviteeRequest {
     pub handle: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RemoveRequestInviteeRequest {
     pub handle: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestInviteeMutationResponse {
     pub request: RequestSummaryResponse,
     pub invitee: RequestInviteeResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct LeaveRequestResponse {
     pub invitee: RequestInviteeResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestListItemResponse {
     pub id: String,
     pub name: String,
@@ -434,7 +344,7 @@ pub struct RequestListItemResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestPermissionsResponse {
     pub can_view_activity: bool,
     pub can_open_discussion: bool,
@@ -450,7 +360,7 @@ pub struct RequestPermissionsResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestMergeabilityResponse {
     pub status: RequestMergeabilityStatus,
     pub current_main_oid: Option<GitOid>,
@@ -459,7 +369,7 @@ pub struct RequestMergeabilityResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestEventResponse {
     pub id: String,
     pub position: u64,
@@ -470,14 +380,14 @@ pub struct RequestEventResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestActorSummaryResponse {
     pub id: String,
     pub handle: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionReplyReferenceResponse {
     pub id: String,
     pub position: u64,
@@ -486,7 +396,7 @@ pub struct RequestDiscussionReplyReferenceResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionReplyResponse {
     pub id: String,
     pub discussion_id: String,
@@ -498,7 +408,7 @@ pub struct RequestDiscussionReplyResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionSummaryResponse {
     pub id: String,
     pub request_id: String,
@@ -519,7 +429,7 @@ pub struct RequestDiscussionSummaryResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionAnchor {
     pub revision_id: String,
     pub revision_position: u64,
@@ -528,7 +438,7 @@ pub struct RequestDiscussionAnchor {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionAnchorInput {
     pub revision_id: String,
     pub commit_oid: Option<String>,
@@ -536,7 +446,7 @@ pub struct RequestDiscussionAnchorInput {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestRevisionCommitResponse {
     pub oid: String,
     pub parent_oids: Vec<String>,
@@ -548,7 +458,7 @@ pub struct RequestRevisionCommitResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CommitFileResponse {
     pub path: String,
     pub kind: FileChangeKind,
@@ -560,7 +470,7 @@ pub struct CommitFileResponse {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub enum RequestRevisionInspectionState {
     Complete,
     Incomplete,
@@ -568,7 +478,7 @@ pub enum RequestRevisionInspectionState {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestRevisionResponse {
     pub id: String,
     pub position: u64,
@@ -581,7 +491,7 @@ pub struct RequestRevisionResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestRevisionListResponse {
     pub review_revision_id: Option<String>,
     pub revisions: Vec<RequestRevisionResponse>,
@@ -589,7 +499,7 @@ pub struct RequestRevisionListResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionPageResponse {
     pub discussions: Vec<RequestDiscussionSummaryResponse>,
     pub next_cursor: Option<String>,
@@ -597,27 +507,27 @@ pub struct RequestDiscussionPageResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionRepliesPageResponse {
     pub replies: Vec<RequestDiscussionReplyResponse>,
     pub next_before_position: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionMutationResponse {
     pub discussion: RequestDiscussionSummaryResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionReplyMutationResponse {
     pub discussion: RequestDiscussionSummaryResponse,
     pub reply: RequestDiscussionReplyResponse,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionChangesResponse {
     pub discussions: Vec<RequestDiscussionSummaryResponse>,
     pub through_position: u64,
@@ -625,20 +535,20 @@ pub struct RequestDiscussionChangesResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestDiscussionReadResponse {
     pub read_through_position: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestActivityPageResponse {
     pub events: Vec<RequestEventResponse>,
     pub through_position: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct StartRequestRequest {
     pub name: String,
     pub title: Option<String>,
@@ -646,18 +556,18 @@ pub struct StartRequestRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct SubmitRequestRequest {}
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct EditRequestIdentityRequest {
     pub title: Option<String>,
     pub description_markdown: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CreateRequestDiscussionRequest {
     pub body_markdown: String,
     pub client_discussion_id: String,
@@ -665,7 +575,7 @@ pub struct CreateRequestDiscussionRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CreateRequestDiscussionReplyRequest {
     pub body_markdown: String,
     pub client_reply_id: String,
@@ -673,7 +583,7 @@ pub struct CreateRequestDiscussionReplyRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct ReopenAndReplyRequest {
     pub body_markdown: String,
     pub client_reply_id: String,
@@ -681,7 +591,7 @@ pub struct ReopenAndReplyRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct MarkRequestDiscussionReadRequest {
     pub through_position: u64,
 }

@@ -11,11 +11,11 @@ default = []
 local-dev = ["scope_postgres/local-dev"]
 smoke-seed = ["scope_postgres/smoke-seed"]
 test-support = ["scope_postgres/test-support", "scope_object_store/test-support"]
-type-export = ["dep:ts-rs", "scope_api_contract/ts"]
+type-export = ["dep:schemars", "dep:ts-rs", "scope_api_contract/ts"]
 
 [[bin]]
-name = "export-api-types"
-path = "src/bin/export_api_types.rs"
+name = "export-api-contract"
+path = "src/bin/export_api_contract.rs"
 required-features = ["type-export"]
 
 [[bin]]
@@ -47,6 +47,7 @@ getrandom.workspace = true
 libc.workspace = true
 posthog-rs = { version = "0.24.0", default-features = false, features = ["async-client"] }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 pub const CLI_OUTPUT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct CliSuccessEnvelope<T> {
     pub version: u32,
     pub command: String,

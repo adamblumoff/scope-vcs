@@ -10,24 +10,27 @@ import type {
   RequestParams,
 } from './types'
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
+import { apiValidators } from './validators.generated'
 import type { LoadRequestQueueInput } from './request-queue-input'
-
 
 export async function loadRequestQueueForRequest(
   data: LoadRequestQueueInput,
 ): Promise<RequestList> {
-  return createApiClient().get<RequestList>(requestQueuePath(data), {
-    auth: 'optional',
-  })
+  return createApiClient().get(
+    requestQueuePath(data),
+    apiValidators.RequestListResponse,
+    { auth: 'optional' },
+  )
 }
-
 
 export async function loadRequestForRequest(
   data: RequestParams,
 ): Promise<RequestDetail> {
-  return createApiClient().get<RequestDetail>(requestPath(data), {
-    auth: 'optional',
-  })
+  return createApiClient().get(
+    requestPath(data),
+    apiValidators.RequestDetailResponse,
+    { auth: 'optional' },
+  )
 }
 
 export type RateRequestInput = RequestParams & {
@@ -38,8 +41,9 @@ export type RateRequestInput = RequestParams & {
 export async function loadRequestRatingsForRequest(
   data: RequestParams,
 ): Promise<RequestRatings> {
-  return createApiClient().get<RequestRatings>(
+  return createApiClient().get(
     requestRoute(ApiRouteTemplates.repoRequestRatings, data),
+    apiValidators.RequestRatingsResponse,
     { auth: 'optional' },
   )
 }
@@ -47,8 +51,9 @@ export async function loadRequestRatingsForRequest(
 export async function rateRequestForRequest(
   data: RateRequestInput,
 ): Promise<RequestRating> {
-  return createApiClient().post<RequestRating>(
+  return createApiClient().post(
     requestRoute(ApiRouteTemplates.repoRequestRatings, data),
+    apiValidators.RequestRatingResponse,
     {
       auth: 'required',
       body: { reason: data.reason, score: data.score },
@@ -63,8 +68,9 @@ export async function loadRequestRevisionsForRequest(
   if (data.revision_id) search.set('revision', data.revision_id)
   if (data.commit_oid) search.set('commit', data.commit_oid)
   const path = requestRoute(ApiRouteTemplates.repoRequestRevisions, data)
-  return createApiClient().get<RequestRevisions>(
+  return createApiClient().get(
     search.size > 0 ? `${path}?${search}` : path,
+    apiValidators.RequestRevisionListResponse,
     { auth: 'optional' },
   )
 }
@@ -77,8 +83,13 @@ export type LoadRequestRevisionCommitInput = RequestParams & {
 export async function loadRequestRevisionCommitFileDiffForRequest(
   data: LoadRequestRevisionCommitInput & { path: string },
 ): Promise<ReviewFileDiff> {
-  const diff = await createApiClient().get<ReviewFileDiff>(
-    `${requestRevisionCommitRoute(ApiRouteTemplates.repoRequestRevisionCommitFileDiff, data)}?path=${encodeURIComponent(data.path)}`,
+  const path = requestRevisionCommitRoute(
+    ApiRouteTemplates.repoRequestRevisionCommitFileDiff,
+    data,
+  )
+  const diff = await createApiClient().get(
+    `${path}?path=${encodeURIComponent(data.path)}`,
+    apiValidators.ReviewFileDiffResponse,
     { auth: 'optional' },
   )
 
@@ -87,7 +98,6 @@ export async function loadRequestRevisionCommitFileDiffForRequest(
     prerenderedHtml: await prerenderReviewFileDiff(diff),
   }
 }
-
 
 function requestQueuePath(data: LoadRequestQueueInput) {
   const path = buildApiPath(ApiRouteTemplates.repoRequestQueue, {

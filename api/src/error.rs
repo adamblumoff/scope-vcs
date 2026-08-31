@@ -136,6 +136,24 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn into_public_parts(self) -> (StatusCode, ErrorResponse) {
+        let status = self.status();
+        let retryable = matches!(
+            self.kind,
+            ErrorKind::ServiceUnavailable | ErrorKind::TooManyRequests
+        );
+        let error_reference = self
+            .operator_diagnostic
+            .as_deref()
+            .and_then(|diagnostic| report_operator_diagnostic(self.kind, self.code, diagnostic));
+        let mut body = ErrorResponse::new(self.code, self.public_message);
+        body.error_reference = error_reference;
+        body.fields.paths = self.paths;
+        body.instruction = self.instruction;
+        body.retryable = retryable;
+        (status, body)
+    }
+
     #[cfg(test)]
     pub(crate) fn public_message(&self) -> &str {
         &self.public_message
@@ -268,20 +286,7 @@ impl From<scope_object_store::ObjectStoreError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = self.status();
-        let retryable = matches!(
-            self.kind,
-            ErrorKind::ServiceUnavailable | ErrorKind::TooManyRequests
-        );
-        let error_reference = self
-            .operator_diagnostic
-            .as_deref()
-            .and_then(|diagnostic| report_operator_diagnostic(self.kind, self.code, diagnostic));
-        let mut body = ErrorResponse::new(self.code, self.public_message);
-        body.error_reference = error_reference;
-        body.fields.paths = self.paths;
-        body.instruction = self.instruction;
-        body.retryable = retryable;
+        let (status, body) = self.into_public_parts();
         (status, Json(body)).into_response()
     }
 }

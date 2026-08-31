@@ -58,6 +58,7 @@ pub(crate) async fn repo_events(
     .expect("connected event is always visible");
     let updates = stream::unfold(
         RepoEventStreamState {
+            finished: false,
             lagged_repo_id: repo_id,
             owner,
             receiver: BroadcastStream::new(receiver),
@@ -66,6 +67,9 @@ pub(crate) async fn repo_events(
             user,
         },
         |mut stream_state| async move {
+            if stream_state.finished {
+                return None;
+            }
             loop {
                 let event = stream_state.receiver.next().await?;
                 let event = match event {
@@ -88,7 +92,10 @@ pub(crate) async fn repo_events(
                 {
                     Ok(Some(event)) => return Some((sse_event(event), stream_state)),
                     Ok(None) => continue,
-                    Err(_) => return None,
+                    Err(error) => {
+                        stream_state.finished = true;
+                        return Some((sse_error_event(error), stream_state));
+                    }
                 }
             }
         },
@@ -104,6 +111,7 @@ pub(crate) async fn repo_events(
 }
 
 struct RepoEventStreamState {
+    finished: bool,
     lagged_repo_id: String,
     owner: String,
     receiver: BroadcastStream<RepoChangeEvent>,
@@ -200,4 +208,10 @@ fn event_for_principal(
 fn sse_event(event: RepoChangeEvent) -> Result<Event, Infallible> {
     let data = serde_json::to_string(&event).expect("repo change events must serialize");
     Ok(Event::default().event("repo-change").data(data))
+}
+
+fn sse_error_event(error: ApiError) -> Result<Event, Infallible> {
+    let (_, body) = error.into_public_parts();
+    let data = serde_json::to_string(&body).expect("public API errors must serialize");
+    Ok(Event::default().event("error").data(data))
 }

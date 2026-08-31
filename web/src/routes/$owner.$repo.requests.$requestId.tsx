@@ -1,6 +1,6 @@
 import { createApiClient, HttpError } from '@/api/client'
-import type { AccountSession } from '@/api/types'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
+import { apiValidators } from '@/api/validators.generated'
 import { loadRequestForRequest } from '@/api/repos'
 import {
   loadRequestRatingsForRequest,
@@ -172,8 +172,9 @@ async function loadOptionalRequestForRequest(data: ReturnType<typeof requestPara
 
 async function loadOptionalAccountSession() {
   try {
-    return await createApiClient().get<AccountSession>(
+    return await createApiClient().get(
       buildApiPath(ApiRouteTemplates.accountSession),
+      apiValidators.AccountSessionResponse,
       { auth: 'optional' },
     )
   } catch (error) {

@@ -1,15 +1,34 @@
-import { ApiRouteTemplates } from './types.generated'
+import { ApiRouteTemplates, type ErrorResponse } from './types.generated'
+import {
+  apiValidators,
+  type ApiValidationIssue,
+  type ApiValidator,
+} from './validators.generated'
 
 export class HttpError extends Error {
+  readonly errorReference: string | undefined
+
   constructor(
-    message: string,
     readonly status: number,
-    readonly errorReference?: string,
+    readonly response: ErrorResponse,
   ) {
-    super(errorReference ? `${message} (reference: ${errorReference})` : message)
+    const errorReference = response.error_reference ?? undefined
+    super(
+      errorReference
+        ? `${response.message} (reference: ${errorReference})`
+        : response.message,
+    )
     this.name = 'HttpError'
+    this.errorReference = errorReference
   }
 }
+
+export type InvalidApiResponseFailure =
+  | 'content-type'
+  | 'json-syntax'
+  | 'schema'
+  | 'unexpected-content'
+  | 'unexpected-no-content'
 
 export class InvalidApiResponseError extends Error {
   constructor(
@@ -17,16 +36,25 @@ export class InvalidApiResponseError extends Error {
     readonly requestPath: string,
     readonly status: number,
     readonly contentType: string | null,
+    readonly failureClass: InvalidApiResponseFailure,
+    readonly issuePath?: string,
   ) {
+    const issue = issuePath ? `, issue ${issuePath}` : ''
     super(
-      `${requestMethod} ${requestPath} returned invalid JSON ` +
-        `(${status}, ${contentType ?? 'unknown content type'})`,
+      `${requestMethod} ${requestPath} returned an invalid API response ` +
+        `(${failureClass}, ${status}, ${contentType ?? 'unknown content type'}${issue})`,
     )
     this.name = 'InvalidApiResponseError'
   }
 }
 
 type InvalidApiResponseObserver = (error: InvalidApiResponseError) => void
+type NoContentValidator = ApiValidator<undefined> & { readonly noContent: true }
+
+export const noContent: NoContentValidator = Object.assign(
+  (value: unknown): value is undefined => value === undefined,
+  { noContent: true as const },
+)
 
 // Nitro can bundle the plugin and API client in separate chunks. This key keeps
 // one process-wide observer shared by both copies of the module.
@@ -53,40 +81,144 @@ export function setInvalidApiResponseObserver(
 
 export async function loadJson<T>(
   url: RequestInfo | URL,
+  validator: ApiValidator<T>,
   init?: RequestInit,
 ): Promise<T> {
   const response = await fetch(url, init)
+  if (!response.ok) await throwApiResponseError(response, url, init)
+  const context = responseContext(response, url, init)
+
   if (response.status === 204 || response.status === 205) {
-    return undefined as T
+    const payload: unknown = undefined
+    if (validator(payload)) return payload
+    throw invalidResponse(context, 'unexpected-no-content')
+  }
+  if (expectsNoContent(validator)) {
+    throw invalidResponse(context, 'unexpected-content')
+  }
+  if (!isJsonContentType(context.contentType)) {
+    throw invalidResponse(context, 'content-type')
   }
 
   let payload: unknown
   try {
     payload = await response.json()
   } catch {
-    if (!response.ok) {
-      payload = null
-    } else {
-      const error = new InvalidApiResponseError(
-        requestMethod(url, init),
-        requestPath(url),
-        response.status,
-        response.headers.get('content-type'),
-      )
-      observeInvalidApiResponse(error)
-      throw error
-    }
+    throw invalidResponse(context, 'json-syntax')
   }
 
-  if (!response.ok) {
-    throw new HttpError(
-      errorMessage(payload, response.status),
-      response.status,
-      errorReference(payload),
+  if (!validator(payload)) {
+    throw invalidResponse(
+      context,
+      'schema',
+      validationIssuePath(validator.errors?.[0]),
     )
   }
+  return payload
+}
 
-  return payload as T
+export async function throwApiResponseError(
+  response: Response,
+  url: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<never> {
+  const context = responseContext(response, url, init)
+  if (!isJsonContentType(context.contentType)) {
+    throw invalidResponse(context, 'content-type')
+  }
+
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    throw invalidResponse(context, 'json-syntax')
+  }
+  if (!apiValidators.ErrorResponse(payload)) {
+    throw invalidResponse(
+      context,
+      'schema',
+      validationIssuePath(apiValidators.ErrorResponse.errors?.[0]),
+    )
+  }
+  throw new HttpError(response.status, payload)
+}
+
+export function arrayOf<T>(itemValidator: ApiValidator<T>): ApiValidator<T[]> {
+  const validator: ApiValidator<T[]> = (value: unknown): value is T[] => {
+    validator.errors = null
+    if (!Array.isArray(value)) {
+      validator.errors = [{ instancePath: '/', keyword: 'type' }]
+      return false
+    }
+    for (const [index, item] of value.entries()) {
+      if (itemValidator(item)) continue
+      const issue = itemValidator.errors?.[0]
+      validator.errors = [{
+        instancePath: `/${index}${issue?.instancePath ?? ''}`,
+        keyword: issue?.keyword ?? 'schema',
+        message: issue?.message,
+        params: issue?.params,
+      }]
+      return false
+    }
+    return true
+  }
+  validator.errors = null
+  return validator
+}
+
+function expectsNoContent<T>(validator: ApiValidator<T>) {
+  return 'noContent' in validator && validator.noContent === true
+}
+
+function invalidResponse(
+  context: {
+    contentType: string | null
+    requestMethod: string
+    requestPath: string
+    status: number
+  },
+  failureClass: InvalidApiResponseFailure,
+  issuePath?: string,
+) {
+  const error = new InvalidApiResponseError(
+    context.requestMethod,
+    context.requestPath,
+    context.status,
+    context.contentType,
+    failureClass,
+    issuePath,
+  )
+  observeInvalidApiResponse(error)
+  return error
+}
+
+function responseContext(
+  response: Response,
+  url: RequestInfo | URL,
+  init?: RequestInit,
+) {
+  return {
+    contentType: response.headers.get('content-type'),
+    requestMethod: requestMethod(url, init),
+    requestPath: requestPath(url),
+    status: response.status,
+  }
+}
+
+export function validationIssuePath(issue: ApiValidationIssue | undefined) {
+  if (!issue) return undefined
+  const missing = issue.params?.missingProperty
+  const path = missing
+    ? `${issue.instancePath}/${String(missing).replaceAll('~', '~0').replaceAll('/', '~1')}`
+    : issue.instancePath || '/'
+  return path.slice(0, 160)
+}
+
+function isJsonContentType(contentType: string | null) {
+  if (!contentType) return false
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase()
+  return mediaType === 'application/json' || mediaType?.endsWith('+json') === true
 }
 
 function observeInvalidApiResponse(error: InvalidApiResponseError) {
@@ -138,32 +270,6 @@ function isRouteParameter(segment: string) {
   return segment.startsWith('{') && segment.endsWith('}')
 }
 
-function errorReference(payload: unknown) {
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'error_reference' in payload &&
-    typeof payload.error_reference === 'string'
-  ) {
-    return payload.error_reference
-  }
-
-  return undefined
-}
-
 export function stripTrailingSlash(value: string) {
   return value.replace(/\/+$/, '')
-}
-
-function errorMessage(payload: unknown, status: number) {
-  if (
-    payload &&
-    typeof payload === 'object' &&
-    'message' in payload &&
-    typeof payload.message === 'string'
-  ) {
-    return payload.message
-  }
-
-  return `request failed: ${status}`
 }

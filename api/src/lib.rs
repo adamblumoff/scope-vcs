@@ -44,6 +44,6 @@ pub use state::AppState;
 pub use workflow_catalog_backfill::validate_repository_workflow_catalogs_for_maintenance;
 
 #[cfg(feature = "type-export")]
-pub fn export_api_types(output_path: &std::path::Path) {
-    http::type_exports::export_api_types(output_path);
+pub fn export_api_contract(output_path: &std::path::Path, schema_output_path: &std::path::Path) {
+    http::type_exports::export_api_contract(output_path, schema_output_path);
 }

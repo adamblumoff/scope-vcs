@@ -2,7 +2,7 @@ use scope_domain::repo_config as domain;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum ConfigVisibility {
     Public,
@@ -10,7 +10,7 @@ pub enum ConfigVisibility {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoConfig {
     #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
@@ -22,7 +22,7 @@ pub struct RepoConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoConfigVisibility {
     #[serde(default = "default_private_visibility")]
     pub default: ConfigVisibility,
@@ -31,28 +31,28 @@ pub struct RepoConfigVisibility {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoConfigVisibilityRule {
     pub path: String,
     pub visibility: ConfigVisibility,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoConfigHistory {
     #[serde(default)]
     pub rewrites: Vec<HistoryRewriteRequest>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct HistoryRewriteRequest {
     pub path: String,
     pub action: HistoryRewriteAction,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[serde(rename_all = "kebab-case")]
 pub enum HistoryRewriteAction {
     RedactPublicHistory,

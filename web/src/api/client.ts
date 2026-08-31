@@ -1,10 +1,13 @@
 export {
+  arrayOf,
   HttpError,
   InvalidApiResponseError,
   loadJson,
+  noContent,
   stripTrailingSlash,
 } from './http'
 import { loadJson, stripTrailingSlash } from './http'
+import type { ApiValidator } from './validators.generated'
 
 const localApiBase = 'http://localhost:8080'
 const localCliInstallBase = 'http://localhost:8787'
@@ -30,6 +33,7 @@ export function createApiClient() {
   async function request<T>(
     method: string,
     path: string,
+    validator: ApiValidator<T>,
     options: ApiRequestOptions = {},
   ): Promise<T> {
     const headers = new Headers()
@@ -48,7 +52,7 @@ export function createApiClient() {
       }
     }
 
-    return loadJson<T>(`${connectionForMethod(method)}${path}`, {
+    return loadJson(`${connectionForMethod(method)}${path}`, validator, {
       body:
         options.body === undefined ? undefined : JSON.stringify(options.body),
       headers,
@@ -64,16 +68,16 @@ export function createApiClient() {
 
   return {
     authenticated: async () => Boolean(await requestAuthToken()),
-    delete: <T>(path: string, options?: ApiRequestOptions) =>
-      request<T>('DELETE', path, options),
-    get: <T>(path: string, options?: ApiRequestOptions) =>
-      request<T>('GET', path, options),
-    patch: <T>(path: string, options?: ApiRequestOptions) =>
-      request<T>('PATCH', path, options),
-    post: <T>(path: string, options?: ApiRequestOptions) =>
-      request<T>('POST', path, options),
-    put: <T>(path: string, options?: ApiRequestOptions) =>
-      request<T>('PUT', path, options),
+    delete: <T>(path: string, validator: ApiValidator<T>, options?: ApiRequestOptions) =>
+      request('DELETE', path, validator, options),
+    get: <T>(path: string, validator: ApiValidator<T>, options?: ApiRequestOptions) =>
+      request('GET', path, validator, options),
+    patch: <T>(path: string, validator: ApiValidator<T>, options?: ApiRequestOptions) =>
+      request('PATCH', path, validator, options),
+    post: <T>(path: string, validator: ApiValidator<T>, options?: ApiRequestOptions) =>
+      request('POST', path, validator, options),
+    put: <T>(path: string, validator: ApiValidator<T>, options?: ApiRequestOptions) =>
+      request('PUT', path, validator, options),
   }
 }
 

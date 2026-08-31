@@ -1,0 +1,54 @@
+import * as assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { arrayOf } from './http'
+import { apiValidators } from './validators.generated'
+
+test('generated validators follow enum, optional, and unknown-field Serde policy', () => {
+  assert.equal(apiValidators.ErrorResponse({
+    code: 'internal',
+    message: 'failed',
+    retryable: false,
+  }), true)
+  assert.equal(apiValidators.ErrorResponse({
+    code: 'internal',
+    extra_server_field: 'allowed until Rust denies unknown fields',
+    message: 'failed',
+    retryable: false,
+  }), true)
+  assert.equal(apiValidators.ErrorResponse({
+    code: 'not-a-real-code',
+    message: 'failed',
+    retryable: false,
+  }), false)
+  assert.equal(apiValidators.ErrorResponse({
+    code: 'internal',
+    message: 'failed',
+  }), false)
+})
+
+test('generated validators enforce arrays and JavaScript safe integers', () => {
+  const validateRepoFiles = arrayOf(apiValidators.RepoFileResponse)
+  assert.equal(validateRepoFiles([{
+    oid: '0123456789abcdef0123456789abcdef01234567',
+    path: '/README.md',
+    tracked: true,
+    visibility: 'Public',
+  }]), true)
+  assert.equal(validateRepoFiles([{
+    oid: '0123456789abcdef0123456789abcdef01234567',
+    path: '/README.md',
+    tracked: 'yes',
+    visibility: 'Public',
+  }]), false)
+
+  const connected = {
+    kind: 'Connected',
+    repo_id: 'owner/repo',
+    version: Number.MAX_SAFE_INTEGER,
+  }
+  assert.equal(apiValidators.RepoChangeEvent(connected), true)
+  assert.equal(apiValidators.RepoChangeEvent({
+    ...connected,
+    version: Number.MAX_SAFE_INTEGER + 1,
+  }), false)
+})

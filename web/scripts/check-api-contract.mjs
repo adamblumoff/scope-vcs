@@ -5,46 +5,41 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const repoRoot = path.resolve(webRoot, '..')
-const apiManifest = path.join(repoRoot, 'api', 'Cargo.toml')
-const generatedTypesPath = path.join(webRoot, 'src', 'api', 'types.generated.ts')
-const tempDir = await mkdtemp(path.join(os.tmpdir(), 'scope-api-types-'))
-const tempTypesPath = path.join(tempDir, 'types.generated.ts')
+const tempDir = await mkdtemp(path.join(os.tmpdir(), 'scope-api-contract-'))
+const artifacts = [
+  'types.generated.ts',
+  'schemas.generated.json',
+  'validators.generated.ts',
+]
 
 try {
   const result = spawnSync(
-    'cargo',
-    [
-      'run',
-      '--manifest-path', apiManifest,
-      '--features', 'type-export',
-      '--bin', 'export-api-types',
-    ],
+    process.execPath,
+    [path.join(webRoot, 'scripts', 'generate-api-contract.mjs')],
     {
-      cwd: repoRoot,
+      cwd: webRoot,
       env: {
         ...process.env,
-        SCOPE_API_TS_EXPORT_PATH: tempTypesPath,
+        SCOPE_API_SCHEMA_EXPORT_PATH: path.join(tempDir, artifacts[1]),
+        SCOPE_API_TS_EXPORT_PATH: path.join(tempDir, artifacts[0]),
+        SCOPE_API_VALIDATOR_EXPORT_PATH: path.join(tempDir, artifacts[2]),
       },
       stdio: 'inherit',
     },
   )
 
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1)
-  }
+  if (result.status !== 0) process.exit(result.status ?? 1)
 
-  const [checkedIn, generated] = await Promise.all([
-    readFile(generatedTypesPath, 'utf8'),
-    readFile(tempTypesPath, 'utf8'),
-  ])
-
-  if (normalizeLineEndings(checkedIn) !== normalizeLineEndings(generated)) {
-    console.error('Generated API types are stale.')
-    console.error(
-      'Run `SCOPE_API_TS_EXPORT_PATH=web/src/api/types.generated.ts cargo run --manifest-path api/Cargo.toml --features type-export --bin export-api-types` from the repo root.',
-    )
-    process.exit(1)
+  for (const artifact of artifacts) {
+    const [checkedIn, generated] = await Promise.all([
+      readFile(path.join(webRoot, 'src', 'api', artifact), 'utf8'),
+      readFile(path.join(tempDir, artifact), 'utf8'),
+    ])
+    if (normalizeLineEndings(checkedIn) !== normalizeLineEndings(generated)) {
+      console.error(`Generated API contract artifact is stale: ${artifact}`)
+      console.error('Run `pnpm generate:api-contract` from web/.')
+      process.exit(1)
+    }
   }
 } finally {
   await rm(tempDir, { force: true, recursive: true })

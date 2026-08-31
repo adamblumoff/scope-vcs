@@ -244,7 +244,7 @@ async fn repo_events_stream_permission_changes_to_members() {
 }
 
 #[tokio::test]
-async fn repo_events_close_when_repo_is_deleted() {
+async fn repo_events_send_one_public_error_when_repo_is_deleted() {
     let state = test_state_with_readme().await;
     cache_test_jwks(&state);
     let app = router(state.clone());
@@ -269,6 +269,10 @@ async fn repo_events_close_when_repo_is_deleted() {
         .await
         .unwrap();
     assert_eq!(deleted.status(), StatusCode::OK);
+    let error = next_event(&mut stream).await;
+    assert!(error.contains("event: error"), "{error}");
+    assert!(error.contains(r#""code":"not_found""#), "{error}");
+    assert!(error.contains(r#""retryable":false"#), "{error}");
     assert!(
         tokio::time::timeout(Duration::from_secs(5), stream.next())
             .await

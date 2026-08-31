@@ -8,6 +8,8 @@ import { invalidApiResponseGroup } from './pagent-invalid-api-response-group'
 
 type InvalidApiResponseContext = {
   contentType: string | null
+  failureClass: InvalidApiResponseError['failureClass']
+  issuePath?: string
   method: string
   path: string
   status: number
@@ -54,6 +56,8 @@ const reportInvalidApiResponse = pagent.observe(
     group: ({ result }) => invalidApiResponseGroup(result),
     context: ({ result }) => ({
       contentType: result.contentType,
+      failureClass: result.failureClass,
+      issuePath: result.issuePath,
       method: result.requestMethod,
       path: result.requestPath,
       status: result.status,
