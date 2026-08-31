@@ -9,6 +9,9 @@ on:
       deploy_worker:
         type: boolean
         default: false
+      deploy_router:
+        type: boolean
+        default: false
       deploy_api:
         type: boolean
         default: false
@@ -56,7 +59,7 @@ jobs:
           SUCCESSFUL_REVISIONS: ${{ inputs.successful_deployment_revisions }}
         run: |
           rm -rf .railway-upload
-          for service in api worker cache-service; do
+          for service in api worker cache-service repo-router; do
             root=".railway-upload/$service"
             mkdir -p "$root"
             cp Cargo.toml Cargo.lock rust-toolchain.toml "$root/"
@@ -71,6 +74,7 @@ jobs:
             printf '%s\n' "$GITHUB_SHA" > "$root/$service/.scope-deployment-sha"
             component="$service"
             [[ "$component" == "cache-service" ]] && component=cache
+            [[ "$component" == "repo-router" ]] && component=router
             successful_sha="$(jq -r --arg component "$component" '.[$component] // ""' <<< "$SUCCESSFUL_REVISIONS")"
             if [[ "$successful_sha" != "$GITHUB_SHA" ]]; then
               printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$root/$service/.scope-deployment-attempt"
@@ -93,6 +97,7 @@ jobs:
           SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS: ${{ inputs.successful_deployment_revisions }}
           SCOPE_DEPLOY_CACHE: ${{ inputs.deploy_cache && '1' || '0' }}
           SCOPE_DEPLOY_WORKER: ${{ inputs.deploy_worker && '1' || '0' }}
+          SCOPE_DEPLOY_ROUTER: ${{ inputs.deploy_router && '1' || '0' }}
           SCOPE_DEPLOY_API: ${{ inputs.deploy_api && '1' || '0' }}
         run: |
           manifest=.github/deployment-services.json
@@ -101,17 +106,20 @@ jobs:
           SCOPE_RAILWAY_API_SERVICE_ID="$(jq -r '.services.api.id' "$manifest")"
           SCOPE_RAILWAY_WORKER_SERVICE_ID="$(jq -r '.services.worker.id' "$manifest")"
           SCOPE_RAILWAY_CACHE_SERVICE_ID="$(jq -r '.services.cache.id' "$manifest")"
+          SCOPE_RAILWAY_ROUTER_SERVICE_ID="$(jq -r '.services.router.id' "$manifest")"
           SCOPE_RAILWAY_DATABASE_SERVICE_ID="$(jq -r '.railway.databaseServiceId' "$manifest")"
           SCOPE_RAILWAY_API_REGION_ID="$(jq -r '.railway.regionId' "$manifest")"
           SCOPE_RAILWAY_WORKER_REGION_ID="$SCOPE_RAILWAY_API_REGION_ID"
           export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
           export SCOPE_RAILWAY_API_SERVICE_ID SCOPE_RAILWAY_WORKER_SERVICE_ID
-          export SCOPE_RAILWAY_CACHE_SERVICE_ID SCOPE_RAILWAY_DATABASE_SERVICE_ID
+          export SCOPE_RAILWAY_CACHE_SERVICE_ID SCOPE_RAILWAY_ROUTER_SERVICE_ID
+          export SCOPE_RAILWAY_DATABASE_SERVICE_ID
           export SCOPE_RAILWAY_API_REGION_ID SCOPE_RAILWAY_WORKER_REGION_ID
           bash .github/scripts/deploy-backend-railway.sh \
             .railway-upload/api \
             .railway-upload/worker \
-            .railway-upload/cache-service
+            .railway-upload/cache-service \
+            .railway-upload/repo-router
 
       - name: Record successful Railway deployments
         if: always()

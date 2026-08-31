@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-export const COMPONENTS = ["checksImage", "cache", "worker", "api", "web", "cli"];
+export const COMPONENTS = ["checksImage", "cache", "worker", "router", "api", "web", "cli"];
 const SELECTIONS = [...COMPONENTS, "cliDistribution"];
 
 function matchesScope(path, scope) {

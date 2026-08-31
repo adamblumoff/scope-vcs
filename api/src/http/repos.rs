@@ -78,7 +78,7 @@ pub(crate) async fn create_repo(
         .file_default_visibility
         .map(Into::into)
         .unwrap_or(Visibility::Private);
-    let git_origin = public_git_origin()?;
+    let git_origin = public_git_origin(&state);
     let cleanup_state = state.clone();
     let (secret, token) = generate_first_push_token(&user.id)?;
     let (push_secret, push_token) = generate_git_push_token(&user.id)?;
@@ -494,7 +494,7 @@ async fn repo_summary_response(
         .filter(|request| request_visible_in_summary(request, summary.access))
         .count();
     let request_permissions = repo_request_permissions_response(summary.access);
-    let git_origin = public_git_origin()?;
+    let git_origin = public_git_origin(state);
     Ok(RepoSummaryResponse {
         id: summary.id,
         git_remote_url: repository_git_remote_url(

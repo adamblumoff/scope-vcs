@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-api_upload_root="${1:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root> <cache-upload-root>}"
-worker_upload_root="${2:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root> <cache-upload-root>}"
-cache_upload_root="${3:?usage: deploy-backend-railway.sh <api-upload-root> <worker-upload-root> <cache-upload-root>}"
+api_upload_root="${1:?usage: deploy-backend-railway.sh <api-root> <worker-root> <cache-root> <router-root>}"
+worker_upload_root="${2:?usage: deploy-backend-railway.sh <api-root> <worker-root> <cache-root> <router-root>}"
+cache_upload_root="${3:?usage: deploy-backend-railway.sh <api-root> <worker-root> <cache-root> <router-root>}"
+router_upload_root="${4:?usage: deploy-backend-railway.sh <api-root> <worker-root> <cache-root> <router-root>}"
 maintenance_binary="${SCOPE_MAINTENANCE_BINARY:-./target/release/scope-maintenance}"
 environment="${SCOPE_RAILWAY_ENVIRONMENT_ID:?SCOPE_RAILWAY_ENVIRONMENT_ID is required}"
 api_service="${SCOPE_RAILWAY_API_SERVICE_ID:?SCOPE_RAILWAY_API_SERVICE_ID is required}"
 worker_service="${SCOPE_RAILWAY_WORKER_SERVICE_ID:?SCOPE_RAILWAY_WORKER_SERVICE_ID is required}"
 cache_service="${SCOPE_RAILWAY_CACHE_SERVICE_ID:?SCOPE_RAILWAY_CACHE_SERVICE_ID is required}"
+router_service="${SCOPE_RAILWAY_ROUTER_SERVICE_ID:?SCOPE_RAILWAY_ROUTER_SERVICE_ID is required}"
 database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SERVICE_ID is required}"
 api_region="${SCOPE_RAILWAY_API_REGION_ID:?SCOPE_RAILWAY_API_REGION_ID is required}"
 worker_region="${SCOPE_RAILWAY_WORKER_REGION_ID:?SCOPE_RAILWAY_WORKER_REGION_ID is required}"
 recover_closed_cutover="${SCOPE_RECOVER_CLOSED_CUTOVER:-0}"
 deploy_cache_requested="${SCOPE_DEPLOY_CACHE:-1}"
 deploy_worker_requested="${SCOPE_DEPLOY_WORKER:-1}"
+deploy_router_requested="${SCOPE_DEPLOY_ROUTER:-1}"
 deploy_api_requested="${SCOPE_DEPLOY_API:-1}"
 successful_deployment_revisions="${SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS:-}"
 [[ -n "$successful_deployment_revisions" ]] || successful_deployment_revisions='{}'
@@ -25,14 +28,15 @@ if [[ -n "$deployment_evidence_path" ]]; then
   rm -f -- "$pending_evidence_path"
 fi
 
-for deployment_flag in deploy_cache_requested deploy_worker_requested deploy_api_requested; do
+for deployment_flag in deploy_cache_requested deploy_worker_requested deploy_router_requested \
+  deploy_api_requested; do
   if [[ "${!deployment_flag}" != "0" && "${!deployment_flag}" != "1" ]]; then
     echo "${deployment_flag} must be 0 or 1." >&2
     exit 2
   fi
 done
 if [[ "$deploy_cache_requested" == "0" && "$deploy_worker_requested" == "0" \
-  && "$deploy_api_requested" == "0" ]]; then
+  && "$deploy_router_requested" == "0" && "$deploy_api_requested" == "0" ]]; then
   echo "At least one backend service must be selected for deployment." >&2
   exit 2
 fi
@@ -72,6 +76,7 @@ validate_production_target() {
     EXPECTED_API_SERVICE_ID="$api_service" \
     EXPECTED_WORKER_SERVICE_ID="$worker_service" \
     EXPECTED_CACHE_SERVICE_ID="$cache_service" \
+    EXPECTED_ROUTER_SERVICE_ID="$router_service" \
     EXPECTED_DATABASE_SERVICE_ID="$database_service" \
     EXPECTED_API_REGION="$api_region" \
     EXPECTED_WORKER_REGION="$worker_region" \
@@ -87,6 +92,7 @@ const expectedServices = new Map([
   [process.env.EXPECTED_API_SERVICE_ID, "scope-api"],
   [process.env.EXPECTED_WORKER_SERVICE_ID, "scope-worker"],
   [process.env.EXPECTED_CACHE_SERVICE_ID, "scope-cache-service"],
+  [process.env.EXPECTED_ROUTER_SERVICE_ID, "scope-repo-router"],
   [process.env.EXPECTED_DATABASE_SERVICE_ID, "scope-postgres"],
 ]);
 const environments = status.environments?.edges?.map(({node}) => node) || [];
@@ -295,6 +301,115 @@ running_replicas() {
   printf '%s\n' "$running"
 }
 
+configured_replicas() {
+  local line status running crashed configured stopped id
+  line="$(service_state_line "$1")"
+  IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
+  printf '%s\n' "$configured"
+}
+
+router_public_domain() {
+  jq -er '
+    [.domains[]? | select(.type == "service")]
+    | if length != 1 then error("expected exactly one router service domain")
+      elif .[0].syncStatus != "ACTIVE" then error("router service domain is not active")
+      elif .[0].targetPort != 8080 then error("router service domain does not target port 8080")
+      else .[0].domain
+      end
+  ' <<< "$1"
+}
+
+configure_production_router() {
+  local domains router_domain router_url api_replicas api_variables router_variables
+  domains="$(railway domain list "${railway_scope[@]}" --service "$router_service" --json)"
+  if [[ "$(jq '[.domains[]? | select(.type == "service")] | length' <<< "$domains")" == "0" ]]; then
+    if [[ "$deploy_router_requested" != "1" ]]; then
+      echo "Production router has no service domain; select the router deployment." >&2
+      return 1
+    fi
+    railway domain "${railway_scope[@]}" --service "$router_service" --port 8080 --json >/dev/null
+    domains="$(railway domain list "${railway_scope[@]}" --service "$router_service" --json)"
+  fi
+  router_domain="$(router_public_domain "$domains")"
+  router_url="https://$router_domain"
+  api_replicas="$(configured_replicas "$api_service")"
+  if [[ ! "$api_replicas" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Production API must have a positive configured replica count." >&2
+    return 1
+  fi
+
+  api_variables="$(railway variable list "${railway_scope[@]}" --service "$api_service" --json)"
+  if ! jq -e --arg expected "$router_url" '.SCOPE_GIT_PUBLIC_URL == $expected' \
+    <<< "$api_variables" >/dev/null; then
+    if [[ "$deploy_api_requested" != "1" ]]; then
+      echo "Production API Git URL drift requires an API deployment." >&2
+      return 1
+    fi
+    railway variable set "${railway_scope[@]}" --service "$api_service" --skip-deploys \
+      "SCOPE_GIT_PUBLIC_URL=$router_url" >/dev/null
+  fi
+
+  router_variables="$(railway variable list "${railway_scope[@]}" --service "$router_service" --json)"
+  if ! jq -e \
+    --arg backend 'scope-api.railway.internal:8080' \
+    --arg replicas "$api_replicas" \
+    '.SCOPE_REPO_ROUTER_BACKEND == $backend and .SCOPE_REPO_ROUTER_READ_REPLICAS == $replicas' \
+    <<< "$router_variables" >/dev/null; then
+    if [[ "$deploy_router_requested" != "1" ]]; then
+      echo "Production router variable drift requires a router deployment." >&2
+      return 1
+    fi
+    railway variable set "${railway_scope[@]}" --service "$router_service" --skip-deploys \
+      'SCOPE_REPO_ROUTER_BACKEND=scope-api.railway.internal:8080' \
+      "SCOPE_REPO_ROUTER_READ_REPLICAS=$api_replicas" >/dev/null
+  fi
+
+  api_variables="$(railway variable list "${railway_scope[@]}" --service "$api_service" --json)"
+  router_variables="$(railway variable list "${railway_scope[@]}" --service "$router_service" --json)"
+  jq -e --arg expected "$router_url" '.SCOPE_GIT_PUBLIC_URL == $expected' \
+    <<< "$api_variables" >/dev/null
+  jq -e \
+    --arg backend 'scope-api.railway.internal:8080' \
+    --arg replicas "$api_replicas" \
+    '.SCOPE_REPO_ROUTER_BACKEND == $backend and .SCOPE_REPO_ROUTER_READ_REPLICAS == $replicas' \
+    <<< "$router_variables" >/dev/null
+
+  if [[ "$deploy_router_requested" == "1" ]]; then
+    railway service scale "${railway_scope[@]}" --service "$router_service" \
+      "$api_region=1" --json >/dev/null
+  fi
+}
+
+assert_router_topology() {
+  local services_json environment_config_json
+  services_json="$(railway service list "${railway_scope[@]}" --json)"
+  environment_config_json="$(railway environment config --environment "$environment" --json)"
+  SERVICES_JSON="$services_json" \
+    ENVIRONMENT_CONFIG_JSON="$environment_config_json" \
+    ROUTER_SERVICE_ID="$router_service" \
+    ROUTER_REGION="$api_region" \
+    node -e '
+const services = JSON.parse(process.env.SERVICES_JSON || "[]");
+const environmentConfig = JSON.parse(process.env.ENVIRONMENT_CONFIG_JSON || "{}");
+const router = services.find(({id}) => id === process.env.ROUTER_SERVICE_ID);
+const replicas = router?.replicas || {};
+const liveRegion = router?.regions?.find(({name}) => name === process.env.ROUTER_REGION);
+const storedRegions = environmentConfig.services?.[process.env.ROUTER_SERVICE_ID]
+  ?.deploy?.multiRegionConfig || {};
+const activeStoredRegions = Object.entries(storedRegions).filter(
+  ([, config]) => config && Number(config.numReplicas) > 0,
+);
+if (router?.status !== "SUCCESS" || router.deploymentStopped === true ||
+    replicas.configured !== 1 || replicas.running !== 1 || (replicas.crashed || 0) !== 0 ||
+    liveRegion?.configured !== 1 || activeStoredRegions.length !== 1 ||
+    activeStoredRegions[0][0] !== process.env.ROUTER_REGION ||
+    Number(activeStoredRegions[0][1].numReplicas) !== 1) {
+  console.error("Production router topology does not match the reviewed region and replica count.");
+  process.exit(1);
+}
+'
+}
+
 service_has_deployment_history() {
   local deployments_json
   deployments_json="$(railway deployment list "${railway_scope[@]}" --service "$1" --limit 1 --json)"
@@ -501,6 +616,15 @@ leave_failure_state() {
 trap 'leave_failure_state $?' EXIT
 
 validate_production_target
+configure_production_router
+if [[ "$deploy_router_requested" == "1" ]]; then
+  activate_release router "$router_service" "$router_upload_root"
+  assert_router_topology
+  promote_pending_evidence
+elif ! assert_router_topology; then
+  echo "Production router must match the reviewed topology before deploying another backend service." >&2
+  exit 1
+fi
 
 plan_json="$(maintenance_read plan)"
 set +e

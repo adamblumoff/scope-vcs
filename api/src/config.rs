@@ -32,6 +32,7 @@ pub const CLERK_AUTHORIZED_PARTIES_ENV: &str = "CLERK_AUTHORIZED_PARTIES";
 pub const CLERK_AUDIENCE_ENV: &str = "CLERK_AUDIENCE";
 pub const DEFAULT_CLERK_AUDIENCE: &str = "scope-api";
 pub const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
+#[cfg(any(test, feature = "local-dev"))]
 pub const LOCAL_API_ORIGIN: &str = "http://localhost:8080";
 pub const FIRST_PUSH_TOKEN_PREFIX: &str = "scope_fp_";
 pub const GIT_PUSH_TOKEN_PREFIX: &str = "scope_git_";
@@ -51,6 +52,27 @@ pub const MAX_PENDING_IMPORT_BLOB_BYTES: usize = 25 * 1024 * 1024;
 pub fn database_url_from_env() -> anyhow::Result<String> {
     non_empty_env(DATABASE_URL_ENV)
         .ok_or_else(|| anyhow::anyhow!("{DATABASE_URL_ENV} is required for Scope metadata storage"))
+}
+
+pub fn git_public_url_from_env(local_fallback: Option<&str>) -> anyhow::Result<String> {
+    git_public_url(std::env::var(SCOPE_GIT_PUBLIC_URL_ENV).ok(), local_fallback)
+}
+
+fn git_public_url(
+    configured: Option<String>,
+    local_fallback: Option<&str>,
+) -> anyhow::Result<String> {
+    configured
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or(local_fallback)
+        .map(|value| value.trim_end_matches('/').to_string())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{SCOPE_GIT_PUBLIC_URL_ENV} is required to create repository Git remote metadata"
+            )
+        })
 }
 
 pub fn non_empty_env(name: &str) -> Option<String> {
@@ -131,4 +153,29 @@ pub fn git_repo_root() -> PathBuf {
     }
 
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_git_public_url_is_required() {
+        for configured in [None, Some(String::new()), Some(" \t\n".to_string())] {
+            let error = git_public_url(configured, None).unwrap_err();
+            assert!(error.to_string().contains(SCOPE_GIT_PUBLIC_URL_ENV));
+        }
+    }
+
+    #[test]
+    fn git_public_url_preserves_local_fallback_and_normalizes_configuration() {
+        assert_eq!(
+            git_public_url(None, Some(LOCAL_API_ORIGIN)).unwrap(),
+            LOCAL_API_ORIGIN
+        );
+        assert_eq!(
+            git_public_url(Some(" https://git.scope.example/ ".to_string()), None).unwrap(),
+            "https://git.scope.example"
+        );
+    }
 }

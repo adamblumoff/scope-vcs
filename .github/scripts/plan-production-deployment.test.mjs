@@ -20,6 +20,7 @@ function deploymentSelection(overrides = {}) {
     checksImage: false,
     cache: false,
     worker: false,
+    router: false,
     api: false,
     web: false,
     cli: false,
@@ -33,6 +34,7 @@ test("changes select the required deployment lanes", () => {
     checksImage: true,
     cache: true,
     worker: true,
+    router: true,
     api: true,
     web: true,
     cli: true,
@@ -53,6 +55,7 @@ test("changes select the required deployment lanes", () => {
         checksImage: true,
         cache: true,
         worker: true,
+        router: true,
         api: true,
         cli: true,
         cliDistribution: true,
@@ -64,6 +67,7 @@ test("changes select the required deployment lanes", () => {
       ["api/src/main.rs"],
       { api: true, web: true, cli: true },
     ],
+    ["router changes deploy the Git router", ["repo-router/src/main.rs"], { router: true }],
     [
       "CLI tests validate CLI without rebuilding distribution targets",
       ["cli/tests/request.rs"],
@@ -86,6 +90,7 @@ test("changes select the required deployment lanes", () => {
         checksImage: true,
         cache: true,
         worker: true,
+        router: true,
         api: true,
         web: true,
         cli: true,
@@ -152,6 +157,7 @@ test("skipped components remain selected across a later backend-only change", ()
     checksImage: [],
     cache: ["cache-service/src/main.rs"],
     worker: [],
+    router: [],
     api: [],
     // Web last succeeded before commit A. Its component-specific range still includes A's
     // web change when commit B changes only the cache service after A's web job was skipped.
@@ -163,6 +169,7 @@ test("skipped components remain selected across a later backend-only change", ()
     checksImage: false,
     cache: true,
     worker: false,
+    router: false,
     api: false,
     web: true,
     cli: false,
@@ -175,6 +182,7 @@ test("CLI deployment progress selects distribution builds only for binary inputs
     checksImage: [],
     cache: [],
     worker: [],
+    router: [],
     api: [],
     web: [],
     cli: ["api/src/main.rs"],
@@ -183,6 +191,7 @@ test("CLI deployment progress selects distribution builds only for binary inputs
     checksImage: [],
     cache: [],
     worker: [],
+    router: [],
     api: [],
     web: [],
     cli: ["crates/scope-api-contract/src/lib.rs"],
@@ -200,6 +209,7 @@ test("manual scopes ignore pending production components", () => {
     checksImage: false,
     cache: false,
     worker: false,
+    router: false,
     api: false,
     web: true,
     cli: false,
@@ -208,7 +218,7 @@ test("manual scopes ignore pending production components", () => {
 });
 
 test("deployment manifest is a single coherent production graph", () => {
-  const order = ["cache", "worker", "api", "web", "cli"];
+  const order = ["cache", "worker", "router", "api", "web", "cli"];
   const serviceIds = order.map((service) => manifest.services[service].id);
 
   assert.equal(manifest.deploymentAuthority, "github-actions");
@@ -222,7 +232,12 @@ test("deployment manifest is a single coherent production graph", () => {
 });
 
 test("service config does not override Railway scaling or restart defaults", () => {
-  for (const path of ["api/railway.json", "worker/railway.json", "cache-service/railway.json"]) {
+  for (const path of [
+    "api/railway.json",
+    "worker/railway.json",
+    "cache-service/railway.json",
+    "repo-router/railway.json",
+  ]) {
     const { deploy } = repositoryJson(path);
 
     assert.equal(deploy.healthcheckTimeout, 60);

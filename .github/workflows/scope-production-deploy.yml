@@ -16,6 +16,7 @@ on:
           - checksImage
           - cache
           - worker
+          - router
           - api
           - web
           - cli
@@ -43,6 +44,7 @@ jobs:
       checks_image: ${{ steps.plan.outputs.checks_image }}
       cache: ${{ steps.plan.outputs.cache }}
       worker: ${{ steps.plan.outputs.worker }}
+      router: ${{ steps.plan.outputs.router }}
       api: ${{ steps.plan.outputs.api }}
       web: ${{ steps.plan.outputs.web }}
       cli: ${{ steps.plan.outputs.cli }}
@@ -177,6 +179,7 @@ jobs:
     if: >-
       (needs.plan.outputs.cache == 'true' ||
       needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.router == 'true' ||
       needs.plan.outputs.api == 'true')
     uses: ./.github/workflows/scope-api-ci.yml
     with:
@@ -231,6 +234,7 @@ jobs:
       (needs.plan.outputs.checks_image != 'true' || needs.checks-image.result == 'success') &&
       ((needs.plan.outputs.cache != 'true' &&
       needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.router != 'true' &&
       needs.plan.outputs.api != 'true') ||
       needs.backend-validation.result == 'success') &&
       (needs.plan.outputs.web != 'true' || needs.web-validation.result == 'success') &&
@@ -249,11 +253,13 @@ jobs:
       needs.production-validation-gate.result == 'success' &&
       (needs.plan.outputs.cache == 'true' ||
       needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.router == 'true' ||
       needs.plan.outputs.api == 'true')
     uses: ./.github/workflows/scope-api-deploy.yml
     with:
       deploy_cache: ${{ needs.plan.outputs.cache == 'true' }}
       deploy_worker: ${{ needs.plan.outputs.worker == 'true' }}
+      deploy_router: ${{ needs.plan.outputs.router == 'true' }}
       deploy_api: ${{ needs.plan.outputs.api == 'true' }}
       successful_deployment_revisions: ${{ needs.plan.outputs.deployed_revisions || '{}' }}
     secrets: inherit
@@ -267,10 +273,12 @@ jobs:
       needs.plan.outputs.web == 'true' &&
       (((needs.plan.outputs.cache == 'true' ||
       needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.router == 'true' ||
       needs.plan.outputs.api == 'true') &&
       needs.backend-deploy.result == 'success') ||
       ((needs.plan.outputs.cache != 'true' &&
       needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.router != 'true' &&
       needs.plan.outputs.api != 'true') &&
       needs.backend-deploy.result == 'skipped'))
     uses: ./.github/workflows/scope-web-deploy.yml
@@ -287,10 +295,12 @@ jobs:
       needs.plan.outputs.cli == 'true' &&
       (((needs.plan.outputs.cache == 'true' ||
       needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.router == 'true' ||
       needs.plan.outputs.api == 'true') &&
       needs.backend-deploy.result == 'success') ||
       ((needs.plan.outputs.cache != 'true' &&
       needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.router != 'true' &&
       needs.plan.outputs.api != 'true') &&
       needs.backend-deploy.result == 'skipped'))
     uses: ./.github/workflows/scope-cli-deploy.yml

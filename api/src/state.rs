@@ -3,7 +3,7 @@ use crate::{
     cache_grants::CacheGrantIssuer,
     config::{
         SCOPE_OPERATOR_TOKEN_ENV, data_dir, database_url_from_env, git_cache_max_bytes_from_env,
-        git_repo_root, non_empty_env,
+        git_public_url_from_env, git_repo_root, non_empty_env,
     },
     git::repository_engine::RepositoryEngine,
     object_store_config::{encryption_key_from_env, git_segment_store_from_env, s3_from_env},
@@ -36,12 +36,14 @@ pub struct AppState {
     pub(crate) repo_events: RepoChangeBus,
     pub(crate) push_intent_signing_key: Arc<[u8]>,
     pub(crate) repository_engine: Arc<RepositoryEngine>,
+    pub(crate) git_public_url: Arc<str>,
     #[cfg(test)]
     pub(crate) test_object_store: Arc<scope_object_store::MemoryObjectStore>,
 }
 
 impl AppState {
     pub async fn from_env() -> anyhow::Result<Self> {
+        let git_public_url = git_public_url_from_env(None)?;
         let repo_root = git_repo_root();
         let data_dir = data_dir(&repo_root);
         ensure_private_dir(&data_dir)
@@ -91,6 +93,7 @@ impl AppState {
             repo_events,
             push_intent_signing_key,
             repository_engine: repository_engine.clone(),
+            git_public_url: Arc::from(git_public_url),
             #[cfg(test)]
             test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
         };
@@ -242,6 +245,7 @@ impl AppState {
                 crate::config::DEFAULT_GIT_CACHE_MAX_BYTES,
             )
             .unwrap(),
+            git_public_url: Arc::from(crate::config::LOCAL_API_ORIGIN),
             #[cfg(test)]
             test_object_store,
         }

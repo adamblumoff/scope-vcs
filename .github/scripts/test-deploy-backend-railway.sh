@@ -4,10 +4,11 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
-mkdir -p "$test_dir/bin" "$test_dir/api" "$test_dir/worker" "$test_dir/cache"
+mkdir -p "$test_dir/bin" "$test_dir/api" "$test_dir/worker" "$test_dir/cache" "$test_dir/router"
 printf '%s\n' test-source-sha > "$test_dir/api/.scope-deployment-sha"
 printf '%s\n' test-source-sha > "$test_dir/worker/.scope-deployment-sha"
 printf '%s\n' test-source-sha > "$test_dir/cache/.scope-deployment-sha"
+printf '%s\n' test-source-sha > "$test_dir/router/.scope-deployment-sha"
 
 cat > "$test_dir/maintenance" <<'FAKE'
 #!/usr/bin/env bash
@@ -93,14 +94,18 @@ printf '%s\n' "$*" >> "$FAKE_RAILWAY_TRACE"
 
 if [[ "$1" == "status" ]]; then
   cat <<'JSON'
-{"id":"project-test","environments":{"edges":[{"node":{"id":"production","name":"production"}}]},"services":{"edges":[{"node":{"id":"scope-api","name":"scope-api"}},{"node":{"id":"scope-worker","name":"scope-worker"}},{"node":{"id":"scope-cache-service","name":"scope-cache-service"}},{"node":{"id":"scope-postgres","name":"scope-postgres"}}]}}
+{"id":"project-test","environments":{"edges":[{"node":{"id":"production","name":"production"}}]},"services":{"edges":[{"node":{"id":"scope-api","name":"scope-api"}},{"node":{"id":"scope-worker","name":"scope-worker"}},{"node":{"id":"scope-cache-service","name":"scope-cache-service"}},{"node":{"id":"scope-repo-router","name":"scope-repo-router"}},{"node":{"id":"scope-postgres","name":"scope-postgres"}}]}}
 JSON
   exit 0
 fi
 
 if [[ "$1 $2" == "environment config" ]]; then
   stored_api_region="${FAKE_STORED_API_REGION:-us-east4-eqdc4a}"
-  printf '{"services":{"scope-api":{"deploy":{"multiRegionConfig":{"%s":{"numReplicas":1}}}},"scope-worker":{"deploy":{"multiRegionConfig":{"us-east4-eqdc4a":{"numReplicas":1}}}}}}\n' "$stored_api_region"
+  router_config='{}'
+  if [[ "${FAKE_ROUTER_CONFIGURED:-1}" == "1" || -f "$FAKE_RAILWAY_STATE/router-scale" ]]; then
+    router_config='{"deploy":{"multiRegionConfig":{"us-east4-eqdc4a":{"numReplicas":1}}}}'
+  fi
+  printf '{"services":{"scope-api":{"deploy":{"multiRegionConfig":{"%s":{"numReplicas":1}}}},"scope-worker":{"deploy":{"multiRegionConfig":{"us-east4-eqdc4a":{"numReplicas":1}}}},"scope-repo-router":%s}}\n' "$stored_api_region" "$router_config"
   exit 0
 fi
 
@@ -127,8 +132,55 @@ if [[ "$1" == "run" ]]; then
   exit $?
 fi
 
+if [[ "$1 $2" == "domain list" ]]; then
+  if [[ "${FAKE_ROUTER_DOMAIN_STATE:-valid}" == "invalid" ]]; then
+    echo '{"domains":[{"domain":"scope-repo-router-production.test","type":"service","syncStatus":"ACTIVE","targetPort":9090}]}'
+  elif [[ "${FAKE_ROUTER_CONFIGURED:-1}" == "1" || -f "$FAKE_RAILWAY_STATE/router-domain" ]]; then
+    echo '{"domains":[{"domain":"scope-repo-router-production.test","type":"service","syncStatus":"ACTIVE","targetPort":8080}]}'
+  else
+    echo '{"domains":[]}'
+  fi
+  exit 0
+fi
+
+if [[ "$1" == "domain" ]]; then
+  touch "$FAKE_RAILWAY_STATE/router-domain"
+  echo '{"domain":"scope-repo-router-production.test"}'
+  exit 0
+fi
+
 if [[ "$1 $2" == "variable list" ]]; then
-  echo '{"DATABASE_PUBLIC_URL":"postgres://public-database.test/scope"}'
+  service=""
+  while [[ "$#" -gt 0 ]]; do
+    if [[ "$1" == "--service" ]]; then service="$2"; shift 2; else shift; fi
+  done
+  if [[ "$service" == "scope-postgres" ]]; then
+    echo '{"DATABASE_PUBLIC_URL":"postgres://public-database.test/scope"}'
+  elif [[ "$service" == "scope-api" ]]; then
+    if [[ "${FAKE_ROUTER_CONFIGURED:-1}" == "1" || -f "$FAKE_RAILWAY_STATE/api-router-variable" ]]; then
+      echo '{"SCOPE_GIT_PUBLIC_URL":"https://scope-repo-router-production.test"}'
+    else
+      echo '{}'
+    fi
+  elif [[ "$service" == "scope-repo-router" ]]; then
+    if [[ "${FAKE_ROUTER_CONFIGURED:-1}" == "1" || -f "$FAKE_RAILWAY_STATE/router-variables" ]]; then
+      echo '{"SCOPE_REPO_ROUTER_BACKEND":"scope-api.railway.internal:8080","SCOPE_REPO_ROUTER_READ_REPLICAS":"1"}'
+    else
+      echo '{}'
+    fi
+  else
+    exit 2
+  fi
+  exit 0
+fi
+
+if [[ "$1 $2" == "variable set" ]]; then
+  service=""
+  while [[ "$#" -gt 0 ]]; do
+    if [[ "$1" == "--service" ]]; then service="$2"; shift 2; else shift; fi
+  done
+  [[ "$service" == "scope-api" ]] && touch "$FAKE_RAILWAY_STATE/api-router-variable"
+  [[ "$service" == "scope-repo-router" ]] && touch "$FAKE_RAILWAY_STATE/router-variables"
   exit 0
 fi
 
@@ -160,17 +212,22 @@ if [[ "$1 $2" == "service list" ]]; then
   api_deployment='"old-scope-api"'
   worker_deployment='"old-scope-worker"'
   cache_deployment='"old-scope-cache-service"'
+  router_deployment='"old-scope-repo-router"'
   api_status=SUCCESS
   worker_status=SUCCESS
   cache_status=SUCCESS
+  router_status=SUCCESS
   api_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
   worker_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
   cache_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
+  router_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
   api_stopped=false
   worker_stopped=false
   cache_stopped=false
+  router_stopped=false
   api_regions="[{\"name\":\"${api_region}\",\"configured\":1}]"
   worker_regions='[{"name":"us-east4-eqdc4a","configured":1}]'
+  router_regions='[{"name":"us-east4-eqdc4a","configured":1}]'
   if [[ -f "$FAKE_RAILWAY_STATE/no-history-scope-api" && ! -f "$FAKE_RAILWAY_STATE/up-scope-api" ]]; then
     api_deployment=null
     api_replicas=null
@@ -183,9 +240,14 @@ if [[ "$1 $2" == "service list" ]]; then
     cache_deployment=null
     cache_replicas=null
   fi
+  if [[ -f "$FAKE_RAILWAY_STATE/no-history-scope-repo-router" && ! -f "$FAKE_RAILWAY_STATE/up-scope-repo-router" ]]; then
+    router_deployment=null
+    router_replicas=null
+  fi
   [[ -f "$FAKE_RAILWAY_STATE/up-scope-api" ]] && api_deployment='"new-scope-api"'
   [[ -f "$FAKE_RAILWAY_STATE/up-scope-worker" ]] && worker_deployment='"new-scope-worker"'
   [[ -f "$FAKE_RAILWAY_STATE/up-scope-cache-service" ]] && cache_deployment='"new-scope-cache-service"'
+  [[ -f "$FAKE_RAILWAY_STATE/up-scope-repo-router" ]] && router_deployment='"new-scope-repo-router"'
   if [[ -f "$FAKE_RAILWAY_STATE/stopped-scope-api" ]]; then
     api_stopped=true
     api_replicas='{"configured":1,"running":0,"crashed":0,"exited":1,"total":1}'
@@ -206,6 +268,9 @@ if [[ "$1 $2" == "service list" ]]; then
   fi
   if [[ -f "$FAKE_RAILWAY_STATE/up-scope-cache-service" && "$cache_stopped" == "false" && ! -f "$FAKE_RAILWAY_STATE/crashed-scope-cache-service" ]]; then
     cache_replicas="{\"configured\":${FAKE_NEW_REPLICAS:-1},\"running\":${FAKE_NEW_REPLICAS:-1},\"crashed\":0,\"exited\":0,\"total\":${FAKE_NEW_REPLICAS:-1}}"
+  fi
+  if [[ -f "$FAKE_RAILWAY_STATE/up-scope-repo-router" && ! -f "$FAKE_RAILWAY_STATE/crashed-scope-repo-router" ]]; then
+    router_replicas='{"configured":1,"running":1,"crashed":0,"exited":0,"total":1}'
   fi
   if [[ -f "$FAKE_RAILWAY_STATE/crashed-scope-api" && "$api_stopped" == "false" ]]; then
     api_status=CRASHED
@@ -235,7 +300,13 @@ if [[ "$1 $2" == "service list" ]]; then
     worker_status=CRASHED
     worker_replicas='{"configured":1,"running":0,"crashed":1,"exited":0,"total":1}'
   fi
-  printf '[{"id":"scope-api","name":"scope-api","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-worker","name":"scope-worker","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-cache-service","name":"scope-cache-service","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s}]\n' "$api_status" "$api_deployment" "$api_stopped" "$api_replicas" "$api_regions" "$worker_status" "$worker_deployment" "$worker_stopped" "$worker_replicas" "$worker_regions" "$cache_status" "$cache_deployment" "$cache_stopped" "$cache_replicas"
+  printf '[{"id":"scope-api","name":"scope-api","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-worker","name":"scope-worker","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s},{"id":"scope-cache-service","name":"scope-cache-service","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s},{"id":"scope-repo-router","name":"scope-repo-router","status":"%s","deploymentId":%s,"deploymentStopped":%s,"replicas":%s,"regions":%s}]\n' "$api_status" "$api_deployment" "$api_stopped" "$api_replicas" "$api_regions" "$worker_status" "$worker_deployment" "$worker_stopped" "$worker_replicas" "$worker_regions" "$cache_status" "$cache_deployment" "$cache_stopped" "$cache_replicas" "$router_status" "$router_deployment" "$router_stopped" "$router_replicas" "$router_regions"
+  exit 0
+fi
+
+if [[ "$1 $2" == "service scale" ]]; then
+  touch "$FAKE_RAILWAY_STATE/router-scale"
+  echo '{"serviceId":"scope-repo-router"}'
   exit 0
 fi
 
@@ -337,6 +408,9 @@ run_cutover() {
   local stale_stop_status="${22:-0}"
   local successful_revisions="${23:-}"
   local fail_workflow_validation="${24:-0}"
+  local deploy_router="${25:-0}"
+  local router_configured="${26:-1}"
+  local router_domain_state="${27:-valid}"
   [[ -n "$successful_revisions" ]] || successful_revisions='{}'
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
@@ -350,6 +424,7 @@ run_cutover() {
     touch "$state/no-history-scope-api" "$state/no-history-scope-worker" \
       "$state/no-history-scope-cache-service"
   fi
+  [[ "$router_configured" == "0" ]] && touch "$state/no-history-scope-repo-router"
   : > "$trace"
   set +e
   PATH="$test_dir/bin:$PATH" \
@@ -368,6 +443,8 @@ run_cutover() {
     FAKE_STUCK_FENCE="$stuck_fence" \
     FAKE_STALE_STOP_STATUS="$stale_stop_status" \
     FAKE_FAIL_WORKFLOW_VALIDATION="$fail_workflow_validation" \
+    FAKE_ROUTER_CONFIGURED="$router_configured" \
+    FAKE_ROUTER_DOMAIN_STATE="$router_domain_state" \
     FAKE_DENY_DEPLOYMENT_ACTION_SERVICE="$deny_deployment_action_service" \
     RAILWAY_PROJECT_ID="project-test" \
     RAILWAY_API_TOKEN="token-graphql" \
@@ -376,11 +453,13 @@ run_cutover() {
     SCOPE_RAILWAY_API_SERVICE_ID="scope-api" \
     SCOPE_RAILWAY_WORKER_SERVICE_ID="scope-worker" \
     SCOPE_RAILWAY_CACHE_SERVICE_ID="scope-cache-service" \
+    SCOPE_RAILWAY_ROUTER_SERVICE_ID="scope-repo-router" \
     SCOPE_RAILWAY_DATABASE_SERVICE_ID="scope-postgres" \
     SCOPE_RAILWAY_API_REGION_ID="us-east4-eqdc4a" \
     SCOPE_RAILWAY_WORKER_REGION_ID="us-east4-eqdc4a" \
     SCOPE_DEPLOY_CACHE="$deploy_cache" \
     SCOPE_DEPLOY_WORKER="$deploy_worker" \
+    SCOPE_DEPLOY_ROUTER="$deploy_router" \
     SCOPE_DEPLOY_API="$deploy_api" \
     SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS="$successful_revisions" \
     SCOPE_DEPLOYMENT_EVIDENCE_PATH="$test_dir/$name-evidence.jsonl" \
@@ -389,7 +468,7 @@ run_cutover() {
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
     SCOPE_RECOVER_CLOSED_CUTOVER="$recover_closed_cutover" \
     bash "$root/.github/scripts/deploy-backend-railway.sh" \
-      "$test_dir/api" "$test_dir/worker" "$test_dir/cache"
+      "$test_dir/api" "$test_dir/worker" "$test_dir/cache" "$test_dir/router"
   result=$?
   set -e
   printf '%s\n' "$result" > "$test_dir/$name-result"
@@ -651,6 +730,34 @@ assert_in_order "$test_dir/rolling-api-trace" \
   "up $test_dir/api"
 if grep -E "up $test_dir/(cache|worker)" "$test_dir/rolling-api-trace"; then
   echo "API-only deployment must not deploy cache or worker" >&2
+  exit 1
+fi
+
+run_cutover router-bootstrap 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 1 0
+[[ "$(cat "$test_dir/router-bootstrap-result")" == "0" ]]
+assert_evidence_components router-bootstrap router,api
+assert_in_order "$test_dir/router-bootstrap-trace" \
+  "domain --project project-test --environment production --service scope-repo-router --port 8080 --json" \
+  "variable set --project project-test --environment production --service scope-api --skip-deploys SCOPE_GIT_PUBLIC_URL=https://scope-repo-router-production.test" \
+  "variable set --project project-test --environment production --service scope-repo-router --skip-deploys SCOPE_REPO_ROUTER_BACKEND=scope-api.railway.internal:8080 SCOPE_REPO_ROUTER_READ_REPLICAS=1" \
+  "up $test_dir/router" \
+  "$test_dir/maintenance plan" \
+  "up $test_dir/api"
+
+run_cutover router-drift-refused 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 0 0
+[[ "$(cat "$test_dir/router-drift-refused-result")" != "0" ]]
+if grep -E "variable set|up |maintenance" "$test_dir/router-drift-refused-trace"; then
+  echo "router drift without a selected router must fail before mutation" >&2
+  exit 1
+fi
+
+run_cutover router-domain-invalid 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 1 1 invalid
+[[ "$(cat "$test_dir/router-domain-invalid-result")" != "0" ]]
+if grep -E "domain --|variable set|up |maintenance" "$test_dir/router-domain-invalid-trace"; then
+  echo "an invalid router domain must fail before mutation" >&2
   exit 1
 fi
 

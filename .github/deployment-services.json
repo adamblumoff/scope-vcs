@@ -35,10 +35,15 @@
       "id": "a474a0d1-3000-4a95-9ca3-cd3a7f3ef669",
       "dependsOn": ["cache"]
     },
+    "router": {
+      "name": "scope-repo-router",
+      "id": "30f8e9d2-6d66-4f88-ad96-a65e1bba503c",
+      "dependsOn": []
+    },
     "api": {
       "name": "scope-api",
       "id": "9456cd8d-40bd-489a-a181-72b7f777c4a8",
-      "dependsOn": ["worker"]
+      "dependsOn": ["worker", "router"]
     },
     "web": {
       "name": "scope-web",
@@ -138,6 +143,23 @@
       "prefixes": [
         "api/",
         "crates/"
+      ]
+    },
+    "router": {
+      "files": [
+        ".github/scripts/deploy-backend-railway.sh",
+        ".github/scripts/deploy-railway.sh",
+        ".github/scripts/test-deploy-backend-railway.sh",
+        ".github/workflows/scope-api-deploy.yml",
+        ".github/workflows/rust-workspace-checks.yml",
+        ".github/workflows/scope-api-ci.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "rust-toolchain.toml"
+      ],
+      "prefixes": [
+        "crates/",
+        "repo-router/"
       ]
     },
     "web": {
