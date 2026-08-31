@@ -7,6 +7,6 @@ fn main() {
         .unwrap_or_else(|| manifest_dir.join("../web/src/api/types.generated.ts"));
     let schema_output_path = std::env::var_os("SCOPE_API_SCHEMA_EXPORT_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join("../web/src/api/schemas.generated.json"));
+        .expect("SCOPE_API_SCHEMA_EXPORT_PATH must point to a temporary schema file");
     api::export_api_contract(&output_path, &schema_output_path);
 }

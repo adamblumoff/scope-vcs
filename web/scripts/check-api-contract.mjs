@@ -8,7 +8,6 @@ const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'scope-api-contract-'))
 const artifacts = [
   'types.generated.ts',
-  'schemas.generated.json',
   'validators.generated.ts',
 ]
 
@@ -20,9 +19,8 @@ try {
       cwd: webRoot,
       env: {
         ...process.env,
-        SCOPE_API_SCHEMA_EXPORT_PATH: path.join(tempDir, artifacts[1]),
         SCOPE_API_TS_EXPORT_PATH: path.join(tempDir, artifacts[0]),
-        SCOPE_API_VALIDATOR_EXPORT_PATH: path.join(tempDir, artifacts[2]),
+        SCOPE_API_VALIDATOR_EXPORT_PATH: path.join(tempDir, artifacts[1]),
       },
       stdio: 'inherit',
     },
