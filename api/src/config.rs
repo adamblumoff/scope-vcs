@@ -32,7 +32,7 @@ pub const CLERK_AUTHORIZED_PARTIES_ENV: &str = "CLERK_AUTHORIZED_PARTIES";
 pub const CLERK_AUDIENCE_ENV: &str = "CLERK_AUDIENCE";
 pub const DEFAULT_CLERK_AUDIENCE: &str = "scope-api";
 pub const LOCAL_APP_ORIGIN: &str = "http://localhost:3000";
-#[cfg(any(test, feature = "local-dev"))]
+#[cfg(any(test, feature = "local-dev", feature = "test-support"))]
 pub const LOCAL_API_ORIGIN: &str = "http://localhost:8080";
 pub const FIRST_PUSH_TOKEN_PREFIX: &str = "scope_fp_";
 pub const GIT_PUSH_TOKEN_PREFIX: &str = "scope_git_";
