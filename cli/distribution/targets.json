@@ -62,7 +62,7 @@
       "os": "windows",
       "arch": "arm64",
       "label": "Windows ARM64",
-      "runner": "blacksmith-4vcpu-windows-2025",
+      "runner": "windows-latest",
       "binary": "target/aarch64-pc-windows-msvc/release/scope.exe",
       "builder": "cargo",
       "smoke": false
