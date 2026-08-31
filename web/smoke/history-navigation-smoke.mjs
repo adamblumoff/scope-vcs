@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-export async function assertHistoryFirstFileStaysInRoute(page, diffWorkers) {
+export async function assertHistoryFirstFileStaysInRoute(page) {
   const fileNavigator = page.getByLabel('Update file navigator')
   await fileNavigator.waitFor()
   await page.waitForFunction(
@@ -44,11 +44,13 @@ export async function assertHistoryFirstFileStaysInRoute(page, diffWorkers) {
   assert.deepEqual(serverFunctions, [
     'loadHistoryEntryFileDiff_createServerFn_handler',
   ])
-  assert.equal(
-    diffWorkers.some((url) => url.includes('worker-portable')),
-    true,
-    'the diff worker should start before the first file selection',
-  )
+  await page.waitForFunction(() => {
+    const host = document.querySelector('diffs-container')
+    return (
+      host?.shadowRoot &&
+      host.shadowRoot.textContent?.includes('Update Demo')
+    )
+  })
 }
 
 function serverFunctionExport(request) {

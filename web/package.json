@@ -38,6 +38,7 @@
     "@tanstack/react-start": "^1.168.26",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dompurify": "^3.4.14",
     "github-slugger": "2.0.0",
     "lucide-react": "^0.562.0",
     "motion": "^12.42.2",

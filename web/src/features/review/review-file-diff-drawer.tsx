@@ -5,6 +5,7 @@ import { PendingSurface } from '@/components/pending-surface'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import DOMPurify from 'dompurify'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useLayoutEffect, useRef } from 'react'
 import {
@@ -136,9 +137,11 @@ function PrerenderedDiff({ html }: { html: string }) {
     const container = containerRef.current
     if (!container) return
 
+    const fragment = DOMPurify.sanitize(html, {
+      RETURN_DOM_FRAGMENT: true,
+    })
     const host = document.createElement('diffs-container')
-    const shadowRoot = host.attachShadow({ mode: 'open' })
-    shadowRoot.innerHTML = html
+    host.attachShadow({ mode: 'open' }).replaceChildren(fragment)
     container.replaceChildren(host)
   }, [html])
 

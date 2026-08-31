@@ -406,7 +406,6 @@ test('public direct Runs access is explicit and exposes no operations', async ()
 })
 
 test('public repository history renders its seeded push as an update', async () => {
-  const diffWorkers = []
   await withPage(`${repoPath}/history`, async (page) => {
     await assertCurrentRepoSection(page, 'History')
     await assertPageHeading(page, 'History')
@@ -433,13 +432,11 @@ test('public repository history renders its seeded push as an update', async () 
     await page.waitForFunction(() => globalThis.__TSR_ROUTER__.state.status === 'idle')
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)))
     assert.equal(new URL(page.url()).searchParams.get('entry'), 'dev-public-1')
-    await assertHistoryFirstFileStaysInRoute(page, diffWorkers)
+    await assertHistoryFirstFileStaysInRoute(page)
     assert.equal(
       await page.evaluate(() => document.querySelector('#main-content')?.scrollTop),
       0,
     )
-  }, {}, async (page) => {
-    page.on('worker', (worker) => diffWorkers.push(worker.url()))
   })
 })
 

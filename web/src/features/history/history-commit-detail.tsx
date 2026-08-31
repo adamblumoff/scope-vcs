@@ -1,18 +1,18 @@
 import type { CommitFile, HistoryEntryDetail } from '@/api/types'
 import { PanelState, EmptyState } from '@/components/empty-state'
 import { FileSystemTree } from '@/components/file-system-tree'
-import { VisibilityBadge } from '@/components/visibility-badge'
 import { PendingSurface } from '@/components/pending-surface'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import { historyCommitTitle } from '@/features/history/history-row-labels'
 import type {
   CommitDetailState,
   CommitFileDiffState,
 } from '@/features/history/history-state'
-import { ArrowRight, GitCommit, TriangleAlert } from 'lucide-react'
+import { GitCommit, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useRef } from 'react'
+import { CommitDetailSkeleton } from './history-commit-detail-skeleton'
+import { VisibilityChanges } from './history-visibility-changes'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 
 const EMPTY_VISIBILITY_CHANGES: HistoryEntryDetail['visibility_changes'] = []
@@ -163,67 +163,6 @@ function CommitDetailPanelContent({
               <span>Select a changed file</span>
             </PanelState>
           )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function VisibilityChanges({
-  changes,
-}: {
-  changes: HistoryEntryDetail['visibility_changes']
-}) {
-  return (
-    <section aria-labelledby="history-visibility-changes" className="border-b border-border">
-      <div className="px-5 pb-2 pt-4 sm:px-6">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" id="history-visibility-changes">
-          Visibility changes
-        </h4>
-      </div>
-      <div className="divide-y divide-border">
-        {changes.map((change) => (
-          <div className="flex min-h-10 items-center gap-2 px-5 py-2 sm:px-6" key={change.path}>
-            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={change.path}>
-              {change.path}
-            </span>
-            <VisibilityBadge compact visibility={change.old_visibility} />
-            <ArrowRight aria-hidden className="size-3 shrink-0 text-muted-foreground" />
-            <VisibilityBadge compact visibility={change.new_visibility} />
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-}
-
-const COMMIT_FILE_SKELETON_WIDTHS = [58, 72, 46, 66, 52]
-
-function CommitDetailSkeleton({ showDiff }: { showDiff: boolean }) {
-  return (
-    <div className="min-w-0">
-      <div className="border-b border-border px-5 py-4 sm:px-6">
-        <Skeleton className="h-4 w-2/5" />
-        <Skeleton className="mt-2 h-3 w-40" />
-      </div>
-      <div className="grid xl:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]">
-        <div className="divide-y divide-border">
-          {COMMIT_FILE_SKELETON_WIDTHS.map((width) => (
-            <div className="flex min-h-9 items-center gap-3 px-5" key={width}>
-              <Skeleton className="size-3.5" />
-              <Skeleton className="h-3" style={{ width: `${width}%` }} />
-              <Skeleton className="ml-auto h-5 w-16 rounded-full" />
-            </div>
-          ))}
-        </div>
-        <div className="h-[70vh] min-h-[340px] max-h-[720px] border-border p-5 xl:border-l">
-          {showDiff ? (
-            <div className="space-y-3">
-              {[82, 56, 74, 44, 88, 64].map((width) => (
-                <Skeleton className="h-3" key={width} style={{ width: `${width}%` }} />
-              ))}
-            </div>
-          ) : null}
         </div>
       </div>
     </div>
