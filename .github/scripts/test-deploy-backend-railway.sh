@@ -103,9 +103,41 @@ if [[ "$1 $2" == "environment config" ]]; then
   stored_api_region="${FAKE_STORED_API_REGION:-us-east4-eqdc4a}"
   router_config='{}'
   if [[ "${FAKE_ROUTER_CONFIGURED:-1}" == "1" || -f "$FAKE_RAILWAY_STATE/router-scale" ]]; then
-    router_config='{"deploy":{"multiRegionConfig":{"us-east4-eqdc4a":{"numReplicas":1}}}}'
+    router_config='{"groupId":"runtime-group","deploy":{"multiRegionConfig":{"us-east4-eqdc4a":{"numReplicas":1}}}}'
   fi
   printf '{"services":{"scope-api":{"deploy":{"multiRegionConfig":{"%s":{"numReplicas":1}}}},"scope-worker":{"deploy":{"multiRegionConfig":{"us-east4-eqdc4a":{"numReplicas":1}}}},"scope-repo-router":%s}}\n' "$stored_api_region" "$router_config"
+  exit 0
+fi
+
+if [[ "$1" == "api" ]]; then
+  [[ -z "${RAILWAY_TOKEN:-}" ]]
+  [[ "${RAILWAY_API_TOKEN:-}" == "token-graphql" ]]
+  variables=""
+  while [[ "$#" -gt 0 ]]; do
+    if [[ "$1" == "--variables" ]]; then variables="$2"; shift 2; else shift; fi
+  done
+  action="$(
+    VARIABLES_JSON="$variables" node -e '
+const variables = JSON.parse(process.env.VARIABLES_JSON || "{}");
+const services = variables.patch?.services || {};
+const ids = Object.keys(services);
+const config = services["scope-repo-router"] || {};
+const validBase = variables.environmentId === "production" && ids.length === 1 &&
+  config.groupId === "runtime-group";
+if (validBase && config.isCreated === true) console.log("create-instance");
+else if (validBase && config.deploy?.multiRegionConfig?.["us-east4-eqdc4a"]?.numReplicas === 1) {
+  console.log("configure-scale");
+} else console.log("invalid");
+'
+  )"
+  [[ "$action" != "invalid" ]]
+  if [[ "$action" == "create-instance" ]]; then
+    touch "$FAKE_RAILWAY_STATE/router-instance-created"
+  else
+    touch "$FAKE_RAILWAY_STATE/router-scale"
+  fi
+  printf 'graphql %s scope-repo-router\n' "$action" >> "$FAKE_RAILWAY_TRACE"
+  echo '{"data":{"environmentPatchCommit":"router-config-commit"}}'
   exit 0
 fi
 
@@ -315,9 +347,8 @@ if [[ "$1 $2" == "service list" ]]; then
 fi
 
 if [[ "$1 $2" == "service scale" ]]; then
-  touch "$FAKE_RAILWAY_STATE/router-scale"
-  echo '{"serviceId":"scope-repo-router"}'
-  exit 0
+  echo "project-token service scale must not be used" >&2
+  exit 97
 fi
 
 if [[ "$1" == "up" ]]; then
@@ -365,26 +396,10 @@ done
 read -r action deployment_id < <(
   REQUEST_JSON="$request" node -e '
 const request = JSON.parse(process.env.REQUEST_JSON || "{}");
-if (request.query?.includes("environmentPatchCommit")) {
-  const services = request.variables?.patch?.services || {};
-  const ids = Object.keys(services);
-  const valid = request.variables?.environmentId === "production" &&
-    ids.length === 1 && ids[0] === "scope-repo-router" &&
-    services[ids[0]]?.isCreated === true;
-  console.log(`${valid ? "create-instance" : "invalid-instance"} scope-repo-router`);
-  process.exit(0);
-}
 const match = request.query?.match(/deployment(Stop|Restart)/);
 console.log(`${match?.[1]?.toLowerCase() || ""} ${request.variables?.id || ""}`);
 '
 )
-if [[ "$action" == "create-instance" ]]; then
-  touch "$FAKE_RAILWAY_STATE/router-instance-created"
-  printf 'graphql create-instance scope-repo-router\n' >> "$FAKE_RAILWAY_TRACE"
-  echo '{"data":{"environmentPatchCommit":"router-instance-commit"}}'
-  exit 0
-fi
-[[ "$action" != "invalid-instance" ]]
 service="${deployment_id#old-}"
 service="${service#new-}"
 printf 'graphql %s %s %s\n' "$action" "$service" "$deployment_id" >> "$FAKE_RAILWAY_TRACE"
@@ -482,6 +497,7 @@ run_cutover() {
     SCOPE_RAILWAY_WORKER_SERVICE_ID="scope-worker" \
     SCOPE_RAILWAY_CACHE_SERVICE_ID="scope-cache-service" \
     SCOPE_RAILWAY_ROUTER_SERVICE_ID="scope-repo-router" \
+    SCOPE_RAILWAY_ROUTER_GROUP_ID="runtime-group" \
     SCOPE_RAILWAY_DATABASE_SERVICE_ID="scope-postgres" \
     SCOPE_RAILWAY_API_REGION_ID="us-east4-eqdc4a" \
     SCOPE_RAILWAY_WORKER_REGION_ID="us-east4-eqdc4a" \
@@ -770,6 +786,7 @@ assert_in_order "$test_dir/router-bootstrap-trace" \
   "domain --project project-test --environment production --service scope-repo-router --port 8080 --json" \
   "variable set --project project-test --environment production --service scope-api --skip-deploys SCOPE_GIT_PUBLIC_URL=https://scope-repo-router-production.test" \
   "variable set --project project-test --environment production --service scope-repo-router --skip-deploys SCOPE_REPO_ROUTER_BACKEND=scope-api.railway.internal:8080 SCOPE_REPO_ROUTER_READ_REPLICAS=1" \
+  "graphql configure-scale scope-repo-router" \
   "up $test_dir/router" \
   "$test_dir/maintenance plan" \
   "up $test_dir/api"

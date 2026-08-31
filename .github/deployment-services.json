@@ -3,6 +3,7 @@
     "cliVersion": "5.41.2",
     "projectId": "45dd67fa-6d69-48ad-9680-1313d41b4490",
     "environmentId": "2f21f6b6-6817-4338-9e08-cf18e78b8f46",
+    "runtimeGroupId": "74120aef-735e-4959-bf8d-5cd36d10cab1",
     "staging": {
       "environmentId": "8743c2e9-5d9b-4161-a047-9617e6d199b9",
       "environmentName": "staging",

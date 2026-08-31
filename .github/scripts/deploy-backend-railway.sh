@@ -11,6 +11,7 @@ api_service="${SCOPE_RAILWAY_API_SERVICE_ID:?SCOPE_RAILWAY_API_SERVICE_ID is req
 worker_service="${SCOPE_RAILWAY_WORKER_SERVICE_ID:?SCOPE_RAILWAY_WORKER_SERVICE_ID is required}"
 cache_service="${SCOPE_RAILWAY_CACHE_SERVICE_ID:?SCOPE_RAILWAY_CACHE_SERVICE_ID is required}"
 router_service="${SCOPE_RAILWAY_ROUTER_SERVICE_ID:?SCOPE_RAILWAY_ROUTER_SERVICE_ID is required}"
+router_group="${SCOPE_RAILWAY_ROUTER_GROUP_ID:?SCOPE_RAILWAY_ROUTER_GROUP_ID is required}"
 database_service="${SCOPE_RAILWAY_DATABASE_SERVICE_ID:?SCOPE_RAILWAY_DATABASE_SERVICE_ID is required}"
 api_region="${SCOPE_RAILWAY_API_REGION_ID:?SCOPE_RAILWAY_API_REGION_ID is required}"
 worker_region="${SCOPE_RAILWAY_WORKER_REGION_ID:?SCOPE_RAILWAY_WORKER_REGION_ID is required}"
@@ -50,8 +51,8 @@ if [[ ! -x "$maintenance_binary" ]]; then
   exit 1
 fi
 
-# The Railway CLI accepts project tokens but currently rejects workspace tokens. Keep the
-# workspace token out of its environment and use it only for deployment control below.
+# Ordinary Railway CLI commands use the project token. Keep the workspace token isolated
+# and expose it only to control-plane mutations sent through `railway api`.
 railway_api_token="$RAILWAY_API_TOKEN"
 unset RAILWAY_API_TOKEN
 
@@ -329,20 +330,11 @@ process.exit(services.some(({id}) => id === process.env.SERVICE_ID) ? 0 : 1);
 '
 }
 
-ensure_production_router_instance() {
-  local request response deadline
-  if production_service_exists "$router_service"; then
-    return 0
-  fi
-  if [[ "$deploy_router_requested" != "1" ]]; then
-    echo "Production router has no service instance; select the router deployment." >&2
-    return 1
-  fi
-
-  request="$(
-    ENVIRONMENT_ID="$environment" ROUTER_SERVICE_ID="$router_service" node -e '
-console.log(JSON.stringify({
-  query: `mutation BootstrapRouterInstance(
+commit_environment_patch() {
+  local patch="$1"
+  local commit_message="$2"
+  local mutation variables response
+  mutation='mutation UpdateProductionEnvironment(
     $environmentId: String!,
     $patch: EnvironmentConfig!,
     $commitMessage: String,
@@ -352,34 +344,41 @@ console.log(JSON.stringify({
       patch: $patch,
       commitMessage: $commitMessage,
     )
-  }`,
-  variables: {
-    environmentId: process.env.ENVIRONMENT_ID,
-    patch: {services: {[process.env.ROUTER_SERVICE_ID]: {isCreated: true}}},
-    commitMessage: "Create production Git router instance",
-  },
-}));
-'
+  }'
+  variables="$(
+    jq -cn \
+      --arg environmentId "$environment" \
+      --argjson patch "$patch" \
+      --arg commitMessage "$commit_message" \
+      '{environmentId: $environmentId, patch: $patch, commitMessage: $commitMessage}'
   )"
   response="$(
-    printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "$railway_api_token" \
-      | curl --silent --show-error --fail-with-body \
-        --request POST \
-        --url https://backboard.railway.com/graphql/v2 \
-        --header @- \
-        --data-binary "$request"
+    env -u RAILWAY_TOKEN \
+      RAILWAY_API_TOKEN="$railway_api_token" \
+      railway api "$mutation" --variables "$variables" --compact
   )"
-  RAILWAY_GRAPHQL_RESPONSE="$response" node -e '
-const response = JSON.parse(process.env.RAILWAY_GRAPHQL_RESPONSE || "{}");
-if (typeof response.data?.environmentPatchCommit !== "string" ||
-    response.data.environmentPatchCommit.length === 0) {
-  const messages = Array.isArray(response.errors)
-    ? response.errors.map(({message}) => message).filter(Boolean).join("; ")
-    : "";
-  console.error(`Railway router instance creation failed${messages ? `: ${messages}` : "."}`);
-  process.exit(1);
+  if ! jq -e '.data.environmentPatchCommit | type == "string" and length > 0' \
+    <<< "$response" >/dev/null; then
+    echo "Railway environment patch failed: $commit_message." >&2
+    return 1
+  fi
 }
-'
+
+ensure_production_router_instance() {
+  local patch deadline
+  if production_service_exists "$router_service"; then
+    return 0
+  fi
+  if [[ "$deploy_router_requested" != "1" ]]; then
+    echo "Production router has no service instance; select the router deployment." >&2
+    return 1
+  fi
+
+  patch="$(
+    jq -cn --arg service "$router_service" --arg group "$router_group" \
+      '{services: {($service): {isCreated: true, groupId: $group}}}'
+  )"
+  commit_environment_patch "$patch" "Create production Git router instance"
 
   deadline=$((SECONDS + 60))
   while (( SECONDS < deadline )); do
@@ -389,6 +388,52 @@ if (typeof response.data?.environmentPatchCommit !== "string" ||
     sleep 2
   done
   echo "Production router service instance did not appear after creation." >&2
+  return 1
+}
+
+router_service_config_matches() {
+  local environment_config_json
+  environment_config_json="$(railway environment config --environment "$environment" --json)"
+  jq -e \
+    --arg service "$router_service" \
+    --arg group "$router_group" \
+    --arg region "$api_region" \
+    '.services[$service].groupId == $group and
+      ((.services[$service].deploy.multiRegionConfig // {})
+        | to_entries
+        | map(select((.value.numReplicas // 0 | tonumber) > 0))
+        | length == 1 and .[0].key == $region and (.[0].value.numReplicas | tonumber) == 1)' \
+    <<< "$environment_config_json" >/dev/null
+}
+
+configure_router_service() {
+  local patch deadline
+  if router_service_config_matches; then
+    return 0
+  fi
+  if [[ "$deploy_router_requested" != "1" ]]; then
+    echo "Production router service configuration drift requires a router deployment." >&2
+    return 1
+  fi
+  patch="$(
+    jq -cn \
+      --arg service "$router_service" \
+      --arg group "$router_group" \
+      --arg region "$api_region" \
+      '{services: {($service): {
+        groupId: $group,
+        deploy: {multiRegionConfig: {($region): {numReplicas: 1}}}
+      }}}'
+  )"
+  commit_environment_patch "$patch" "Configure production Git router topology"
+  deadline=$((SECONDS + 60))
+  while (( SECONDS < deadline )); do
+    if router_service_config_matches; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Production router service configuration did not converge after update." >&2
   return 1
 }
 
@@ -447,10 +492,7 @@ configure_production_router() {
     '.SCOPE_REPO_ROUTER_BACKEND == $backend and .SCOPE_REPO_ROUTER_READ_REPLICAS == $replicas' \
     <<< "$router_variables" >/dev/null
 
-  if [[ "$deploy_router_requested" == "1" ]]; then
-    railway service scale "${railway_scope[@]}" --service "$router_service" \
-      "$api_region=1" --json >/dev/null
-  fi
+  configure_router_service
 }
 
 assert_router_topology() {
@@ -460,6 +502,7 @@ assert_router_topology() {
   SERVICES_JSON="$services_json" \
     ENVIRONMENT_CONFIG_JSON="$environment_config_json" \
     ROUTER_SERVICE_ID="$router_service" \
+    ROUTER_GROUP_ID="$router_group" \
     ROUTER_REGION="$api_region" \
     node -e '
 const services = JSON.parse(process.env.SERVICES_JSON || "[]");
@@ -472,7 +515,8 @@ const storedRegions = environmentConfig.services?.[process.env.ROUTER_SERVICE_ID
 const activeStoredRegions = Object.entries(storedRegions).filter(
   ([, config]) => config && Number(config.numReplicas) > 0,
 );
-if (router?.status !== "SUCCESS" || router.deploymentStopped === true ||
+if (environmentConfig.services?.[process.env.ROUTER_SERVICE_ID]?.groupId !== process.env.ROUTER_GROUP_ID ||
+    router?.status !== "SUCCESS" || router.deploymentStopped === true ||
     replicas.configured !== 1 || replicas.running !== 1 || (replicas.crashed || 0) !== 0 ||
     liveRegion?.configured !== 1 || activeStoredRegions.length !== 1 ||
     activeStoredRegions[0][0] !== process.env.ROUTER_REGION ||
