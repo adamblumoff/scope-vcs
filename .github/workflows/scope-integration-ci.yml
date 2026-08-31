@@ -146,8 +146,25 @@ jobs:
           SCOPE_DEV_HEADLESS_E2E: ${{ inputs.run_web && '0' || '1' }}
         run: ./dev/scope-dev up
 
+      - name: Wait for seeded projections
+        id: projections
+        if: steps.stack.outcome == 'success'
+        shell: bash
+        run: |
+          request_url='http://localhost:8080/v1/repos/dev/update-demo/requests/req_demo_ready'
+          last_status='unavailable'
+          for _ in $(seq 1 90); do
+            last_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "$request_url" || true)"
+            if [[ "$last_status" == '200' ]]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Seeded request projection did not become ready (last HTTP status: $last_status)."
+          exit 1
+
       - name: Run browser smoke
-        if: inputs.run_web && steps.stack.outcome == 'success'
+        if: inputs.run_web && steps.projections.outcome == 'success'
         working-directory: web
         env:
           SCOPE_SMOKE_REPO: dev/public-demo
@@ -155,7 +172,7 @@ jobs:
         run: pnpm test:smoke
 
       - name: Run two-actor CLI contribution flow
-        if: inputs.run_cli && !cancelled() && steps.stack.outcome == 'success'
+        if: inputs.run_cli && !cancelled() && steps.projections.outcome == 'success'
         env:
           SCOPE_API_URL: http://localhost:8080
           SCOPE_CLI_E2E: "1"

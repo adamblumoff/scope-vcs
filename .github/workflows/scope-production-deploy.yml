@@ -216,16 +216,40 @@ jobs:
       run_cli: ${{ needs.plan.outputs.cli == 'true' }}
     secrets: inherit
 
-  backend-deploy:
-    name: Backend deploy
-    needs: [plan, checks-image, backend-validation]
+  production-validation-gate:
+    name: Production validation gate
+    needs:
+      - plan
+      - checks-image
+      - backend-validation
+      - web-validation
+      - cli-validation
+      - integration-validation
     if: >-
       always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      needs.plan.result == 'success' &&
+      (needs.plan.outputs.checks_image != 'true' || needs.checks-image.result == 'success') &&
+      ((needs.plan.outputs.cache != 'true' &&
+      needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.api != 'true') ||
+      needs.backend-validation.result == 'success') &&
+      (needs.plan.outputs.web != 'true' || needs.web-validation.result == 'success') &&
+      (needs.plan.outputs.cli != 'true' || needs.cli-validation.result == 'success') &&
+      ((needs.plan.outputs.web != 'true' && needs.plan.outputs.cli != 'true') ||
+      needs.integration-validation.result == 'success')
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - run: echo 'All selected production validations passed.'
+
+  backend-deploy:
+    name: Backend deploy
+    needs: [plan, production-validation-gate]
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      needs.production-validation-gate.result == 'success' &&
       (needs.plan.outputs.cache == 'true' ||
       needs.plan.outputs.worker == 'true' ||
-      needs.plan.outputs.api == 'true') &&
-      needs.backend-validation.result == 'success' &&
-      (needs.checks-image.result == 'success' || needs.checks-image.result == 'skipped')
+      needs.plan.outputs.api == 'true')
     uses: ./.github/workflows/scope-api-deploy.yml
     with:
       deploy_cache: ${{ needs.plan.outputs.cache == 'true' }}
@@ -236,13 +260,19 @@ jobs:
 
   web-deploy:
     name: Web deploy
-    needs: [plan, backend-deploy, web-validation, integration-validation]
+    needs: [plan, production-validation-gate, backend-deploy]
     if: >-
       always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      needs.production-validation-gate.result == 'success' &&
       needs.plan.outputs.web == 'true' &&
-      needs.web-validation.result == 'success' &&
-      needs.integration-validation.result == 'success' &&
-      (needs.backend-deploy.result == 'success' || needs.backend-deploy.result == 'skipped')
+      (((needs.plan.outputs.cache == 'true' ||
+      needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.api == 'true') &&
+      needs.backend-deploy.result == 'success') ||
+      ((needs.plan.outputs.cache != 'true' &&
+      needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.api != 'true') &&
+      needs.backend-deploy.result == 'skipped'))
     uses: ./.github/workflows/scope-web-deploy.yml
     with:
       verified_successful_sha: ${{ fromJSON(needs.plan.outputs.deployed_revisions || '{}').web || '' }}
@@ -250,13 +280,19 @@ jobs:
 
   cli-deploy:
     name: CLI deploy
-    needs: [plan, backend-deploy, cli-validation, integration-validation]
+    needs: [plan, production-validation-gate, backend-deploy]
     if: >-
       always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      needs.production-validation-gate.result == 'success' &&
       needs.plan.outputs.cli == 'true' &&
-      needs.cli-validation.result == 'success' &&
-      needs.integration-validation.result == 'success' &&
-      (needs.backend-deploy.result == 'success' || needs.backend-deploy.result == 'skipped')
+      (((needs.plan.outputs.cache == 'true' ||
+      needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.api == 'true') &&
+      needs.backend-deploy.result == 'success') ||
+      ((needs.plan.outputs.cache != 'true' &&
+      needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.api != 'true') &&
+      needs.backend-deploy.result == 'skipped'))
     uses: ./.github/workflows/scope-cli-deploy.yml
     with:
       verified_successful_sha: ${{ fromJSON(needs.plan.outputs.deployed_revisions || '{}').cli || '' }}
