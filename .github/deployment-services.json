@@ -91,6 +91,7 @@
         ".github/scripts/deploy-backend-railway.sh",
         ".github/scripts/deploy-railway.sh",
         ".github/scripts/test-deploy-backend-railway.sh",
+        ".github/workflows/scope-api-deploy.yml",
         ".github/workflows/rust-workspace-checks.yml",
         ".github/workflows/scope-api-ci.yml",
         "Cargo.lock",
@@ -107,6 +108,7 @@
         ".github/scripts/deploy-backend-railway.sh",
         ".github/scripts/deploy-railway.sh",
         ".github/scripts/test-deploy-backend-railway.sh",
+        ".github/workflows/scope-api-deploy.yml",
         ".github/workflows/rust-workspace-checks.yml",
         ".github/workflows/scope-api-ci.yml",
         "Cargo.lock",
@@ -124,6 +126,7 @@
         ".github/scripts/deploy-backend-railway.sh",
         ".github/scripts/deploy-railway.sh",
         ".github/scripts/test-deploy-backend-railway.sh",
+        ".github/workflows/scope-api-deploy.yml",
         ".github/workflows/rust-workspace-checks.yml",
         ".github/workflows/scope-api-ci.yml",
         "Cargo.lock",
@@ -140,6 +143,8 @@
     "web": {
       "files": [
         ".github/scripts/deploy-railway.sh",
+        ".github/workflows/scope-web-deploy.yml",
+        ".github/workflows/scope-integration-ci.yml",
         ".github/workflows/scope-web-ci.yml",
         "Cargo.lock",
         "Cargo.toml"
@@ -155,6 +160,8 @@
     "cli": {
       "files": [
         ".github/scripts/deploy-railway.sh",
+        ".github/workflows/scope-cli-deploy.yml",
+        ".github/workflows/scope-integration-ci.yml",
         ".github/workflows/scope-cli-build.yml",
         "Cargo.lock",
         "Cargo.toml",
@@ -167,6 +174,20 @@
         "crates/",
         "dev/",
         "worker/"
+      ]
+    },
+    "cliDistribution": {
+      "files": [
+        ".github/workflows/scope-cli-build.yml",
+        "cli/Cargo.lock",
+        "cli/Cargo.toml",
+        "rust-toolchain.toml"
+      ],
+      "prefixes": [
+        "cli/distribution/",
+        "cli/src/",
+        "crates/scope-api-contract/",
+        "crates/scope-domain/"
       ]
     }
   }

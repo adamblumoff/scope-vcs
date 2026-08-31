@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -21,6 +23,7 @@ function deploymentSelection(overrides = {}) {
     api: false,
     web: false,
     cli: false,
+    cliDistribution: false,
     ...overrides,
   };
 }
@@ -33,6 +36,7 @@ test("changes select the required deployment lanes", () => {
     api: true,
     web: true,
     cli: true,
+    cliDistribution: true,
   };
   const cases = [
     ["documentation-only changes do not deploy", ["docs/cache.md"], {}],
@@ -45,9 +49,48 @@ test("changes select the required deployment lanes", () => {
     [
       "toolchain changes publish the checks image and rebuild Rust services",
       ["rust-toolchain.toml"],
-      { checksImage: true, cache: true, worker: true, api: true, cli: true },
+      {
+        checksImage: true,
+        cache: true,
+        worker: true,
+        api: true,
+        cli: true,
+        cliDistribution: true,
+      },
     ],
     ["web-only changes deploy only web", ["web/src/routes/+page.svelte"], { web: true }],
+    [
+      "API implementation changes validate CLI without rebuilding distribution targets",
+      ["api/src/main.rs"],
+      { api: true, web: true, cli: true },
+    ],
+    [
+      "CLI tests validate CLI without rebuilding distribution targets",
+      ["cli/tests/request.rs"],
+      { cli: true },
+    ],
+    [
+      "CLI source changes rebuild distribution targets",
+      ["cli/src/request.rs"],
+      { cli: true, cliDistribution: true },
+    ],
+    [
+      "distribution config changes rebuild distribution targets",
+      ["cli/distribution/targets.json"],
+      { cli: true, cliDistribution: true },
+    ],
+    [
+      "unrelated shared crates retain broad CLI validation without rebuilding targets",
+      ["crates/scope-cache-contract/src/lib.rs"],
+      {
+        checksImage: true,
+        cache: true,
+        worker: true,
+        api: true,
+        web: true,
+        cli: true,
+      },
+    ],
     [
       "shared workspace changes preserve the previous conservative scope",
       ["crates/scope-domain/src/lib.rs"],
@@ -66,9 +109,31 @@ test("changes select the required deployment lanes", () => {
 });
 
 test("manual component and all scopes are explicit", () => {
-  assert.equal(classifyChanges(manifest, [], "web").web, true);
+  assert.deepEqual(classifyChanges(manifest, [], "web"), deploymentSelection({ web: true }));
+  assert.deepEqual(
+    classifyChanges(manifest, [], "cli"),
+    deploymentSelection({ cli: true, cliDistribution: true }),
+  );
   assert.ok(Object.values(classifyChanges(manifest, [], "all")).every(Boolean));
+  assert.throws(
+    () => classifyChanges(manifest, [], "cliDistribution"),
+    /Unknown deployment scope/,
+  );
   assert.throws(() => classifyChanges(manifest, [], "database"), /Unknown deployment scope/);
+});
+
+test("planner emits the CLI distribution selection as a snake-case workflow output", () => {
+  const output = execFileSync(process.execPath, [
+    fileURLToPath(new URL("./plan-production-deployment.mjs", import.meta.url)),
+    "--manifest",
+    fileURLToPath(new URL("../deployment-services.json", import.meta.url)),
+    "--scope",
+    "cli",
+  ], { encoding: "utf8" });
+
+  assert.match(output, /^cli=true$/m);
+  assert.match(output, /^cli_distribution=true$/m);
+  assert.doesNotMatch(output, /^cliDistribution=/m);
 });
 
 test("an unseeded production ledger deploys every component", () => {
@@ -94,7 +159,33 @@ test("skipped components remain selected across a later backend-only change", ()
     api: false,
     web: true,
     cli: false,
+    cliDistribution: false,
   });
+});
+
+test("CLI deployment progress selects distribution builds only for binary inputs", () => {
+  const broadOnly = planFromDeploymentProgress(manifest, {
+    checksImage: [],
+    cache: [],
+    worker: [],
+    api: [],
+    web: [],
+    cli: ["api/src/main.rs"],
+  });
+  const binaryChange = planFromDeploymentProgress(manifest, {
+    checksImage: [],
+    cache: [],
+    worker: [],
+    api: [],
+    web: [],
+    cli: ["crates/scope-api-contract/src/lib.rs"],
+  });
+
+  assert.deepEqual(broadOnly, deploymentSelection({ cli: true }));
+  assert.deepEqual(
+    binaryChange,
+    deploymentSelection({ cli: true, cliDistribution: true }),
+  );
 });
 
 test("manual scopes ignore pending production components", () => {
@@ -105,6 +196,7 @@ test("manual scopes ignore pending production components", () => {
     api: false,
     web: true,
     cli: false,
+    cliDistribution: false,
   });
 });
 

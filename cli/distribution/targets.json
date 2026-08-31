@@ -7,7 +7,7 @@
       "os": "linux",
       "arch": "x64",
       "label": "Linux x64",
-      "runner": "ubuntu-latest",
+      "runner": "blacksmith-4vcpu-ubuntu-2404",
       "binary": "target/x86_64-unknown-linux-gnu/release/scope",
       "builder": "cargo",
       "smoke": true
@@ -18,7 +18,7 @@
       "os": "linux",
       "arch": "arm64",
       "label": "Linux ARM64",
-      "runner": "ubuntu-latest",
+      "runner": "blacksmith-4vcpu-ubuntu-2404",
       "binary": "target/aarch64-unknown-linux-gnu/release/scope",
       "builder": "cross",
       "smoke": false
@@ -40,7 +40,7 @@
       "os": "macos",
       "arch": "arm64",
       "label": "macOS Apple Silicon",
-      "runner": "macos-15",
+      "runner": "blacksmith-6vcpu-macos-15",
       "binary": "target/aarch64-apple-darwin/release/scope",
       "builder": "cargo",
       "smoke": true
@@ -51,7 +51,7 @@
       "os": "windows",
       "arch": "x64",
       "label": "Windows x64",
-      "runner": "windows-latest",
+      "runner": "blacksmith-4vcpu-windows-2025",
       "binary": "target/x86_64-pc-windows-msvc/release/scope.exe",
       "builder": "cargo",
       "smoke": true
@@ -62,7 +62,7 @@
       "os": "windows",
       "arch": "arm64",
       "label": "Windows ARM64",
-      "runner": "windows-latest",
+      "runner": "blacksmith-4vcpu-windows-2025",
       "binary": "target/aarch64-pc-windows-msvc/release/scope.exe",
       "builder": "cargo",
       "smoke": false

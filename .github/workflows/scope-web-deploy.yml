@@ -1,0 +1,76 @@
+name: Scope Web Deploy
+
+on:
+  workflow_call:
+    inputs:
+      verified_successful_sha:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  deployments: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    name: Deploy scope-web
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Stage Railway upload root
+        shell: bash
+        env:
+          VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
+        run: |
+          rm -rf .railway-upload
+          mkdir -p .railway-upload/web
+          cp -a web/. .railway-upload/web/
+          printf '%s\n' "$GITHUB_SHA" > .railway-upload/web/.scope-deployment-sha
+          if [[ "$VERIFIED_SUCCESSFUL_SHA" != "$GITHUB_SHA" ]]; then
+            printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-upload/web/.scope-deployment-attempt
+          fi
+          test -s .railway-upload/web/package.json
+          test ! -e .railway-upload/package.json
+
+      - name: Install Railway CLI
+        run: |
+          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
+          npm install -g "@railway/cli@$railway_cli_version"
+
+      - name: Deploy to Railway
+        shell: bash
+        env:
+          RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SCOPE_DEPLOYMENT_COMPONENT: web
+          SCOPE_DEPLOYMENT_EVIDENCE_PATH: production-deployments.ndjson
+          SCOPE_DEPLOYMENT_SOURCE_SHA: ${{ github.sha }}
+          SCOPE_VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
+        run: |
+          manifest=.github/deployment-services.json
+          RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
+          SCOPE_RAILWAY_ENVIRONMENT_ID="$(jq -r '.railway.environmentId' "$manifest")"
+          export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
+          service_id="$(jq -r '.services.web.id' "$manifest")"
+          bash .github/scripts/deploy-railway.sh "$service_id" .railway-upload
+
+      - name: Record successful Railway deployment
+        if: always()
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node .github/scripts/production-deployment-progress.mjs record-file \
+            --file production-deployments.ndjson \
+            --log-url "$LOG_URL"

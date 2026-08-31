@@ -5,30 +5,32 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export const COMPONENTS = ["checksImage", "cache", "worker", "api", "web", "cli"];
+const SELECTIONS = [...COMPONENTS, "cliDistribution"];
 
 function matchesScope(path, scope) {
   return scope.files.includes(path) || scope.prefixes.some((prefix) => path.startsWith(prefix));
 }
 
 export function classifyChanges(manifest, paths, requestedScope = "changed") {
-  const selection = Object.fromEntries(COMPONENTS.map((component) => [component, false]));
+  const selection = Object.fromEntries(SELECTIONS.map((component) => [component, false]));
 
   if (requestedScope !== "changed") {
     if (requestedScope === "all") {
-      return Object.fromEntries(COMPONENTS.map((component) => [component, true]));
+      return Object.fromEntries(SELECTIONS.map((component) => [component, true]));
     }
     if (!COMPONENTS.includes(requestedScope)) {
       throw new Error(`Unknown deployment scope: ${requestedScope}`);
     }
     selection[requestedScope] = true;
+    if (requestedScope === "cli") selection.cliDistribution = true;
     return selection;
   }
 
   for (const path of paths) {
     if (matchesScope(path, manifest.changeScopes.all)) {
-      return Object.fromEntries(COMPONENTS.map((component) => [component, true]));
+      return Object.fromEntries(SELECTIONS.map((component) => [component, true]));
     }
-    for (const component of COMPONENTS) {
+    for (const component of SELECTIONS) {
       if (matchesScope(path, manifest.changeScopes[component])) selection[component] = true;
     }
   }
@@ -39,11 +41,15 @@ export function classifyChanges(manifest, paths, requestedScope = "changed") {
 export function planFromDeploymentProgress(manifest, pathsByComponent, requestedScope = "changed") {
   if (requestedScope !== "changed") return classifyChanges(manifest, [], requestedScope);
 
-  return Object.fromEntries(COMPONENTS.map((component) => {
+  const selection = Object.fromEntries(COMPONENTS.map((component) => {
     const paths = pathsByComponent[component];
     if (!Array.isArray(paths)) return [component, true];
     return [component, classifyChanges(manifest, paths)[component]];
   }));
+  const cliPaths = pathsByComponent.cli;
+  selection.cliDistribution = !Array.isArray(cliPaths)
+    || classifyChanges(manifest, cliPaths).cliDistribution;
+  return selection;
 }
 
 function changedPaths(base, head, useMergeBase = true) {
@@ -99,7 +105,10 @@ function main() {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
 
   for (const [component, selected] of Object.entries(selection)) {
-    const outputName = component === "checksImage" ? "checks_image" : component;
+    const outputName = {
+      checksImage: "checks_image",
+      cliDistribution: "cli_distribution",
+    }[component] ?? component;
     const line = `${outputName}=${selected}\n`;
     if (outputPath) appendFileSync(outputPath, line);
     else process.stdout.write(line);

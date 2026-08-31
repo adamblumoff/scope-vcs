@@ -19,8 +19,8 @@ function workflowReplica(path, count = 1) {
 const REPLICAS = [
   workflowReplica(".github/workflows/rust-workspace-checks.yml"),
   workflowReplica(".github/workflows/scope-api-ci.yml"),
-  workflowReplica(".github/workflows/scope-web-ci.yml"),
   workflowReplica(".github/workflows/scope-cli-build.yml", 3),
+  workflowReplica(".github/workflows/scope-integration-ci.yml"),
   workflowReplica(".github/workflows/scope-railway-staging.yml"),
   {
     path: ".scope/images/checks/Dockerfile",

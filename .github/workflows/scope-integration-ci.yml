@@ -1,0 +1,182 @@
+name: Scope Integration CI
+
+on:
+  workflow_call:
+    inputs:
+      run_web:
+        type: boolean
+        required: true
+      run_cli:
+        type: boolean
+        required: true
+    secrets:
+      CLERK_DEVELOPMENT_PUBLISHABLE_KEY:
+        required: false
+      CLERK_DEVELOPMENT_SECRET_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  integration:
+    name: Seeded local stack integration
+    if: >-
+      (inputs.run_web || inputs.run_cli) &&
+      (github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'))
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: scope_dev
+          POSTGRES_PASSWORD: scope
+          POSTGRES_USER: scope
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scope -d scope_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.98.0
+
+      - name: Cache Rust dependencies for web smoke
+        if: inputs.run_web && !inputs.run_cli
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-bin: false
+          cache-on-failure: true
+          shared-key: web-smoke
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+
+      - name: Cache Rust dependencies for CLI integration
+        if: inputs.run_cli
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-bin: false
+          cache-on-failure: true
+          shared-key: cli-e2e
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          workspaces: |
+            . -> target
+            cli -> target
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.0 --activate
+
+      - name: Install web dependencies
+        if: inputs.run_web
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        if: inputs.run_web
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Configure seeded database
+        shell: bash
+        run: |
+          printf '%s\n' \
+            'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
+            'SCOPE_DEV_USER_EMAIL=smoke@example.test' \
+            'SCOPE_DEV_USER_HANDLE=dev' > .env.local
+
+      # Browser smoke requires a matching Clerk development key pair.
+      - name: Configure Clerk for browser smoke
+        if: inputs.run_web
+        env:
+          CLERK_DEVELOPMENT_PUBLISHABLE_KEY: ${{ secrets.CLERK_DEVELOPMENT_PUBLISHABLE_KEY }}
+          CLERK_DEVELOPMENT_SECRET_KEY: ${{ secrets.CLERK_DEVELOPMENT_SECRET_KEY }}
+        shell: bash
+        run: |
+          if [[ "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" != pk_test_* ]]; then
+            echo "::error::Repository secret CLERK_DEVELOPMENT_PUBLISHABLE_KEY must contain a Clerk development publishable key (pk_test_*)."
+            exit 1
+          fi
+          if [[ "$CLERK_DEVELOPMENT_SECRET_KEY" != sk_test_* ]]; then
+            echo "::error::Repository secret CLERK_DEVELOPMENT_SECRET_KEY must contain the matching Clerk development secret key (sk_test_*)."
+            exit 1
+          fi
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\nVITE_SCOPE_WEB_FORCE_SIGNED_OUT=1\n' \
+            "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" \
+            "$CLERK_DEVELOPMENT_SECRET_KEY" > web/.env.local
+
+      - name: Configure fake Clerk for CLI-only integration
+        if: inputs.run_cli && !inputs.run_web
+        shell: bash
+        run: |
+          clerk_host='scope-e2e.clerk.accounts.dev$'
+          clerk_payload="$(printf '%s' "$clerk_host" | base64 | tr '/+' '_-' | tr -d '=\n')"
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\n' \
+            "$clerk_payload" > web/.env.local
+
+      - name: Build local API and worker
+        run: cargo build -p api -p worker --features api/local-dev --locked
+
+      - name: Build scope-cli
+        if: inputs.run_cli
+        run: cargo build --manifest-path cli/Cargo.toml --locked --bin scope
+
+      - name: Start seeded local stack
+        id: stack
+        env:
+          SCOPE_DEV_HEADLESS_E2E: ${{ inputs.run_web && '0' || '1' }}
+        run: ./dev/scope-dev up
+
+      - name: Run browser smoke
+        if: inputs.run_web && steps.stack.outcome == 'success'
+        working-directory: web
+        env:
+          SCOPE_SMOKE_REPO: dev/public-demo
+          SCOPE_WEB_BASE_URL: http://localhost:3000
+        run: pnpm test:smoke
+
+      - name: Run two-actor CLI contribution flow
+        if: inputs.run_cli && !cancelled() && steps.stack.outcome == 'success'
+        env:
+          SCOPE_API_URL: http://localhost:8080
+          SCOPE_CLI_E2E: "1"
+        run: >-
+          cargo test
+          --manifest-path cli/Cargo.toml
+          --test contribution_flow
+          --locked
+          -- --nocapture
+
+      - name: Print local stack logs
+        if: failure()
+        shell: bash
+        run: |
+          for log in .tmp/local-dev/*.log; do
+            [[ -f "$log" ]] || continue
+            echo "::group::$log"
+            tail -n 300 "$log"
+            echo "::endgroup::"
+          done
+
+      - name: Stop local stack
+        if: always()
+        run: ./dev/scope-dev down

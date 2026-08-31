@@ -46,6 +46,7 @@ jobs:
       api: ${{ steps.plan.outputs.api }}
       web: ${{ steps.plan.outputs.web }}
       cli: ${{ steps.plan.outputs.cli }}
+      cli_distribution: ${{ steps.plan.outputs.cli_distribution }}
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v7
@@ -170,87 +171,93 @@ jobs:
           echo "Timed out locating the trusted staging proof for $SOURCE_SHA." >&2
           exit 1
 
-  backend:
-    name: Backend
-    needs: [plan, checks-image]
+  backend-validation:
+    name: Backend validation
+    needs: plan
     if: >-
-      always() &&
+      (needs.plan.outputs.cache == 'true' ||
+      needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.api == 'true')
+    uses: ./.github/workflows/scope-api-ci.yml
+    with:
+      build_maintenance_artifact: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    secrets: inherit
+
+  web-validation:
+    name: Web validation
+    needs: plan
+    if: needs.plan.outputs.web == 'true'
+    uses: ./.github/workflows/scope-web-ci.yml
+    secrets: inherit
+
+  cli-validation:
+    name: CLI validation
+    needs: plan
+    if: needs.plan.outputs.cli == 'true'
+    uses: ./.github/workflows/scope-cli-build.yml
+    with:
+      validate_targets: >-
+        ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') ||
+        (needs.plan.outputs.cli_distribution == 'true' &&
+        (github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.actor != 'dependabot[bot]'))) }}
+      validate_service_release: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    secrets: inherit
+
+  integration-validation:
+    name: Integration validation
+    needs: plan
+    if: needs.plan.outputs.web == 'true' || needs.plan.outputs.cli == 'true'
+    uses: ./.github/workflows/scope-integration-ci.yml
+    with:
+      run_web: ${{ needs.plan.outputs.web == 'true' }}
+      run_cli: ${{ needs.plan.outputs.cli == 'true' }}
+    secrets: inherit
+
+  backend-deploy:
+    name: Backend deploy
+    needs: [plan, checks-image, backend-validation]
+    if: >-
+      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       (needs.plan.outputs.cache == 'true' ||
       needs.plan.outputs.worker == 'true' ||
       needs.plan.outputs.api == 'true') &&
+      needs.backend-validation.result == 'success' &&
       (needs.checks-image.result == 'success' || needs.checks-image.result == 'skipped')
-    uses: ./.github/workflows/scope-api-ci.yml
+    uses: ./.github/workflows/scope-api-deploy.yml
     with:
-      deploy_cache: ${{ github.event_name != 'pull_request' && needs.plan.outputs.cache == 'true' }}
-      deploy_worker: ${{ github.event_name != 'pull_request' && needs.plan.outputs.worker == 'true' }}
-      deploy_api: ${{ github.event_name != 'pull_request' && needs.plan.outputs.api == 'true' }}
+      deploy_cache: ${{ needs.plan.outputs.cache == 'true' }}
+      deploy_worker: ${{ needs.plan.outputs.worker == 'true' }}
+      deploy_api: ${{ needs.plan.outputs.api == 'true' }}
       successful_deployment_revisions: ${{ needs.plan.outputs.deployed_revisions || '{}' }}
     secrets: inherit
 
-  web-independent:
-    name: Web
-    needs: plan
+  web-deploy:
+    name: Web deploy
+    needs: [plan, backend-deploy, web-validation, integration-validation]
     if: >-
+      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       needs.plan.outputs.web == 'true' &&
-      needs.plan.outputs.cache != 'true' &&
-      needs.plan.outputs.worker != 'true' &&
-      needs.plan.outputs.api != 'true'
-    uses: ./.github/workflows/scope-web-ci.yml
+      needs.web-validation.result == 'success' &&
+      needs.integration-validation.result == 'success' &&
+      (needs.backend-deploy.result == 'success' || needs.backend-deploy.result == 'skipped')
+    uses: ./.github/workflows/scope-web-deploy.yml
     with:
-      deploy: ${{ github.event_name != 'pull_request' }}
       verified_successful_sha: ${{ fromJSON(needs.plan.outputs.deployed_revisions || '{}').web || '' }}
     secrets: inherit
 
-  web-after-backend:
-    name: Web after backend
-    needs: [plan, backend]
+  cli-deploy:
+    name: CLI deploy
+    needs: [plan, backend-deploy, cli-validation, integration-validation]
     if: >-
-      always() && needs.plan.outputs.web == 'true' &&
-      (needs.plan.outputs.cache == 'true' ||
-      needs.plan.outputs.worker == 'true' ||
-      needs.plan.outputs.api == 'true') &&
-      needs.backend.result == 'success'
-    uses: ./.github/workflows/scope-web-ci.yml
-    with:
-      deploy: ${{ github.event_name != 'pull_request' }}
-      verified_successful_sha: ${{ fromJSON(needs.plan.outputs.deployed_revisions || '{}').web || '' }}
-    secrets: inherit
-
-  cli-independent:
-    name: CLI
-    needs: plan
-    if: >-
+      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       needs.plan.outputs.cli == 'true' &&
-      needs.plan.outputs.cache != 'true' &&
-      needs.plan.outputs.worker != 'true' &&
-      needs.plan.outputs.api != 'true'
-    uses: ./.github/workflows/scope-cli-build.yml
+      needs.cli-validation.result == 'success' &&
+      needs.integration-validation.result == 'success' &&
+      (needs.backend-deploy.result == 'success' || needs.backend-deploy.result == 'skipped')
+    uses: ./.github/workflows/scope-cli-deploy.yml
     with:
-      deploy: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
       verified_successful_sha: ${{ fromJSON(needs.plan.outputs.deployed_revisions || '{}').cli || '' }}
-      validate_targets: >-
-        ${{ github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.actor != 'dependabot[bot]') }}
-    secrets: inherit
-
-  cli-after-backend:
-    name: CLI after backend
-    needs: [plan, backend]
-    if: >-
-      always() && needs.plan.outputs.cli == 'true' &&
-      (needs.plan.outputs.cache == 'true' ||
-      needs.plan.outputs.worker == 'true' ||
-      needs.plan.outputs.api == 'true') &&
-      needs.backend.result == 'success'
-    uses: ./.github/workflows/scope-cli-build.yml
-    with:
-      deploy: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-      verified_successful_sha: ${{ fromJSON(needs.plan.outputs.deployed_revisions || '{}').cli || '' }}
-      validate_targets: >-
-        ${{ github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.actor != 'dependabot[bot]') }}
     secrets: inherit

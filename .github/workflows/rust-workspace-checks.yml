@@ -51,22 +51,31 @@ jobs:
           shared-key: workspace-${{ inputs.include_api && 'with-api' || 'without-api' }}
           save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
-      - name: Check Rust workspace
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Test Rust workspace
         shell: bash
         run: |
           if [[ "${{ inputs.include_api }}" == "true" ]]; then
-            features=(--features api/test-support)
-            packages=()
+            cargo test --workspace --features api/test-support --locked
           else
-            features=()
-            packages=(--exclude api)
+            cargo test --workspace --exclude api --locked
           fi
-          cargo fmt --all --check
-          cargo test --workspace "${packages[@]}" "${features[@]}" --locked
+
+      - name: Test API local development helpers
+        if: inputs.include_api
+        run: |
+          cargo test -p api --features local-dev --locked dev::
+
+      - name: Lint Rust workspace
+        shell: bash
+        run: |
           if [[ "${{ inputs.include_api }}" == "true" ]]; then
-            cargo test -p api --features local-dev --locked dev::
+            cargo clippy --workspace --features api/test-support --all-targets --locked -- -D warnings
+          else
+            cargo clippy --workspace --exclude api --all-targets --locked -- -D warnings
           fi
-          cargo clippy --workspace "${packages[@]}" "${features[@]}" --all-targets --locked -- -D warnings
 
       - name: Install Node
         if: inputs.include_api
@@ -74,7 +83,7 @@ jobs:
         with:
           node-version: 24
 
-      - name: Check API TypeScript contract
+      - name: Check generated API TypeScript contract
         if: inputs.include_api
         working-directory: web
         run: node scripts/check-api-contract.mjs
