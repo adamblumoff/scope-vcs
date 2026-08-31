@@ -223,6 +223,7 @@ pub(crate) async fn accept_repository_invite(
     headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Result<Json<AcceptRepositoryInviteResponse>, ApiError> {
+    let git_origin = crate::http::origins::public_git_origin(&state).to_string();
     let user = require_scope_user(&state, &headers).await?;
     let now = unix_now()?;
     let token_hash = repository_invite_token_hash(&token);
@@ -245,7 +246,6 @@ pub(crate) async fn accept_repository_invite(
         .await;
     let open_request_count =
         open_request_count_for_access(&state, &repo, repo.access_for_user_id(&user.id)).await?;
-    let git_origin = crate::http::origins::public_git_origin()?;
     let summary = repo_summary_for_user(&repo, &user.id, open_request_count, &git_origin)
         .ok_or_else(|| ApiError::internal_message("accepted invite member cannot read repo"))?;
     Ok(Json(AcceptRepositoryInviteResponse {

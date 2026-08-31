@@ -3,19 +3,15 @@ name: Scope CLI Build
 on:
   workflow_call:
     inputs:
-      deploy:
-        type: boolean
-        default: false
       validate_targets:
         type: boolean
         default: false
-      verified_successful_sha:
-        type: string
-        default: ""
+      validate_service_release:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-  deployments: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,9 +20,7 @@ env:
 jobs:
   prepare:
     name: Prepare distribution matrix
-    if: >-
-      inputs.validate_targets ||
-      (inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main')
+    if: inputs.validate_targets
     runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
@@ -71,22 +65,39 @@ jobs:
       - name: Lint
         run: cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
 
-      - name: Build release binaries
-        if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+  service-release:
+    name: Build scope-cli service
+    if: inputs.validate_service_release
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.98.0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-bin: false
+          shared-key: cli-service-release
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          workspaces: cli -> target
+
+      - name: Build service
         run: >
           cargo build
           --manifest-path cli/Cargo.toml
           --release
           --locked
-          --bin scope
           --bin scope-cli-service
 
   build:
     name: Build ${{ matrix.label }}
     needs: [checks, prepare]
-    if: >-
-      inputs.validate_targets ||
-      (inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main')
+    if: inputs.validate_targets
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -148,202 +159,3 @@ jobs:
           name: ${{ matrix.artifact }}
           path: cli/dist/${{ matrix.artifact }}
           if-no-files-found: error
-
-  e2e:
-    name: Two-actor contribution flow
-    if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'dependabot[bot]')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: scope_dev
-          POSTGRES_PASSWORD: scope
-          POSTGRES_USER: scope
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U scope -d scope_dev"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
-        with:
-          toolchain: 1.98.0
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          cache-bin: false
-          cache-on-failure: true
-          shared-key: cli-e2e
-          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-          workspaces: |
-            . -> target
-            cli -> target
-
-      - name: Install Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Install web dependencies
-        working-directory: web
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.1.0 --activate
-          pnpm install --frozen-lockfile
-
-      - name: Configure isolated local stack
-        shell: bash
-        run: |
-          clerk_host='scope-e2e.clerk.accounts.dev$'
-          clerk_payload="$(printf '%s' "$clerk_host" | base64 | tr '/+' '_-' | tr -d '=\n')"
-          printf '%s\n' \
-            'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
-            'SCOPE_DEV_USER_EMAIL=smoke@example.test' \
-            'SCOPE_DEV_USER_HANDLE=dev' > .env.local
-          printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\n' \
-            "$clerk_payload" > web/.env.local
-
-      - name: Prebuild local stack and CLI
-        run: |
-          cargo build -p api --features local-dev --locked
-          cargo build -p worker --locked
-          cargo build --manifest-path cli/Cargo.toml --locked --bin scope
-
-      - name: Start seeded local stack
-        env:
-          SCOPE_DEV_HEADLESS_E2E: "1"
-        run: ./dev/scope-dev up
-
-      - name: Exercise the two-actor contribution flow
-        env:
-          SCOPE_API_URL: http://localhost:8080
-          SCOPE_CLI_E2E: "1"
-        run: >-
-          cargo test
-          --manifest-path cli/Cargo.toml
-          --test contribution_flow
-          --locked
-          -- --nocapture
-
-      - name: Print local stack logs
-        if: failure()
-        shell: bash
-        run: |
-          for log in .tmp/local-dev/*.log; do
-            [[ -f "$log" ]] || continue
-            echo "::group::$log"
-            tail -n 300 "$log"
-            echo "::endgroup::"
-          done
-
-      - name: Stop local stack
-        if: always()
-        run: ./dev/scope-dev down
-
-  deploy:
-    name: Deploy scope-cli
-    needs: [build, e2e]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: scope-*
-          path: cli/dist
-          merge-multiple: true
-
-      - name: Verify artifacts and write checksums
-        shell: bash
-        run: |
-          mapfile -t expected < <(jq -r '.targets[].artifact' cli/distribution/targets.json)
-
-          for artifact in "${expected[@]}"; do
-            test -s "cli/dist/$artifact"
-          done
-
-          (
-            cd cli/dist
-            for artifact in "${expected[@]}"; do
-              sha256sum "$artifact" > "$artifact.sha256"
-            done
-          )
-
-      - name: Install Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Stage Railway upload root
-        shell: bash
-        env:
-          VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
-        run: |
-          rm -rf .railway-upload
-          mkdir -p .railway-upload/cli/crates
-          cp -a cli/. .railway-upload/cli/
-          cp rust-toolchain.toml .railway-upload/cli/rust-toolchain.toml
-          cp -a crates/scope-api-contract .railway-upload/cli/crates/scope-api-contract
-          cp -a crates/scope-cache-domain .railway-upload/cli/crates/scope-cache-domain
-          cp -a crates/scope-domain .railway-upload/cli/crates/scope-domain
-          printf '%s\n' "$GITHUB_SHA" > .railway-upload/cli/.scope-deployment-sha
-          if [[ "$VERIFIED_SUCCESSFUL_SHA" != "$GITHUB_SHA" ]]; then
-            printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-upload/cli/.scope-deployment-attempt
-          fi
-          perl -0pi -e 's#path = "\.\./crates/scope-api-contract"#path = "crates/scope-api-contract"#' .railway-upload/cli/Cargo.toml
-          perl -0pi -e 's#path = "\.\./crates/scope-domain"#path = "crates/scope-domain"#' .railway-upload/cli/Cargo.toml
-          grep -F 'path = "crates/scope-api-contract"' .railway-upload/cli/Cargo.toml
-          grep -F 'path = "crates/scope-domain"' .railway-upload/cli/Cargo.toml
-          test -s .railway-upload/cli/railpack.json
-          test -s .railway-upload/cli/crates/scope-api-contract/Cargo.toml
-          test -s .railway-upload/cli/crates/scope-cache-domain/Cargo.toml
-          test -s .railway-upload/cli/crates/scope-domain/Cargo.toml
-          test ! -e .railway-upload/Cargo.toml
-
-      - name: Install Railway CLI
-        run: |
-          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
-          npm install -g "@railway/cli@$railway_cli_version"
-
-      - name: Deploy artifacts to Railway
-        shell: bash
-        env:
-          RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          SCOPE_DEPLOYMENT_COMPONENT: cli
-          SCOPE_DEPLOYMENT_EVIDENCE_PATH: production-deployments.ndjson
-          SCOPE_DEPLOYMENT_SOURCE_SHA: ${{ github.sha }}
-          SCOPE_VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
-        run: |
-          manifest=.github/deployment-services.json
-          RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
-          SCOPE_RAILWAY_ENVIRONMENT_ID="$(jq -r '.railway.environmentId' "$manifest")"
-          export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
-          service_id="$(jq -r '.services.cli.id' "$manifest")"
-          bash .github/scripts/deploy-railway.sh "$service_id" .railway-upload
-
-      - name: Record successful Railway deployment
-        if: always()
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          node .github/scripts/production-deployment-progress.mjs record-file \
-            --file production-deployments.ndjson \
-            --log-url "$LOG_URL"

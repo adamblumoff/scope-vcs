@@ -4,7 +4,10 @@ use crate::demo_seed as seed;
 use crate::{
     AppState,
     auth::{clerk::ClerkVerifier, cli::CliAuthService},
-    config::{SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_repo_root, non_empty_env},
+    config::{
+        LOCAL_API_ORIGIN, SCOPE_OPERATOR_TOKEN_ENV, data_dir, git_public_url_from_env,
+        git_repo_root, non_empty_env,
+    },
     error::ApiError,
     object_store_config::{
         encryption_key_from_env, file_from_env, git_segment_file_store_from_env,
@@ -33,6 +36,7 @@ pub fn local_maintenance_database_url() -> anyhow::Result<String> {
 
 pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let settings = env::validate_local_dev_environment()?;
+    let git_public_url = git_public_url_from_env(Some(LOCAL_API_ORIGIN))?;
     let repo_root = git_repo_root();
     let data_dir = data_dir(&repo_root);
     ensure_private_dir(&data_dir)
@@ -123,6 +127,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
         repo_events,
         push_intent_signing_key,
         repository_engine: repository_engine.clone(),
+        git_public_url: Arc::from(git_public_url),
         #[cfg(test)]
         test_object_store: Arc::new(scope_object_store::MemoryObjectStore::new()),
     };

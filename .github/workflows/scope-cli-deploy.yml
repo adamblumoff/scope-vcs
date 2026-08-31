@@ -1,0 +1,110 @@
+name: Scope CLI Deploy
+
+on:
+  workflow_call:
+    inputs:
+      verified_successful_sha:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  deployments: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    name: Deploy scope-cli
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: scope-*
+          path: cli/dist
+          merge-multiple: true
+
+      - name: Verify artifacts and write checksums
+        shell: bash
+        run: |
+          mapfile -t expected < <(jq -r '.targets[].artifact' cli/distribution/targets.json)
+
+          for artifact in "${expected[@]}"; do
+            test -s "cli/dist/$artifact"
+          done
+
+          (
+            cd cli/dist
+            for artifact in "${expected[@]}"; do
+              sha256sum "$artifact" > "$artifact.sha256"
+            done
+          )
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Stage Railway upload root
+        shell: bash
+        env:
+          VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
+        run: |
+          rm -rf .railway-upload
+          mkdir -p .railway-upload/cli/crates
+          cp -a cli/. .railway-upload/cli/
+          cp rust-toolchain.toml .railway-upload/cli/rust-toolchain.toml
+          cp -a crates/scope-api-contract .railway-upload/cli/crates/scope-api-contract
+          cp -a crates/scope-cache-domain .railway-upload/cli/crates/scope-cache-domain
+          cp -a crates/scope-domain .railway-upload/cli/crates/scope-domain
+          printf '%s\n' "$GITHUB_SHA" > .railway-upload/cli/.scope-deployment-sha
+          if [[ "$VERIFIED_SUCCESSFUL_SHA" != "$GITHUB_SHA" ]]; then
+            printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-upload/cli/.scope-deployment-attempt
+          fi
+          perl -0pi -e 's#path = "\.\./crates/scope-api-contract"#path = "crates/scope-api-contract"#' .railway-upload/cli/Cargo.toml
+          perl -0pi -e 's#path = "\.\./crates/scope-domain"#path = "crates/scope-domain"#' .railway-upload/cli/Cargo.toml
+          grep -F 'path = "crates/scope-api-contract"' .railway-upload/cli/Cargo.toml
+          grep -F 'path = "crates/scope-domain"' .railway-upload/cli/Cargo.toml
+          test -s .railway-upload/cli/railpack.json
+          test -s .railway-upload/cli/crates/scope-api-contract/Cargo.toml
+          test -s .railway-upload/cli/crates/scope-cache-domain/Cargo.toml
+          test -s .railway-upload/cli/crates/scope-domain/Cargo.toml
+          test ! -e .railway-upload/Cargo.toml
+
+      - name: Install Railway CLI
+        run: |
+          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
+          npm install -g "@railway/cli@$railway_cli_version"
+
+      - name: Deploy artifacts to Railway
+        shell: bash
+        env:
+          RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SCOPE_DEPLOYMENT_COMPONENT: cli
+          SCOPE_DEPLOYMENT_EVIDENCE_PATH: production-deployments.ndjson
+          SCOPE_DEPLOYMENT_SOURCE_SHA: ${{ github.sha }}
+          SCOPE_VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
+        run: |
+          manifest=.github/deployment-services.json
+          RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
+          SCOPE_RAILWAY_ENVIRONMENT_ID="$(jq -r '.railway.environmentId' "$manifest")"
+          export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
+          service_id="$(jq -r '.services.cli.id' "$manifest")"
+          bash .github/scripts/deploy-railway.sh "$service_id" .railway-upload
+
+      - name: Record successful Railway deployment
+        if: always()
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node .github/scripts/production-deployment-progress.mjs record-file \
+            --file production-deployments.ndjson \
+            --log-url "$LOG_URL"

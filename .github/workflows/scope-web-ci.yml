@@ -2,17 +2,9 @@ name: Scope Web CI
 
 on:
   workflow_call:
-    inputs:
-      deploy:
-        type: boolean
-        default: false
-      verified_successful_sha:
-        type: string
-        default: ""
 
 permissions:
   contents: read
-  deployments: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -41,183 +33,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test
+      - name: Test scope-web
         run: pnpm test
 
-      - name: Check
-        run: pnpm check
+      - name: Type-check scope-web
+        run: pnpm typecheck
 
-      - name: Build
+      - name: Check React health
+        run: pnpm check:react-doctor
+
+      - name: Check web structure
+        run: pnpm check:konsistent
+
+      - name: Build scope-web
         run: pnpm build
-
-  smoke:
-    name: Browser smoke against seeded local stack
-    if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'dependabot[bot]')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: scope_dev
-          POSTGRES_PASSWORD: scope
-          POSTGRES_USER: scope
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U scope -d scope_dev"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
-        with:
-          toolchain: 1.98.0
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          cache-bin: false
-          cache-on-failure: true
-          shared-key: web-smoke
-          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-
-      - name: Install Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.1.0 --activate
-
-      - name: Install web dependencies
-        working-directory: web
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Chromium
-        working-directory: web
-        run: pnpm exec playwright install --with-deps chromium
-
-      # Required repository secrets: a matching Clerk development key pair.
-      - name: Configure isolated local stack
-        env:
-          CLERK_DEVELOPMENT_PUBLISHABLE_KEY: ${{ secrets.CLERK_DEVELOPMENT_PUBLISHABLE_KEY }}
-          CLERK_DEVELOPMENT_SECRET_KEY: ${{ secrets.CLERK_DEVELOPMENT_SECRET_KEY }}
-        shell: bash
-        run: |
-          if [[ "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" != pk_test_* ]]; then
-            echo "::error::Repository secret CLERK_DEVELOPMENT_PUBLISHABLE_KEY must contain a Clerk development publishable key (pk_test_*)."
-            exit 1
-          fi
-          if [[ "$CLERK_DEVELOPMENT_SECRET_KEY" != sk_test_* ]]; then
-            echo "::error::Repository secret CLERK_DEVELOPMENT_SECRET_KEY must contain the matching Clerk development secret key (sk_test_*)."
-            exit 1
-          fi
-          printf '%s\n' \
-            'DATABASE_URL=postgres://scope:scope@127.0.0.1:5432/scope_dev' \
-            'SCOPE_DEV_USER_EMAIL=smoke@example.test' \
-            'SCOPE_DEV_USER_HANDLE=dev' > .env.local
-          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\nCLERK_SECRET_KEY=%s\nVITE_SCOPE_WEB_FORCE_SIGNED_OUT=1\n' \
-            "$CLERK_DEVELOPMENT_PUBLISHABLE_KEY" \
-            "$CLERK_DEVELOPMENT_SECRET_KEY" > web/.env.local
-
-      - name: Prebuild local API and worker
-        run: |
-          cargo build -p api --features local-dev --locked
-          cargo build -p worker --locked
-
-      - name: Start seeded local stack
-        run: ./dev/scope-dev up
-
-      - name: Run browser smoke
-        working-directory: web
-        env:
-          SCOPE_SMOKE_REPO: dev/public-demo
-          SCOPE_WEB_BASE_URL: http://localhost:3000
-        run: pnpm test:smoke
-
-      - name: Print local stack logs
-        if: failure()
-        shell: bash
-        run: |
-          for log in .tmp/local-dev/*.log; do
-            [[ -f "$log" ]] || continue
-            echo "::group::$log"
-            tail -n 300 "$log"
-            echo "::endgroup::"
-          done
-
-      - name: Stop local stack
-        if: always()
-        run: ./dev/scope-dev down
-
-  deploy:
-    name: Deploy scope-web
-    needs: [checks, smoke]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: inputs.deploy && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Stage Railway upload root
-        shell: bash
-        env:
-          VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
-        run: |
-          rm -rf .railway-upload
-          mkdir -p .railway-upload/web
-          cp -a web/. .railway-upload/web/
-          printf '%s\n' "$GITHUB_SHA" > .railway-upload/web/.scope-deployment-sha
-          if [[ "$VERIFIED_SUCCESSFUL_SHA" != "$GITHUB_SHA" ]]; then
-            printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-upload/web/.scope-deployment-attempt
-          fi
-          test -s .railway-upload/web/package.json
-          test ! -e .railway-upload/package.json
-
-      - name: Install Railway CLI
-        run: |
-          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
-          npm install -g "@railway/cli@$railway_cli_version"
-
-      - name: Deploy to Railway
-        shell: bash
-        env:
-          RAILWAY_DEPLOY_MESSAGE: ${{ github.event.head_commit.message || github.workflow }}
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          SCOPE_DEPLOYMENT_COMPONENT: web
-          SCOPE_DEPLOYMENT_EVIDENCE_PATH: production-deployments.ndjson
-          SCOPE_DEPLOYMENT_SOURCE_SHA: ${{ github.sha }}
-          SCOPE_VERIFIED_SUCCESSFUL_SHA: ${{ inputs.verified_successful_sha }}
-        run: |
-          manifest=.github/deployment-services.json
-          RAILWAY_PROJECT_ID="$(jq -r '.railway.projectId' "$manifest")"
-          SCOPE_RAILWAY_ENVIRONMENT_ID="$(jq -r '.railway.environmentId' "$manifest")"
-          export RAILWAY_PROJECT_ID SCOPE_RAILWAY_ENVIRONMENT_ID
-          service_id="$(jq -r '.services.web.id' "$manifest")"
-          bash .github/scripts/deploy-railway.sh "$service_id" .railway-upload
-
-      - name: Record successful Railway deployment
-        if: always()
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          node .github/scripts/production-deployment-progress.mjs record-file \
-            --file production-deployments.ndjson \
-            --log-url "$LOG_URL"
