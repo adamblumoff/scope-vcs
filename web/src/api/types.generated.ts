@@ -276,6 +276,10 @@ export type RepoChangeKind = "Connected" | "Lagged" | { "RepositoryChanged": { r
 
 export type RunChangeKind = "Created" | "StatusChanged" | "LogsAppended";
 
+export type RunState = "queued" | "dispatching" | "running" | "succeeded" | "failed" | "canceled" | "lost";
+
+export type RunResponse = { id: string, repository_id: string, workflow_name: string, git_oid: string, state: RunState, cancellation_requested: boolean, logs_truncated: boolean, created_at_unix: number, updated_at_unix: number, completed_at_unix: number | null, };
+
 export type RepositoryRunState = "queued" | "dispatching" | "running" | "succeeded" | "failed" | "canceled" | "lost";
 
 export type RepositoryRunTrigger = "manual" | "push-main";

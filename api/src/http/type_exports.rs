@@ -34,8 +34,8 @@ use scope_api_contract::{
     RequestMutationResponse, RequestPermissionsResponse, RequestQueueSection,
     RequestRatingParticipantResponse, RequestRatingResponse, RequestRatingsResponse,
     RequestRevisionCommitResponse, RequestRevisionInspectionState, RequestRevisionListResponse,
-    RequestRevisionResponse, RequestState, RequestSummaryResponse, RunChangeKind, SessionIdentity,
-    StartRequestRequest, SubmitRequestRequest, UserResponse, Visibility,
+    RequestRevisionResponse, RequestState, RequestSummaryResponse, RunChangeKind, RunResponse,
+    RunState, SessionIdentity, StartRequestRequest, SubmitRequestRequest, UserResponse, Visibility,
 };
 use std::{collections::BTreeMap, fs, path::Path};
 use ts_rs::TS;
@@ -201,6 +201,8 @@ pub(crate) fn export_api_contract(output_path: &Path, schema_output_path: &Path)
         MarkRequestDiscussionReadRequest,
         RepoChangeKind,
         RunChangeKind,
+        RunState,
+        RunResponse,
         RepositoryRunState,
         RepositoryRunTrigger,
         RepositoryRunSummaryResponse,
@@ -267,6 +269,7 @@ pub(crate) fn export_api_contract(output_path: &Path, schema_output_path: &Path)
         RequestRatingsResponse,
         RequestRevisionListResponse,
         ReviewFileDiffResponse,
+        RunResponse,
     );
     let declarations = [
         vec![generated_header()],

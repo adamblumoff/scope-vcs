@@ -5947,6 +5947,79 @@
       ],
       "title": "ReviewFileDiffResponse",
       "type": "object"
+    },
+    "RunResponse": {
+      "$defs": {
+        "RunState": {
+          "enum": [
+            "queued",
+            "dispatching",
+            "running",
+            "succeeded",
+            "failed",
+            "canceled",
+            "lost"
+          ],
+          "type": "string"
+        }
+      },
+      "$id": "scope://api/RunResponse",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cancellation_requested": {
+          "type": "boolean"
+        },
+        "completed_at_unix": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "maximum": 9007199254740991
+        },
+        "created_at_unix": {
+          "minimum": 0,
+          "type": "integer",
+          "maximum": 9007199254740991
+        },
+        "git_oid": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "logs_truncated": {
+          "type": "boolean"
+        },
+        "repository_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RunState"
+        },
+        "updated_at_unix": {
+          "minimum": 0,
+          "type": "integer",
+          "maximum": 9007199254740991
+        },
+        "workflow_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "repository_id",
+        "workflow_name",
+        "git_oid",
+        "state",
+        "cancellation_requested",
+        "logs_truncated",
+        "created_at_unix",
+        "updated_at_unix",
+        "completed_at_unix"
+      ],
+      "title": "RunResponse",
+      "type": "object"
     }
   }
 }

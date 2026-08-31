@@ -52,3 +52,24 @@ test('generated validators enforce arrays and JavaScript safe integers', () => {
     version: Number.MAX_SAFE_INTEGER + 1,
   }), false)
 })
+
+test('run mutation responses use the exact RunResponse contract', () => {
+  const response = {
+    cancellation_requested: true,
+    completed_at_unix: 2,
+    created_at_unix: 1,
+    git_oid: 'a'.repeat(40),
+    id: 'run-1',
+    logs_truncated: false,
+    repository_id: 'owner/repo',
+    state: 'canceled',
+    updated_at_unix: 2,
+    workflow_name: 'checks',
+  }
+
+  assert.equal(apiValidators.RunResponse(response), true)
+  assert.equal(apiValidators.RunResponse({
+    ...response,
+    state: 'not-a-run-state',
+  }), false)
+})

@@ -134,26 +134,38 @@ export async function streamRepoEvents(
   }
   if (!response.body) return { type: 'transport' }
   if (!isEventStream(response.headers.get('content-type'))) {
+    await cancelBody(response.body)
     return { type: 'protocol-error', failureClass: 'content-type' }
   }
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  while (!signal.aborted) {
-    const chunk = await reader.read()
-    if (chunk.done) return { type: 'transport' }
-    buffer += decoder.decode(chunk.value, { stream: true })
-    buffer = normalizeSseLineEndings(buffer)
-    const taken = takeSseMessages(buffer)
-    buffer = taken.rest
-    for (const message of taken.messages) {
-      const outcome = parseRepoStreamMessage(message)
-      if (outcome.type === 'event') onEvent(outcome.event)
-      else if (outcome.type !== 'ignored') return outcome
+  try {
+    while (!signal.aborted) {
+      const chunk = await reader.read()
+      if (chunk.done) return { type: 'transport' }
+      buffer += decoder.decode(chunk.value, { stream: true })
+      buffer = normalizeSseLineEndings(buffer)
+      const taken = takeSseMessages(buffer)
+      buffer = taken.rest
+      for (const message of taken.messages) {
+        const outcome = parseRepoStreamMessage(message)
+        if (outcome.type === 'event') onEvent(outcome.event)
+        else if (outcome.type !== 'ignored') return outcome
+      }
     }
+    return { type: 'transport' }
+  } catch {
+    return { type: 'transport' }
+  } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      // The fetch abort may have already errored the stream.
+    }
+    reader.releaseLock()
   }
-  return { type: 'transport' }
 }
 
 export function parseRepoStreamMessage(message: string): RepoStreamParseOutcome {
@@ -229,6 +241,14 @@ export function takeSseMessages(buffer: string) {
 
 function isEventStream(contentType: string | null) {
   return contentType?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream'
+}
+
+async function cancelBody(body: ReadableStream<Uint8Array>) {
+  try {
+    await body.cancel()
+  } catch {
+    // A transport failure can error the body before it is rejected here.
+  }
 }
 
 function normalizeSseLineEndings(buffer: string) {

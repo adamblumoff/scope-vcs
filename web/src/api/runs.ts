@@ -1,4 +1,4 @@
-import { createApiClient, noContent } from '@/api/client'
+import { createApiClient } from '@/api/client'
 import type { ApiClient } from '@/api/client'
 import type {
   RepoParams,
@@ -65,7 +65,7 @@ export async function loadRepoRunStepLogsForRequest(data: RunStepLogsInput) {
 export async function cancelRepoRunForRequest(data: RunActionInput) {
   await createApiClient().post(
     runPath(ApiRouteTemplates.repoRunCancel, data),
-    noContent,
+    apiValidators.RunResponse,
     { auth: 'required' },
   )
 }
@@ -73,7 +73,7 @@ export async function cancelRepoRunForRequest(data: RunActionInput) {
 export async function retryRepoRunForRequest(data: RunActionInput) {
   await createApiClient().post(
     runPath(ApiRouteTemplates.repoRunRetry, data),
-    noContent,
+    apiValidators.RunResponse,
     { auth: 'required' },
   )
 }

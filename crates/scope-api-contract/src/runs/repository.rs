@@ -9,6 +9,8 @@ pub struct CreateManualRunQuery {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RunState {
     Queued,
     Dispatching,
@@ -20,6 +22,7 @@ pub enum RunState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RunResponse {
     pub id: String,
     pub repository_id: String,

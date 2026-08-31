@@ -188,6 +188,59 @@ test('stream decoding handles split CRLF frames before a public stream error', a
   })
 })
 
+test('protocol failures cancel response bodies before reconnecting', async () => {
+  const encoder = new TextEncoder()
+  let malformedBodyCanceled = false
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('event: repo-change\ndata: {\n\n'))
+    },
+    cancel() {
+      malformedBodyCanceled = true
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } })
+
+  const malformed = await streamRepoEvents(
+    {
+      clerk_token_template: 'scope_api',
+      event_stream_url: 'https://api.scope.test/v1/repos/owner/repo/events',
+    },
+    async () => null,
+    () => assert.fail('no event expected'),
+    new AbortController().signal,
+  )
+
+  assert.deepEqual(malformed, {
+    type: 'protocol-error',
+    failureClass: 'json-syntax',
+    issuePath: '/data',
+  })
+  assert.equal(malformedBodyCanceled, true)
+
+  let wrongTypeBodyCanceled = false
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    cancel() {
+      wrongTypeBodyCanceled = true
+    },
+  }), { headers: { 'content-type': 'text/plain' } })
+
+  const wrongType = await streamRepoEvents(
+    {
+      clerk_token_template: 'scope_api',
+      event_stream_url: 'https://api.scope.test/v1/repos/owner/repo/events',
+    },
+    async () => null,
+    () => assert.fail('no event expected'),
+    new AbortController().signal,
+  )
+
+  assert.deepEqual(wrongType, {
+    type: 'protocol-error',
+    failureClass: 'content-type',
+  })
+  assert.equal(wrongTypeBodyCanceled, true)
+})
+
 test('stream recovery follows retryable, protocol, and terminal outcomes', async () => {
   const outcomes: RepoStreamEnd[] = [
     { type: 'protocol-error', failureClass: 'schema', issuePath: '/kind' },

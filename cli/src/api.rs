@@ -86,9 +86,13 @@ pub(crate) fn successful_response(response: Response, context: &str) -> anyhow::
     }
 
     let status = response.status();
-    let mut error = response
+    let error = response
         .json::<ErrorResponse>()
         .unwrap_or_else(|_| fallback_error_response(status, context));
+    Err(CliError::new(terminal_safe_error_response(error)).into())
+}
+
+pub(crate) fn terminal_safe_error_response(mut error: ErrorResponse) -> ErrorResponse {
     error.message = terminal_safe(&error.message);
     error.error_reference = error
         .error_reference
@@ -107,7 +111,7 @@ pub(crate) fn successful_response(response: Response, context: &str) -> anyhow::
         .map(|path| terminal_safe(path))
         .filter(|path| !path.is_empty())
         .collect();
-    Err(CliError::new(error).into())
+    error
 }
 
 fn fallback_error_response(status: StatusCode, context: &str) -> ErrorResponse {
