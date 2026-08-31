@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 import {
   classifyChanges,
@@ -30,6 +31,59 @@ function deploymentSelection(overrides = {}) {
     cli: false,
     cliDistribution: false,
     ...overrides,
+  };
+}
+
+function productionJobCondition(jobName) {
+  const block = productionWorkflow.match(
+    new RegExp(`\\n  ${jobName}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z-]+:|$)`),
+  )?.[1];
+  assert.ok(block, `${jobName} job is present`);
+  const condition = block.match(/\n    if: >-\n([\s\S]*?)(?=\n    [a-z])/i)?.[1];
+  assert.ok(condition, `${jobName} has a multiline condition`);
+  return condition.trim().replace(/\s+/g, " ");
+}
+
+function evaluateProductionCondition(expression, context) {
+  const resolve = (path) => path.split(".").reduce((value, key) => value?.[key], context);
+  const executable = expression.replace(
+    /cancelled\(\)|(?:github|needs)(?:\.[A-Za-z0-9_-]+)+/g,
+    (reference) => JSON.stringify(
+      reference === "cancelled()" ? context.cancelled : resolve(reference),
+    ),
+  );
+  const unsupported = executable.replace(
+    /true|false|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|&&|\|\||==|!=|!|\(|\)|\s+/g,
+    "",
+  );
+  assert.equal(unsupported, "", `unsupported workflow expression syntax: ${unsupported}`);
+  return Boolean(runInNewContext(executable, Object.create(null), { timeout: 100 }));
+}
+
+function productionConditionContext(overrides = {}) {
+  const backendSelected = overrides.backendSelected ?? false;
+  return {
+    cancelled: overrides.cancelled ?? false,
+    github: {
+      event_name: overrides.eventName ?? "push",
+      ref: overrides.ref ?? "refs/heads/main",
+    },
+    needs: {
+      "backend-deploy": { result: overrides.backendResult ?? "skipped" },
+      plan: {
+        outputs: {
+          api: backendSelected ? "true" : "false",
+          cache: backendSelected ? "true" : "false",
+          cli: overrides.cliSelected === false ? "false" : "true",
+          router: backendSelected ? "true" : "false",
+          web: overrides.webSelected === false ? "false" : "true",
+          worker: backendSelected ? "true" : "false",
+        },
+      },
+      "production-validation-gate": {
+        result: overrides.validationResult ?? "success",
+      },
+    },
   };
 }
 
@@ -182,9 +236,56 @@ test("skipped components remain selected across a later backend-only change", ()
 });
 
 test("skipped validation ancestors do not suppress a selected backend deployment", () => {
-  const backendDeploy = productionWorkflow.match(/\n  backend-deploy:\n[\s\S]*?\n  web-deploy:/)?.[0];
-  assert.ok(backendDeploy, "backend deploy job is present");
-  assert.match(backendDeploy, /\n    if: >-\n      !cancelled\(\) && github\.event_name/);
+  assert.match(
+    productionJobCondition("backend-deploy"),
+    /^!cancelled\(\) && github\.event_name/,
+  );
+});
+
+test("web and CLI deployment conditions are cancellation-safe after optional backend jobs", () => {
+  const conditions = Object.fromEntries(["web-deploy", "cli-deploy"].map((job) => [
+    job,
+    productionJobCondition(job),
+  ]));
+  for (const condition of Object.values(conditions)) {
+    assert.match(condition, /^!cancelled\(\) && github\.event_name/);
+    assert.match(condition, /needs\.production-validation-gate\.result == 'success'/);
+    assert.match(condition, /needs\.backend-deploy\.result == 'success'/);
+    assert.match(condition, /needs\.backend-deploy\.result == 'skipped'/);
+  }
+  assert.equal(
+    conditions["web-deploy"].replace("needs.plan.outputs.web", "needs.plan.outputs.component"),
+    conditions["cli-deploy"].replace("needs.plan.outputs.cli", "needs.plan.outputs.component"),
+  );
+});
+
+test("frontend production deployment eligibility covers optional backend and failure states", () => {
+  const fixtures = [
+    ["backend selected", { backendSelected: true, backendResult: "success" }, true],
+    ["backend skipped", { backendSelected: false, backendResult: "skipped" }, true],
+    [
+      "failed validation",
+      { backendSelected: false, backendResult: "skipped", validationResult: "failure" },
+      false,
+    ],
+    ["failed backend", { backendSelected: true, backendResult: "failure" }, false],
+    [
+      "canceled workflow",
+      { backendSelected: false, backendResult: "skipped", cancelled: true },
+      false,
+    ],
+  ];
+
+  for (const job of ["web-deploy", "cli-deploy"]) {
+    const condition = productionJobCondition(job);
+    for (const [name, input, expected] of fixtures) {
+      assert.equal(
+        evaluateProductionCondition(condition, productionConditionContext(input)),
+        expected,
+        `${job}: ${name}`,
+      );
+    }
+  }
 });
 
 test("CLI deployment progress selects distribution builds only for binary inputs", () => {

@@ -268,7 +268,7 @@ jobs:
     name: Web deploy
     needs: [plan, production-validation-gate, backend-deploy]
     if: >-
-      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       needs.production-validation-gate.result == 'success' &&
       needs.plan.outputs.web == 'true' &&
       (((needs.plan.outputs.cache == 'true' ||
@@ -290,7 +290,7 @@ jobs:
     name: CLI deploy
     needs: [plan, production-validation-gate, backend-deploy]
     if: >-
-      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       needs.production-validation-gate.result == 'success' &&
       needs.plan.outputs.cli == 'true' &&
       (((needs.plan.outputs.cache == 'true' ||
