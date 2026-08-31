@@ -10,8 +10,8 @@ use aws_sdk_ecs::{
     types::{
         AssignPublicIp, AwsVpcConfiguration, ContainerDefinition, ContainerOverride,
         CpuArchitecture, Failure, KeyValuePair, LaunchType, LogConfiguration, LogDriver,
-        NetworkConfiguration, NetworkMode, OsFamily, RuntimePlatform, Secret, SortOrder, Tag, Task,
-        TaskDefinitionStatus, TaskOverride,
+        NetworkConfiguration, NetworkMode, OsFamily, RepositoryCredentials, RuntimePlatform,
+        Secret, SortOrder, Tag, Task, TaskDefinitionStatus, TaskOverride,
     },
 };
 use aws_sdk_secretsmanager::{Client as SecretsManagerClient, types::Tag as SecretTag};
@@ -346,6 +346,7 @@ impl EcsClient {
             &self.settings.aws_region,
             &self.settings.ecs_log_group,
             secret_arn,
+            self.settings.registry_credentials_secret_arn.as_deref(),
         )?;
         let result = self
             .client
@@ -436,6 +437,7 @@ fn runner_container(
     region: &str,
     log_group: &str,
     bootstrap_secret_arn: &str,
+    registry_credentials_secret_arn: Option<&str>,
 ) -> anyhow::Result<ContainerDefinition> {
     let log_options = HashMap::from([
         ("awslogs-group".to_string(), log_group.to_string()),
@@ -447,11 +449,20 @@ fn runner_container(
         .set_options(Some(log_options))
         .build()
         .context("build ECS log configuration")?;
+    let repository_credentials = registry_credentials_secret_arn
+        .map(|arn| {
+            RepositoryCredentials::builder()
+                .credentials_parameter(arn)
+                .build()
+                .context("build ECS repository credentials")
+        })
+        .transpose()?;
     Ok(ContainerDefinition::builder()
         .name(CONTAINER_NAME)
         .image(image)
         .essential(true)
         .entry_point(RUNTIME_ENTRYPOINT)
+        .set_repository_credentials(repository_credentials)
         .secrets(
             Secret::builder()
                 .name(BOOTSTRAP_SECRET_ENV)
@@ -495,6 +506,7 @@ fn verify_task_definition_contract(
         &settings.aws_region,
         &settings.ecs_log_group,
         bootstrap_secret_arn,
+        settings.registry_credentials_secret_arn.as_deref(),
     )?;
     Ok(())
 }
@@ -506,6 +518,7 @@ fn verify_container_contract(
     region: &str,
     log_group: &str,
     bootstrap_secret_arn: &str,
+    registry_credentials_secret_arn: Option<&str>,
 ) -> anyhow::Result<()> {
     let expected_log_options = HashMap::from([
         ("awslogs-group".to_string(), log_group.to_string()),
@@ -515,6 +528,14 @@ fn verify_container_contract(
     let logs = container
         .log_configuration()
         .context("stored definition is missing the log configuration")?;
+    let expected_repository_credentials = registry_credentials_secret_arn
+        .map(|arn| {
+            RepositoryCredentials::builder()
+                .credentials_parameter(arn)
+                .build()
+                .context("build expected ECS repository credentials")
+        })
+        .transpose()?;
     if container.name() != Some(CONTAINER_NAME)
         || container.image() != Some(image)
         || container.essential() != Some(true)
@@ -522,7 +543,7 @@ fn verify_container_contract(
         || container.cpu() != 0
         || container.memory().is_some()
         || container.memory_reservation().is_some()
-        || container.repository_credentials().is_some()
+        || container.repository_credentials() != expected_repository_credentials.as_ref()
         || !container.links().is_empty()
         || !container.port_mappings().is_empty()
         || container.restart_policy().is_some()

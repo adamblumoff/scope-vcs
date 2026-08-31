@@ -30,6 +30,7 @@ readonly github_repository="${GITHUB_REPOSITORY:-scope-vcs/scope-vcs}"
 readonly github_repository_id="${GITHUB_REPOSITORY_ID:-1272896256}"
 readonly github_repository_owner_id="${GITHUB_REPOSITORY_OWNER_ID:-321219119}"
 readonly existing_github_oidc_provider_arn="${EXISTING_GITHUB_OIDC_PROVIDER_ARN:-}"
+readonly registry_credentials_secret_arn="${SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN:-}"
 
 aws_command() {
   aws --region "$aws_region" "$@"
@@ -88,6 +89,7 @@ readonly parameters=(
   "ParameterKey=GitHubRepositoryId,ParameterValue=$github_repository_id"
   "ParameterKey=GitHubRepositoryOwnerId,ParameterValue=$github_repository_owner_id"
   "ParameterKey=ExistingGitHubOidcProviderArn,ParameterValue=$existing_github_oidc_provider_arn"
+  "ParameterKey=RegistryCredentialsSecretArn,ParameterValue=$registry_credentials_secret_arn"
 )
 readonly tags=(
   "Key=Project,Value=scope-vcs"
