@@ -127,9 +127,9 @@ fn parse_run_event_stream(
                     "error" => {
                         let error: ErrorResponse = serde_json::from_str(&payload)
                             .context("parse Scope run stream error")?;
-                        return Err(crate::error::CliError::new(
-                            terminal_safe_error_response(error),
-                        )
+                        return Err(crate::error::CliError::new(terminal_safe_error_response(
+                            error,
+                        ))
                         .into());
                     }
                     _ => None,
