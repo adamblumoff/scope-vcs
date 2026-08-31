@@ -9,11 +9,12 @@ test('keeps readable invalid response groups within the Pagent limit', () => {
     '/v1/repos',
     200,
     'text/html; charset=utf-8',
+    'content-type',
   )
 
   assert.equal(
     invalidApiResponseGroup(error),
-    'GET:/v1/repos:200:text/html; charset=utf-8',
+    'GET:/v1/repos:200:text/html; charset=utf-8:content-type:none',
   )
 })
 
@@ -24,6 +25,8 @@ test('hashes oversized invalid response groups deterministically', () => {
     '/v1/repos/{owner}/{repo}/requests/{request_id}/revisions/{revision_number}/files/{file_path}',
     200,
     contentType,
+    'schema',
+    '/repo/name',
   )
   const group = invalidApiResponseGroup(error)
 
@@ -37,6 +40,8 @@ test('hashes oversized invalid response groups deterministically', () => {
       error.requestPath,
       error.status,
       `${contentType}y`,
+      error.failureClass,
+      error.issuePath,
     )),
   )
 })

@@ -125,14 +125,12 @@ fn parse_run_event_stream(
                         serde_json::from_str(&payload).context("parse Scope run status event")?,
                     )),
                     "error" => {
-                        let error: serde_json::Value = serde_json::from_str(&payload)
+                        let error: ErrorResponse = serde_json::from_str(&payload)
                             .context("parse Scope run stream error")?;
-                        anyhow::bail!(
-                            "{}",
-                            error["message"]
-                                .as_str()
-                                .unwrap_or("Scope run event stream failed")
-                        );
+                        return Err(crate::error::CliError::new(terminal_safe_error_response(
+                            error,
+                        ))
+                        .into());
                     }
                     _ => None,
                 };
@@ -221,4 +219,30 @@ fn successful(
     context: &str,
 ) -> anyhow::Result<reqwest::blocking::Response> {
     successful_response(response, context)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::{CliError, ExitCategory};
+    use std::io::Cursor;
+
+    #[test]
+    fn run_stream_errors_preserve_the_safe_diagnostic_reference() {
+        let stream = concat!(
+            "event: error\n",
+            "data: {\"code\":\"internal\",\"message\":\"Scope hit an internal error.\",",
+            "\"error_reference\":\"err_0123456789abcdef0123456789abcdef\",",
+            "\"retryable\":false}\n\n",
+        );
+
+        let error = parse_run_event_stream(Cursor::new(stream), |_| Ok(true)).unwrap_err();
+        let error = error.downcast_ref::<CliError>().expect("typed CLI error");
+
+        assert_eq!(error.exit_category(), ExitCategory::Unexpected);
+        assert_eq!(
+            error.to_string(),
+            "Scope hit an internal error.\nReference: err_0123456789abcdef0123456789abcdef"
+        );
+    }
 }

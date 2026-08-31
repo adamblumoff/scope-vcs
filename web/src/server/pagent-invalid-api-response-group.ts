@@ -9,6 +9,8 @@ export function invalidApiResponseGroup(error: InvalidApiResponseError) {
     error.requestPath,
     error.status,
     error.contentType ?? 'unknown',
+    error.failureClass,
+    error.issuePath ?? 'none',
   ].join(':')
 
   if (group.length <= MAX_INVESTIGATION_GROUP_LENGTH) return group

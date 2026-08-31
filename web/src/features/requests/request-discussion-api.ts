@@ -1,18 +1,12 @@
 import { createApiClient } from '@/api/client'
-import type { RequestMutation, RequestParams } from '@/api/types'
+import type { RequestParams } from '@/api/types'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
+import { apiValidators } from '@/api/validators.generated'
 import type {
   CreateRequestDiscussionInput,
   CreateRequestDiscussionReplyInput,
-  RequestActivityPage,
-  RequestDiscussionChanges,
-  RequestDiscussionMutation,
-  RequestDiscussionPage,
-  RequestDiscussionReplyMutation,
   RequestDiscussionReply,
-  RequestDiscussionReadState,
 } from './request-discussion-types'
-
 
 export type LoadDiscussionsInput = RequestParams & {
   commit_oid?: string
@@ -30,7 +24,6 @@ export type LoadRepliesInput = RequestParams & {
 }
 
 export type LoadActivityInput = RequestParams
-
 
 export type RequestDiscussionActionInput = RequestParams & {
   discussion_id: string
@@ -54,7 +47,7 @@ export type RequestDiscussionRepliesPage = {
 export async function loadRequestDiscussionsForRequest(
   data: LoadDiscussionsInput,
 ) {
-  return createApiClient().get<RequestDiscussionPage>(
+  return createApiClient().get(
     `${requestDiscussionsPath(data)}${query({
       commit: data.commit_oid,
       cursor: data.cursor,
@@ -63,20 +56,21 @@ export async function loadRequestDiscussionsForRequest(
       limit: (data.limit ?? 25).toString(),
       revision: data.revision_id,
     })}`,
+    apiValidators.RequestDiscussionPageResponse,
     { auth: 'optional' },
   )
 }
 
-
 export async function loadRequestDiscussionRepliesForRequest(
   data: LoadRepliesInput,
 ) {
-  return createApiClient().get<RequestDiscussionRepliesPage>(
+  return createApiClient().get(
     `${requestDiscussionRoute(ApiRouteTemplates.repoRequestDiscussionReplies, data)}${query({
       before: data.before?.toString(),
       limit: '50',
       reply: data.reply,
     })}`,
+    apiValidators.RequestDiscussionRepliesPageResponse,
     { auth: 'optional' },
   )
 }
@@ -84,11 +78,12 @@ export async function loadRequestDiscussionRepliesForRequest(
 export async function loadRequestDiscussionChangesForRequest(
   data: RequestParams & { after: number },
 ) {
-  return createApiClient().get<RequestDiscussionChanges>(
+  return createApiClient().get(
     `${requestRoute(ApiRouteTemplates.repoRequestDiscussionChanges, data)}${query({
       after: data.after.toString(),
       limit: '100',
     })}`,
+    apiValidators.RequestDiscussionChangesResponse,
     { auth: 'optional' },
   )
 }
@@ -96,11 +91,12 @@ export async function loadRequestDiscussionChangesForRequest(
 export async function loadRequestActivityForRequest(
   data: LoadActivityInput,
 ) {
-  return createApiClient().get<RequestActivityPage>(
+  return createApiClient().get(
     `${requestRoute(ApiRouteTemplates.repoRequestActivity, data)}${query({
       latest: 'true',
       limit: '50',
     })}`,
+    apiValidators.RequestActivityPageResponse,
     { auth: 'optional' },
   )
 }
@@ -108,8 +104,9 @@ export async function loadRequestActivityForRequest(
 export async function createRequestDiscussionForRequest(
   data: CreateDiscussionInput,
 ) {
-  return createApiClient().post<RequestDiscussionMutation>(
+  return createApiClient().post(
     requestDiscussionsPath(data),
+    apiValidators.RequestDiscussionMutationResponse,
     {
       auth: 'required',
       body: {
@@ -124,11 +121,12 @@ export async function createRequestDiscussionForRequest(
 export async function createRequestDiscussionReplyForRequest(
   data: CreateReplyInput,
 ) {
-  return createApiClient().post<RequestDiscussionReplyMutation>(
+  return createApiClient().post(
     requestDiscussionRoute(
       ApiRouteTemplates.repoRequestDiscussionReplies,
       data,
     ),
+    apiValidators.RequestDiscussionReplyMutationResponse,
     {
       auth: 'required',
       body: {
@@ -143,11 +141,12 @@ export async function createRequestDiscussionReplyForRequest(
 export async function resolveRequestDiscussionForRequest(
   data: RequestDiscussionActionInput,
 ) {
-  return createApiClient().post<RequestDiscussionMutation>(
+  return createApiClient().post(
     requestDiscussionRoute(
       ApiRouteTemplates.repoRequestDiscussionResolve,
       data,
     ),
+    apiValidators.RequestDiscussionMutationResponse,
     { auth: 'required' },
   )
 }
@@ -155,11 +154,12 @@ export async function resolveRequestDiscussionForRequest(
 export async function reopenAndReplyToRequestDiscussionForRequest(
   data: CreateReplyInput,
 ) {
-  return createApiClient().post<RequestDiscussionReplyMutation>(
+  return createApiClient().post(
     requestDiscussionRoute(
       ApiRouteTemplates.repoRequestDiscussionReopenAndReply,
       data,
     ),
+    apiValidators.RequestDiscussionReplyMutationResponse,
     {
       auth: 'required',
       body: {
@@ -174,11 +174,12 @@ export async function reopenAndReplyToRequestDiscussionForRequest(
 export async function markRequestDiscussionReadForRequest(
   data: MarkDiscussionReadInput,
 ) {
-  return createApiClient().put<RequestDiscussionReadState>(
+  return createApiClient().put(
     requestDiscussionRoute(
       ApiRouteTemplates.repoRequestDiscussionRead,
       data,
     ),
+    apiValidators.RequestDiscussionReadResponse,
     {
       auth: 'required',
       body: { through_position: data.through_position },
@@ -189,8 +190,9 @@ export async function markRequestDiscussionReadForRequest(
 export async function updateRequestDescriptionForRequest(
   data: UpdateDescriptionInput,
 ) {
-  return createApiClient().patch<RequestMutation>(
+  return createApiClient().patch(
     requestRoute(ApiRouteTemplates.repoRequest, data),
+    apiValidators.RequestMutationResponse,
     {
       auth: 'required',
       body: { description_markdown: data.description_markdown },
@@ -221,7 +223,6 @@ function requestDiscussionRoute(
     request_id: data.request_id,
   })
 }
-
 
 function query(values: Record<string, string | undefined>) {
   const params = new URLSearchParams()

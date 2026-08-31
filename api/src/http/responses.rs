@@ -43,7 +43,7 @@ pub(crate) fn request_actor_summary_response(
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct RepositoryRunWorkflowResponse {
     pub(crate) key: String,
     pub(crate) name: String,
@@ -54,20 +54,20 @@ pub(crate) struct RepositoryRunWorkflowResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct RepositoryRunWorkflowListResponse {
     pub(crate) workflows: Vec<RepositoryRunWorkflowResponse>,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct RepositoryRunHistoryPageResponse {
     pub(crate) runs: Vec<RepositoryRunSummaryResponse>,
     pub(crate) next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct RepositoryRunLogResponse {
     pub(crate) position: u64,
     pub(crate) sequence: u64,
@@ -76,7 +76,7 @@ pub(crate) struct RepositoryRunLogResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct RepositoryRunStepLogPageResponse {
     pub(crate) logs: Vec<RepositoryRunLogResponse>,
     pub(crate) next_after: u64,
@@ -123,7 +123,7 @@ pub(crate) fn git_oid_request(label: &str, value: &str) -> Result<String, ApiErr
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct SessionResponse {
     pub(crate) identity: Option<SessionIdentity>,
     pub(crate) repo: SessionRepo,
@@ -132,7 +132,7 @@ pub(crate) struct SessionResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct SessionRepo {
     pub(crate) id: String,
     pub(crate) lifecycle_state: RepoLifecycleState,
@@ -140,7 +140,7 @@ pub(crate) struct SessionRepo {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct SessionCapabilities {
     pub(crate) read: bool,
     pub(crate) can_read_private_files: bool,
@@ -152,32 +152,32 @@ pub(crate) struct SessionCapabilities {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct DeviceLoginCompleteResponse {
     pub(crate) status: DeviceLoginStatus,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct BrowserLoginCompleteResponse {
     pub(crate) callback_url: String,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct CliExchangeGrantResponse {
     pub(crate) exchange_token: String,
     pub(crate) expires_at_unix: u64,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct CliSessionsResponse {
     pub(crate) sessions: Vec<CliSessionResponse>,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct CliSessionResponse {
     pub(crate) id: String,
     pub(crate) label: String,
@@ -187,46 +187,46 @@ pub(crate) struct CliSessionResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct DeleteRepoResponse {
     pub(crate) id: String,
     pub(crate) deleted: bool,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryPageRequest {
     pub(crate) audience: Option<ProjectionPreviewAudience>,
     pub(crate) before: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryEntryRequest {
     pub(crate) audience: Option<ProjectionPreviewAudience>,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryEntryFileDiffRequest {
     pub(crate) audience: Option<ProjectionPreviewAudience>,
     pub(crate) path: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct RequestFileDiffRequest {
     pub(crate) path: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct RepoFileContentRequest {
     pub(crate) path: String,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct ReviewFileDiffResponse {
     pub(crate) path: String,
     pub(crate) kind: FileChangeKind,
@@ -238,7 +238,7 @@ pub(crate) struct ReviewFileDiffResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "type-export", ts(rename_all = "lowercase"))]
 pub(crate) enum ReviewFileContentResponse {
     Text { text: String },
@@ -246,7 +246,7 @@ pub(crate) enum ReviewFileContentResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryPageResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
@@ -257,7 +257,7 @@ pub(crate) struct HistoryPageResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryEntrySummaryResponse {
     pub(crate) id: String,
     pub(crate) source_id: String,
@@ -271,7 +271,7 @@ pub(crate) struct HistoryEntrySummaryResponse {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "type-export", ts(rename_all = "snake_case"))]
 pub(crate) enum HistoryEntryKind {
     Push,
@@ -280,7 +280,7 @@ pub(crate) enum HistoryEntryKind {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryEntryDetailResponse {
     pub(crate) audience: ProjectionPreviewAudience,
     pub(crate) repo_id: String,
@@ -298,14 +298,14 @@ pub(crate) struct HistoryEntryDetailResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryVisibilitySummaryResponse {
     pub(crate) made_public_count: usize,
     pub(crate) made_private_count: usize,
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryVisibilityChangeResponse {
     pub(crate) path: String,
     pub(crate) old_visibility: Visibility,
@@ -313,7 +313,7 @@ pub(crate) struct HistoryVisibilityChangeResponse {
 }
 
 #[derive(Debug, Serialize)]
-#[cfg_attr(feature = "type-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct HistoryEntryFileResponse {
     pub(crate) path: String,
     pub(crate) kind: FileChangeKind,

@@ -83,7 +83,18 @@ jobs:
         with:
           node-version: 24
 
+      - name: Enable pnpm
+        if: inputs.include_api
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.0 --activate
+
+      - name: Install web dependencies
+        if: inputs.include_api
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
       - name: Check generated API TypeScript contract
         if: inputs.include_api
         working-directory: web
-        run: node scripts/check-api-contract.mjs
+        run: pnpm check:api-contract

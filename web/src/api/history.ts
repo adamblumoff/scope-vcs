@@ -10,6 +10,7 @@ import type {
   ReviewFileDiff,
 } from './types'
 import { ApiRouteTemplates, buildApiPath } from './types.generated'
+import { apiValidators } from './validators.generated'
 export {
   parseHistoryEntryDetailInput,
   parseHistoryEntryFileDiffInput,
@@ -23,11 +24,12 @@ export async function loadHistoryPageForRequest(
   if (data.audience) query.set('audience', parseHistoryAudience(data.audience))
   if (data.before) query.set('before', data.before)
 
-  return createApiClient().get<HistoryPage>(
+  return createApiClient().get(
     `${buildApiPath(ApiRouteTemplates.repoHistory, {
       owner: data.owner,
       repo: data.repo,
     })}?${query}`,
+    apiValidators.HistoryPageResponse,
     { auth: 'optional' },
   )
 }
@@ -38,12 +40,13 @@ export async function loadHistoryEntryForRequest(
   const query = new URLSearchParams()
   if (data.audience) query.set('audience', parseHistoryAudience(data.audience))
 
-  return createApiClient().get<HistoryEntryDetail>(
+  return createApiClient().get(
     `${buildApiPath(ApiRouteTemplates.repoHistoryEntry, {
       owner: data.owner,
       repo: data.repo,
       entry_id: data.entry,
     })}?${query}`,
+    apiValidators.HistoryEntryDetailResponse,
     { auth: 'optional' },
   )
 }
@@ -56,12 +59,13 @@ export async function loadHistoryEntryFileDiffForRequest(
     path: data.path,
   })
 
-  const diff = await createApiClient().get<ReviewFileDiff>(
+  const diff = await createApiClient().get(
     `${buildApiPath(ApiRouteTemplates.repoHistoryEntryFileDiff, {
       owner: data.owner,
       repo: data.repo,
       entry_id: data.entry,
     })}?${query}`,
+    apiValidators.ReviewFileDiffResponse,
     { auth: 'optional' },
   )
 

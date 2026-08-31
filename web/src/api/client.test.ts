@@ -4,8 +4,10 @@ import {
   HttpError,
   InvalidApiResponseError,
   loadJson,
+  noContent,
   setInvalidApiResponseObserver,
 } from './http'
+import { apiValidators, type ApiValidator } from './validators.generated'
 
 const originalFetch = globalThis.fetch
 afterEach(() => {
@@ -13,31 +15,50 @@ afterEach(() => {
   setInvalidApiResponseObserver(undefined)
 })
 
-test('loadJson parses success and preserves request init', async () => {
+test('loadJson validates a successful response and preserves request init', async () => {
   let captured: RequestInit | undefined
   globalThis.fetch = async (_url, init) => {
     captured = init
     return jsonResponse({ ok: true }, 200)
   }
-  assert.deepEqual(await loadJson('/v1/repos', {
-    headers: { authorization: 'Bearer repo-token' },
-  }), { ok: true })
+
+  assert.deepEqual(
+    await loadJson('/v1/repos', okValidator, {
+      headers: { authorization: 'Bearer repo-token' },
+    }),
+    { ok: true },
+  )
   assert.deepEqual(captured?.headers, { authorization: 'Bearer repo-token' })
 })
 
-test('loadJson surfaces structured and malformed API errors', async () => {
-  let observed = 0
-  setInvalidApiResponseObserver(() => { observed += 1 })
+test('loadJson validates structured API errors', async () => {
+  globalThis.fetch = async () => jsonResponse({
+    code: 'forbidden',
+    message: 'repo is private',
+    retryable: false,
+  }, 403)
 
-  globalThis.fetch = async () => jsonResponse({ message: 'repo is private' }, 403)
-  await assert.rejects(loadJson('/v1/repos/private'), hasHttpError(403, 'repo is private'))
-
-  globalThis.fetch = async () => new Response('not json', { status: 502 })
-  await assert.rejects(loadJson('/v1/repos'), hasHttpError(502, 'request failed: 502'))
-  assert.equal(observed, 0)
+  await assert.rejects(
+    loadJson('/v1/repos/private', okValidator),
+    hasHttpError(403, 'repo is private'),
+  )
 })
 
-test('loadJson rejects malformed successful responses with safe diagnostics', async () => {
+test('loadJson rejects malformed API error bodies', async () => {
+  let observed: InvalidApiResponseError | undefined
+  setInvalidApiResponseObserver((error) => { observed = error })
+  globalThis.fetch = async () => jsonResponse({ message: 'missing code' }, 502)
+
+  await assert.rejects(
+    loadJson('/v1/repos', okValidator),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.failureClass === 'schema' &&
+      error.status === 502,
+  )
+  assert.equal(observed?.failureClass, 'schema')
+})
+
+test('loadJson rejects the wrong media type without exposing the body', async () => {
   let observed: InvalidApiResponseError | undefined
   setInvalidApiResponseObserver((error) => { observed = error })
   globalThis.fetch = async () => new Response('<h1>secret response</h1>', {
@@ -46,41 +67,48 @@ test('loadJson rejects malformed successful responses with safe diagnostics', as
   })
 
   await assert.rejects(
-    loadJson('https://api.scope.test/v1/repos?token=secret', { method: 'post' }),
+    loadJson('https://api.scope.test/v1/repos?token=secret', okValidator, {
+      method: 'post',
+    }),
     (error: unknown) => error instanceof InvalidApiResponseError &&
       error.requestMethod === 'POST' &&
       error.requestPath === '/v1/repos' &&
       error.status === 200 &&
       error.contentType === 'text/html; charset=utf-8' &&
-      error.message ===
-        'POST /v1/repos returned invalid JSON (200, text/html; charset=utf-8)' &&
+      error.failureClass === 'content-type' &&
       !error.message.includes('secret'),
   )
-  assert.ok(observed instanceof InvalidApiResponseError)
-  assert.equal(observed.requestPath, '/v1/repos')
+  assert.equal(observed?.requestPath, '/v1/repos')
 })
 
 test('loadJson preserves its error when the observer fails', async () => {
   setInvalidApiResponseObserver(() => { throw new Error('observer failed') })
-  globalThis.fetch = async () => new Response('not json', { status: 200 })
+  globalThis.fetch = async () => new Response('not json', {
+    headers: { 'content-type': 'application/json' },
+    status: 200,
+  })
 
   await assert.rejects(
-    loadJson('/v1/repos'),
-    (error: unknown) => error instanceof InvalidApiResponseError,
+    loadJson('/v1/repos', okValidator),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.failureClass === 'json-syntax',
   )
 })
 
 test('loadJson replaces sensitive and dynamic path segments with the API template', async () => {
-  globalThis.fetch = async () => new Response('not json', { status: 200 })
+  globalThis.fetch = async () => new Response('not json', {
+    headers: { 'content-type': 'application/json' },
+    status: 200,
+  })
 
   await assert.rejects(
-    loadJson('/v1/repository-invites/invite-bearer-secret/accept'),
+    loadJson('/v1/repository-invites/invite-bearer-secret/accept', okValidator),
     (error: unknown) => error instanceof InvalidApiResponseError &&
       error.requestPath === '/v1/repository-invites/{token}/accept' &&
       !error.message.includes('invite-bearer-secret'),
   )
   await assert.rejects(
-    loadJson('/v1/repos/acme/widgets/requests/request_123'),
+    loadJson('/v1/repos/acme/widgets/requests/request_123', okValidator),
     (error: unknown) => error instanceof InvalidApiResponseError &&
       error.requestPath === '/v1/repos/{owner}/{repo}/requests/{request_id}' &&
       !error.message.includes('acme') &&
@@ -88,30 +116,36 @@ test('loadJson replaces sensitive and dynamic path segments with the API templat
   )
 })
 
-test('loadJson rejects an empty JSON response unless the status allows no content', async () => {
+test('loadJson requires explicit no-content handling', async () => {
   globalThis.fetch = async () => new Response(null, { status: 200 })
   await assert.rejects(
-    loadJson('/v1/repos'),
+    loadJson('/v1/repos', okValidator),
     (error: unknown) => error instanceof InvalidApiResponseError &&
-      error.contentType === null &&
-      error.message ===
-        'GET /v1/repos returned invalid JSON (200, unknown content type)',
+      error.failureClass === 'content-type',
   )
 
   globalThis.fetch = async () => new Response(null, { status: 204 })
-  assert.equal(await loadJson<void>('/v1/cli/sessions/session_1', {
-    method: 'DELETE',
-  }), undefined)
+  assert.equal(
+    await loadJson('/v1/cli/sessions/session_1', noContent, { method: 'DELETE' }),
+    undefined,
+  )
+  await assert.rejects(
+    loadJson('/v1/repos', okValidator),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.failureClass === 'unexpected-no-content',
+  )
 })
 
-test('loadJson keeps the opaque server reference with a diagnostic error', async () => {
+test('loadJson keeps the opaque server reference with a validated error', async () => {
   globalThis.fetch = async () => jsonResponse({
+    code: 'internal',
     message: 'Scope hit an internal error.',
     error_reference: 'err_0123456789abcdef0123456789abcdef',
+    retryable: false,
   }, 500)
 
   await assert.rejects(
-    loadJson('/v1/repos'),
+    loadJson('/v1/repos', okValidator),
     hasHttpError(
       500,
       'Scope hit an internal error. (reference: err_0123456789abcdef0123456789abcdef)',
@@ -120,8 +154,48 @@ test('loadJson keeps the opaque server reference with a diagnostic error', async
   )
 })
 
+test('generated validators expose one bounded issue path', async () => {
+  globalThis.fetch = async () => jsonResponse({
+    code: 'internal',
+    message: 'Scope hit an internal error.',
+  }, 500)
+
+  await assert.rejects(
+    loadJson('/v1/repos', okValidator),
+    (error: unknown) => error instanceof InvalidApiResponseError &&
+      error.failureClass === 'schema' &&
+      error.issuePath === '/retryable',
+  )
+  assert.equal(apiValidators.ErrorResponse({
+    code: 'internal',
+    message: 'Scope hit an internal error.',
+    retryable: false,
+  }), true)
+})
+
+const okValidator = withIssue(
+  (value: unknown): value is { ok: boolean } =>
+    value !== null &&
+    typeof value === 'object' &&
+    'ok' in value &&
+    typeof value.ok === 'boolean',
+)
+
+function withIssue<T>(validate: (value: unknown) => value is T): ApiValidator<T> {
+  const validator: ApiValidator<T> = (value: unknown): value is T => {
+    const valid = validate(value)
+    validator.errors = valid
+      ? null
+      : [{ instancePath: '/ok', keyword: 'type', message: 'must be boolean' }]
+    return valid
+  }
+  validator.errors = null
+  return validator
+}
+
 const jsonResponse = (body: unknown, status: number) => new Response(JSON.stringify(body), {
-  headers: { 'content-type': 'application/json' }, status,
+  headers: { 'content-type': 'application/json' },
+  status,
 })
 
 const hasHttpError = (status: number, message: string, errorReference?: string) =>

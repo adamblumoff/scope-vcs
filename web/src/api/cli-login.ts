@@ -1,27 +1,20 @@
-import { createApiClient } from '@/api/client'
+import { createApiClient, noContent } from '@/api/client'
 import type {
   CompleteBrowserCliLoginInput,
   CompleteCliLoginInput,
   RevokeCliSessionInput,
 } from './cli-login-input'
-import type {
-  BrowserLoginComplete,
-  CliExchangeGrant,
-  CliSessions,
-} from './types'
-import {
-  ApiRouteTemplates,
-  buildApiPath,
-  type DeviceLoginCompleteResponse,
-} from './types.generated'
+import { ApiRouteTemplates, buildApiPath } from './types.generated'
+import { apiValidators } from './validators.generated'
 
 export async function completeCliLoginForRequest(
   data: CompleteCliLoginInput,
 ) {
-  return createApiClient().post<DeviceLoginCompleteResponse>(
+  return createApiClient().post(
     buildApiPath(ApiRouteTemplates.cliDeviceLoginComplete, {
       user_code: data.code,
     }),
+    apiValidators.DeviceLoginCompleteResponse,
     { auth: 'required' },
   )
 }
@@ -29,31 +22,37 @@ export async function completeCliLoginForRequest(
 export async function completeBrowserCliLoginForRequest(
   data: CompleteBrowserCliLoginInput,
 ) {
-  return createApiClient().post<BrowserLoginComplete>(
+  return createApiClient().post(
     buildApiPath(ApiRouteTemplates.cliBrowserLoginComplete, {
       request_id: data.requestId,
     }),
+    apiValidators.BrowserLoginCompleteResponse,
     { auth: 'required' },
   )
 }
 
 export async function createCliExchangeGrantForRequest() {
-  return createApiClient().post<CliExchangeGrant>(ApiRouteTemplates.cliExchangeGrants, {
-    auth: 'required',
-  })
+  return createApiClient().post(
+    ApiRouteTemplates.cliExchangeGrants,
+    apiValidators.CliExchangeGrantResponse,
+    { auth: 'required' },
+  )
 }
 
 export async function listCliSessionsForRequest() {
-  return createApiClient().get<CliSessions>(ApiRouteTemplates.cliSessions, {
-    auth: 'required',
-  })
+  return createApiClient().get(
+    ApiRouteTemplates.cliSessions,
+    apiValidators.CliSessionsResponse,
+    { auth: 'required' },
+  )
 }
 
 export async function revokeCliSessionForRequest(data: RevokeCliSessionInput) {
-  return createApiClient().delete<void>(
+  return createApiClient().delete(
     buildApiPath(ApiRouteTemplates.cliSessionById, {
       session_id: data.sessionId,
     }),
+    noContent,
     { auth: 'required' },
   )
 }

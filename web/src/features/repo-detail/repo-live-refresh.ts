@@ -1,12 +1,11 @@
 import type { RepoLiveState } from '@/api/types'
-import type { RepoChangeEvent, RunChangeKind } from '@/api/types.generated'
+import type { RepoChangeEvent } from '@/api/types.generated'
 import { useAuth } from '@clerk/tanstack-react-start'
 import { useCallback, useEffect, useRef } from 'react'
+import { runRepoEventStream, streamRepoEvents } from './repo-event-stream'
 
-const RECONNECT_DELAY_MS = 2000
+const REFRESH_RETRY_DELAY_MS = 2_000
 
-type AuthTokenGetter = (options: { template: string }) => Promise<string | null>
-type StreamRepoEventsResult = 'closed'
 type RetryScheduler = (retry: () => void) => () => void
 export type RepoChangeListener = (event: RepoChangeEvent) => void
 export type SubscribeToRepoChanges = (
@@ -66,34 +65,14 @@ export function useRepoLiveRefresh(
       notifyListeners(event)
     }
 
-    let stopped = false
-    const run = async () => {
-      while (!stopped) {
-        try {
-          const result = await streamRepoEvents(
-            live,
-            getToken,
-            onEvent,
-            controller.signal,
-          )
-          if (!controller.signal.aborted && result === 'closed') {
-            onStreamInterrupted()
-          }
-        } catch (error) {
-          if (controller.signal.aborted) {
-            return
-          }
-          onStreamInterrupted()
-        }
-        if (!stopped) {
-          await delay(RECONNECT_DELAY_MS, controller.signal)
-        }
-      }
-    }
-
-    void run()
+    void runRepoEventStream({
+      connect: (deliver, signal) =>
+        streamRepoEvents(live, getToken, deliver, signal),
+      onEvent,
+      onInterrupted: onStreamInterrupted,
+      signal: controller.signal,
+    })
     return () => {
-      stopped = true
       coordinator.stop()
       controller.abort()
     }
@@ -189,160 +168,10 @@ export function createRepoRefreshCoordinator({
 }
 
 function browserRetryScheduler(retry: () => void) {
-  const timeout = window.setTimeout(retry, RECONNECT_DELAY_MS)
+  const timeout = window.setTimeout(retry, REFRESH_RETRY_DELAY_MS)
   return () => window.clearTimeout(timeout)
 }
 
 function usesVersionedRepoChangeEvents(live: RepoLiveState) {
   return live.repo.access.actor !== 'Public'
-}
-
-async function streamRepoEvents(
-  live: RepoLiveState,
-  getToken: AuthTokenGetter,
-  onEvent: (event: RepoChangeEvent) => void,
-  signal: AbortSignal,
-): Promise<StreamRepoEventsResult> {
-  const token = await getToken({ template: live.clerk_token_template })
-  const headers = new Headers()
-  if (token) {
-    headers.set('authorization', `Bearer ${token}`)
-  }
-
-  const response = await fetch(live.event_stream_url, { headers, signal })
-  if (!response.ok || !response.body) {
-    return 'closed'
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (!signal.aborted) {
-    const chunk = await reader.read()
-    if (chunk.done) {
-      return 'closed'
-    }
-    buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, '\n')
-    const taken = takeSseMessages(buffer)
-    buffer = taken.rest
-    for (const message of taken.messages) {
-      const event = parseRepoChangeEvent(message)
-      if (event) {
-        onEvent(event)
-      }
-    }
-  }
-  return 'closed'
-}
-
-export function parseRepoChangeEvent(message: string): RepoChangeEvent | null {
-  const lines = message.split('\n')
-  let eventName = ''
-  const data: string[] = []
-  for (const line of lines) {
-    if (line.startsWith('event:')) {
-      eventName = line.slice('event:'.length).trim()
-    } else if (line.startsWith('data:')) {
-      data.push(line.slice('data:'.length).trimStart())
-    }
-  }
-
-  if (eventName !== 'repo-change' || data.length === 0) {
-    return null
-  }
-
-  let payload: Partial<RepoChangeEvent>
-  try {
-    payload = JSON.parse(data.join('\n')) as Partial<RepoChangeEvent>
-  } catch {
-    return null
-  }
-  if (
-    typeof payload.repo_id !== 'string' ||
-    typeof payload.version !== 'number' ||
-    !isRepoChangeKind(payload.kind)
-  ) {
-    return null
-  }
-
-  return {
-    kind: payload.kind,
-    repo_id: payload.repo_id,
-    version: payload.version,
-  } as RepoChangeEvent
-}
-
-function isRepoChangeKind(value: unknown): value is RepoChangeEvent['kind'] {
-  if (value === 'Connected' || value === 'Lagged') return true
-  if (!value || typeof value !== 'object') return false
-  if ('RepositoryChanged' in value) {
-    const changed = value.RepositoryChanged
-    return (
-      !!changed &&
-      typeof changed === 'object' &&
-      'reason' in changed &&
-      typeof changed.reason === 'string'
-    )
-  }
-  if ('RequestTimelineChanged' in value) {
-    const changed = value.RequestTimelineChanged
-    return (
-      !!changed &&
-      typeof changed === 'object' &&
-      'request_id' in changed &&
-      typeof changed.request_id === 'string' &&
-      'discussion_id' in changed &&
-      typeof changed.discussion_id === 'string' &&
-      'through_position' in changed &&
-      typeof changed.through_position === 'number'
-    )
-  }
-  if ('RunChanged' in value) {
-    const changed = value.RunChanged
-    return (
-      !!changed &&
-      typeof changed === 'object' &&
-      'run_id' in changed &&
-      typeof changed.run_id === 'string' &&
-      'change' in changed &&
-      isRunChangeKind(changed.change)
-    )
-  }
-  return false
-}
-
-function isRunChangeKind(value: unknown): value is RunChangeKind {
-  return value === 'Created' ||
-    value === 'StatusChanged' ||
-    value === 'LogsAppended'
-}
-
-export function takeSseMessages(buffer: string) {
-  const messages: string[] = []
-  let rest = buffer
-  let separator = rest.indexOf('\n\n')
-  while (separator >= 0) {
-    messages.push(rest.slice(0, separator))
-    rest = rest.slice(separator + 2)
-    separator = rest.indexOf('\n\n')
-  }
-  return { messages, rest }
-}
-
-function delay(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) {
-      resolve()
-      return
-    }
-    const timeout = window.setTimeout(resolve, ms)
-    signal.addEventListener(
-      'abort',
-      () => {
-        window.clearTimeout(timeout)
-        resolve()
-      },
-      { once: true },
-    )
-  })
 }

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 macro_rules! wire_enum {
     ($(#[$meta:meta])* $wire:ident => $domain:ident { $($variant:ident),+ $(,)? }) => {
         #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
         $(#[$meta])*
         pub enum $wire {
             $($variant),+
@@ -50,7 +50,7 @@ macro_rules! wire_enum {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct SessionIdentity {
     pub user_id: String,
     pub email: Option<String>,
@@ -100,7 +100,7 @@ wire_enum!(FirstPushTokenStatus => DomainFirstPushTokenStatus { Active, Expired,
 wire_enum!(FileChangeKind => DomainFileChangeKind { Added, Modified, Deleted });
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryMemberPermissions {
     pub can_push: bool,
     pub can_change_file_visibility: bool,
@@ -156,7 +156,7 @@ wire_enum!(
 wire_enum!(RequestDiscussionStatus => DomainRequestDiscussionStatus { Open, Resolved });
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RequestIdentityAuditFact {
     pub title_sha256: String,
     pub title_byte_count: u64,
@@ -176,7 +176,7 @@ impl From<DomainRequestIdentityAuditFact> for RequestIdentityAuditFact {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub enum RequestEventPayload {
     Started {
         identity: RequestIdentityAuditFact,
@@ -243,7 +243,7 @@ impl From<DomainRequestEventPayload> for RequestEventPayload {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoChangeEvent {
     pub repo_id: String,
     pub version: u64,
@@ -257,7 +257,7 @@ pub struct RepoChangeNotification {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub enum RunChangeKind {
     Created,
     StatusChanged,
@@ -265,7 +265,7 @@ pub enum RunChangeKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub enum RepoChangeKind {
     Connected,
     Lagged,

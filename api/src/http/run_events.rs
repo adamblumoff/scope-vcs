@@ -14,7 +14,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
-use scope_api_contract::{RunEventsQuery, RunLogResponse};
+use scope_api_contract::{ErrorResponse, RunEventsQuery, RunLogResponse};
 use std::{
     convert::Infallible,
     time::{Duration, Instant},
@@ -246,8 +246,8 @@ async fn send_stream_error(
     }
 }
 
-fn stream_error_data(error: ApiError) -> serde_json::Value {
-    serde_json::json!({ "message": error.into_public_message() })
+fn stream_error_data(error: ApiError) -> ErrorResponse {
+    error.into_public_parts().1
 }
 #[cfg(test)]
 mod tests {
@@ -260,10 +260,12 @@ mod tests {
         let error = scope_postgres::error::PostgresError::internal_message(diagnostic);
 
         let data = stream_error_data(error.into());
-        let message = data["message"].as_str().unwrap();
 
-        assert!(message.starts_with("Scope hit an internal error. (reference: err_"));
-        assert!(!message.contains(diagnostic));
+        assert_eq!(data.code, scope_api_contract::ErrorCode::Internal);
+        assert_eq!(data.message, "Scope hit an internal error.");
+        assert!(!data.message.contains(diagnostic));
+        assert!(data.error_reference.is_some());
+        assert!(!data.retryable);
     }
 
     #[tokio::test]

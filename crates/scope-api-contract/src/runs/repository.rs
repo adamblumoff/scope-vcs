@@ -9,6 +9,8 @@ pub struct CreateManualRunQuery {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RunState {
     Queued,
     Dispatching,
@@ -20,6 +22,7 @@ pub enum RunState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RunResponse {
     pub id: String,
     pub repository_id: String,
@@ -35,7 +38,7 @@ pub struct RunResponse {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RepositoryRunState {
     Queued,
@@ -49,7 +52,7 @@ pub enum RepositoryRunState {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RepositoryRunTrigger {
     Manual,
@@ -57,7 +60,7 @@ pub enum RepositoryRunTrigger {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunSummaryResponse {
     pub id: String,
     pub workflow_name: String,
@@ -74,7 +77,7 @@ pub struct RepositoryRunSummaryResponse {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RepositoryRunJobState {
     Blocked,
@@ -90,7 +93,7 @@ pub enum RepositoryRunJobState {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RepositoryRunAttemptState {
     Dispatching,
@@ -103,7 +106,7 @@ pub enum RepositoryRunAttemptState {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RepositoryRunStepState {
     Pending,
@@ -117,7 +120,7 @@ pub enum RepositoryRunStepState {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(tag = "kind", rename_all = "kebab-case"))]
 pub enum RepositoryRunTerminalReason {
     StepFailed { step_index: u32, exit_code: i32 },
@@ -129,7 +132,7 @@ pub enum RepositoryRunTerminalReason {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RepositoryRunCacheColdReason {
     MetadataMissing,
@@ -142,7 +145,7 @@ pub enum RepositoryRunCacheColdReason {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(tag = "kind", rename_all = "kebab-case"))]
 pub enum RepositoryRunCachePreparation {
     Exact,
@@ -154,7 +157,7 @@ pub enum RepositoryRunCachePreparation {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(rename_all = "kebab-case"))]
 pub enum RepositoryRunCacheFinalState {
     Pending,
@@ -163,7 +166,7 @@ pub enum RepositoryRunCacheFinalState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunCacheObservationResponse {
     pub workflow_path: String,
     pub job_key: String,
@@ -181,14 +184,14 @@ pub struct RepositoryRunCacheObservationResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunCacheSetupObservationResponse {
     pub authorization_ms: u64,
     pub wall_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunCacheResponse {
     pub name: String,
     pub path: String,
@@ -196,7 +199,7 @@ pub struct RepositoryRunCacheResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunStepResponse {
     pub index: u32,
     pub name: String,
@@ -208,7 +211,7 @@ pub struct RepositoryRunStepResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunAttemptResponse {
     pub id: String,
     pub number: u32,
@@ -225,7 +228,7 @@ pub struct RepositoryRunAttemptResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunJobResponse {
     pub key: String,
     pub needs: Vec<String>,
@@ -238,14 +241,14 @@ pub struct RepositoryRunJobResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunJobDetailResponse {
     pub job: RepositoryRunJobResponse,
     pub attempts: Vec<RepositoryRunAttemptResponse>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepositoryRunDetailResponse {
     pub run: RepositoryRunSummaryResponse,
     pub jobs: Vec<RepositoryRunJobDetailResponse>,
