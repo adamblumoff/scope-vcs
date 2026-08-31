@@ -330,7 +330,7 @@ process.exit(services.some(({id}) => id === process.env.SERVICE_ID) ? 0 : 1);
 }
 
 ensure_production_router_instance() {
-  local request response attempt
+  local request response deadline
   if production_service_exists "$router_service"; then
     return 0
   fi
@@ -381,11 +381,12 @@ if (typeof response.data?.environmentPatchCommit !== "string" ||
 }
 '
 
-  for attempt in 1 2 3; do
+  deadline=$((SECONDS + 60))
+  while (( SECONDS < deadline )); do
     if production_service_exists "$router_service"; then
       return 0
     fi
-    [[ "$attempt" == "3" ]] || sleep 2
+    sleep 2
   done
   echo "Production router service instance did not appear after creation." >&2
   return 1
