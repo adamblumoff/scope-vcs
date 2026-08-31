@@ -16,6 +16,8 @@ const CLI_DEVICE_CODE_PREFIX: &str = "scope_device_";
 const CLI_BROWSER_LOGIN_TTL_SECS: u64 = 5 * 60;
 const CLI_DEVICE_LOGIN_TTL_SECS: u64 = 10 * 60;
 const CLI_EXCHANGE_GRANT_TTL_SECS: u64 = 5 * 60;
+#[cfg(feature = "smoke-seed")]
+const STAGING_SMOKE_EXCHANGE_GRANT_TTL_SECS: u64 = 60 * 60;
 const CLI_SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 const CLI_DEVICE_LOGIN_POLL_INTERVAL_SECS: u64 = 2;
 const USER_CODE_BYTES: usize = 8;
@@ -245,11 +247,31 @@ impl CliAuthService {
         user: &UserAccount,
         now_unix: u64,
     ) -> Result<CliExchangeGrant, ApiError> {
+        self.create_exchange_grant_with_ttl(user, now_unix, CLI_EXCHANGE_GRANT_TTL_SECS)
+            .await
+    }
+
+    #[cfg(feature = "smoke-seed")]
+    pub(crate) async fn create_staging_smoke_exchange_grant(
+        &self,
+        user: &UserAccount,
+        now_unix: u64,
+    ) -> Result<CliExchangeGrant, ApiError> {
+        self.create_exchange_grant_with_ttl(user, now_unix, STAGING_SMOKE_EXCHANGE_GRANT_TTL_SECS)
+            .await
+    }
+
+    async fn create_exchange_grant_with_ttl(
+        &self,
+        user: &UserAccount,
+        now_unix: u64,
+        ttl_secs: u64,
+    ) -> Result<CliExchangeGrant, ApiError> {
         let exchange_token = random_token(
             CLI_EXCHANGE_GRANT_PREFIX,
             "failed to generate CLI exchange token",
         )?;
-        let expires_at_unix = now_unix + CLI_EXCHANGE_GRANT_TTL_SECS;
+        let expires_at_unix = now_unix + ttl_secs;
         self.store
             .create_cli_exchange_grant(
                 CreateCliExchangeGrantCommand {

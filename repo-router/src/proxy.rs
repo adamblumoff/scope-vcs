@@ -12,6 +12,8 @@ use axum::{
 };
 use std::{collections::HashSet, sync::Arc};
 
+const ROUTER_RESPONSE_HEADER: &str = "x-scope-git-router";
+
 struct UpstreamRequest {
     method: Method,
     path_and_query: String,
@@ -211,6 +213,10 @@ fn upstream_response(upstream: reqwest::Response) -> Response {
     let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
     *response.status_mut() = status;
     *response.headers_mut() = headers;
+    response.headers_mut().insert(
+        ROUTER_RESPONSE_HEADER,
+        "1".parse().expect("static header value"),
+    );
     response
 }
 
@@ -365,6 +371,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["x-test-marker"], "preserved");
+        assert_eq!(response.headers()[ROUTER_RESPONSE_HEADER], "1");
         assert_eq!(
             axum::body::to_bytes(response.into_body(), 1024)
                 .await

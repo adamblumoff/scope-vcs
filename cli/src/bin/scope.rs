@@ -94,8 +94,10 @@ enum RulesCommand {
 struct LoginArgs {
     #[arg(long)]
     headless: bool,
-    #[arg(long, value_name = "TOKEN")]
+    #[arg(long, value_name = "TOKEN", conflicts_with = "exchange_file")]
     exchange: Option<String>,
+    #[arg(long, value_name = "PATH", conflicts_with = "exchange")]
+    exchange_file: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -189,7 +191,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         CommandKind::Clone(args) => {
             scope_cli::clone::clone_repo(&args.repository, args.destination.as_deref())
         }
-        CommandKind::Login(args) => scope_cli::login::login(args.headless, args.exchange),
+        CommandKind::Login(args) => {
+            scope_cli::login::login(args.headless, args.exchange, args.exchange_file.as_deref())
+        }
         CommandKind::Logout => scope_cli::login::logout(),
         CommandKind::Whoami => scope_cli::login::whoami(),
         CommandKind::Run(args) => run_workflow(args, cli.json),
