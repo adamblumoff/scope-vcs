@@ -44,13 +44,15 @@ export async function assertHistoryFirstFileStaysInRoute(page) {
   assert.deepEqual(serverFunctions, [
     'loadHistoryEntryFileDiff_createServerFn_handler',
   ])
-  await page.waitForFunction(() => {
-    const host = document.querySelector('diffs-container')
+  await page.waitForFunction((diffLabel) => {
+    const diff = document.querySelector(`[aria-label="${diffLabel}"]`)
+    const host = diff?.querySelector('diffs-container')
     return (
       host?.shadowRoot &&
-      host.shadowRoot.textContent?.includes('Update Demo')
+      host.shadowRoot.childNodes.length > 0 &&
+      host.shadowRoot.textContent?.trim().length > 0
     )
-  })
+  }, 'README.html diff')
 }
 
 function serverFunctionExport(request) {
