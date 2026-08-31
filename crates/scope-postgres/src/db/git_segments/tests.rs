@@ -199,11 +199,18 @@ async fn repository_deletion_keeps_segment_ledger_for_physical_cleanup() {
         .mark_git_segment_upload_published(&segment.segment_id, 12)
         .await
         .unwrap();
+    let incarnation = repositories
+        .repository("segment-user", "repo")
+        .await
+        .unwrap()
+        .unwrap()
+        .incarnation();
 
     repositories
         .delete_repo(
             "segment-user",
             "repo",
+            &incarnation,
             "segment_user",
             20,
             &crate::db::generated_ids::test_generated_id,

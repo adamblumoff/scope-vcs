@@ -126,6 +126,7 @@ export type CommitSummary = {
 }
 export type CommitDetail = CommitSummary & {
   audience: ProjectionPreviewAudience
+  files_truncated: boolean
   repo_id: string
   view_key: string
   files: CommitFile[]

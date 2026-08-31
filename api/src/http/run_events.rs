@@ -274,6 +274,7 @@ mod tests {
         sender
             .send(RepoChangeEvent {
                 repo_id: "owner/repo".to_string(),
+                incarnation_id: "repoi_test".to_string(),
                 version: 0,
                 kind: RepoChangeKind::RunChanged {
                     run_id: "another-run".to_string(),
@@ -284,6 +285,7 @@ mod tests {
         sender
             .send(RepoChangeEvent {
                 repo_id: "owner/repo".to_string(),
+                incarnation_id: "repoi_test".to_string(),
                 version: 0,
                 kind: RepoChangeKind::RunChanged {
                     run_id: "target-run".to_string(),
@@ -303,6 +305,7 @@ mod tests {
         sender
             .send(RepoChangeEvent {
                 repo_id: "owner/repo".to_string(),
+                incarnation_id: "repoi_test".to_string(),
                 version: 4,
                 kind: RepoChangeKind::RepositoryChanged {
                     reason: "member-removed".to_string(),

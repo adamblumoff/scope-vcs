@@ -1,5 +1,5 @@
 use super::*;
-use crate::repo_events::RepoChangeReason;
+use crate::repo_events::{RepoChangeReason, repository_change_event};
 use scope_api_contract::RunChangeKind;
 use scope_domain::requests::{RequestActorRole, RequestAudience, StartRequestInput};
 use std::time::Duration;
@@ -234,7 +234,11 @@ async fn repo_events_stream_permission_changes_to_members() {
         .record
         .change_version;
     state
-        .publish_repo_change(TEST_REPO_ID, version, RepoChangeReason::VisibilityChanged)
+        .publish_repo_change(
+            &test_repo_incarnation(),
+            version,
+            RepoChangeReason::VisibilityChanged,
+        )
         .await;
 
     let event = next_event(&mut stream).await;
@@ -279,6 +283,59 @@ async fn repo_events_send_one_public_error_when_repo_is_deleted() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn event_streams_isolate_missed_recreation_notifications() {
+    let state = test_state_with_repo();
+    cache_test_jwks(&state);
+    let response = events(state.clone(), Some(bearer_header())).await;
+    let mut old_stream = response.into_body().into_data_stream();
+    let initial = next_event(&mut old_stream).await;
+    assert!(initial.contains(r#""incarnation_id":"repoi_workflow_test""#));
+
+    let mut recreated = find_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
+        .await
+        .unwrap();
+    recreated.record.incarnation_id = "repoi_recreated_events".to_string();
+    let recreated_incarnation = recreated.incarnation();
+    state
+        .metadata
+        .repositories()
+        .recreate_repository_for_tests(recreated)
+        .await
+        .unwrap();
+    state
+        .publish_repo_change(
+            &recreated_incarnation,
+            1,
+            RepoChangeReason::VisibilityChanged,
+        )
+        .await;
+
+    let error = next_event(&mut old_stream).await;
+    assert!(error.contains("event: error"), "{error}");
+    assert!(error.contains(r#""code":"conflict""#), "{error}");
+
+    let response = events(state.clone(), Some(bearer_header())).await;
+    let mut new_stream = response.into_body().into_data_stream();
+    let connected = next_event(&mut new_stream).await;
+    assert!(connected.contains(r#""incarnation_id":"repoi_recreated_events""#));
+    state.repo_events.publish_event(repository_change_event(
+        &test_repo_incarnation(),
+        99,
+        RepoChangeReason::VisibilityChanged,
+    ));
+    state
+        .publish_repo_change(
+            &recreated_incarnation,
+            2,
+            RepoChangeReason::VisibilityChanged,
+        )
+        .await;
+    let update = next_repo_change_event(&mut new_stream, 2).await;
+    assert!(update.contains(r#""incarnation_id":"repoi_recreated_events""#));
+    assert!(!update.contains(r#""version":99"#));
 }
 
 #[tokio::test]
@@ -339,7 +396,7 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
 
     state
         .publish_request_timeline_change(
-            TEST_REPO_ID,
+            &test_repo_incarnation(),
             "req_private_stream".to_string(),
             "discussion_private".to_string(),
             2,
@@ -354,7 +411,7 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
 
     state
         .publish_request_timeline_change(
-            TEST_REPO_ID,
+            &test_repo_incarnation(),
             "req_public_stream".to_string(),
             "discussion_ready".to_string(),
             2,
@@ -366,7 +423,7 @@ async fn public_repo_stream_drops_private_discussion_identifiers() {
 
     state
         .publish_request_timeline_change(
-            TEST_REPO_ID,
+            &test_repo_incarnation(),
             "req_public_stream".to_string(),
             "discussion_open".to_string(),
             3,

@@ -19,7 +19,7 @@ use crate::{
 use scope_domain::{
     projection::{ProjectionViewKey, project_graph},
     repository::{
-        RepoLifecycleState, Repository,
+        RepoLifecycleState, Repository, RepositoryIncarnation,
         access::{RepositoryAccess, RepositoryActor},
     },
     requests::{
@@ -54,11 +54,17 @@ pub(super) async fn actor_has_open_editable_request(
 
 pub(crate) async fn prepare_request_staging_repo(
     state: &AppState,
+    incarnation: &scope_domain::repository::RepositoryIncarnation,
     owner: &str,
     repo_name: &str,
     actor_user_id: &str,
 ) -> Result<PathBuf, ApiError> {
     let repo = find_repo(state, owner, repo_name).await?;
+    if repo.incarnation() != *incarnation {
+        return Err(ApiError::conflict(
+            "repository was recreated during push preparation",
+        ));
+    }
     if repo.record.lifecycle_state != RepoLifecycleState::Ready {
         return Err(ApiError::not_found(format!(
             "repo {owner}/{repo_name} not found"
@@ -79,7 +85,7 @@ pub(crate) async fn prepare_request_staging_repo(
             if let Some(head) = repo.git_head.as_ref() {
                 state.repository_engine.materialize_repository(
                     state,
-                    &repo.record.id,
+                    &repo.incarnation(),
                     head,
                     &repo.git_pack_spans,
                 )?
@@ -92,7 +98,7 @@ pub(crate) async fn prepare_request_staging_repo(
                 );
                 projection_bare_repo_for_state(
                     state,
-                    &repo.record.id,
+                    &repo.incarnation(),
                     &projection,
                     repo.git_head.as_ref(),
                     &repo.git_pack_spans,
@@ -100,8 +106,7 @@ pub(crate) async fn prepare_request_staging_repo(
             }
         }
     };
-    let staging_repo =
-        create_request_receive_pack_staging_repo(state, owner, repo_name, &seed_repo)?;
+    let staging_repo = create_request_receive_pack_staging_repo(state, incarnation, &seed_repo)?;
     if let Err(error) =
         seed_editable_request_refs_for_repo(state, &repo, actor_user_id, access, &staging_repo)
             .await
@@ -171,7 +176,7 @@ fn public_projection_repo(state: &AppState, repo: &Repository) -> Result<GitRepo
     );
     projection_bare_repo_for_state(
         state,
-        &repo.record.id,
+        &repo.incarnation(),
         &projection,
         repo.git_head.as_ref(),
         &repo.git_pack_spans,
@@ -182,12 +187,12 @@ pub(super) async fn persist_request_ref_revision(
     state: &AppState,
     owner: &str,
     repo_name: &str,
+    expected_incarnation: &RepositoryIncarnation,
     actor_user_id: &str,
     staging_repo: &Path,
     update: RequestRefUpdate,
 ) -> Result<(), ApiError> {
-    let _lock = acquire_request_ref_update_lock(state, owner, repo_name, &update.request_ref)?;
-    let request = ensure_request_ref_update_allowed(
+    let (repo, request) = ensure_request_ref_update_allowed(
         state,
         owner,
         repo_name,
@@ -195,7 +200,13 @@ pub(super) async fn persist_request_ref_revision(
         &update.request_name,
     )
     .await?;
-    let request_repo_id = request.repo_id.clone();
+    let incarnation = repo.incarnation();
+    if &incarnation != expected_incarnation {
+        return Err(ApiError::conflict(
+            "repository changed after receive-pack; retry the push",
+        ));
+    }
+    let _lock = acquire_request_ref_update_lock(state, &incarnation, &update.request_ref)?;
     let request_audience = request.audience;
     let now_unix = unix_now()?;
     let expected_old_head_oid = update
@@ -203,8 +214,7 @@ pub(super) async fn persist_request_ref_revision(
         .clone()
         .or_else(|| Some(request.head_oid.clone()));
     let persisted =
-        persist_request_ref_to_store(state, owner, repo_name, staging_repo, &request, &update)
-            .await?;
+        persist_request_ref_to_store(state, &repo, staging_repo, &request, &update).await?;
     let mutation = state
         .metadata
         .requests()
@@ -232,15 +242,14 @@ pub(super) async fn persist_request_ref_revision(
                 ),
             );
             state
-                .publish_request_summary_refresh(&request_repo_id, RepoChangeReason::RequestRevised)
+                .publish_request_summary_refresh(&incarnation, RepoChangeReason::RequestRevised)
                 .await;
             persisted.fence.release().await;
         }
         Err(error) => {
             rollback_request_ref(
                 state,
-                owner,
-                repo_name,
+                &incarnation,
                 &update.request_ref,
                 persisted.previous_head,
             );
@@ -262,7 +271,7 @@ async fn ensure_request_ref_update_allowed(
     repo_name: &str,
     actor_user_id: &str,
     request_name: &str,
-) -> Result<Request, ApiError> {
+) -> Result<(Repository, Request), ApiError> {
     let repo = find_repo(state, owner, repo_name).await?;
     let access = repo.access_for_user_id(actor_user_id);
     let request = state
@@ -279,7 +288,7 @@ async fn ensure_request_ref_update_allowed(
     if !request_actor_can_edit_ref(&request, actor_user_id, access, is_invitee) {
         return Err(ApiError::not_found("request not found"));
     }
-    Ok(request)
+    Ok((repo, request))
 }
 
 fn request_actor_can_edit_ref(

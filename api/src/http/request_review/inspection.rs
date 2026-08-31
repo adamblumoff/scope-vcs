@@ -38,8 +38,6 @@ fn request_commit_is_visible_to(
 
 pub(crate) struct RequestRevisionCommitVisibility<'a> {
     state: &'a AppState,
-    owner: &'a str,
-    repo_name: &'a str,
     repo: &'a Repository,
     access: RepositoryAccess,
     request: &'a Request,
@@ -48,16 +46,12 @@ pub(crate) struct RequestRevisionCommitVisibility<'a> {
 impl<'a> RequestRevisionCommitVisibility<'a> {
     pub(crate) fn new(
         state: &'a AppState,
-        owner: &'a str,
-        repo_name: &'a str,
         repo: &'a Repository,
         access: RepositoryAccess,
         request: &'a Request,
     ) -> Self {
         Self {
             state,
-            owner,
-            repo_name,
             repo,
             access,
             request,
@@ -106,8 +100,7 @@ impl<'a> RequestRevisionCommitVisibility<'a> {
         };
         with_request_revision_store_repo(
             self.state,
-            self.owner,
-            self.repo_name,
+            &self.repo.incarnation(),
             self.request,
             &revision,
             |raw_repo| {
@@ -159,6 +152,7 @@ pub(super) fn inspect_request_commit(
             message: metadata.message,
             change_count: changes.files.len(),
             files: changes.files,
+            files_truncated: false,
         }),
         inspection: if metadata.complete {
             RequestRevisionInspectionState::Complete

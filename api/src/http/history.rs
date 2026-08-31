@@ -231,13 +231,9 @@ fn history_entry_file_diff_response(
 ) -> Result<ReviewFileDiffResponse, ApiError> {
     review_file_diff_response_for_blobs(
         state,
-        repo.git_head.as_ref().map(|head| {
-            (
-                repo.record.id.as_str(),
-                head,
-                repo.git_pack_spans.as_slice(),
-            )
-        }),
+        repo.git_head
+            .as_ref()
+            .map(|head| (repo.incarnation(), head, repo.git_pack_spans.as_slice())),
         file.path.as_str().to_string(),
         file.kind,
         file.old_content.as_ref(),

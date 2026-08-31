@@ -32,7 +32,7 @@ fn generated_projection_matches_canonical_head_identity() {
         }],
     };
 
-    let repo = projection_bare_repo_with_loader(&root, &projection, None, |blob| {
+    let repo = projection_bare_repo_with_loader(&root, None, &projection, None, |blob| {
         Ok(blob.sha256.as_bytes().to_vec())
     })
     .unwrap();
@@ -71,7 +71,7 @@ fn generated_projection_preserves_a_leading_quote_in_a_file_name() {
         }],
     };
 
-    let repo = projection_bare_repo_with_loader(&root, &projection, None, |blob| {
+    let repo = projection_bare_repo_with_loader(&root, None, &projection, None, |blob| {
         Ok(blob.sha256.as_bytes().to_vec())
     })
     .unwrap();
@@ -120,10 +120,11 @@ fn projection_identity_and_materializer_reject_the_same_reserved_path() {
     let identity_error = scope_git::projection_head_oid(&projection)
         .unwrap_err()
         .to_string();
-    let materialization_error = projection_bare_repo_with_loader(&root, &projection, None, |_| {
-        panic!("invalid paths must fail before loading content")
-    })
-    .unwrap_err();
+    let materialization_error =
+        projection_bare_repo_with_loader(&root, None, &projection, None, |_| {
+            panic!("invalid paths must fail before loading content")
+        })
+        .unwrap_err();
 
     assert_eq!(materialization_error.operator_diagnostic(), identity_error);
     assert_eq!(
@@ -278,7 +279,7 @@ fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
         commits: vec![generated, preserved],
     };
 
-    let repo = projection_bare_repo_with_loader(&cache, &projection, Some(&source), |blob| {
+    let repo = projection_bare_repo_with_loader(&cache, None, &projection, Some(&source), |blob| {
         Ok(blob.sha256.as_bytes().to_vec())
     })
     .unwrap();
@@ -297,7 +298,7 @@ fn native_commit_is_reused_exactly_and_tree_corruption_fails_closed() {
         panic!("expected preserved commit")
     };
     *tree_oid = "0000000000000000000000000000000000000000".to_string();
-    let error = projection_bare_repo_with_loader(&cache, &corrupted, Some(&source), |blob| {
+    let error = projection_bare_repo_with_loader(&cache, None, &corrupted, Some(&source), |blob| {
         Ok(blob.sha256.as_bytes().to_vec())
     })
     .unwrap_err();

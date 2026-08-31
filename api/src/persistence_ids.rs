@@ -7,6 +7,7 @@ pub(crate) fn generate_persistence_id(kind: GeneratedIdKind) -> Result<String, S
     Ok(match kind {
         GeneratedIdKind::CleanupGeneration => random,
         GeneratedIdKind::OutboxJob => format!("outbox_{random}"),
+        GeneratedIdKind::RepositoryIncarnation => format!("repoi_{random}"),
     })
 }
 

@@ -20,7 +20,7 @@ use crate::{
     repo_events::RepoChangeReason,
     state::AppState,
 };
-use scope_domain::repository::{RepoLifecycleState, access::MainPushMode};
+use scope_domain::repository::{RepoLifecycleState, RepositoryIncarnation, access::MainPushMode};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -30,14 +30,17 @@ use std::{
 pub(crate) enum ReceivePackAccess {
     FirstPush {
         author_id: String,
+        incarnation: RepositoryIncarnation,
         push_intent: ValidatedPushIntent,
     },
     ReadyMember {
         author_id: String,
+        incarnation: RepositoryIncarnation,
         push_intent: ValidatedPushIntent,
     },
     RequestContributor {
         author_id: String,
+        incarnation: RepositoryIncarnation,
     },
 }
 
@@ -46,7 +49,15 @@ impl ReceivePackAccess {
         match self {
             Self::FirstPush { author_id, .. }
             | Self::ReadyMember { author_id, .. }
-            | Self::RequestContributor { author_id } => author_id,
+            | Self::RequestContributor { author_id, .. } => author_id,
+        }
+    }
+
+    pub(crate) fn incarnation(&self) -> &RepositoryIncarnation {
+        match self {
+            Self::FirstPush { incarnation, .. }
+            | Self::ReadyMember { incarnation, .. }
+            | Self::RequestContributor { incarnation, .. } => incarnation,
         }
     }
 }
@@ -87,6 +98,7 @@ pub(crate) async fn authorize(
                 push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
                 return Ok(ReceivePackAccess::FirstPush {
                     author_id,
+                    incarnation: repo.incarnation(),
                     push_intent,
                 });
             }
@@ -101,6 +113,7 @@ pub(crate) async fn authorize(
                         push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
                         Ok(ReceivePackAccess::ReadyMember {
                             author_id,
+                            incarnation: repo.incarnation(),
                             push_intent,
                         })
                     }
@@ -122,6 +135,7 @@ pub(crate) async fn authorize(
                 push_intent.ensure_repo_user(&context.repo_id, &user.id)?;
                 return Ok(ReceivePackAccess::ReadyMember {
                     author_id: user.id,
+                    incarnation: context.incarnation,
                     push_intent,
                 });
             }
@@ -134,6 +148,7 @@ pub(crate) async fn authorize(
                 push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
                 return Ok(ReceivePackAccess::FirstPush {
                     author_id,
+                    incarnation: repo.incarnation(),
                     push_intent,
                 });
             }
@@ -148,7 +163,10 @@ pub(crate) async fn authorize(
                     )
                     .await?
                 {
-                    return Ok(ReceivePackAccess::RequestContributor { author_id });
+                    return Ok(ReceivePackAccess::RequestContributor {
+                        author_id,
+                        incarnation: repo.incarnation(),
+                    });
                 }
                 return Err(ApiError::not_found(format!(
                     "repo {owner}/{repo_name} not found"
@@ -165,6 +183,7 @@ pub(crate) async fn authorize(
                                 push_intent.ensure_repo_user(&repo.record.id, &author_id)?;
                                 return Ok(ReceivePackAccess::ReadyMember {
                                     author_id,
+                                    incarnation: repo.incarnation(),
                                     push_intent,
                                 });
                             }
@@ -178,7 +197,10 @@ pub(crate) async fn authorize(
                                 )
                                 .await?
                                 {
-                                    return Ok(ReceivePackAccess::RequestContributor { author_id });
+                                    return Ok(ReceivePackAccess::RequestContributor {
+                                        author_id,
+                                        incarnation: repo.incarnation(),
+                                    });
                                 }
                                 return Err(error);
                             }
@@ -193,7 +215,10 @@ pub(crate) async fn authorize(
                     )
                     .await?
                     {
-                        Ok(ReceivePackAccess::RequestContributor { author_id })
+                        Ok(ReceivePackAccess::RequestContributor {
+                            author_id,
+                            incarnation: repo.incarnation(),
+                        })
                     } else {
                         Err(ApiError::forbidden("valid Scope push intent required"))
                     }
@@ -210,13 +235,20 @@ pub(crate) async fn prepare(
     access: ReceivePackAccess,
     advertisement_only: bool,
 ) -> Result<ReceivePreparation, ApiError> {
+    let incarnation = access.incarnation().clone();
     let staging_repo = match &access {
         ReceivePackAccess::FirstPush { .. } => {
-            ensure_first_push_receive_pack_staging_repo(state, owner, repo_name)?
+            ensure_first_push_receive_pack_staging_repo(state, &incarnation)?
         }
         ReceivePackAccess::ReadyMember { author_id, .. } => {
-            let staging =
-                ensure_ready_receive_pack_staging_repo(state, owner, repo_name, author_id).await?;
+            let staging = ensure_ready_receive_pack_staging_repo(
+                state,
+                &incarnation,
+                owner,
+                repo_name,
+                author_id,
+            )
+            .await?;
             if let Err(error) = request_ref::seed_editable_request_refs(
                 state, owner, repo_name, author_id, &staging,
             )
@@ -227,8 +259,15 @@ pub(crate) async fn prepare(
             }
             staging
         }
-        ReceivePackAccess::RequestContributor { author_id } => {
-            request_ref::prepare_request_staging_repo(state, owner, repo_name, author_id).await?
+        ReceivePackAccess::RequestContributor { author_id, .. } => {
+            request_ref::prepare_request_staging_repo(
+                state,
+                &incarnation,
+                owner,
+                repo_name,
+                author_id,
+            )
+            .await?
         }
     };
     let refs_before = if advertisement_only {
@@ -284,12 +323,13 @@ pub(crate) async fn complete(
                 ));
             }
             ReceivePackAccess::ReadyMember { author_id, .. }
-            | ReceivePackAccess::RequestContributor { author_id } => author_id,
+            | ReceivePackAccess::RequestContributor { author_id, .. } => author_id,
         };
         request_ref::persist_request_ref_revision(
             state,
             owner,
             repo_name,
+            preparation.access.incarnation(),
             author_id,
             staging_repo,
             update,
@@ -334,11 +374,14 @@ async fn complete_main_push(
 ) -> Result<(), ApiError> {
     let first_push = matches!(&access, ReceivePackAccess::FirstPush { .. });
     let author_id = access.author_id().to_string();
+    let incarnation = access.incarnation().clone();
     let import_started_at = Instant::now();
     let (prepared, change_count): (PreparedReceivePackUpdate, usize) =
         main_push::prepare_main_push(state, owner, repo_name, staging_repo, &access).await?;
     let persisted =
-        main_push::persist_main_push(state, owner, repo_name, prepared, &author_id).await?;
+        main_push::persist_main_push(state, owner, repo_name, prepared, &author_id, &incarnation)
+            .await?;
+    let committed_incarnation = persisted.incarnation.clone();
     let committed_git_head = persisted.head;
     let event = if first_push {
         state
@@ -350,7 +393,7 @@ async fn complete_main_push(
     };
     state
         .publish_repo_change(
-            &scope_domain::repository::repo_id(owner, repo_name),
+            &committed_incarnation,
             committed_git_head.change_version,
             event,
         )
@@ -369,6 +412,7 @@ async fn complete_main_push(
         owner,
         repo_name,
         &author_id,
+        &committed_incarnation,
         persisted.staged_segment.local_pack_path(),
         &committed_git_head,
     )
@@ -395,6 +439,7 @@ async fn best_effort_sync_cache(
     owner: &str,
     repo_name: &str,
     author_id: &str,
+    committed_incarnation: &RepositoryIncarnation,
     local_pack: &Path,
     committed_git_head: &scope_domain::repository::git::GitHead,
 ) {
@@ -405,12 +450,13 @@ async fn best_effort_sync_cache(
         .await
     {
         Ok(Some(repo)) => {
-            let is_still_current = repo.git_head.as_ref().is_some_and(|head| {
-                head.manifest.content_ref == committed_git_head.manifest.content_ref
-            });
+            let is_still_current = repo.incarnation == *committed_incarnation
+                && repo.git_head.as_ref().is_some_and(|head| {
+                    head.manifest.content_ref == committed_git_head.manifest.content_ref
+                });
             if is_still_current
                 && let Err(error) = state.repository_engine.sync_after_push(
-                    &scope_domain::repository::repo_id(owner, repo_name),
+                    committed_incarnation,
                     local_pack,
                     &committed_git_head.head_oid,
                     committed_git_head.push_sequence,

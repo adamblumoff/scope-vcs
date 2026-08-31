@@ -5,8 +5,8 @@ use super::{
 use crate::error::PostgresError;
 use scope_domain::{
     content::SourceBlob,
-    repository::Repository,
     repository::git::{GitHead, GitPackSpan},
+    repository::{Repository, RepositoryIncarnation},
     runs::catalog::{RepositoryWorkflowCatalog, RepositoryWorkflowFile},
 };
 use sea_orm::{
@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug)]
 pub struct RepositoryWorkflowCatalogBackfillCandidate {
     pub repo_id: String,
+    pub incarnation: RepositoryIncarnation,
     pub source_change_version: u64,
     pub git_head: GitHead,
     pub git_pack_spans: Vec<GitPackSpan>,
@@ -160,8 +161,14 @@ impl RepositoryStore {
             let source_change_version = git_head.change_version;
             let git_pack_spans = load_git_pack_spans(self.db.as_ref(), &repository.id).await?;
             let workflow_blobs = current_workflow_blobs(self.db.as_ref(), &repository.id).await?;
+            let incarnation = RepositoryIncarnation::new(
+                repository.id.clone(),
+                repository.incarnation_id.clone(),
+            )
+            .map_err(PostgresError::internal)?;
             candidates.push(RepositoryWorkflowCatalogBackfillCandidate {
                 repo_id: repository.id,
+                incarnation,
                 source_change_version,
                 git_head,
                 git_pack_spans,

@@ -20,6 +20,7 @@ function commit(projectedId: string): CommitDetail {
     audience: 'public',
     author: null,
     change_count: 0,
+    files_truncated: false,
     files: [],
     logical_commit_id: projectedId,
     message: projectedId,

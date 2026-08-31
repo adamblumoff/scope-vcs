@@ -13,8 +13,8 @@ use std::{collections::BTreeSet, path::Path as FsPath};
 
 pub(super) async fn validate(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    _owner: &str,
+    _repo_name: &str,
     context: &MutationContext,
     anchor: DiscussionAnchorInput,
 ) -> Result<RequestDiscussionAnchor, ApiError> {
@@ -37,8 +37,7 @@ pub(super) async fn validate(
     if let Some(commit_oid) = commit_oid.as_deref() {
         let visible_paths = with_request_revision_store_repo(
             state,
-            owner,
-            repo_name,
+            &context.repo.incarnation(),
             &context.request,
             &revision,
             |raw_repo| {
@@ -68,8 +67,8 @@ pub(super) async fn validate(
 
 pub(super) async fn visible_commits(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    _owner: &str,
+    _repo_name: &str,
     context: &MutationContext,
     anchor: Option<&RequestDiscussionAnchor>,
 ) -> BTreeSet<(String, String)> {
@@ -91,8 +90,7 @@ pub(super) async fn visible_commits(
             .ok_or_else(|| ApiError::not_found("request revision not found"))?;
         let visible = with_request_revision_store_repo(
             state,
-            owner,
-            repo_name,
+            &context.repo.incarnation(),
             &context.request,
             &revision,
             |raw_repo| {

@@ -1,9 +1,10 @@
 use crate::{
     error::ApiError,
-    git::{import::safe_repo_key, storage::git_repo_storage_root},
+    git::storage::{git_repo_storage_root, repository_storage_key},
     persistence::unix_now,
     state::AppState,
 };
+use scope_domain::repository::RepositoryIncarnation;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
@@ -31,21 +32,19 @@ impl Drop for GitLockFile {
 
 pub(crate) fn acquire_request_ref_update_lock(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
     request_ref: &str,
 ) -> Result<GitLockFile, ApiError> {
-    let path = request_ref_update_lock_path(state, owner, repo_name, request_ref);
+    let path = request_ref_update_lock_path(state, incarnation, request_ref);
     acquire_git_lock(path, "request branch update already in progress")
 }
 
 pub(super) fn acquire_request_ref_store_lock(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
 ) -> Result<GitLockFile, ApiError> {
     acquire_git_lock(
-        request_ref_store_lock_path(state, owner, repo_name),
+        request_ref_store_lock_path(state, incarnation),
         "request branch store initialization already in progress",
     )
 }
@@ -176,8 +175,8 @@ fn process_is_alive(_pid: u32) -> bool {
     true
 }
 
-fn request_ref_store_lock_path(state: &AppState, owner: &str, repo_name: &str) -> PathBuf {
-    let repo_key = safe_repo_key(owner, repo_name);
+fn request_ref_store_lock_path(state: &AppState, incarnation: &RepositoryIncarnation) -> PathBuf {
+    let repo_key = repository_storage_key(incarnation);
     git_repo_storage_root(state)
         .join("git-request-refs-locks")
         .join(format!("{repo_key}-store.lock"))
@@ -185,11 +184,10 @@ fn request_ref_store_lock_path(state: &AppState, owner: &str, repo_name: &str) -
 
 fn request_ref_update_lock_path(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
     request_ref: &str,
 ) -> PathBuf {
-    let repo_key = safe_repo_key(owner, repo_name);
+    let repo_key = repository_storage_key(incarnation);
     let ref_hash = hex::encode(Sha256::digest(request_ref.as_bytes()));
     git_repo_storage_root(state)
         .join("git-request-refs-locks")

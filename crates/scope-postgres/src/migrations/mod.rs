@@ -31,6 +31,7 @@ mod m0030_cache_preparation_timings;
 mod m0031_provider_neutral_run_attempts;
 mod m0032_flat_discussion_replies;
 mod m0033_git_segment_streaming_v2;
+mod m0034_repository_incarnations;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -151,6 +152,10 @@ fn inventory() -> Vec<MigrationSpec> {
         ),
         spec(
             m0033_git_segment_streaming_v2::Migration,
+            MaintenanceRequired,
+        ),
+        spec(
+            m0034_repository_incarnations::Migration,
             MaintenanceRequired,
         ),
     ]

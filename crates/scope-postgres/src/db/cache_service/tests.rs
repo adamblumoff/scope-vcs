@@ -223,7 +223,7 @@ fn seed_repository(store: &MetadataStore) -> String {
         email: "cache-owner@example.com".to_string(),
         email_verified: true,
     };
-    let mut repository = Repository::new(&owner, "cache-repo", Visibility::Private)
+    let mut repository = Repository::new(&owner, "cache-repo", Visibility::Private, "repoi_test")
         .expect("test repository is valid");
     repository.record.lifecycle_state = RepoLifecycleState::Ready;
     let repository_id = repository.record.id.clone();

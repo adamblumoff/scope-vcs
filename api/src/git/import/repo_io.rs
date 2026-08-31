@@ -18,7 +18,6 @@ use scope_git_process::{ProcessLimits, StreamingProcessError, run_with_stdout};
 use scope_git_storage::{ENCODING_VERSION, StagedGitSegment};
 use scope_object_store::{ContentObjectKind, content_object_for_bytes, object_key};
 use scope_postgres::db::ContentRefFence;
-use sha2::{Digest, Sha256};
 use std::{
     path::Path as FsPath,
     process::Command,
@@ -809,12 +808,6 @@ pub(crate) fn run_git_output_bounded(
         }
         _ => error,
     })
-}
-
-pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {
-    let repo_id = scope_domain::repository::repo_id(owner, repo_name);
-    let digest = Sha256::digest(repo_id.as_bytes());
-    format!("repo-{digest:x}")
 }
 
 #[cfg(test)]

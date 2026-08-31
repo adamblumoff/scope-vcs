@@ -455,6 +455,7 @@ pub struct RequestRevisionCommitResponse {
     pub message: String,
     pub change_count: usize,
     pub files: Vec<CommitFileResponse>,
+    pub files_truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

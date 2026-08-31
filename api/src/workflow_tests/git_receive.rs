@@ -343,6 +343,7 @@ async fn published_receive_pack_staging_restores_accepted_git_head_from_bucket_s
 
     let restored = ensure_ready_receive_pack_staging_repo(
         &state,
+        &test_repo_incarnation(),
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         &test_owner_id(),

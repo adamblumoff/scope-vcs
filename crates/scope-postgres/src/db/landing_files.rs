@@ -6,7 +6,10 @@ use scope_domain::{
         MAX_REPOSITORY_LANDING_FILE_BYTES, REPOSITORY_LANDING_FILE_PATH, RepositoryLandingFile,
         RepositoryLandingFileMutation,
     },
-    repository::git::{GitHead, GitPackSpan},
+    repository::{
+        RepositoryIncarnation,
+        git::{GitHead, GitPackSpan},
+    },
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
@@ -17,6 +20,7 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug)]
 pub struct RepositoryLandingFileBackfillCandidate {
     pub repo_id: String,
+    pub incarnation: RepositoryIncarnation,
     pub blob: SourceBlob,
     pub git_head: Option<GitHead>,
     pub git_pack_spans: Vec<GitPackSpan>,
@@ -123,8 +127,18 @@ impl RepositoryStore {
                 .map(entities::git_head::Model::try_into_domain)
                 .transpose()?;
             let git_pack_spans = load_git_pack_spans(self.db.as_ref(), &row.repo_id).await?;
+            let repository = entities::repository::Entity::find_by_id(&row.repo_id)
+                .one(self.db.as_ref())
+                .await
+                .map_err(PostgresError::internal)?
+                .ok_or_else(|| {
+                    PostgresError::internal_message("landing-file repository is missing")
+                })?;
+            let incarnation = RepositoryIncarnation::new(repository.id, repository.incarnation_id)
+                .map_err(PostgresError::internal)?;
             candidates.push(RepositoryLandingFileBackfillCandidate {
                 repo_id: row.repo_id,
+                incarnation,
                 blob,
                 git_head,
                 git_pack_spans,

@@ -715,7 +715,7 @@ fn catalog_with_repo() -> crate::db::CatalogFixture {
         email: "public@example.com".to_string(),
         email_verified: true,
     };
-    let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
+    let mut repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
 
     let mut catalog = crate::db::CatalogFixture::default();

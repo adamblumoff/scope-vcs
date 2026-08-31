@@ -4,6 +4,7 @@ import type { RequestRevisions } from '@/api/types'
 import type { RequestDiscussion } from './request-discussion-types'
 import {
   discussionsForRequestCommit,
+  missingRequestCommitFileError,
   orderedRequestCommits,
   requestCommitForListId,
   requestChangeSelection,
@@ -78,6 +79,25 @@ test('keeps revision and commit selection consistent', () => {
   )
 })
 
+test('keeps a valid commit selectable when its file list is truncated', () => {
+  const oversized = [revision('revision-large', 1, ['commit-large'])]
+  oversized[0].commits[0].files = []
+  oversized[0].commits[0].change_count = 10_001
+  oversized[0].commits[0].files_truncated = true
+
+  const selection = requestChangeSelection(
+    oversized,
+    'revision-large',
+    { commit: 'commit-large', revision: 'revision-large' },
+  )
+  assert.equal(selection.commit, 'commit-large')
+  assert.equal(selection.error, null)
+  assert.match(
+    missingRequestCommitFileError(oversized[0].commits[0]),
+    /outside the bounded file list/,
+  )
+})
+
 test('lists newest request commits first', () => {
   assert.deepEqual(
     orderedRequestCommits(revisions).map(({ projected_id }) => projected_id),
@@ -141,6 +161,7 @@ function revision(
       message: `Commit ${oid}`,
       oid,
       parent_oids: ['base'],
+      files_truncated: false,
     })),
     created_at_unix: position,
     id,

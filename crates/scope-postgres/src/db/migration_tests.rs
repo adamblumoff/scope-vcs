@@ -13,6 +13,7 @@ mod git_pack_spans;
 mod git_segment_streaming_v2;
 mod logical_run_sources;
 mod maintenance_cutover;
+mod repository_incarnations;
 mod repository_landing_files;
 mod repository_workflow_catalogs;
 mod request_revisions;
@@ -60,6 +61,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0031_provider_neutral_run_attempts",
     "m0032_flat_discussion_replies",
     "m0033_git_segment_streaming_v2",
+    "m0034_repository_incarnations",
 ];
 
 pub(super) async fn isolated_database() -> (

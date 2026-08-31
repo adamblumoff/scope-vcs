@@ -63,7 +63,7 @@ pub(crate) async fn create_request_rating(
         rating.score,
     ));
     state
-        .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestRated)
+        .publish_request_summary_refresh(&repo.incarnation(), RepoChangeReason::RequestRated)
         .await;
     let users = state
         .metadata

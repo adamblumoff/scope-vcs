@@ -245,40 +245,6 @@ async fn published_receive_pack_accepts_member_scope_session() {
 }
 
 #[tokio::test]
-async fn upload_pack_ignores_stale_durable_git_repos() {
-    let state = test_state_with_readme().await;
-    cache_test_jwks(&state);
-    let raw_repo = owner_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
-    let staged_repo = staged_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
-    fs::create_dir_all(&raw_repo).unwrap();
-    fs::create_dir_all(&staged_repo).unwrap();
-    fs::write(raw_repo.join("HEAD"), "not a real source of truth").unwrap();
-    fs::write(staged_repo.join("HEAD"), "not a real staged source").unwrap();
-
-    let headers = authorization_headers(bearer_header());
-
-    let repo_path = git_upload_pack_repo_for_request(
-        &state,
-        &headers,
-        TEST_REPO_OWNER,
-        TEST_REPO_NAME,
-        GitRemoteMode::Permissioned,
-    )
-    .await
-    .unwrap();
-    let actual = git_stdout_text(
-        &repo_path,
-        &["show", &format!("{DEFAULT_GIT_BRANCH}:README.md")],
-        "read bucket-backed projection",
-    )
-    .unwrap();
-
-    assert_eq!(actual, "hello");
-    let _ = fs::remove_dir_all(raw_repo);
-    let _ = fs::remove_dir_all(staged_repo);
-}
-
-#[tokio::test]
 async fn upload_pack_wrong_basic_credentials_do_not_reveal_repo_existence() {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -381,8 +347,7 @@ async fn unpublished_upload_pack_member_scope_session_stays_hidden() {
 async fn first_push_staging_repo_head_points_to_default_branch() {
     let state = test_state_with_repo();
     let staging_repo =
-        ensure_first_push_receive_pack_staging_repo(&state, TEST_REPO_OWNER, TEST_REPO_NAME)
-            .unwrap();
+        ensure_first_push_receive_pack_staging_repo(&state, &test_repo_incarnation()).unwrap();
     let head = git_stdout_text(
         &staging_repo,
         &["symbolic-ref", "HEAD"],

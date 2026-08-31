@@ -239,7 +239,7 @@ pub(crate) async fn accept_repository_invite(
         .await?;
     state
         .publish_repo_change(
-            &repo.record.id,
+            &repo.incarnation(),
             repo.record.change_version,
             RepoChangeReason::MemberAdded,
         )
@@ -269,8 +269,9 @@ where
     let user = require_scope_user(state, headers).await?;
     let repo = find_repo(state, owner, repo_name).await?;
     ensure_collaboration_owner_access(state, &repo, &user.id)?;
+    let incarnation = repo.incarnation();
     let result = mutate(user).await?;
-    publish_collaboration_change(state, owner, repo_name, event).await?;
+    publish_collaboration_change(state, owner, repo_name, &incarnation, event).await?;
     Ok(result)
 }
 
@@ -278,12 +279,22 @@ async fn publish_collaboration_change(
     state: &AppState,
     owner: &str,
     repo_name: &str,
+    expected_incarnation: &scope_domain::repository::RepositoryIncarnation,
     event: RepoChangeReason,
 ) -> Result<(), ApiError> {
-    let repo = find_repo(state, owner, repo_name).await?;
-    state
-        .publish_repo_change(&repo.record.id, repo.record.change_version, event)
-        .await;
+    let Some(repo) = state
+        .metadata
+        .repositories()
+        .repository(owner, repo_name)
+        .await?
+    else {
+        return Ok(());
+    };
+    if &repo.incarnation() == expected_incarnation {
+        state
+            .publish_repo_change(expected_incarnation, repo.record.change_version, event)
+            .await;
+    }
     Ok(())
 }
 

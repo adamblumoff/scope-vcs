@@ -12,7 +12,7 @@ impl AppState {
         for candidate in candidates {
             let git_source = candidate.git_head.as_ref().map(|head| {
                 (
-                    candidate.repo_id.as_str(),
+                    candidate.incarnation.clone(),
                     head,
                     candidate.git_pack_spans.as_slice(),
                 )
@@ -25,10 +25,10 @@ impl AppState {
                 .repositories()
                 .store_backfilled_repository_landing_file(&candidate.repo_id, landing_file)
                 .await?;
-            let cache_path = self.repository_engine.repository_path(&candidate.repo_id);
-            if cache_path.exists() {
-                std::fs::remove_dir_all(&cache_path)?;
-            }
+            let _ = self
+                .repository_engine
+                .delete_repository_cache(&candidate.incarnation)
+                .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
             stored += 1;
         }
         let remaining = self

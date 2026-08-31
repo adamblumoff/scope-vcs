@@ -9,7 +9,7 @@ use crate::{
 use scope_domain::{
     error::DomainError,
     repo_config::repo_config_fingerprint as domain_repo_config_fingerprint,
-    repository::{Repository, git::GitHead},
+    repository::{Repository, RepositoryIncarnation, git::GitHead},
     reviewed_updates::content::{ReviewedUpdateAuthorization, authorize_reviewed_update},
     runs::trigger::PushTriggerInput,
 };
@@ -21,6 +21,7 @@ use std::{path::Path, time::Instant};
 use super::ReceivePackAccess;
 
 pub(crate) struct PersistedGitPush {
+    pub(crate) incarnation: RepositoryIncarnation,
     pub(crate) head: GitHead,
     pub(crate) staged_segment: StagedGitSegment,
     pub(crate) write_lease: RepositoryGitWriteLease,
@@ -47,10 +48,12 @@ pub(super) async fn prepare_main_push(
         ReceivePackAccess::FirstPush {
             author_id,
             push_intent,
+            ..
         } => (author_id, push_intent, true),
         ReceivePackAccess::ReadyMember {
             author_id,
             push_intent,
+            ..
         } => (author_id, push_intent, false),
         ReceivePackAccess::RequestContributor { .. } => {
             return Err(ApiError::bad_request(
@@ -111,6 +114,7 @@ pub(crate) async fn persist_main_push(
     repo_name: &str,
     prepared: PreparedReceivePackUpdate,
     author_id: &str,
+    incarnation: &RepositoryIncarnation,
 ) -> Result<PersistedGitPush, ApiError> {
     let PreparedReceivePackUpdate {
         update,
@@ -154,6 +158,7 @@ pub(crate) async fn persist_main_push(
             .repositories()
             .apply_content_only_push(
                 scope_postgres::db::ApplyContentOnlyPushCommand {
+                    incarnation: incarnation.clone(),
                     owner: owner.to_string(),
                     name: repo_name.to_string(),
                     author_id: author_id.clone(),
@@ -186,6 +191,7 @@ pub(crate) async fn persist_main_push(
         tracing::info!("committed focused content-only push transaction");
         fence.release().await;
         return Ok(PersistedGitPush {
+            incarnation: incarnation.clone(),
             head: git_head,
             staged_segment,
             write_lease,
@@ -193,6 +199,7 @@ pub(crate) async fn persist_main_push(
     }
 
     let transaction_started = Instant::now();
+    let expected_incarnation = incarnation.clone();
     let git_head = state
         .metadata
         .repositories()
@@ -202,6 +209,11 @@ pub(crate) async fn persist_main_push(
             now_unix,
             &crate::persistence_ids::generate_persistence_id,
             move |repo| {
+                if repo.incarnation() != expected_incarnation {
+                    return Err(DomainError::conflict(
+                        "repository was recreated since push preparation",
+                    ));
+                }
                 let domain_started = Instant::now();
                 let mut update = update;
                 let push_policy = repo.push_policy_for_user_id(&author_id);
@@ -265,6 +277,7 @@ pub(crate) async fn persist_main_push(
     );
     fence.release().await;
     Ok(PersistedGitPush {
+        incarnation: incarnation.clone(),
         head: git_head,
         staged_segment,
         write_lease,

@@ -14,16 +14,25 @@ import {
   type RepoStreamEnd,
 } from './repo-event-stream'
 
+const TEST_INCARNATION_ID = 'repoi-owner-repo'
+
 const event = (version: number, reason = 'changed', repo_id = 'owner/repo') =>
   ({
+    incarnation_id: TEST_INCARNATION_ID,
     kind: { RepositoryChanged: { reason } },
     repo_id,
     version,
   }) satisfies RepoChangeEvent
 const laggedEvent = (repo_id = 'owner/repo') =>
-  ({ kind: 'Lagged', repo_id, version: 0 }) satisfies RepoChangeEvent
+  ({
+    incarnation_id: TEST_INCARNATION_ID,
+    kind: 'Lagged',
+    repo_id,
+    version: 0,
+  }) satisfies RepoChangeEvent
 const discussionEvent = (version: number) =>
   ({
+    incarnation_id: TEST_INCARNATION_ID,
     kind: {
       RequestTimelineChanged: {
         audience: 'Public',
@@ -37,6 +46,7 @@ const discussionEvent = (version: number) =>
   }) satisfies RepoChangeEvent
 const runEvent = (version: number) =>
   ({
+    incarnation_id: TEST_INCARNATION_ID,
     kind: {
       RunChanged: {
         change: 'StatusChanged',
@@ -56,17 +66,18 @@ afterEach(() => {
 test('SSE parsing returns explicit validated outcomes', () => {
   assert.deepEqual(
     parseRepoStreamMessage(
-      'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RepositoryChanged":{"reason":"visibility-changed"}}}',
+      'event: repo-change\ndata: {"repo_id":"owner/repo","incarnation_id":"repoi-owner-repo","version":2,"kind":{"RepositoryChanged":{"reason":"visibility-changed"}}}',
     ),
     { type: 'event', event: event(2, 'visibility-changed') },
   )
   assert.deepEqual(
     parseRepoStreamMessage(
-      'event: repo-change\ndata: {"repo_id":"owner/repo","version":3,"kind":{"RunChanged":{"run_id":"run-1","change":"LogsAppended"}}}',
+      'event: repo-change\ndata: {"repo_id":"owner/repo","incarnation_id":"repoi-owner-repo","version":3,"kind":{"RunChanged":{"run_id":"run-1","change":"LogsAppended"}}}',
     ),
     {
       type: 'event',
       event: {
+        incarnation_id: TEST_INCARNATION_ID,
         kind: { RunChanged: { change: 'LogsAppended', run_id: 'run-1' } },
         repo_id: 'owner/repo',
         version: 3,
@@ -80,7 +91,7 @@ test('SSE parsing returns explicit validated outcomes', () => {
     { type: 'protocol-error', failureClass: 'json-syntax', issuePath: '/data' },
   )
   const invalid = parseRepoStreamMessage(
-    'event: repo-change\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RequestTimelineChanged":{"request_id":"request-1"}}}',
+    'event: repo-change\ndata: {"repo_id":"owner/repo","incarnation_id":"repoi-owner-repo","version":2,"kind":{"RequestTimelineChanged":{"request_id":"request-1"}}}',
   )
   assert.equal(invalid.type, 'protocol-error')
   assert.equal(invalid.type === 'protocol-error' ? invalid.failureClass : '', 'schema')
@@ -160,7 +171,7 @@ test('stream decoding handles split CRLF frames before a public stream error', a
   const encoder = new TextEncoder()
   const chunks = [
     'event: repo-change\r',
-    '\ndata: {"repo_id":"owner/repo","version":2,"kind":{"RepositoryChanged":{"reason":"changed"}}}\r\n\r\n',
+    '\ndata: {"repo_id":"owner/repo","incarnation_id":"repoi-owner-repo","version":2,"kind":{"RepositoryChanged":{"reason":"changed"}}}\r\n\r\n',
     'event: error\r\ndata: {"code":"forbidden","message":"access changed","retryable":false}\r\n\r\n',
   ]
   globalThis.fetch = async () => new Response(new ReadableStream({
@@ -325,7 +336,12 @@ test('coordinator ignores stale, connected, and wrong-repo events', async () => 
   let refreshes = 0
   const coordinator = coordinatorFor(async () => { refreshes += 1 }, 2)
   coordinator.onEvent(event(2))
-  coordinator.onEvent({ kind: 'Connected', repo_id: 'owner/repo', version: 3 })
+  coordinator.onEvent({
+    incarnation_id: TEST_INCARNATION_ID,
+    kind: 'Connected',
+    repo_id: 'owner/repo',
+    version: 3,
+  })
   coordinator.onEvent(discussionEvent(3))
   coordinator.onEvent(runEvent(3))
   coordinator.onEvent(event(3, 'changed', 'other/repo'))

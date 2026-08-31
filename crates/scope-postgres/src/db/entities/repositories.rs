@@ -8,6 +8,7 @@ pub mod repository {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
+        pub incarnation_id: String,
         pub owner_handle: String,
         pub name: String,
         pub owner_user_id: String,
@@ -26,6 +27,7 @@ pub mod repository {
         pub fn from_domain(repo: &Repository) -> Result<Self, PostgresError> {
             Ok(Self {
                 id: repo.record.id.clone(),
+                incarnation_id: repo.record.incarnation_id.clone(),
                 owner_handle: repo.record.owner_handle.clone(),
                 name: repo.record.name.clone(),
                 owner_user_id: repo.record.owner_user_id.clone(),
@@ -50,6 +52,7 @@ pub mod repository {
             Ok(Repository {
                 record: RepoRecord {
                     id: self.id.clone(),
+                    incarnation_id: self.incarnation_id,
                     owner_handle: self.owner_handle,
                     name: self.name,
                     owner_user_id: self.owner_user_id,

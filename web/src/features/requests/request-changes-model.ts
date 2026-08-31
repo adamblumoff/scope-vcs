@@ -94,6 +94,14 @@ export function requestCommitForListId(
   return null
 }
 
+export function missingRequestCommitFileError(
+  commit: RequestRevisions['revisions'][number]['commits'][number],
+) {
+  return commit.files_truncated
+    ? 'This file is outside the bounded file list for the selected commit.'
+    : 'This file is not part of the selected commit.'
+}
+
 export function discussionsForRequestCommit(
   discussions: RequestDiscussion[],
   revision: RequestRevisions['revisions'][number] | null,

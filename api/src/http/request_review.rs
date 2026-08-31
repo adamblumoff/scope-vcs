@@ -115,8 +115,7 @@ pub(crate) async fn list_request_revisions(
         let (commits, inspection) = if let Some(commit_limit) = commit_limit {
             let inspected = with_request_revision_store_repo(
                 &state,
-                &owner,
-                &repo_name,
+                &repo.incarnation(),
                 &request,
                 revision,
                 |raw_repo| {
@@ -194,7 +193,6 @@ impl RequestRevisionListWorkBudget {
     fn claim_revision(&mut self, snapshot_bytes: u64) -> Option<usize> {
         let commit_limit = self.remaining_commits.min(MAX_LISTED_COMMITS_PER_REVISION);
         if commit_limit == 0
-            || self.remaining_files == 0
             || self.remaining_revisions == 0
             || snapshot_bytes > self.remaining_snapshot_bytes
         {
@@ -243,8 +241,7 @@ pub(crate) async fn get_request_revision_commit_file_diff(
     let path = normalized_path(&input.path)?;
     let (file, old_content, new_content) = with_request_revision_store_repo(
         &state,
-        &owner,
-        &repo_name,
+        &repo.incarnation(),
         &request,
         &revision,
         |raw_repo| {
@@ -318,12 +315,8 @@ fn request_revision_commits(
     for index in inspection_order {
         let commit = inspect_request_commit(raw_repo, repo, access, &commit_oids[index])?;
         metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
-        if let Some(summary) = commit.commit {
-            if summary.files.len() > remaining_files {
-                file_budget_incomplete = true;
-                continue;
-            }
-            remaining_files -= summary.files.len();
+        if let Some(mut summary) = commit.commit {
+            file_budget_incomplete |= truncate_commit_files(&mut summary, &mut remaining_files);
             visible.push((index, summary));
         }
     }
@@ -338,6 +331,17 @@ fn request_revision_commits(
             RequestRevisionInspectionState::Complete
         },
     })
+}
+
+fn truncate_commit_files(
+    commit: &mut RequestRevisionCommitResponse,
+    remaining_files: &mut usize,
+) -> bool {
+    let listed = commit.files.len().min(*remaining_files);
+    commit.files.truncate(listed);
+    commit.files_truncated = listed < commit.change_count;
+    *remaining_files = remaining_files.saturating_sub(listed);
+    commit.files_truncated
 }
 
 struct InspectedRequestCommits {
@@ -586,7 +590,20 @@ fn normalized_scope_path(path: &str) -> Result<ScopePath, ApiError> {
 mod tests {
     use super::{
         MAX_IMPORTED_REQUEST_REVISIONS, MAX_IMPORTED_REQUEST_SNAPSHOT_BYTES,
-        RequestRevisionListWorkBudget,
+        RequestRevisionListWorkBudget, request_revision_commits,
+    };
+    use scope_domain::{
+        account::UserAccount,
+        content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
+        content_ref::ContentRef,
+        policy::Visibility,
+        repository::Repository,
+        requests::RequestRevision,
+    };
+    use std::{
+        io::Write,
+        path::Path,
+        process::{Command, Stdio},
     };
 
     #[test]
@@ -612,6 +629,146 @@ mod tests {
 
         let mut file_budget = RequestRevisionListWorkBudget::new();
         file_budget.record_inspected(0, usize::MAX);
-        assert_eq!(file_budget.claim_revision(1), None);
+        assert!(file_budget.claim_revision(1).is_some());
+    }
+
+    #[test]
+    fn revision_response_keeps_oversized_commit_identity_and_prioritizes_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        git(directory.path(), &["init", "--quiet"], None);
+        let empty_tree = git(directory.path(), &["mktree"], Some(""));
+        let base = git(
+            directory.path(),
+            &["commit-tree", &empty_tree, "-m", "base"],
+            None,
+        );
+        let blob = git(
+            directory.path(),
+            &["hash-object", "-w", "--stdin"],
+            Some("content\n"),
+        );
+        let mut tree_entries = String::new();
+        for index in 0..10_001 {
+            tree_entries.push_str(&format!("100644 blob {blob}\tfile-{index:05}.txt\n"));
+        }
+        let oversized_tree = git(directory.path(), &["mktree"], Some(&tree_entries));
+        let oversized = git(
+            directory.path(),
+            &[
+                "commit-tree",
+                &oversized_tree,
+                "-p",
+                &base,
+                "-m",
+                "oversized",
+            ],
+            None,
+        );
+        tree_entries.push_str(&format!("100644 blob {blob}\tlast.txt\n"));
+        let last_tree = git(directory.path(), &["mktree"], Some(&tree_entries));
+        let last = git(
+            directory.path(),
+            &["commit-tree", &last_tree, "-p", &oversized, "-m", "last"],
+            None,
+        );
+        let revision = RequestRevision {
+            id: "revision-1".to_string(),
+            request_id: "request-1".to_string(),
+            position: 1,
+            actor_user_id: "owner-1".to_string(),
+            old_head_oid: base,
+            new_head_oid: last.clone(),
+            git_snapshot: SourceBlob {
+                content_ref: ContentRef::blob_sha256("snapshot"),
+                sha256: "snapshot".to_string(),
+                git_oid: "snapshot".to_string(),
+                git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+                size_bytes: 1,
+            },
+            created_at_unix: 1,
+        };
+        let owner = UserAccount {
+            id: "owner-1".to_string(),
+            handle: "owner".to_string(),
+            email: "owner@example.test".to_string(),
+            email_verified: true,
+        };
+        let repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
+        let access = repo.access_for_user_id(&owner.id);
+
+        let default = request_revision_commits(
+            directory.path(),
+            &repo,
+            access,
+            &revision,
+            None,
+            100,
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(default.visible.len(), 2);
+        assert_eq!(default.files_listed, 10_000);
+        assert_eq!(default.visible[0].oid, oversized);
+        assert_eq!(default.visible[0].change_count, 10_001);
+        assert_eq!(default.visible[0].files.len(), 9_999);
+        assert!(default.visible[0].files_truncated);
+        assert_eq!(default.visible[1].oid, last);
+        assert_eq!(default.visible[1].files.len(), 1);
+        assert!(!default.visible[1].files_truncated);
+
+        let selected = request_revision_commits(
+            directory.path(),
+            &repo,
+            access,
+            &revision,
+            Some(&oversized),
+            100,
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(selected.visible.len(), 2);
+        assert_eq!(selected.files_listed, 10_000);
+        assert_eq!(selected.visible[0].oid, oversized);
+        assert_eq!(selected.visible[0].files.len(), 10_000);
+        assert!(selected.visible[0].files_truncated);
+        assert_eq!(selected.visible[1].oid, last);
+        assert!(selected.visible[1].files.is_empty());
+        assert!(selected.visible[1].files_truncated);
+    }
+
+    fn git(repo: &Path, args: &[&str], stdin: Option<&str>) -> String {
+        let mut command = Command::new("git");
+        command
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "Scope Test")
+            .env("GIT_AUTHOR_EMAIL", "scope@example.test")
+            .env("GIT_AUTHOR_DATE", "1700000000 +0000")
+            .env("GIT_COMMITTER_NAME", "Scope Test")
+            .env("GIT_COMMITTER_EMAIL", "scope@example.test")
+            .env("GIT_COMMITTER_DATE", "1700000000 +0000")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if stdin.is_some() {
+            command.stdin(Stdio::piped());
+        }
+        let mut child = command.spawn().unwrap();
+        if let Some(input) = stdin {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 }

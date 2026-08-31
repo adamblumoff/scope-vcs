@@ -243,6 +243,7 @@ async fn incremental_git_pack_layout_restores_after_cache_loss() {
         TEST_REPO_NAME,
         update,
         &test_owner_id(),
+        &test_repo_incarnation(),
     )
     .await
     .unwrap();
@@ -315,6 +316,7 @@ async fn content_push_rejects_stale_reviewed_config() {
         TEST_REPO_NAME,
         update,
         &test_owner_id(),
+        &test_repo_incarnation(),
     )
     .await
     .unwrap_err();
@@ -325,4 +327,50 @@ async fn content_push_rejects_stale_reviewed_config() {
         "repo config changed since review; rerun scope push"
     );
     assert_eq!(stored_config(&state).await, newer_config);
+}
+
+#[tokio::test]
+async fn reviewed_push_cannot_cross_repository_recreation() {
+    let (state, source, _head_oid) = published_git_fixture("recreated-repository-push").await;
+    fs::write(source.join("README.md"), "prepared for predecessor\n").unwrap();
+    run_git(
+        Some(&source),
+        &["add", "README.md"],
+        "add predecessor update",
+    )
+    .unwrap();
+    commit_all(&source, "predecessor update");
+    let bare = bare_clone(&source, "recreated-repository-push-bare");
+    let update = receive_pack_update_from_staging_repo(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &bare,
+        &test_owner_id(),
+        repo_config(Visibility::Public),
+    )
+    .await
+    .unwrap();
+
+    let mut recreated = test_repo(&test_owner_id());
+    recreated.record.incarnation_id = "repoi_recreated".to_string();
+    state
+        .metadata
+        .repositories()
+        .recreate_repository_for_tests(recreated)
+        .await
+        .unwrap();
+
+    let error = git_receive_use_case::main_push::persist_main_push(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        update,
+        &test_owner_id(),
+        &test_repo_incarnation(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.status(), StatusCode::CONFLICT);
+    assert!(error.public_message().contains("recreated"));
 }

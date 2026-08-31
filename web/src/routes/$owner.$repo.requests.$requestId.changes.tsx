@@ -8,8 +8,8 @@ import {
   type LoadDiscussionsInput,
   loadRequestDiscussionsForRequest,
 } from '@/features/requests/request-discussion-api'
-import type { RequestDiscussionPage } from '@/features/requests/request-discussion-types'
 import { RequestChangesView } from '@/features/requests/request-changes-view'
+import { loadCompleteDiscussionReferencePages } from '@/features/requests/request-changes-discussion-references'
 import type {
   RequestChangesDiscussionReferences,
   RequestChangesSearch,
@@ -76,9 +76,8 @@ const loadDiscussionsForView = (data: LoadDiscussionsInput) =>
 export const Route = createFileRoute(
   '/$owner/$repo/requests/$requestId/changes',
 )({
-  loaderDeps: () => ({}),
-  loader: async ({ location, params }) => {
-    const selectionSearch = requestChangesSelectionSearch(location.search)
+  loaderDeps: ({ search }) => requestChangesSelectionSearch(search),
+  loader: async ({ deps: selectionSearch, params }) => {
     const input = {
       ...requestParamsForRoute(params),
       commit_oid: selectionSearch.commit,
@@ -180,18 +179,21 @@ async function initialDiscussionReferences(
       }
     }),
   )
-  const pages = await queries.reduce<Promise<Array<readonly [string, RequestDiscussionPage | null]>>>(
-    (loaded, query) => loaded.then((pages) => loadRequestDiscussionsForRequest({
-      ...params,
-      commit_oid: query.commit_oid,
-      include_revision_anchor: query.include_revision_anchor,
-      limit: 100,
-      revision_id: query.revision_id,
-    }).catch((error: unknown) => {
+  const byCommit = await loadCompleteDiscussionReferencePages(
+    queries.map((query) => ({
+      input: {
+        ...params,
+        commit_oid: query.commit_oid,
+        include_revision_anchor: query.include_revision_anchor,
+        limit: 100,
+        revision_id: query.revision_id,
+      },
+      key: query.key,
+    })),
+    loadRequestDiscussionsForRequest,
+    (error) => {
       console.error('Loading request commit discussion references failed', error)
-      return null
-    }).then((page) => [...pages, [query.key, page] as const])),
-    Promise.resolve([]),
+    },
   )
-  return { all: null, byCommit: Object.fromEntries(pages) }
+  return { all: null, byCommit }
 }

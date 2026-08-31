@@ -82,7 +82,7 @@ impl AppState {
                         self,
                         blob,
                         Some((
-                            candidate.repo_id.as_str(),
+                            candidate.incarnation.clone(),
                             &candidate.git_head,
                             candidate.git_pack_spans.as_slice(),
                         )),

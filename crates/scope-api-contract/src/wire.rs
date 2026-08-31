@@ -246,6 +246,7 @@ impl From<DomainRequestEventPayload> for RequestEventPayload {
 #[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
 pub struct RepoChangeEvent {
     pub repo_id: String,
+    pub incarnation_id: String,
     pub version: u64,
     pub kind: RepoChangeKind,
 }

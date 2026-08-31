@@ -317,6 +317,7 @@ function historyEntryToCommitState(
         audience: page.audience,
         author: resource.value.author,
         change_count: resource.value.file_change_count,
+        files_truncated: false,
         files: resource.value.files,
         logical_commit_id: resource.value.source_id,
         message: resource.value.message,

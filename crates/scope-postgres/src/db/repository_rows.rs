@@ -83,6 +83,11 @@ where
             "repository mutation cannot change repository identity",
         ));
     }
+    if before.record.incarnation_id != after.record.incarnation_id {
+        return Err(PostgresError::internal_message(
+            "repository mutation cannot change repository incarnation",
+        ));
+    }
 
     let before_row = entities::repository::Model::from_domain(before)?;
     let row = entities::repository::Model::from_domain(after)?;

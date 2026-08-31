@@ -1,5 +1,6 @@
 use scope_api_contract::RepoChangeNotification;
 pub(crate) use scope_api_contract::{RepoChangeEvent, RepoChangeKind, RunChangeKind};
+use scope_domain::repository::RepositoryIncarnation;
 use scope_domain::requests::RequestAudience as DomainRequestAudience;
 use std::{
     collections::BTreeMap,
@@ -153,12 +154,13 @@ impl RepoChangeBus {
 }
 
 pub(crate) fn repository_change_event(
-    repo_id: &str,
+    incarnation: &RepositoryIncarnation,
     version: u64,
     reason: RepoChangeReason,
 ) -> RepoChangeEvent {
     RepoChangeEvent {
-        repo_id: repo_id.to_string(),
+        repo_id: incarnation.repository_id().to_string(),
+        incarnation_id: incarnation.incarnation_id().to_string(),
         version,
         kind: match reason {
             RepoChangeReason::Connected => RepoChangeKind::Connected,
@@ -171,14 +173,15 @@ pub(crate) fn repository_change_event(
 }
 
 pub(crate) fn request_timeline_change_event(
-    repo_id: &str,
+    incarnation: &RepositoryIncarnation,
     request_id: String,
     discussion_id: String,
     through_position: u64,
     audience: DomainRequestAudience,
 ) -> RepoChangeEvent {
     RepoChangeEvent {
-        repo_id: repo_id.to_string(),
+        repo_id: incarnation.repository_id().to_string(),
+        incarnation_id: incarnation.incarnation_id().to_string(),
         version: 0,
         kind: RepoChangeKind::RequestTimelineChanged {
             request_id,
@@ -190,12 +193,13 @@ pub(crate) fn request_timeline_change_event(
 }
 
 pub(crate) fn run_change_event(
-    repo_id: &str,
+    incarnation: &RepositoryIncarnation,
     run_id: String,
     change: RunChangeKind,
 ) -> RepoChangeEvent {
     RepoChangeEvent {
-        repo_id: repo_id.to_string(),
+        repo_id: incarnation.repository_id().to_string(),
+        incarnation_id: incarnation.incarnation_id().to_string(),
         version: 0,
         kind: RepoChangeKind::RunChanged { run_id, change },
     }
@@ -204,33 +208,33 @@ pub(crate) fn run_change_event(
 impl crate::state::AppState {
     pub(crate) async fn publish_repo_change(
         &self,
-        repo_id: &str,
+        incarnation: &RepositoryIncarnation,
         version: u64,
         reason: RepoChangeReason,
     ) {
-        let event = repository_change_event(repo_id, version, reason);
+        let event = repository_change_event(incarnation, version, reason);
         self.publish_repo_event(event, "repo change").await;
     }
 
     pub(crate) async fn publish_request_summary_refresh(
         &self,
-        repo_id: &str,
+        incarnation: &RepositoryIncarnation,
         reason: RepoChangeReason,
     ) {
-        self.publish_repo_change(repo_id, REQUEST_SUMMARY_REFRESH_VERSION, reason)
+        self.publish_repo_change(incarnation, REQUEST_SUMMARY_REFRESH_VERSION, reason)
             .await;
     }
 
     pub(crate) async fn publish_request_timeline_change(
         &self,
-        repo_id: &str,
+        incarnation: &RepositoryIncarnation,
         request_id: String,
         discussion_id: String,
         through_position: u64,
         audience: scope_domain::requests::RequestAudience,
     ) {
         let event = request_timeline_change_event(
-            repo_id,
+            incarnation,
             request_id,
             discussion_id,
             through_position,
@@ -245,7 +249,20 @@ impl crate::state::AppState {
         run_id: String,
         change: RunChangeKind,
     ) {
-        let event = run_change_event(repo_id, run_id, change);
+        let incarnation = match self
+            .metadata
+            .repositories()
+            .run_repository_incarnation(&run_id, repo_id)
+            .await
+        {
+            Ok(Some(incarnation)) => incarnation,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(repo_id, error = %error.message, "failed to resolve run notification repository incarnation");
+                return;
+            }
+        };
+        let event = run_change_event(&incarnation, run_id, change);
         self.publish_repo_event(event, "run change").await;
     }
 
@@ -285,22 +302,27 @@ fn new_origin_id() -> String {
 mod tests {
     use super::*;
 
+    fn incarnation(repo_id: &str) -> RepositoryIncarnation {
+        RepositoryIncarnation::new(repo_id, format!("repoi_{repo_id}"))
+            .expect("test repository identity is valid")
+    }
+
     fn event(repo_id: &str) -> RepoChangeEvent {
-        repository_change_event(repo_id, 4, RepoChangeReason::PushReceived)
+        repository_change_event(&incarnation(repo_id), 4, RepoChangeReason::PushReceived)
     }
 
     #[test]
     fn typed_reasons_preserve_special_kinds_and_wire_reason() {
         assert_eq!(
-            repository_change_event("repo", 1, RepoChangeReason::Connected).kind,
+            repository_change_event(&incarnation("repo"), 1, RepoChangeReason::Connected).kind,
             RepoChangeKind::Connected
         );
         assert_eq!(
-            repository_change_event("repo", 1, RepoChangeReason::Lagged).kind,
+            repository_change_event(&incarnation("repo"), 1, RepoChangeReason::Lagged).kind,
             RepoChangeKind::Lagged
         );
         assert_eq!(
-            repository_change_event("repo", 1, RepoChangeReason::ConfigApplied).kind,
+            repository_change_event(&incarnation("repo"), 1, RepoChangeReason::ConfigApplied).kind,
             RepoChangeKind::RepositoryChanged {
                 reason: "config-applied".to_string(),
             }
@@ -310,9 +332,14 @@ mod tests {
     #[test]
     fn run_changes_preserve_the_run_and_change_kind() {
         assert_eq!(
-            run_change_event("repo", "run_1".to_string(), RunChangeKind::LogsAppended),
+            run_change_event(
+                &incarnation("repo"),
+                "run_1".to_string(),
+                RunChangeKind::LogsAppended
+            ),
             RepoChangeEvent {
                 repo_id: "repo".to_string(),
+                incarnation_id: "repoi_repo".to_string(),
                 version: 0,
                 kind: RepoChangeKind::RunChanged {
                     run_id: "run_1".to_string(),

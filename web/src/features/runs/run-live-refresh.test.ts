@@ -44,9 +44,19 @@ test('connected and lagged events request recovery refreshes', async () => {
   const coordinator = createCoordinator(async (reasons) => {
     received.push([...reasons])
   })
-  coordinator.onEvent({ kind: 'Connected', repo_id: 'repo-1', version: 1 })
+  coordinator.onEvent({
+    incarnation_id: 'repoi-repo-1',
+    kind: 'Connected',
+    repo_id: 'repo-1',
+    version: 1,
+  })
   await tick()
-  coordinator.onEvent({ kind: 'Lagged', repo_id: 'repo-1', version: 0 })
+  coordinator.onEvent({
+    incarnation_id: 'repoi-repo-1',
+    kind: 'Lagged',
+    repo_id: 'repo-1',
+    version: 0,
+  })
   await tick()
   assert.deepEqual(received, [['Recovery'], ['Recovery']])
 })
@@ -146,6 +156,7 @@ function runEvent(
   change: 'Created' | 'StatusChanged' | 'LogsAppended',
 ): RepoChangeEvent {
   return {
+    incarnation_id: `repoi-${repoId}`,
     kind: { RunChanged: { change, run_id: runId } },
     repo_id: repoId,
     version: 1,

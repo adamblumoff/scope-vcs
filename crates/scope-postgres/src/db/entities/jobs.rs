@@ -161,6 +161,7 @@ pub mod repo_storage_cleanup_job {
         pub generation: String,
         pub owner_handle: String,
         pub repo_name: String,
+        pub incarnation_id: String,
         pub attempts: i32,
         pub next_run_at_unix: i64,
         pub last_error: Option<String>,
@@ -188,6 +189,7 @@ pub mod repo_storage_cleanup_job {
                 generation,
                 owner_handle: cleanup.owner_handle.clone(),
                 repo_name: cleanup.repo_name.clone(),
+                incarnation_id: cleanup.incarnation.incarnation_id().to_string(),
                 attempts: 0,
                 next_run_at_unix: now_unix,
                 last_error: None,
@@ -201,6 +203,11 @@ pub mod repo_storage_cleanup_job {
             RepoStorageCleanup {
                 owner_handle: self.owner_handle,
                 repo_name: self.repo_name,
+                incarnation: scope_domain::repository::RepositoryIncarnation::new(
+                    self.repo_id,
+                    self.incarnation_id,
+                )
+                .expect("persisted cleanup identity is nonempty"),
             }
         }
     }

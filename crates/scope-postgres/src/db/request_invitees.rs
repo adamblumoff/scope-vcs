@@ -540,7 +540,7 @@ mod tests {
     fn catalog(target_count: usize) -> crate::db::CatalogFixture {
         let owner = user("user_owner", "owner");
         let author = user("user_author", "author");
-        let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
         repo.record.lifecycle_state = RepoLifecycleState::Ready;
         let mut catalog = crate::db::CatalogFixture::default();
         catalog.users.insert(owner.id.clone(), owner);

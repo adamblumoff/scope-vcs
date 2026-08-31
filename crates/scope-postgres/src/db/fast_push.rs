@@ -10,8 +10,8 @@ use {
     scope_domain::{
         landing_file::RepositoryLandingFileMutation,
         repo_config::RepoConfig,
-        repository::RepoLifecycleState,
         repository::access::repository_push_policy_for_user_id,
+        repository::{RepoLifecycleState, RepositoryIncarnation},
         reviewed_updates::content::{
             ReviewedUpdateAuthorization, ReviewedUpdateInput, authorize_reviewed_update,
         },
@@ -20,6 +20,7 @@ use {
 };
 
 pub struct ApplyContentOnlyPushCommand {
+    pub incarnation: RepositoryIncarnation,
     pub owner: String,
     pub name: String,
     pub author_id: String,
@@ -38,6 +39,7 @@ impl RepositoryStore {
         generated_ids: &dyn GeneratedIdSource,
     ) -> Result<Option<scope_domain::repository::git::GitHead>, PostgresError> {
         let ApplyContentOnlyPushCommand {
+            incarnation,
             owner,
             name,
             author_id,
@@ -63,6 +65,13 @@ impl RepositoryStore {
             .await
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::not_found(format!("repo {owner}/{name} not found")))?;
+        if repo_row.incarnation_id != incarnation.incarnation_id()
+            || repo_row.id != incarnation.repository_id()
+        {
+            return Err(PostgresError::conflict(
+                "repository was recreated since push preparation",
+            ));
+        }
         let publication_state: RepoLifecycleState = serde_json::from_value(
             serde_json::Value::String(repo_row.publication_state.clone()),
         )

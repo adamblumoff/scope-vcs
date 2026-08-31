@@ -26,9 +26,48 @@ pub enum RepoLifecycleState {
     Ready,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RepositoryIncarnation {
+    repository_id: String,
+    incarnation_id: String,
+}
+
+impl RepositoryIncarnation {
+    pub fn new(
+        repository_id: impl Into<String>,
+        incarnation_id: impl Into<String>,
+    ) -> Result<Self, CatalogError> {
+        let repository_id = repository_id.into();
+        let incarnation_id = incarnation_id.into();
+        if repository_id.trim().is_empty() {
+            return Err(CatalogError::InvalidRepositoryIdentity(
+                "repository id is required".to_string(),
+            ));
+        }
+        if incarnation_id.trim().is_empty() {
+            return Err(CatalogError::InvalidRepositoryIdentity(
+                "repository incarnation id is required".to_string(),
+            ));
+        }
+        Ok(Self {
+            repository_id,
+            incarnation_id,
+        })
+    }
+
+    pub fn repository_id(&self) -> &str {
+        &self.repository_id
+    }
+
+    pub fn incarnation_id(&self) -> &str {
+        &self.incarnation_id
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoRecord {
     pub id: String,
+    pub incarnation_id: String,
     pub owner_handle: String,
     pub name: String,
     pub owner_user_id: String,
@@ -57,13 +96,16 @@ impl Repository {
         owner: &UserAccount,
         name: &str,
         default_visibility: Visibility,
+        incarnation_id: impl Into<String>,
     ) -> Result<Self, CatalogError> {
         let name = validate_repo_name(name)?;
         let id = repo_id(&owner.handle, &name);
+        let incarnation = RepositoryIncarnation::new(id.clone(), incarnation_id)?;
         let config_default = ConfigVisibility::from(default_visibility);
         Ok(Self {
             record: RepoRecord {
                 id: id.clone(),
+                incarnation_id: incarnation.incarnation_id,
                 owner_handle: owner.handle.clone(),
                 name,
                 owner_user_id: owner.id.clone(),
@@ -89,6 +131,10 @@ impl Repository {
 
     pub fn is_owner_user(&self, user_id: &str) -> bool {
         self.record.owner_user_id == user_id
+    }
+
+    pub fn incarnation(&self) -> RepositoryIncarnation {
+        self.record.incarnation()
     }
 
     pub fn member_for_user(&self, user_id: &str) -> Option<&RepositoryMember> {
@@ -130,6 +176,15 @@ impl Repository {
 
     pub fn has_file_for_visibility_update(&self, path: &ScopePath) -> bool {
         self.graph_has_file(path)
+    }
+}
+
+impl RepoRecord {
+    pub fn incarnation(&self) -> RepositoryIncarnation {
+        RepositoryIncarnation {
+            repository_id: self.id.clone(),
+            incarnation_id: self.incarnation_id.clone(),
+        }
     }
 }
 
@@ -184,4 +239,6 @@ fn validate_repo_name(name: &str) -> Result<String, CatalogError> {
 pub enum CatalogError {
     #[error("{0}")]
     InvalidRepositoryName(String),
+    #[error("{0}")]
+    InvalidRepositoryIdentity(String),
 }

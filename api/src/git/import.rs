@@ -13,7 +13,7 @@ pub(crate) use self::repo_io::{
 };
 pub(crate) use self::repo_io::{
     best_effort_delete_staged_git_segment, git_snapshot_from_ref, run_git, run_git_output,
-    run_git_output_bounded, safe_repo_key, validate_pushed_commit_range, validate_pushed_tree,
+    run_git_output_bounded, validate_pushed_commit_range, validate_pushed_tree,
 };
 #[cfg(test)]
 pub(crate) use self::staging::ReceivePackFileChange;
