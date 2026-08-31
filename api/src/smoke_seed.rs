@@ -3,7 +3,8 @@ use crate::{
     demo_seed::{DevSeedUser, catalog, seed_request_discussion_gallery},
     object_store_config::{encryption_key_from_env, git_segment_store_from_env, s3_from_env},
 };
-use scope_object_store::EncryptedObjectStore;
+use scope_domain::landing_file::{REPOSITORY_LANDING_FILE_PATH, RepositoryLandingFile};
+use scope_object_store::{EncryptedObjectStore, ObjectStore, source_blob_bytes};
 use scope_postgres::db::MetadataStore;
 use std::sync::Arc;
 
@@ -60,6 +61,7 @@ pub async fn run() -> anyhow::Result<()> {
     let git_segment_store = git_segment_store_from_env(local_root, encryption_key)?;
     let fixture = catalog(&object_store, &git_segment_store, target.seed_user)
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
+    let landing_files = landing_file_snapshots(&fixture, &object_store)?;
     let metadata = MetadataStore::connect(database_url_from_env()?).await?;
     metadata
         .admin()
@@ -69,8 +71,42 @@ pub async fn run() -> anyhow::Result<()> {
     seed_request_discussion_gallery(&metadata)
         .await
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
-    println!(r#"{{"seeded":"dev/public-demo"}}"#);
+    for (repo_id, landing_file) in &landing_files {
+        metadata
+            .repositories()
+            .store_backfilled_repository_landing_file(repo_id, landing_file.clone())
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("storing staging smoke landing file for {repo_id}: {error}")
+            })?;
+    }
+    println!(
+        r#"{{"seeded":"dev/public-demo","landingFilesSeeded":{}}}"#,
+        landing_files.len()
+    );
     Ok(())
+}
+
+fn landing_file_snapshots(
+    fixture: &scope_postgres::db::CatalogFixture,
+    object_store: &dyn ObjectStore,
+) -> anyhow::Result<Vec<(String, RepositoryLandingFile)>> {
+    let mut snapshots = Vec::new();
+    for repository in fixture.repositories.values() {
+        let Some((_, blob)) = repository
+            .live_files
+            .iter()
+            .find(|(path, _)| path.as_str() == REPOSITORY_LANDING_FILE_PATH)
+        else {
+            continue;
+        };
+        let bytes = source_blob_bytes(object_store, blob)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let landing_file = RepositoryLandingFile::from_source_blob(blob, bytes)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        snapshots.push((repository.record.id.clone(), landing_file));
+    }
+    Ok(snapshots)
 }
 
 fn validate(snapshot: &Snapshot) -> anyhow::Result<Target> {
@@ -147,6 +183,7 @@ fn require_exact(name: &str, actual: Option<&str>, expected: &str) -> anyhow::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scope_object_store::MemoryObjectStore;
 
     fn valid_snapshot() -> Snapshot {
         Snapshot {
@@ -212,5 +249,28 @@ mod tests {
             mutate(&mut snapshot);
             assert!(validate(&snapshot).is_err());
         }
+    }
+
+    #[test]
+    fn derives_landing_files_from_the_seed_catalog() {
+        let object_store = EncryptedObjectStore::new(Arc::new(MemoryObjectStore::new()), [7; 32]);
+        let fixture = catalog(
+            &object_store,
+            DevSeedUser {
+                email: "smoke@example.test".into(),
+                handle: "dev".into(),
+            },
+        )
+        .unwrap();
+
+        let landing_files = landing_file_snapshots(&fixture, &object_store).unwrap();
+
+        assert_eq!(landing_files.len(), 1);
+        assert_eq!(landing_files[0].0, "dev/public-demo");
+        assert!(
+            std::str::from_utf8(&landing_files[0].1.content_bytes)
+                .unwrap()
+                .contains("<h1>Public by design.</h1>")
+        );
     }
 }

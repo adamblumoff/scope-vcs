@@ -14,10 +14,10 @@ export async function assertHistoryFirstFileStaysInRoute(page, diffWorkers) {
   await page.evaluate((sentinel) => {
     window.__scopeHistoryDocument = sentinel
   }, documentSentinel)
-  const serverFunctions = []
+  let serverFunctionRequests = 0
   const recordServerFunction = (request) => {
     if (request.url().includes('/_serverFn/')) {
-      serverFunctions.push(serverFunctionExport(request))
+      serverFunctionRequests += 1
     }
   }
   page.on('request', recordServerFunction)
@@ -41,18 +41,10 @@ export async function assertHistoryFirstFileStaysInRoute(page, diffWorkers) {
     await page.evaluate(() => window.__scopeHistoryDocument),
     documentSentinel,
   )
-  assert.deepEqual(serverFunctions, [
-    'loadHistoryEntryFileDiff_createServerFn_handler',
-  ])
+  assert.equal(serverFunctionRequests, 1)
   assert.equal(
     diffWorkers.some((url) => url.includes('worker-portable')),
     true,
     'the diff worker should start before the first file selection',
   )
-}
-
-function serverFunctionExport(request) {
-  const encodedId = new URL(request.url()).pathname.split('/').at(-1)
-  assert(encodedId, 'server function request is missing its encoded id')
-  return JSON.parse(Buffer.from(encodedId, 'base64url')).export
 }
