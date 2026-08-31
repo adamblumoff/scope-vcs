@@ -1,4 +1,5 @@
 import { createApiClient } from '@/api/client'
+import { prerenderReviewFileDiff } from '@/features/review/review-file-diff-prerender'
 import type {
   RequestDetail,
   RequestList,
@@ -76,10 +77,15 @@ export type LoadRequestRevisionCommitInput = RequestParams & {
 export async function loadRequestRevisionCommitFileDiffForRequest(
   data: LoadRequestRevisionCommitInput & { path: string },
 ): Promise<ReviewFileDiff> {
-  return createApiClient().get<ReviewFileDiff>(
+  const diff = await createApiClient().get<ReviewFileDiff>(
     `${requestRevisionCommitRoute(ApiRouteTemplates.repoRequestRevisionCommitFileDiff, data)}?path=${encodeURIComponent(data.path)}`,
     { auth: 'optional' },
   )
+
+  return {
+    ...diff,
+    prerenderedHtml: await prerenderReviewFileDiff(diff),
+  }
 }
 
 

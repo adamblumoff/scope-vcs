@@ -133,7 +133,9 @@ export type CommitDetail = CommitSummary & {
 export type HistoryPage = HistoryPageResponse
 export type HistoryEntrySummary = HistoryEntrySummaryResponse
 export type HistoryEntryDetail = HistoryEntryDetailResponse
-export type ReviewFileDiff = ReviewFileDiffResponse
+export type ReviewFileDiff = ReviewFileDiffResponse & {
+  prerenderedHtml?: string | null
+}
 export type RequestList = RequestListResponse
 export type RequestListItem = RequestListItemResponse
 export type RequestDetail = RequestDetailResponse

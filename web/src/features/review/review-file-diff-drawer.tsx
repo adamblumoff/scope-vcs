@@ -5,26 +5,14 @@ import { PendingSurface } from '@/components/pending-surface'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { parseDiffFromFile, type FileDiffMetadata } from '@pierre/diffs'
-import { FileDiff } from '@pierre/diffs/react'
-import { useThemeType } from '@/lib/use-theme-type'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
-import { type ReactNode, useLayoutEffect, useMemo, useRef } from 'react'
+import { type ReactNode, useLayoutEffect, useRef } from 'react'
 import {
   type BinaryContentSide,
   type ReviewFileContent,
   reviewContentSides,
   type TextContentSide,
 } from './review-file-content'
-import { parsedDiffForReviewFile } from './review-file-diff-cache'
-
-const PIERRE_DIFF_OPTIONS = {
-  diffStyle: 'unified',
-  disableFileHeader: true,
-  hunkSeparators: 'line-info-basic',
-  lineDiffType: 'word',
-  overflow: 'wrap',
-} as const
 
 export function ReviewFileDiffDrawer({
   cacheKey,
@@ -49,26 +37,11 @@ export function ReviewFileDiffDrawer({
   scrollTop?: number
   selectedPath: string | null
 }) {
-  const themeType = useThemeType()
-  const fileDiff = useMemo(
-    () =>
-      diff
-        ? parsedDiffForReviewFile(diff, cacheKey, diffMetadataForReviewFile)
-        : null,
-    [cacheKey, diff],
-  )
-  const contentSides = useMemo(
-    () => (diff ? reviewContentSides(diff) : { binary: [], text: [] }),
-    [diff],
-  )
-  const diffOptions = useMemo(
-    () => ({ ...PIERRE_DIFF_OPTIONS, themeType }),
-    [themeType],
-  )
+  const contentSides = diff ? reviewContentSides(diff) : { binary: [], text: [] }
   const displayName = displayPath(diff?.path ?? selectedPath ?? '')
   const scrollRef = useRef<HTMLDivElement>(null)
   const restoredScrollKeyRef = useRef<string | null>(null)
-  const scrollKey = cacheKey ?? selectedPath
+  const scrollKey = cacheKey ?? selectedPath ?? null
 
   useLayoutEffect(() => {
     if (restoredScrollKeyRef.current === scrollKey) return
@@ -142,14 +115,8 @@ export function ReviewFileDiffDrawer({
             />
           ) : contentSides.binary.length > 0 ? (
             <BinaryDiffState sides={contentSides.binary} />
-          ) : fileDiff && fileDiff.hunks.length > 0 ? (
-            <div className="review-diff-viewer scope-content-enter">
-              <FileDiff
-                disableWorkerPool={typeof Worker === 'undefined'}
-                fileDiff={fileDiff}
-                options={diffOptions}
-              />
-            </div>
+          ) : diff?.prerenderedHtml ? (
+            <PrerenderedDiff html={diff.prerenderedHtml} />
           ) : (
             <PanelState>
               <FileText className="size-5" />
@@ -159,6 +126,28 @@ export function ReviewFileDiffDrawer({
         </div>
       </div>
     </aside>
+  )
+}
+
+function PrerenderedDiff({ html }: { html: string }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const host = document.createElement('diffs-container')
+    const shadowRoot = host.attachShadow({ mode: 'open' })
+    shadowRoot.innerHTML = html
+    container.replaceChildren(host)
+  }, [html])
+
+  return (
+    <div
+      className="review-diff-viewer scope-content-enter"
+      ref={containerRef}
+      suppressHydrationWarning
+    />
   )
 }
 
@@ -181,28 +170,6 @@ function DiffSkeleton() {
       ))}
     </div>
   )
-}
-
-function diffMetadataForReviewFile(diff: ReviewFileDiff): FileDiffMetadata | null {
-  const oldText = textContents(diff.old_content)
-  const newText = textContents(diff.new_content)
-  if (oldText === null || newText === null) return null
-
-  return parseDiffFromFile(
-    {
-      contents: oldText,
-      name: diff.path,
-    },
-    {
-      contents: newText,
-      name: diff.path,
-    },
-  )
-}
-
-function textContents(content: ReviewFileContent | null) {
-  if (!content) return ''
-  return content.kind === 'text' ? content.text : null
 }
 
 function BinaryDiffState({ sides }: { sides: BinaryContentSide[] }) {

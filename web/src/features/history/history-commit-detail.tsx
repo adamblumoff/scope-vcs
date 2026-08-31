@@ -13,7 +13,6 @@ import type {
 } from '@/features/history/history-state'
 import { ArrowRight, GitCommit, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useRef } from 'react'
-import { ReviewDiffRuntimeProvider } from '../review/review-diff-runtime-provider'
 import { ReviewFileDiffDrawer } from '../review/review-file-diff-drawer'
 
 const EMPTY_VISIBILITY_CHANGES: HistoryEntryDetail['visibility_changes'] = []
@@ -35,11 +34,7 @@ type CommitDetailPanelProps = {
 }
 
 export function CommitDetailPanel(props: CommitDetailPanelProps) {
-  return (
-    <ReviewDiffRuntimeProvider>
-      <CommitDetailPanelContent {...props} />
-    </ReviewDiffRuntimeProvider>
-  )
+  return <CommitDetailPanelContent {...props} />
 }
 
 function CommitDetailPanelContent({

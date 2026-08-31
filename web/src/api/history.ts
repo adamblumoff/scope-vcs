@@ -1,4 +1,5 @@
 import { createApiClient } from '@/api/client'
+import { prerenderReviewFileDiff } from '@/features/review/review-file-diff-prerender'
 import { parseHistoryAudience } from './history-inputs'
 import type {
   HistoryEntryDetail,
@@ -55,7 +56,7 @@ export async function loadHistoryEntryFileDiffForRequest(
     path: data.path,
   })
 
-  return createApiClient().get<ReviewFileDiff>(
+  const diff = await createApiClient().get<ReviewFileDiff>(
     `${buildApiPath(ApiRouteTemplates.repoHistoryEntryFileDiff, {
       owner: data.owner,
       repo: data.repo,
@@ -63,4 +64,9 @@ export async function loadHistoryEntryFileDiffForRequest(
     })}?${query}`,
     { auth: 'optional' },
   )
+
+  return {
+    ...diff,
+    prerenderedHtml: await prerenderReviewFileDiff(diff),
+  }
 }
