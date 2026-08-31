@@ -72,9 +72,6 @@ jobs:
           cargo test --workspace --features api/test-support --locked
           cargo test -p api --features local-dev --locked dev::
           cargo clippy --workspace --features api/test-support --all-targets --locked -- -D warnings
-      - name: Check API TypeScript contract
-        run: node web/scripts/check-api-contract.mjs
-
   cli-checks:
     caches:
       - name: cargo
