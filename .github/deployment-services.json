@@ -70,6 +70,8 @@
         ".github/source-size-audit.json",
         ".github/scripts/production-deployment-progress.mjs",
         ".github/scripts/production-deployment-progress.test.mjs",
+        ".github/scripts/railway-service-health.mjs",
+        ".github/scripts/railway-service-health.test.mjs",
         ".github/workflows/scope-production-deploy.yml",
         "dev/check"
       ],

@@ -24,7 +24,13 @@ deployment_component="${SCOPE_DEPLOYMENT_COMPONENT:-}"
 deployment_source_sha="${SCOPE_DEPLOYMENT_SOURCE_SHA:-${GITHUB_SHA:-}}"
 deployment_evidence_path="${SCOPE_DEPLOYMENT_EVIDENCE_PATH:-}"
 verified_successful_sha="${SCOPE_VERIFIED_SUCCESSFUL_SHA:-}"
+defer_service_health="${SCOPE_DEFER_SERVICE_HEALTH:-0}"
 deployment_was_skipped=0
+
+if [[ "$defer_service_health" != "0" && "$defer_service_health" != "1" ]]; then
+  echo "SCOPE_DEFER_SERVICE_HEALTH must be 0 or 1." >&2
+  exit 2
+fi
 
 deploy_message_from_event() {
   local raw_message="${RAILWAY_DEPLOY_MESSAGE:-}"
@@ -59,6 +65,40 @@ ensure_service_exists() {
     echo "Create the service in Railway, configure its variables, then rerun this workflow."
     return 1
   fi
+}
+
+service_is_healthy() {
+  local service_name="$1"
+  local expected_deployment_id="${2:-}"
+  local services_json
+  services_json="$(
+    railway service list \
+      --project "$RAILWAY_PROJECT_ID" \
+      --environment "$railway_environment" \
+      --json
+  )"
+  SCOPE_RAILWAY_SERVICES_JSON="$services_json" \
+    SCOPE_RAILWAY_SERVICE_ID="$service_name" \
+    SCOPE_EXPECTED_RAILWAY_DEPLOYMENT_ID="$expected_deployment_id" \
+    node .github/scripts/railway-service-health.mjs >/dev/null
+}
+
+wait_for_service_health() {
+  local service_name="$1"
+  local expected_deployment_id="${2:-}"
+  local timeout="${SCOPE_SERVICE_HEALTH_TIMEOUT_SECONDS:-600}"
+  local interval="${SCOPE_SERVICE_HEALTH_POLL_SECONDS:-10}"
+  local deadline=$((SECONDS + timeout))
+  while true; do
+    if service_is_healthy "$service_name" "$expected_deployment_id" 2>/dev/null; then
+      return 0
+    fi
+    (( SECONDS < deadline )) || break
+    sleep "$interval"
+  done
+  service_is_healthy "$service_name" "$expected_deployment_id" || true
+  echo "Timed out waiting for $service_name to reach its exact healthy deployment." >&2
+  return 1
 }
 
 print_deployment_logs() {
@@ -225,6 +265,13 @@ process.exit(1);
 )"
 
 wait_for_deployment "$service_name" "$deployment_id"
+if [[ "$defer_service_health" == "0" ]]; then
+  if [[ "$deployment_was_skipped" == "1" ]]; then
+    service_is_healthy "$service_name"
+  else
+    wait_for_service_health "$service_name" "$deployment_id"
+  fi
+fi
 if [[ "$deployment_was_skipped" == "0" ]]; then
   record_deployment_evidence "$deployment_id"
 fi

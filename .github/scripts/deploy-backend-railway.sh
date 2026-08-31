@@ -270,29 +270,31 @@ console.log([
 
 wait_for_service_health() {
   local service_name="$1"
-  local deadline=$((SECONDS + 600))
-  local line status running crashed configured stopped id
-  while (( SECONDS < deadline )); do
-    line="$(service_state_line "$service_name" || true)"
-    if [[ -n "$line" ]]; then
-      IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
-      if [[ "$status" == "SUCCESS" && "$stopped" == "0" && "$configured" -gt 0 \
-        && "$running" == "$configured" && "${crashed:-0}" == "0" ]]; then
-        return 0
-      fi
+  local expected_deployment_id="${2:-}"
+  local timeout="${SCOPE_SERVICE_HEALTH_TIMEOUT_SECONDS:-600}"
+  local interval="${SCOPE_SERVICE_HEALTH_POLL_SECONDS:-10}"
+  local deadline=$((SECONDS + timeout))
+  while true; do
+    if service_is_healthy "$service_name" "$expected_deployment_id" 2>/dev/null; then
+      return 0
     fi
-    sleep 10
+    (( SECONDS < deadline )) || break
+    sleep "$interval"
   done
+  service_is_healthy "$service_name" "$expected_deployment_id" || true
   echo "Timed out waiting for $service_name to reach its configured healthy replica count." >&2
   return 1
 }
 
 service_is_healthy() {
-  local line status running crashed configured stopped id
-  line="$(service_state_line "$1")"
-  IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
-  [[ "$status" == "SUCCESS" && "$stopped" == "0" && "$configured" -gt 0 \
-    && "$running" == "$configured" && "${crashed:-0}" == "0" ]]
+  local service_name="$1"
+  local expected_deployment_id="${2:-}"
+  local services_json
+  services_json="$(railway service list "${railway_scope[@]}" --json)"
+  SCOPE_RAILWAY_SERVICES_JSON="$services_json" \
+    SCOPE_RAILWAY_SERVICE_ID="$service_name" \
+    SCOPE_EXPECTED_RAILWAY_DEPLOYMENT_ID="$expected_deployment_id" \
+    node .github/scripts/railway-service-health.mjs >/dev/null
 }
 
 running_replicas() {
@@ -589,7 +591,7 @@ if (response.data?.[field] !== true) {
 
 restart_service() {
   deployment_action Restart "$1"
-  wait_for_service_health "$1"
+  wait_for_service_health "$1" "${2:-}"
 }
 
 quiesce_writers() {
@@ -653,20 +655,34 @@ deploy_release() {
   verified_sha="$(successful_revision "$component")"
   SCOPE_DEPLOYMENT_COMPONENT="$component" \
     SCOPE_DEPLOYMENT_EVIDENCE_PATH="$pending_evidence_path" \
+    SCOPE_DEFER_SERVICE_HEALTH=1 \
     SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
     bash .github/scripts/deploy-railway.sh "$service_name" "$upload_root"
+}
+
+pending_deployment_id() {
+  local component="$1"
+  [[ -n "$pending_evidence_path" && -s "$pending_evidence_path" ]] || return 0
+  COMPONENT="$component" EVIDENCE_PATH="$pending_evidence_path" node -e '
+const { readFileSync } = require("node:fs");
+const records = readFileSync(process.env.EVIDENCE_PATH, "utf8")
+  .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+const evidence = records.findLast(({component}) => component === process.env.COMPONENT);
+process.stdout.write(evidence?.evidenceId || "");
+'
 }
 
 activate_release() {
   local component="$1"
   local service_name="$2"
   local upload_root="$3"
+  local expected_deployment_id
   deploy_release "$component" "$service_name" "$upload_root"
+  expected_deployment_id="$(pending_deployment_id "$component")"
   if [[ "$(running_replicas "$service_name")" == "0" ]]; then
-    restart_service "$service_name"
-  else
-    wait_for_service_health "$service_name"
+    deployment_action Restart "$service_name"
   fi
+  wait_for_service_health "$service_name" "$expected_deployment_id"
 }
 
 promote_pending_evidence() {
@@ -690,11 +706,11 @@ deploy_selected_releases() {
     promote_pending_evidence
   fi
   if [[ "$deploy_worker_requested" == "1" ]]; then
-    deploy_release worker "$worker_service" "$worker_upload_root"
+    activate_release worker "$worker_service" "$worker_upload_root"
     promote_pending_evidence
   fi
   if [[ "$deploy_api_requested" == "1" ]]; then
-    deploy_release api "$api_service" "$api_upload_root"
+    activate_release api "$api_service" "$api_upload_root"
     promote_pending_evidence
   fi
 }

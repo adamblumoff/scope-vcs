@@ -81,6 +81,9 @@ jobs:
       - name: Test production deployment progress
         run: node --test .github/scripts/production-deployment-progress.test.mjs
 
+      - name: Test Railway service health policy
+        run: node --test .github/scripts/railway-service-health.test.mjs
+
       - name: Test deployment planner
         run: node --test .github/scripts/plan-production-deployment.test.mjs
 
@@ -307,3 +310,66 @@ jobs:
     with:
       verified_successful_sha: ${{ fromJSON(needs.plan.outputs.deployed_revisions || '{}').cli || '' }}
     secrets: inherit
+
+  production-health-gate:
+    name: Production Railway health gate
+    needs: [plan, production-validation-gate, backend-deploy, web-deploy, cli-deploy]
+    if: >-
+      !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      needs.production-validation-gate.result == 'success' &&
+      (((needs.plan.outputs.cache == 'true' ||
+      needs.plan.outputs.worker == 'true' ||
+      needs.plan.outputs.router == 'true' ||
+      needs.plan.outputs.api == 'true') &&
+      needs.backend-deploy.result == 'success') ||
+      ((needs.plan.outputs.cache != 'true' &&
+      needs.plan.outputs.worker != 'true' &&
+      needs.plan.outputs.router != 'true' &&
+      needs.plan.outputs.api != 'true') &&
+      needs.backend-deploy.result == 'skipped')) &&
+      ((needs.plan.outputs.web == 'true' && needs.web-deploy.result == 'success') ||
+      (needs.plan.outputs.web != 'true' && needs.web-deploy.result == 'skipped')) &&
+      ((needs.plan.outputs.cli == 'true' && needs.cli-deploy.result == 'success') ||
+      (needs.plan.outputs.cli != 'true' && needs.cli-deploy.result == 'skipped'))
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      deployments: read
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Read final production deployment evidence
+        id: progress
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/production-deployment-progress.mjs read
+
+      - name: Install Railway CLI
+        run: |
+          railway_cli_version="$(jq -r '.railway.cliVersion' .github/deployment-services.json)"
+          npm install -g "@railway/cli@$railway_cli_version"
+
+      - name: Verify exact live production deployments
+        shell: bash
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SCOPE_PRODUCTION_DEPLOYMENTS_JSON: ${{ steps.progress.outputs.deployments }}
+        run: |
+          manifest=.github/deployment-services.json
+          project_id="$(jq -er '.railway.projectId' "$manifest")"
+          environment_id="$(jq -er '.railway.environmentId' "$manifest")"
+          services_json="$(
+            railway service list \
+              --project "$project_id" \
+              --environment "$environment_id" \
+              --json
+          )"
+          SCOPE_DEPLOYMENT_MANIFEST_JSON="$(jq -c . "$manifest")" \
+            SCOPE_RAILWAY_SERVICES_JSON="$services_json" \
+            node .github/scripts/railway-service-health.mjs

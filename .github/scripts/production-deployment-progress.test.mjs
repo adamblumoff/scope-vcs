@@ -5,12 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  latestSuccessfulDeployments,
   latestSuccessfulRevisions,
   recordEvidenceFile,
   recordSuccessfulDeployment,
 } from "./production-deployment-progress.mjs";
 
 const SOURCE_SHA = "a".repeat(40);
+const PREVIOUS_SHA = "b".repeat(40);
 
 function response(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -30,8 +32,26 @@ test("reads the newest successful revision for every component", async () => {
     if (parsed.pathname.endsWith("/deployments")) {
       const component = parsed.searchParams.get("environment").split("/")[1];
       return response([
-        { id: `${component}-new`, sha: `${component}-new-sha` },
-        { id: `${component}-old`, sha: `${component}-old-sha` },
+        {
+          id: `${component}-new`,
+          sha: SOURCE_SHA,
+          payload: {
+            component,
+            sourceSha: SOURCE_SHA,
+            provider: "railway",
+            evidenceId: `${component}-new-provider-id`,
+          },
+        },
+        {
+          id: `${component}-old`,
+          sha: PREVIOUS_SHA,
+          payload: JSON.stringify({
+            component,
+            sourceSha: PREVIOUS_SHA,
+            provider: "railway",
+            evidenceId: `${component}-old-provider-id`,
+          }),
+        },
       ]);
     }
     if (parsed.pathname.includes("-new/statuses")) return response([{ state: "failure" }]);
@@ -41,8 +61,49 @@ test("reads the newest successful revision for every component", async () => {
 
   try {
     const revisions = await latestSuccessfulRevisions(fetchImpl);
-    assert.equal(revisions.web, "web-old-sha");
-    assert.equal(revisions.cache, "cache-old-sha");
+    assert.equal(revisions.web, PREVIOUS_SHA);
+    assert.equal(revisions.cache, PREVIOUS_SHA);
+  } finally {
+    if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previousToken;
+    if (previousRepository === undefined) delete process.env.GITHUB_REPOSITORY;
+    else process.env.GITHUB_REPOSITORY = previousRepository;
+  }
+});
+
+test("reads exact provider identity from the newest valid successful deployment", async () => {
+  const previousToken = process.env.GITHUB_TOKEN;
+  const previousRepository = process.env.GITHUB_REPOSITORY;
+  process.env.GITHUB_TOKEN = "test-token";
+  process.env.GITHUB_REPOSITORY = "scope-vcs/scope-vcs";
+
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/deployments")) {
+      const component = parsed.searchParams.get("environment").split("/")[1];
+      return response([
+        {
+          id: `${component}-invalid`,
+          sha: SOURCE_SHA,
+          payload: { component, sourceSha: PREVIOUS_SHA, provider: "railway", evidenceId: "wrong" },
+        },
+        {
+          id: `${component}-valid`,
+          sha: SOURCE_SHA,
+          payload: { component, sourceSha: SOURCE_SHA, provider: "railway", evidenceId: `${component}-7` },
+        },
+      ]);
+    }
+    return response([{ state: "success" }]);
+  };
+
+  try {
+    const deployments = await latestSuccessfulDeployments(fetchImpl);
+    assert.deepEqual(deployments.web, {
+      sourceSha: SOURCE_SHA,
+      provider: "railway",
+      evidenceId: "web-7",
+    });
   } finally {
     if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
     else process.env.GITHUB_TOKEN = previousToken;

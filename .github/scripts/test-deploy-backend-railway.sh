@@ -232,12 +232,12 @@ if [[ "$1 $2" == "deployment list" ]]; then
   fi
   id="old-${service}"
   [[ -f "$FAKE_RAILWAY_STATE/up-${service}" ]] && id="new-${service}"
-  if [[ -f "$FAKE_RAILWAY_STATE/crashed-${service}" ]]; then
-    printf '[{"id":"%s","status":"CRASHED","createdAt":"2026-01-02T00:00:00Z"}]\n' "$id"
-    exit 0
-  fi
   if [[ -f "$FAKE_RAILWAY_STATE/skipped-${service}" ]]; then
     printf '[{"id":"skip-%s","status":"SKIPPED","createdAt":"2026-01-02T00:00:00Z","meta":{"skippedReason":"identical"}},{"id":"new-%s","status":"SUCCESS","createdAt":"2026-01-01T00:00:00Z"}]\n' "$service" "$service"
+    exit 0
+  fi
+  if [[ -f "$FAKE_RAILWAY_STATE/crashed-${service}" ]]; then
+    printf '[{"id":"%s","status":"CRASHED","createdAt":"2026-01-02T00:00:00Z"}]\n' "$id"
     exit 0
   fi
   printf '[{"id":"%s","status":"SUCCESS","createdAt":"2026-01-01T00:00:00Z"}]\n' "$id"
@@ -331,6 +331,16 @@ if [[ "$1 $2" == "service list" ]]; then
   fi
   if [[ "${FAKE_DEGRADED_SERVICE:-}" == "scope-cache-service" && "$cache_stopped" == "false" ]]; then
     cache_replicas='{"configured":2,"running":1,"crashed":1,"exited":0,"total":2}'
+  fi
+  if [[ "${FAKE_UNHEALTHY_AFTER_UP_SERVICE:-}" == "scope-api" \
+    && -f "$FAKE_RAILWAY_STATE/up-scope-api" ]]; then
+    api_replicas='{"configured":2,"running":1,"crashed":1,"exited":0,"total":2}'
+    api_regions='[{"name":"us-east4-eqdc4a","configured":2}]'
+  fi
+  if [[ "${FAKE_UNHEALTHY_AFTER_UP_SERVICE:-}" == "scope-worker" \
+    && -f "$FAKE_RAILWAY_STATE/up-scope-worker" ]]; then
+    worker_replicas='{"configured":2,"running":1,"crashed":1,"exited":0,"total":2}'
+    worker_regions='[{"name":"us-east4-eqdc4a","configured":2}]'
   fi
   if [[ "${FAKE_DEGRADE_WORKER_AFTER_API_STOP:-0}" == "1" \
     && -f "$FAKE_RAILWAY_STATE/stopped-scope-api" && "$worker_stopped" == "false" ]]; then
@@ -453,6 +463,7 @@ run_cutover() {
   local router_configured="${26:-1}"
   local router_domain_state="${27:-valid}"
   local router_instance_exists="${28:-1}"
+  local unhealthy_after_up_service="${29:-}"
   [[ -n "$successful_revisions" ]] || successful_revisions='{}'
   local state="$test_dir/$name-state"
   local trace="$test_dir/$name-trace"
@@ -477,6 +488,7 @@ run_cutover() {
     FAKE_CRASH_UP_SERVICE="$crash_up_service" \
     FAKE_NEW_REPLICAS="$new_replicas" \
     FAKE_DEGRADED_SERVICE="$degraded_service" \
+    FAKE_UNHEALTHY_AFTER_UP_SERVICE="$unhealthy_after_up_service" \
     FAKE_DEGRADE_WORKER_AFTER_API_STOP="$degrade_worker_after_api_stop" \
     FAKE_API_REGION="$reported_api_region" \
     FAKE_STORED_API_REGION="$stored_api_region" \
@@ -507,6 +519,8 @@ run_cutover() {
     SCOPE_DEPLOY_API="$deploy_api" \
     SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS="$successful_revisions" \
     SCOPE_DEPLOYMENT_EVIDENCE_PATH="$test_dir/$name-evidence.jsonl" \
+    SCOPE_SERVICE_HEALTH_TIMEOUT_SECONDS=0 \
+    SCOPE_SERVICE_HEALTH_POLL_SECONDS=0 \
     GITHUB_SHA="test-source-sha" \
     SCOPE_WRITER_FENCE_GRACE_SECONDS="0" \
     SCOPE_MAINTENANCE_BINARY="$test_dir/maintenance" \
@@ -766,6 +780,11 @@ if grep -E "up $test_dir/(cache|api)" "$test_dir/rolling-worker-trace"; then
   exit 1
 fi
 
+run_cutover rolling-worker-unhealthy 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 1 0 0 0 '{}' 0 0 1 valid 1 scope-worker
+[[ "$(cat "$test_dir/rolling-worker-unhealthy-result")" != "0" ]]
+assert_evidence_components rolling-worker-unhealthy ""
+
 run_cutover rolling-api 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
   us-east4-eqdc4a us-east4-eqdc4a 0 0 1
 [[ "$(cat "$test_dir/rolling-api-result")" == "0" ]]
@@ -776,6 +795,11 @@ if grep -E "up $test_dir/(cache|worker)" "$test_dir/rolling-api-trace"; then
   echo "API-only deployment must not deploy cache or worker" >&2
   exit 1
 fi
+
+run_cutover rolling-api-unhealthy 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
+  us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 0 1 valid 1 scope-api
+[[ "$(cat "$test_dir/rolling-api-unhealthy-result")" != "0" ]]
+assert_evidence_components rolling-api-unhealthy ""
 
 run_cutover router-bootstrap 0 1 "" 0 0 0 0 "" 0 "" "" 1 "" 0 \
   us-east4-eqdc4a us-east4-eqdc4a 0 0 1 0 0 '{}' 0 1 0 valid 0
@@ -912,16 +936,21 @@ direct_trace="$test_dir/direct-trace"
 direct_evidence="$test_dir/direct-evidence.jsonl"
 mkdir -p "$direct_state"
 : > "$direct_trace"
-PATH="$test_dir/bin:$PATH" \
-  FAKE_RAILWAY_STATE="$direct_state" \
-  FAKE_RAILWAY_TRACE="$direct_trace" \
-  RAILWAY_PROJECT_ID="project-test" \
-  RAILWAY_TOKEN="token-project" \
-  SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
-  SCOPE_DEPLOYMENT_COMPONENT="api" \
-  SCOPE_DEPLOYMENT_SOURCE_SHA="test-source-sha" \
-  SCOPE_DEPLOYMENT_EVIDENCE_PATH="$direct_evidence" \
-  bash "$root/.github/scripts/deploy-railway.sh" scope-api "$test_dir/api"
+run_direct_deploy() {
+  PATH="$test_dir/bin:$PATH" \
+    FAKE_RAILWAY_STATE="$direct_state" \
+    FAKE_RAILWAY_TRACE="$direct_trace" \
+    RAILWAY_PROJECT_ID="project-test" \
+    RAILWAY_TOKEN="token-project" \
+    SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
+    SCOPE_DEPLOYMENT_COMPONENT="api" \
+    SCOPE_DEPLOYMENT_SOURCE_SHA="test-source-sha" \
+    SCOPE_VERIFIED_SUCCESSFUL_SHA="${1:-}" \
+    SCOPE_DEPLOYMENT_EVIDENCE_PATH="${2:-}" \
+    bash "$root/.github/scripts/deploy-railway.sh" scope-api "$test_dir/api"
+}
+
+run_direct_deploy "" "$direct_evidence"
 EVIDENCE_PATH="$direct_evidence" node -e '
 const { readFileSync } = require("node:fs");
 const evidence = JSON.parse(readFileSync(process.env.EVIDENCE_PATH, "utf8"));
@@ -931,17 +960,21 @@ if (evidence.component !== "api" || evidence.sourceSha !== "test-source-sha" ||
 
 # A healthy old service is not proof that Railway deployed the requested source revision.
 set +e
-PATH="$test_dir/bin:$PATH" \
-  FAKE_RAILWAY_STATE="$direct_state" \
-  FAKE_RAILWAY_TRACE="$direct_trace" \
-  RAILWAY_PROJECT_ID="project-test" \
-  RAILWAY_TOKEN="token-project" \
-  SCOPE_RAILWAY_ENVIRONMENT_ID="production" \
-  SCOPE_DEPLOYMENT_COMPONENT="api" \
-  SCOPE_DEPLOYMENT_SOURCE_SHA="test-source-sha" \
-  bash "$root/.github/scripts/deploy-railway.sh" scope-api "$test_dir/api"
+run_direct_deploy
 skipped_result=$?
 set -e
 [[ "$skipped_result" != "0" ]]
+
+# Exact durable identity plus current health makes an identical deployment idempotent.
+run_direct_deploy test-source-sha "$direct_evidence"
+[[ "$(wc -l < "$direct_evidence")" == "1" ]]
+
+# Historical identity must not carry a deployment whose live service has crashed.
+touch "$direct_state/crashed-scope-api"
+set +e
+run_direct_deploy test-source-sha
+unhealthy_skipped_result=$?
+set -e
+[[ "$unhealthy_skipped_result" != "0" ]]
 
 echo "backend deployment cutover tests passed"

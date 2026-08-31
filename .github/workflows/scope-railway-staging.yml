@@ -136,6 +136,7 @@ jobs:
           mv .railway-staging-upload/repo-router/railway.json.tmp .railway-staging-upload/repo-router/railway.json
           mkdir -p .railway-staging-upload/web-root/web
           cp -a candidate/web/. .railway-staging-upload/web-root/web/
+          cp candidate/web/railway.json .railway-staging-upload/web-root/railway.json
           printf '%s\n' "$SOURCE_SHA" > .railway-staging-upload/web-root/web/.scope-deployment-sha
           printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-staging-upload/web-root/web/.scope-deployment-attempt
           test -s .railway-staging-upload/api/api/.scope-deployment-sha
@@ -144,6 +145,7 @@ jobs:
           test -s .railway-staging-upload/repo-router/repo-router/.scope-deployment-sha
           test -s .railway-staging-upload/web-root/web/.scope-deployment-sha
           test -s .railway-staging-upload/web-root/web/package.json
+          test -s .railway-staging-upload/web-root/railway.json
 
       - name: Migrate, seed, and deploy staging services
         shell: bash

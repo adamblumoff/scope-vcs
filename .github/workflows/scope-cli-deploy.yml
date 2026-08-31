@@ -58,6 +58,7 @@ jobs:
           rm -rf .railway-upload
           mkdir -p .railway-upload/cli/crates
           cp -a cli/. .railway-upload/cli/
+          cp cli/railway.json .railway-upload/railway.json
           cp rust-toolchain.toml .railway-upload/cli/rust-toolchain.toml
           cp -a crates/scope-api-contract .railway-upload/cli/crates/scope-api-contract
           cp -a crates/scope-cache-domain .railway-upload/cli/crates/scope-cache-domain
@@ -71,6 +72,7 @@ jobs:
           grep -F 'path = "crates/scope-api-contract"' .railway-upload/cli/Cargo.toml
           grep -F 'path = "crates/scope-domain"' .railway-upload/cli/Cargo.toml
           test -s .railway-upload/cli/railpack.json
+          test -s .railway-upload/railway.json
           test -s .railway-upload/cli/crates/scope-api-contract/Cargo.toml
           test -s .railway-upload/cli/crates/scope-cache-domain/Cargo.toml
           test -s .railway-upload/cli/crates/scope-domain/Cargo.toml

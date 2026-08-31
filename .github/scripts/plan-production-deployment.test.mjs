@@ -15,6 +15,18 @@ const productionWorkflow = readFileSync(
   new URL("../workflows/scope-production-deploy.yml", import.meta.url),
   "utf8",
 );
+const cliDeployWorkflow = readFileSync(
+  new URL("../workflows/scope-cli-deploy.yml", import.meta.url),
+  "utf8",
+);
+const stagingWorkflow = readFileSync(
+  new URL("../workflows/scope-railway-staging.yml", import.meta.url),
+  "utf8",
+);
+const webDeployWorkflow = readFileSync(
+  new URL("../workflows/scope-web-deploy.yml", import.meta.url),
+  "utf8",
+);
 
 function repositoryJson(path) {
   return JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
@@ -70,6 +82,9 @@ function productionConditionContext(overrides = {}) {
     },
     needs: {
       "backend-deploy": { result: overrides.backendResult ?? "skipped" },
+      "cli-deploy": {
+        result: overrides.cliResult ?? (overrides.cliSelected === false ? "skipped" : "success"),
+      },
       plan: {
         outputs: {
           api: backendSelected ? "true" : "false",
@@ -82,6 +97,9 @@ function productionConditionContext(overrides = {}) {
       },
       "production-validation-gate": {
         result: overrides.validationResult ?? "success",
+      },
+      "web-deploy": {
+        result: overrides.webResult ?? (overrides.webSelected === false ? "skipped" : "success"),
       },
     },
   };
@@ -162,6 +180,11 @@ test("changes select the required deployment lanes", () => {
     [
       "conductor changes exercise every lane",
       [".github/workflows/scope-production-deploy.yml"],
+      allLanes,
+    ],
+    [
+      "production health policy changes exercise every lane",
+      [".github/scripts/railway-service-health.mjs"],
       allLanes,
     ],
   ];
@@ -288,6 +311,55 @@ test("frontend production deployment eligibility covers optional backend and fai
   }
 });
 
+test("the final production gate verifies selected and carried-forward services", () => {
+  const condition = productionJobCondition("production-health-gate");
+  assert.match(condition, /^!cancelled\(\) && github\.event_name/);
+  const fixtures = [
+    [
+      "all Railway components carried forward",
+      { backendSelected: false, cliSelected: false, webSelected: false },
+      true,
+    ],
+    [
+      "backend selected and frontend carried forward",
+      {
+        backendSelected: true,
+        backendResult: "success",
+        cliSelected: false,
+        webSelected: false,
+      },
+      true,
+    ],
+    [
+      "selected web deployment failed",
+      { backendSelected: false, cliSelected: false, webResult: "failure" },
+      false,
+    ],
+    [
+      "selected backend deployment failed",
+      {
+        backendSelected: true,
+        backendResult: "failure",
+        cliSelected: false,
+        webSelected: false,
+      },
+      false,
+    ],
+    [
+      "workflow canceled after deploy jobs",
+      { backendSelected: false, cancelled: true, cliSelected: false, webSelected: false },
+      false,
+    ],
+  ];
+  for (const [name, input, expected] of fixtures) {
+    assert.equal(
+      evaluateProductionCondition(condition, productionConditionContext(input)),
+      expected,
+      name,
+    );
+  }
+});
+
 test("CLI deployment progress selects distribution builds only for binary inputs", () => {
   const broadOnly = planFromDeploymentProgress(manifest, {
     checksImage: [],
@@ -343,17 +415,30 @@ test("deployment manifest is a single coherent production graph", () => {
 });
 
 test("service config does not override Railway scaling or restart defaults", () => {
-  for (const path of [
-    "api/railway.json",
-    "worker/railway.json",
-    "cache-service/railway.json",
-    "repo-router/railway.json",
-  ]) {
+  const configs = {
+    "api/railway.json": "/healthz",
+    "worker/railway.json": "/healthz",
+    "cache-service/railway.json": "/readyz",
+    "repo-router/railway.json": "/readyz",
+    "cli/railway.json": "/readyz",
+    "web/railway.json": "/",
+  };
+  for (const [path, healthcheckPath] of Object.entries(configs)) {
     const { deploy } = repositoryJson(path);
 
+    assert.equal(deploy.healthcheckPath, healthcheckPath);
     assert.equal(deploy.healthcheckTimeout, 60);
     assert.equal(deploy.multiRegionConfig, undefined);
     assert.equal(deploy.restartPolicyType, undefined);
     assert.equal(deploy.restartPolicyMaxRetries, undefined);
   }
+});
+
+test("web and CLI healthcheck configs are staged at Railway upload roots", () => {
+  assert.match(cliDeployWorkflow, /cp cli\/railway\.json \.railway-upload\/railway\.json/);
+  assert.match(webDeployWorkflow, /cp web\/railway\.json \.railway-upload\/railway\.json/);
+  assert.match(
+    stagingWorkflow,
+    /cp candidate\/web\/railway\.json \.railway-staging-upload\/web-root\/railway\.json/,
+  );
 });
