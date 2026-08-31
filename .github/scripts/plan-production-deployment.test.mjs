@@ -184,7 +184,7 @@ test("skipped components remain selected across a later backend-only change", ()
 test("skipped validation ancestors do not suppress a selected backend deployment", () => {
   const backendDeploy = productionWorkflow.match(/\n  backend-deploy:\n[\s\S]*?\n  web-deploy:/)?.[0];
   assert.ok(backendDeploy, "backend deploy job is present");
-  assert.match(backendDeploy, /\n    if: >-\n      always\(\) && github\.event_name/);
+  assert.match(backendDeploy, /\n    if: >-\n      !cancelled\(\) && github\.event_name/);
 });
 
 test("CLI deployment progress selects distribution builds only for binary inputs", () => {

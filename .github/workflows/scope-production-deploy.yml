@@ -229,7 +229,7 @@ jobs:
       - cli-validation
       - integration-validation
     if: >-
-      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       needs.plan.result == 'success' &&
       (needs.plan.outputs.checks_image != 'true' || needs.checks-image.result == 'success') &&
       ((needs.plan.outputs.cache != 'true' &&
@@ -249,7 +249,7 @@ jobs:
     name: Backend deploy
     needs: [plan, production-validation-gate]
     if: >-
-      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       needs.production-validation-gate.result == 'success' &&
       (needs.plan.outputs.cache == 'true' ||
       needs.plan.outputs.worker == 'true' ||
