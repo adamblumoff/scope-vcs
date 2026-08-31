@@ -129,7 +129,14 @@ test("planner emits the CLI distribution selection as a snake-case workflow outp
     fileURLToPath(new URL("../deployment-services.json", import.meta.url)),
     "--scope",
     "cli",
-  ], { encoding: "utf8" });
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_OUTPUT: "",
+      GITHUB_STEP_SUMMARY: "",
+    },
+  });
 
   assert.match(output, /^cli=true$/m);
   assert.match(output, /^cli_distribution=true$/m);
