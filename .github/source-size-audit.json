@@ -2,6 +2,11 @@
   "version": 1,
   "production": [
     {
+      "path": ".github/scripts/deploy-backend-railway.sh",
+      "owner": "production backend Railway cutover",
+      "reason": "Target validation, router bootstrap, ordered activation, maintenance fencing, recovery, and deployment evidence form one fail-closed backend transaction."
+    },
+    {
       "path": "api/src/git/cache.rs",
       "owner": "repository Git materialization cache",
       "reason": "Materialization coordination, leases, pruning, and their concurrency and eviction tests define one cache lifecycle."
