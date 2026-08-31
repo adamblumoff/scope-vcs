@@ -249,7 +249,7 @@ jobs:
     name: Backend deploy
     needs: [plan, production-validation-gate]
     if: >-
-      github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       needs.production-validation-gate.result == 'success' &&
       (needs.plan.outputs.cache == 'true' ||
       needs.plan.outputs.worker == 'true' ||

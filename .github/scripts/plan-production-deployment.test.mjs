@@ -10,6 +10,10 @@ import {
 } from "./plan-production-deployment.mjs";
 
 const manifest = JSON.parse(readFileSync(new URL("../deployment-services.json", import.meta.url), "utf8"));
+const productionWorkflow = readFileSync(
+  new URL("../workflows/scope-production-deploy.yml", import.meta.url),
+  "utf8",
+);
 
 function repositoryJson(path) {
   return JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
@@ -175,6 +179,12 @@ test("skipped components remain selected across a later backend-only change", ()
     cli: false,
     cliDistribution: false,
   });
+});
+
+test("skipped validation ancestors do not suppress a selected backend deployment", () => {
+  const backendDeploy = productionWorkflow.match(/\n  backend-deploy:\n[\s\S]*?\n  web-deploy:/)?.[0];
+  assert.ok(backendDeploy, "backend deploy job is present");
+  assert.match(backendDeploy, /\n    if: >-\n      always\(\) && github\.event_name/);
 });
 
 test("CLI deployment progress selects distribution builds only for binary inputs", () => {
