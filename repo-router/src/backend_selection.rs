@@ -50,16 +50,23 @@ impl BackendSelector {
         }
     }
 
-    pub(crate) fn select_index(&self, kind: GitRequestKind, backend_count: usize) -> Option<usize> {
+    pub(crate) fn candidate_indices(
+        &self,
+        kind: GitRequestKind,
+        backend_count: usize,
+    ) -> Vec<usize> {
         if backend_count == 0 {
-            return None;
+            return Vec::new();
         }
         if kind == GitRequestKind::PrimaryOnly {
-            return Some(0);
+            return vec![0];
         }
 
         let eligible = self.read_replicas.min(backend_count);
-        Some(self.next_read.fetch_add(1, Ordering::Relaxed) % eligible)
+        let start = self.next_read.fetch_add(1, Ordering::Relaxed) % eligible;
+        (0..eligible)
+            .map(|offset| (start + offset) % eligible)
+            .collect()
     }
 }
 
@@ -118,16 +125,14 @@ mod tests {
     }
 
     #[test]
-    fn round_robins_reads_across_the_configured_ranked_prefix() {
+    fn rotates_ordered_read_candidates_across_the_configured_ranked_prefix() {
         let selector = BackendSelector::new(2);
 
         assert_eq!(
-            (0..6)
-                .map(|_| selector
-                    .select_index(GitRequestKind::UploadPackRead, 3)
-                    .unwrap())
+            (0..4)
+                .map(|_| selector.candidate_indices(GitRequestKind::UploadPackRead, 3))
                 .collect::<Vec<_>>(),
-            vec![0, 1, 0, 1, 0, 1]
+            vec![vec![0, 1], vec![1, 0], vec![0, 1], vec![1, 0]]
         );
     }
 
@@ -136,20 +141,18 @@ mod tests {
         let selector = BackendSelector::new(3);
 
         assert_eq!(
-            selector.select_index(GitRequestKind::PrimaryOnly, 2),
-            Some(0)
+            selector.candidate_indices(GitRequestKind::PrimaryOnly, 2),
+            vec![0]
         );
         assert_eq!(
             (0..4)
-                .map(|_| selector
-                    .select_index(GitRequestKind::UploadPackRead, 2)
-                    .unwrap())
+                .map(|_| selector.candidate_indices(GitRequestKind::UploadPackRead, 2))
                 .collect::<Vec<_>>(),
-            vec![0, 1, 0, 1]
+            vec![vec![0, 1], vec![1, 0], vec![0, 1], vec![1, 0]]
         );
         assert_eq!(
-            selector.select_index(GitRequestKind::UploadPackRead, 0),
-            None
+            selector.candidate_indices(GitRequestKind::UploadPackRead, 0),
+            Vec::<usize>::new()
         );
     }
 }
