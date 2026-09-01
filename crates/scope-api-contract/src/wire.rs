@@ -293,6 +293,7 @@ mod tests {
     fn run_change_uses_the_repo_event_envelope() {
         let event = RepoChangeEvent {
             repo_id: "owner/repo".to_string(),
+            incarnation_id: "inc_1".to_string(),
             version: 0,
             kind: RepoChangeKind::RunChanged {
                 run_id: "run_1".to_string(),
@@ -304,6 +305,7 @@ mod tests {
             serde_json::to_value(event).unwrap(),
             serde_json::json!({
                 "repo_id": "owner/repo",
+                "incarnation_id": "inc_1",
                 "version": 0,
                 "kind": {
                     "RunChanged": {

@@ -32,7 +32,7 @@ pub fn login(
 ) -> anyhow::Result<()> {
     if headless && (exchange.is_some() || exchange_file.is_some()) {
         return Err(CliError::usage(
-            "--headless cannot be used with --exchange or --exchange-file",
+            "--headless and either --exchange or --exchange-file cannot be used together",
         )
         .into());
     }
