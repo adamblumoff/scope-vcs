@@ -18,6 +18,7 @@ test('recognizes HTML documents without treating adjacent formats as HTML', () =
 test('prefixes the repository policy ahead of authored markup', () => {
   const document = repositoryHtmlDocument(
     '<!doctype html><html><head><title>Project</title></head><body>Hello</body></html>',
+    'dark',
   )
 
   assert.match(
@@ -25,38 +26,45 @@ test('prefixes the repository policy ahead of authored markup', () => {
     /^<!doctype html><meta charset="utf-8">/,
   )
   assert.match(document, /<meta http-equiv="Content-Security-Policy"/)
-  assert.match(document, /<base target="_blank"><html><head><title>Project<\/title>/)
+  assert.match(
+    document,
+    /<base target="_blank"><style>:root\{color-scheme:dark!important\}<\/style><html><head><title>Project<\/title>/,
+  )
   assert.match(document, /<body>Hello<\/body>/)
 })
 
 test('enforces the policy when authored markup contains misleading head text', () => {
   const withRoot = repositoryHtmlDocument(
     '<!-- <head> --><html lang="en"><body>Hello</body></html>',
+    'light',
   )
-  const fragment = repositoryHtmlDocument('<main>Hello</main>')
+  const fragment = repositoryHtmlDocument('<main>Hello</main>', 'light')
 
   assert.match(
     withRoot,
-    /<base target="_blank"><!-- <head> --><html lang="en">/,
+    /<style>:root\{color-scheme:light!important\}<\/style><!-- <head> --><html lang="en">/,
   )
   assert.match(
     fragment,
-    /<base target="_blank"><main>/,
+    /<style>:root\{color-scheme:light!important\}<\/style><main>/,
   )
 })
 
 test('removes authored meta elements that could navigate the preview', () => {
-  const document = repositoryHtmlDocument(`
-    <html>
-      <head>
-        <META HTTP-EQUIV="refresh" content="0 > 0;url=https://example.com">
-        <meta/name="theme-color" content="red">
-        <metadata>kept</metadata>
-        <style>body { color: green; }</style>
-      </head>
-      <body>Hello</body>
-    </html>
-  `)
+  const document = repositoryHtmlDocument(
+    `
+      <html>
+        <head>
+          <META HTTP-EQUIV="refresh" content="0 > 0;url=https://example.com">
+          <meta/name="theme-color" content="red">
+          <metadata>kept</metadata>
+          <style>body { color: green; }</style>
+        </head>
+        <body>Hello</body>
+      </html>
+    `,
+    'dark',
+  )
 
   assert.doesNotMatch(document, /<meta http-equiv="refresh"/i)
   assert.doesNotMatch(document, /0 > 0;url=https:\/\/example.com/)

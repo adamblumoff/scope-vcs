@@ -8,54 +8,37 @@
   <title>Scope | Open source shouldn't be all or nothing.</title>
   <script>
     (() => {
+      document.documentElement.classList.add('interactive');
       const saved = localStorage.getItem('scope-readme-theme');
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       const dark = saved ? saved === 'dark' : prefersDark;
       document.documentElement.classList.toggle('dark', dark);
+      document.documentElement.classList.toggle('light', !dark);
       document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
     })();
   </script>
   <style>
     :root {
-      --paper: #f4f3ef;
-      --surface: #eae8e2;
-      --card: #fffefa;
-      --ink: #1b1a17;
-      --muted: #6d6961;
-      --line: #dcd9d1;
-      --line-strong: #bab5a8;
-      --platinum: #7a746a;
-      --accent: #4f8561;
-      --accent-strong: #386c4a;
-      --accent-soft: #e6efe6;
-      --signal: #8b7044;
-      --signal-soft: #f0e9da;
-      --detail: #bc5965;
-      --detail-strong: #9f3f4c;
-      --detail-soft: #f6e2e2;
-      --shadow: 0 18px 44px -18px rgba(27, 26, 23, .22), 0 7px 18px -10px rgba(27, 26, 23, .12);
+      color-scheme: light dark;
+      --paper: light-dark(#f4f3ef, #0e0f11);
+      --surface: light-dark(#eae8e2, #1d1f23);
+      --card: light-dark(#fffefa, #131417);
+      --ink: light-dark(#1b1a17, #f1f0ec);
+      --muted: light-dark(#6d6961, #a09d96);
+      --line: light-dark(#dcd9d1, #33363d);
+      --line-strong: light-dark(#bab5a8, #4a4d55);
+      --platinum: light-dark(#7a746a, #b5b1a8);
+      --accent: light-dark(#4f8561, #6fa27c);
+      --accent-strong: light-dark(#386c4a, #83b28e);
+      --accent-soft: light-dark(#e6efe6, #17211a);
+      --signal: light-dark(#8b7044, #b49a6b);
+      --signal-soft: light-dark(#f0e9da, #221e16);
+      --detail: light-dark(#bc5965, #d96c75);
+      --detail-strong: light-dark(#9f3f4c, #e4868e);
+      --detail-soft: light-dark(#f6e2e2, #261719);
+      --shadow: light-dark(0 18px 44px -18px rgba(27, 26, 23, .22), 0 20px 54px -18px rgba(0, 0, 0, .72));
       --sans: "IBM Plex Sans Variable", "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --mono: "Commit Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    }
-
-    html.dark {
-      --paper: #0e0f11;
-      --surface: #1d1f23;
-      --card: #131417;
-      --ink: #f1f0ec;
-      --muted: #a09d96;
-      --line: #33363d;
-      --line-strong: #4a4d55;
-      --platinum: #b5b1a8;
-      --accent: #6fa27c;
-      --accent-strong: #83b28e;
-      --accent-soft: #17211a;
-      --signal: #b49a6b;
-      --signal-soft: #221e16;
-      --detail: #d96c75;
-      --detail-strong: #e4868e;
-      --detail-soft: #261719;
-      --shadow: 0 20px 54px -18px rgba(0, 0, 0, .72), 0 8px 20px -10px rgba(0, 0, 0, .62);
     }
 
     * { box-sizing: border-box; }
@@ -101,7 +84,8 @@
     .nav-links { gap: 24px; }
     .nav-links a { color: var(--muted); font-size: .84rem; font-weight: 650; text-decoration: none; }
     .nav-links a:hover { color: var(--ink); }
-    .theme-toggle { width: 38px; height: 38px; display: grid; place-items: center; cursor: pointer; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 50%; }
+    .theme-toggle { width: 38px; height: 38px; display: none; place-items: center; cursor: pointer; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 50%; }
+    html.interactive .theme-toggle { display: grid; }
     .theme-toggle:hover { border-color: var(--line-strong); }
     .theme-toggle svg { width: 17px; height: 17px; }
     .sun, html.dark .moon { display: none; }
@@ -210,7 +194,8 @@
     .text-link { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: .84rem; font-weight: 700; text-underline-offset: 4px; }
     .terminal { overflow: hidden; color: #ffffff; background: #0a0a0a; border: 1px solid #303030; border-radius: 12px; }
     .terminal-head { min-height: 48px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #aaaaaa; border-bottom: 1px solid #303030; font: .68rem/1 var(--mono); }
-    .copy-button { padding: 6px 9px; cursor: pointer; color: #ffffff; background: #181818; border: 1px solid #3c3c3c; border-radius: 6px; font: 600 .66rem/1 var(--mono); }
+    .copy-button { display: none; padding: 6px 9px; cursor: pointer; color: #ffffff; background: #181818; border: 1px solid #3c3c3c; border-radius: 6px; font: 600 .66rem/1 var(--mono); }
+    html.interactive .copy-button { display: inline-block; }
     .copy-button:hover { border-color: #777777; }
     pre { margin: 0; padding: 22px; overflow-wrap: break-word; white-space: pre-wrap; font-size: .76rem; line-height: 1.8; }
     .prompt { color: #56d6c7; }
@@ -535,6 +520,7 @@
     themeToggle.addEventListener('click', () => {
       const dark = !root.classList.contains('dark');
       root.classList.toggle('dark', dark);
+      root.classList.toggle('light', !dark);
       root.style.colorScheme = dark ? 'dark' : 'light';
       localStorage.setItem('scope-readme-theme', dark ? 'dark' : 'light');
       syncThemeLabel();

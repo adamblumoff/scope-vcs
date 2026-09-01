@@ -1,3 +1,5 @@
+import type { ThemeType } from '@/lib/use-theme-type'
+
 const HTML_DOCTYPE = /^\s*<!doctype\s+html[^>]*>/i
 
 export const REPOSITORY_HTML_CONTENT_SECURITY_POLICY = [
@@ -21,11 +23,12 @@ export function isRepositoryHtmlPath(path: string) {
   return /\.html$/i.test(fileName)
 }
 
-export function repositoryHtmlDocument(source: string) {
+export function repositoryHtmlDocument(source: string, theme: ThemeType) {
   const authoredDocument = stripAuthoredMetaElements(
     source.replace(HTML_DOCTYPE, ''),
   )
-  return `<!doctype html>${REPOSITORY_HTML_POLICY}${authoredDocument}`
+  const themePolicy = `<style>:root{color-scheme:${theme}!important}</style>`
+  return `<!doctype html>${REPOSITORY_HTML_POLICY}${themePolicy}${authoredDocument}`
 }
 
 function stripAuthoredMetaElements(source: string) {

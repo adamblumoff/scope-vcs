@@ -1,4 +1,5 @@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { useThemeType } from '@/lib/use-theme-type'
 import { useMemo, useState } from 'react'
 import { repositoryHtmlDocument } from './repository-html'
 import { PersistentRepositoryHtmlPreview } from './repository-html-preview-store'
@@ -15,7 +16,11 @@ export function RepositoryHtmlRenderer({
   source: string
 }) {
   const [mode, setMode] = useState<RepositoryHtmlMode>('preview')
-  const document = useMemo(() => repositoryHtmlDocument(source), [source])
+  const theme = useThemeType()
+  const document = useMemo(
+    () => repositoryHtmlDocument(source, theme),
+    [source, theme],
+  )
   const displayPath = path.replace(/^\/+/, '')
 
   function selectMode(value: string) {
@@ -45,8 +50,8 @@ export function RepositoryHtmlRenderer({
       </div>
       {mode === 'preview' ? (
         <PersistentRepositoryHtmlPreview
-          className="h-[calc(100dvh-var(--app-chrome)-132px)] min-h-[32rem] max-h-[70rem] w-full border-0 bg-white"
-          identity={identity}
+          className="h-[calc(100dvh-var(--app-chrome)-132px)] min-h-[32rem] max-h-[70rem] w-full border-0 bg-background"
+          identity={`${identity}:${theme}`}
           srcDoc={document}
           title={`${displayPath} preview`}
         />
