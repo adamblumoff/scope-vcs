@@ -24,18 +24,93 @@ impl MigrationTrait for Migration {
                     scope_git_segment_v2_backfill
                     IN ACCESS EXCLUSIVE MODE;
 
+                CREATE TEMP TABLE scope_git_segment_v2_sources ON COMMIT DROP AS
+                SELECT repo_id, first_sequence, last_sequence,
+                       object_key AS legacy_object_key,
+                       sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
+                       geometric_tier, base_oid, head_oid
+                FROM scope_git_segments
+                UNION ALL
+                SELECT runs.source->>'repository_id',
+                       (span->>'first_sequence')::bigint,
+                       (span->>'last_sequence')::bigint,
+                       (span#>'{object,content_ref}')::text,
+                       span#>>'{object,sha256}',
+                       (span#>>'{object,size_bytes}')::bigint,
+                       (span->>'geometric_tier')::integer,
+                       span->>'base_oid', span->>'head_oid'
+                FROM scope_runs runs
+                CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
+                WHERE runs.source->>'kind' = 'accepted-git-head'
+                UNION ALL
+                SELECT jobs.repo_id,
+                       (span->>'first_sequence')::bigint,
+                       (span->>'last_sequence')::bigint,
+                       (span#>'{object,content_ref}')::text,
+                       span#>>'{object,sha256}',
+                       (span#>>'{object,size_bytes}')::bigint,
+                       (span->>'geometric_tier')::integer,
+                       span->>'base_oid', span->>'head_oid'
+                FROM scope_outbox_jobs jobs
+                CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
+                WHERE jobs.kind = 'push_main_trigger_evaluation'
+                  AND jobs.completed_at_unix IS NULL;
+
                 DO $$
                 BEGIN
                     IF EXISTS (
                         SELECT 1
-                        FROM scope_git_segments spans
+                        FROM scope_git_segment_v2_sources spans
+                        WHERE spans.repo_id IS NULL
+                           OR length(btrim(spans.repo_id)) = 0
+                           OR spans.first_sequence IS NULL
+                           OR spans.first_sequence <= 0
+                           OR spans.last_sequence IS NULL
+                           OR spans.last_sequence < spans.first_sequence
+                           OR spans.geometric_tier IS NULL
+                           OR spans.geometric_tier NOT BETWEEN 0 AND 62
+                           OR spans.last_sequence - spans.first_sequence + 1 <>
+                              power(2::numeric, spans.geometric_tier)
+                           OR spans.legacy_sha256 IS NULL
+                           OR length(spans.legacy_sha256) <> 64
+                           OR spans.legacy_sha256 !~ '^[0-9a-f]+$'
+                           OR spans.legacy_size_bytes IS NULL
+                           OR spans.legacy_size_bytes < 0
+                           OR spans.legacy_object_key IS NULL
+                           OR spans.legacy_object_key::jsonb <>
+                              jsonb_build_object('GitSegmentSha256', spans.legacy_sha256)
+                           OR spans.head_oid IS NULL
+                           OR length(btrim(spans.head_oid)) = 0
+                    ) THEN
+                        RAISE EXCEPTION 'm0033 found invalid legacy Git segment metadata';
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM scope_git_segment_v2_sources
+                        GROUP BY repo_id, first_sequence, last_sequence, legacy_object_key
+                        HAVING count(DISTINCT jsonb_build_object(
+                            'sha256', legacy_sha256,
+                            'size_bytes', legacy_size_bytes,
+                            'geometric_tier', geometric_tier,
+                            'base_oid', base_oid,
+                            'head_oid', head_oid
+                        )) > 1
+                    ) THEN
+                        RAISE EXCEPTION
+                            'm0033 found conflicting metadata for a legacy Git segment identity';
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1
+                        FROM scope_git_segment_v2_sources spans
                         LEFT JOIN scope_git_segment_v2_backfill prepared
                           ON prepared.repo_id = spans.repo_id
                          AND prepared.first_sequence = spans.first_sequence
                          AND prepared.last_sequence = spans.last_sequence
-                         AND prepared.legacy_object_key = spans.object_key
-                         AND prepared.legacy_sha256 = spans.sha256
-                         AND prepared.legacy_size_bytes = spans.size_bytes
+                         AND prepared.legacy_object_key = spans.legacy_object_key
+                         AND prepared.legacy_sha256 = spans.legacy_sha256
+                         AND prepared.legacy_size_bytes = spans.legacy_size_bytes
                         WHERE prepared.repo_id IS NULL
                     ) THEN
                         RAISE EXCEPTION USING
@@ -46,49 +121,16 @@ impl MigrationTrait for Migration {
                     IF EXISTS (
                         SELECT 1
                         FROM scope_git_segment_v2_backfill prepared
-                        LEFT JOIN scope_git_segments spans
+                        LEFT JOIN scope_git_segment_v2_sources spans
                           ON prepared.repo_id = spans.repo_id
                          AND prepared.first_sequence = spans.first_sequence
                          AND prepared.last_sequence = spans.last_sequence
-                         AND prepared.legacy_object_key = spans.object_key
-                         AND prepared.legacy_sha256 = spans.sha256
-                         AND prepared.legacy_size_bytes = spans.size_bytes
+                         AND prepared.legacy_object_key = spans.legacy_object_key
+                         AND prepared.legacy_sha256 = spans.legacy_sha256
+                         AND prepared.legacy_size_bytes = spans.legacy_size_bytes
                         WHERE spans.repo_id IS NULL
                     ) THEN
                         RAISE EXCEPTION 'm0033 found a stale Git segment backfill record';
-                    END IF;
-
-                    IF EXISTS (
-                        SELECT 1
-                        FROM scope_runs runs
-                        CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
-                        LEFT JOIN scope_git_segment_v2_backfill prepared
-                          ON prepared.repo_id = runs.source->>'repository_id'
-                         AND prepared.first_sequence = (span->>'first_sequence')::bigint
-                         AND prepared.last_sequence = (span->>'last_sequence')::bigint
-                         AND prepared.legacy_sha256 = span#>>'{object,sha256}'
-                         AND prepared.legacy_size_bytes = (span#>>'{object,size_bytes}')::bigint
-                        WHERE runs.source->>'kind' = 'accepted-git-head'
-                          AND prepared.repo_id IS NULL
-                    ) THEN
-                        RAISE EXCEPTION 'm0033 cannot map an accepted Git run source';
-                    END IF;
-
-                    IF EXISTS (
-                        SELECT 1
-                        FROM scope_outbox_jobs jobs
-                        CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
-                        LEFT JOIN scope_git_segment_v2_backfill prepared
-                          ON prepared.repo_id = jobs.repo_id
-                         AND prepared.first_sequence = (span->>'first_sequence')::bigint
-                         AND prepared.last_sequence = (span->>'last_sequence')::bigint
-                         AND prepared.legacy_sha256 = span#>>'{object,sha256}'
-                         AND prepared.legacy_size_bytes = (span#>>'{object,size_bytes}')::bigint
-                        WHERE jobs.kind = 'push_main_trigger_evaluation'
-                          AND jobs.completed_at_unix IS NULL
-                          AND prepared.repo_id IS NULL
-                    ) THEN
-                        RAISE EXCEPTION 'm0033 cannot map a pending push trigger source';
                     END IF;
                 END
                 $$;
@@ -105,7 +147,9 @@ impl MigrationTrait for Migration {
                     created_at_unix bigint NOT NULL,
                     updated_at_unix bigint NOT NULL,
                     CONSTRAINT scope_git_segment_upload_state CHECK (
-                        state IN ('uploading', 'ready', 'published', 'deleting', 'deleted')
+                        state IN (
+                            'uploading', 'ready', 'published', 'retained', 'deleting', 'deleted'
+                        )
                     ),
                     CONSTRAINT scope_git_segment_upload_values CHECK (
                         length(btrim(segment_id)) > 0 AND
@@ -117,7 +161,7 @@ impl MigrationTrait for Migration {
                         (plaintext_bytes IS NULL OR plaintext_bytes >= 0) AND
                         (encrypted_bytes IS NULL OR encrypted_bytes >= 0) AND
                         (
-                            state NOT IN ('ready', 'published') OR
+                            state NOT IN ('ready', 'published', 'retained') OR
                             (sha256 IS NOT NULL AND plaintext_bytes IS NOT NULL AND encrypted_bytes IS NOT NULL)
                         )
                     )
@@ -147,10 +191,20 @@ impl MigrationTrait for Migration {
                     plaintext_bytes, encrypted_bytes, encoding_version,
                     created_at_unix, updated_at_unix
                 )
-                SELECT segment_id, repo_id, object_key, 'published', sha256,
+                SELECT prepared.segment_id, prepared.repo_id, prepared.object_key,
+                       CASE WHEN EXISTS (
+                           SELECT 1 FROM scope_git_segments spans
+                           WHERE spans.repo_id = prepared.repo_id
+                             AND spans.first_sequence = prepared.first_sequence
+                             AND spans.last_sequence = prepared.last_sequence
+                             AND spans.object_key = prepared.legacy_object_key
+                             AND spans.sha256 = prepared.legacy_sha256
+                             AND spans.size_bytes = prepared.legacy_size_bytes
+                       ) THEN 'published' ELSE 'retained' END,
+                       prepared.sha256,
                        plaintext_bytes, encrypted_bytes, encoding_version,
                        completed_at_unix, completed_at_unix
-                FROM scope_git_segment_v2_backfill;
+                FROM scope_git_segment_v2_backfill prepared;
 
                 ALTER TABLE scope_git_segments
                     ADD COLUMN segment_id text;
@@ -159,7 +213,11 @@ impl MigrationTrait for Migration {
                 SET segment_id = prepared.segment_id
                 FROM scope_git_segment_v2_backfill prepared
                 WHERE prepared.repo_id = spans.repo_id
-                  AND prepared.first_sequence = spans.first_sequence;
+                  AND prepared.first_sequence = spans.first_sequence
+                  AND prepared.last_sequence = spans.last_sequence
+                  AND prepared.legacy_object_key = spans.object_key
+                  AND prepared.legacy_sha256 = spans.sha256
+                  AND prepared.legacy_size_bytes = spans.size_bytes;
 
                 ALTER TABLE scope_git_segments
                     ALTER COLUMN segment_id SET NOT NULL,
@@ -193,6 +251,11 @@ impl MigrationTrait for Migration {
                           ON prepared.repo_id = runs.source->>'repository_id'
                          AND prepared.first_sequence = (span->>'first_sequence')::bigint
                          AND prepared.last_sequence = (span->>'last_sequence')::bigint
+                         AND prepared.legacy_object_key =
+                             (span#>'{object,content_ref}')::text
+                         AND prepared.legacy_sha256 = span#>>'{object,sha256}'
+                         AND prepared.legacy_size_bytes =
+                             (span#>>'{object,size_bytes}')::bigint
                     )
                 )
                 WHERE runs.source->>'kind' = 'accepted-git-head';
@@ -219,6 +282,11 @@ impl MigrationTrait for Migration {
                           ON prepared.repo_id = jobs.repo_id
                          AND prepared.first_sequence = (span->>'first_sequence')::bigint
                          AND prepared.last_sequence = (span->>'last_sequence')::bigint
+                         AND prepared.legacy_object_key =
+                             (span#>'{object,content_ref}')::text
+                         AND prepared.legacy_sha256 = span#>>'{object,sha256}'
+                         AND prepared.legacy_size_bytes =
+                             (span#>>'{object,size_bytes}')::bigint
                     )
                 )
                 WHERE jobs.kind = 'push_main_trigger_evaluation'
@@ -247,16 +315,20 @@ impl MigrationTrait for Migration {
                 )
                 SELECT DISTINCT ON (prepared.legacy_object_key)
                     prepared.legacy_object_key, 'm0033_git_segment_streaming_v2',
-                    prepared.legacy_sha256, spans.head_oid,
+                    prepared.legacy_sha256, sources.head_oid,
                     prepared.legacy_size_bytes, 0,
                     EXTRACT(EPOCH FROM clock_timestamp())::bigint,
                     NULL, NULL, 0, 0
                 FROM scope_git_segment_v2_backfill prepared
-                JOIN scope_git_segments spans
-                  ON spans.repo_id = prepared.repo_id
-                 AND spans.first_sequence = prepared.first_sequence
+                JOIN scope_git_segment_v2_sources sources
+                  ON sources.repo_id = prepared.repo_id
+                 AND sources.first_sequence = prepared.first_sequence
+                 AND sources.last_sequence = prepared.last_sequence
+                 AND sources.legacy_object_key = prepared.legacy_object_key
+                 AND sources.legacy_sha256 = prepared.legacy_sha256
+                 AND sources.legacy_size_bytes = prepared.legacy_size_bytes
                 ORDER BY prepared.legacy_object_key, prepared.repo_id,
-                         prepared.first_sequence
+                         prepared.first_sequence, prepared.last_sequence
                 ON CONFLICT (object_key) DO UPDATE SET
                     generation = EXCLUDED.generation,
                     sha256 = EXCLUDED.sha256,

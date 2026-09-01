@@ -4,8 +4,10 @@ use super::{
     UploadedPart, lifecycle::sync_directory, object_key, valid_segment_id,
 };
 use crate::envelope::EnvelopeWriter;
+use crate::lifecycle::REMOTE_CLEANUP_TIMEOUT;
 use bytes::Bytes;
 use scope_domain::repository::git::GitSegmentRef;
+use scope_git_process::ProcessCancellation;
 use sha2::{Digest, Sha256};
 use std::{
     io::Read,
@@ -26,12 +28,13 @@ impl GitSegmentStore {
         &self,
         repository_id: &str,
         source: R,
+        max_plaintext_bytes: u64,
     ) -> Result<StagedGitSegment, GitStorageError>
     where
         R: AsyncRead + Unpin + Send,
     {
         let reservation = self.reserve(repository_id)?;
-        self.ingest_reserved(repository_id, reservation, source)
+        self.ingest_reserved(repository_id, reservation, source, max_plaintext_bytes)
             .await
     }
 
@@ -39,13 +42,19 @@ impl GitSegmentStore {
         &self,
         repository_id: &str,
         source: R,
+        max_plaintext_bytes: u64,
     ) -> Result<StagedGitSegment, GitStorageError>
     where
         R: Read + Send + 'static,
     {
         let reservation = self.reserve(repository_id)?;
-        self.ingest_reserved_blocking_reader(repository_id, reservation, source)
-            .await
+        self.ingest_reserved_blocking_reader(
+            repository_id,
+            reservation,
+            source,
+            max_plaintext_bytes,
+        )
+        .await
     }
 
     pub fn reserve(&self, repository_id: &str) -> Result<GitSegmentReservation, GitStorageError> {
@@ -65,7 +74,29 @@ impl GitSegmentStore {
         &self,
         repository_id: &str,
         reservation: GitSegmentReservation,
+        source: R,
+        max_plaintext_bytes: u64,
+    ) -> Result<StagedGitSegment, GitStorageError>
+    where
+        R: AsyncRead + Unpin + Send,
+    {
+        self.ingest_reserved_controlled(
+            repository_id,
+            reservation,
+            source,
+            max_plaintext_bytes,
+            None,
+        )
+        .await
+    }
+
+    async fn ingest_reserved_controlled<R>(
+        &self,
+        repository_id: &str,
+        reservation: GitSegmentReservation,
         mut source: R,
+        max_plaintext_bytes: u64,
+        cancellation: Option<ProcessCancellation>,
     ) -> Result<StagedGitSegment, GitStorageError>
     where
         R: AsyncRead + Unpin + Send,
@@ -97,6 +128,7 @@ impl GitSegmentStore {
                 object_key: object_key.clone(),
                 frame_bytes: self.config.chunk_bytes,
                 part_bytes: self.config.multipart_part_bytes,
+                cancellation: cancellation.clone(),
             },
             remote_rx,
         ));
@@ -107,7 +139,26 @@ impl GitSegmentStore {
         let mut input_error = None;
         let mut buffer = vec![0_u8; self.config.chunk_bytes];
         loop {
-            match source.read(&mut buffer).await {
+            let remaining = max_plaintext_bytes.saturating_sub(plaintext_bytes);
+            let read_bytes = buffer.len().min(
+                usize::try_from(remaining)
+                    .unwrap_or(usize::MAX)
+                    .saturating_add(1),
+            );
+            let read = match &cancellation {
+                Some(cancellation) => {
+                    tokio::select! {
+                        biased;
+                        () = cancellation.cancelled() => {
+                            input_error = Some(GitStorageError::Cancelled);
+                            break;
+                        }
+                        read = source.read(&mut buffer[..read_bytes]) => read,
+                    }
+                }
+                None => source.read(&mut buffer[..read_bytes]).await,
+            };
+            match read {
                 Ok(0) => {
                     let blocked_at = Instant::now();
                     let (local_result, remote_result) = tokio::join!(
@@ -121,6 +172,12 @@ impl GitSegmentStore {
                     break;
                 }
                 Ok(read) => {
+                    if read as u64 > remaining {
+                        input_error = Some(GitStorageError::PlaintextLimitExceeded {
+                            max_bytes: max_plaintext_bytes,
+                        });
+                        break;
+                    }
                     let chunk = Bytes::copy_from_slice(&buffer[..read]);
                     digest.update(&chunk);
                     plaintext_bytes =
@@ -200,7 +257,50 @@ impl GitSegmentStore {
         &self,
         repository_id: &str,
         reservation: GitSegmentReservation,
+        source: R,
+        max_plaintext_bytes: u64,
+    ) -> Result<StagedGitSegment, GitStorageError>
+    where
+        R: Read + Send + 'static,
+    {
+        self.ingest_reserved_blocking_reader_controlled(
+            repository_id,
+            reservation,
+            source,
+            max_plaintext_bytes,
+            None,
+        )
+        .await
+    }
+
+    pub async fn ingest_reserved_blocking_reader_cancellable<R>(
+        &self,
+        repository_id: &str,
+        reservation: GitSegmentReservation,
+        source: R,
+        max_plaintext_bytes: u64,
+        cancellation: ProcessCancellation,
+    ) -> Result<StagedGitSegment, GitStorageError>
+    where
+        R: Read + Send + 'static,
+    {
+        self.ingest_reserved_blocking_reader_controlled(
+            repository_id,
+            reservation,
+            source,
+            max_plaintext_bytes,
+            Some(cancellation),
+        )
+        .await
+    }
+
+    async fn ingest_reserved_blocking_reader_controlled<R>(
+        &self,
+        repository_id: &str,
+        reservation: GitSegmentReservation,
         mut source: R,
+        max_plaintext_bytes: u64,
+        cancellation: Option<ProcessCancellation>,
     ) -> Result<StagedGitSegment, GitStorageError>
     where
         R: Read + Send + 'static,
@@ -209,14 +309,25 @@ impl GitSegmentStore {
         let chunk_bytes = self.config.chunk_bytes;
         let bridge = tokio::task::spawn_blocking(move || {
             let mut buffer = vec![0_u8; chunk_bytes];
+            let mut remaining = max_plaintext_bytes;
             loop {
-                match source.read(&mut buffer) {
+                let read_bytes = buffer.len().min(
+                    usize::try_from(remaining)
+                        .unwrap_or(usize::MAX)
+                        .saturating_add(1),
+                );
+                match source.read(&mut buffer[..read_bytes]) {
                     Ok(0) => return,
                     Ok(read) => {
+                        let exceeded = read as u64 > remaining;
+                        remaining = remaining.saturating_sub(read as u64);
                         if sender
                             .blocking_send(Ok(Bytes::copy_from_slice(&buffer[..read])))
                             .is_err()
                         {
+                            return;
+                        }
+                        if exceeded {
                             return;
                         }
                     }
@@ -228,10 +339,12 @@ impl GitSegmentStore {
             }
         });
         let result = self
-            .ingest_reserved(
+            .ingest_reserved_controlled(
                 repository_id,
                 reservation,
                 BlockingReaderStream::new(receiver),
+                max_plaintext_bytes,
+                cancellation,
             )
             .await;
         bridge
@@ -362,6 +475,7 @@ struct RemoteIngestRequest {
     object_key: String,
     frame_bytes: usize,
     part_bytes: usize,
+    cancellation: Option<ProcessCancellation>,
 }
 
 async fn upload_remote(
@@ -376,13 +490,19 @@ async fn upload_remote(
         object_key,
         frame_bytes,
         part_bytes,
+        cancellation,
     } = request;
     let started = Instant::now();
-    let upload = backend.begin(&object_key).await?;
-    let upload_for_abort = upload.clone();
-    let result = async {
+    let upload =
+        multipart_with_cancellation(cancellation.as_ref(), backend.begin(&object_key)).await?;
+    async {
         let mut envelope = EnvelopeWriter::new(&key, &repository_id, &segment_id, frame_bytes)?;
-        let mut parts = MultipartAccumulator::new(Arc::clone(&backend), upload.clone(), part_bytes);
+        let mut parts = MultipartAccumulator::new(
+            Arc::clone(&backend),
+            upload.clone(),
+            part_bytes,
+            cancellation.clone(),
+        );
         parts.push(envelope.header()).await?;
         loop {
             match receiver.recv().await {
@@ -402,18 +522,18 @@ async fn upload_remote(
         let uploaded_parts = u32::try_from(completed_parts.len()).map_err(|_| {
             GitStorageError::InvalidEnvelope("multipart part count exceeds u32".into())
         })?;
-        backend.complete(upload, completed_parts).await?;
+        multipart_with_cancellation(
+            cancellation.as_ref(),
+            backend.complete(upload, completed_parts),
+        )
+        .await?;
         Ok(RemoteOutcome {
             encrypted_bytes,
             uploaded_parts,
             elapsed: started.elapsed(),
         })
     }
-    .await;
-    if result.is_err() {
-        let _ = backend.abort(upload_for_abort).await;
-    }
-    result
+    .await
 }
 
 struct MultipartAccumulator {
@@ -423,10 +543,16 @@ struct MultipartAccumulator {
     buffer: Vec<u8>,
     parts: Vec<UploadedPart>,
     encrypted_bytes: u64,
+    cancellation: Option<ProcessCancellation>,
 }
 
 impl MultipartAccumulator {
-    fn new(backend: Arc<dyn MultipartStore>, upload: MultipartUpload, part_bytes: usize) -> Self {
+    fn new(
+        backend: Arc<dyn MultipartStore>,
+        upload: MultipartUpload,
+        part_bytes: usize,
+        cancellation: Option<ProcessCancellation>,
+    ) -> Self {
         Self {
             backend,
             upload,
@@ -434,6 +560,7 @@ impl MultipartAccumulator {
             buffer: Vec::with_capacity(part_bytes),
             parts: Vec::new(),
             encrypted_bytes: 0,
+            cancellation,
         }
     }
 
@@ -474,10 +601,8 @@ impl MultipartAccumulator {
             &mut self.buffer,
             Vec::with_capacity(self.part_bytes),
         ));
-        let part = self
-            .backend
-            .upload_part(&self.upload, part_number, bytes)
-            .await?;
+        let part = self.backend.upload_part(&self.upload, part_number, bytes);
+        let part = multipart_with_cancellation(self.cancellation.as_ref(), part).await?;
         if part.part_number != part_number {
             return Err(GitStorageError::Multipart(MultipartError::new(
                 "multipart backend returned the wrong part number",
@@ -496,8 +621,27 @@ async fn cleanup_ingest(
     if let Some(local) = local {
         let _ = fs::remove_file(local.path).await;
     }
-    let _ = backend.abort_incomplete(object_key).await;
-    let _ = backend.delete(object_key).await;
+    let cleanup = async {
+        backend.abort_incomplete(object_key).await?;
+        backend.delete(object_key).await
+    };
+    let _ = tokio::time::timeout(REMOTE_CLEANUP_TIMEOUT, cleanup).await;
+}
+
+async fn multipart_with_cancellation<T>(
+    cancellation: Option<&ProcessCancellation>,
+    operation: impl std::future::Future<Output = Result<T, MultipartError>>,
+) -> Result<T, GitStorageError> {
+    match cancellation {
+        Some(cancellation) => {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => Err(GitStorageError::Cancelled),
+                result = operation => result.map_err(GitStorageError::from),
+            }
+        }
+        None => operation.await.map_err(GitStorageError::from),
+    }
 }
 
 fn random_segment_id() -> Result<String, GitStorageError> {

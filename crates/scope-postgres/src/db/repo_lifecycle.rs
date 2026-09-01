@@ -230,7 +230,7 @@ impl RepositoryStore {
             DatabaseBackend::Postgres,
             "UPDATE scope_git_segment_uploads
              SET state = 'deleting', updated_at_unix = GREATEST(updated_at_unix, $2)
-             WHERE repo_id = $1 AND state IN ('uploading', 'ready', 'published')",
+             WHERE repo_id = $1 AND state IN ('uploading', 'ready', 'published', 'retained')",
             [
                 repo_id.clone().into(),
                 i64::try_from(now_unix)

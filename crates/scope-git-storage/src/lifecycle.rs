@@ -1,6 +1,8 @@
 use super::{GitSegmentStore, GitStorageError, MultipartError, StagedGitSegment, valid_segment_id};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 use tokio::fs;
+
+pub(crate) const REMOTE_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 impl GitSegmentStore {
     /// Removes process-local staging packs left by an earlier process. The
@@ -30,6 +32,16 @@ impl GitSegmentStore {
                 ))))
             }
         }
+    }
+
+    /// Bounds rollback work independently of any process deadline. Callers may
+    /// mark durable metadata deleted only after this returns success.
+    pub async fn cleanup_remote_bounded(&self, object_key: &str) -> Result<(), GitStorageError> {
+        tokio::time::timeout(REMOTE_CLEANUP_TIMEOUT, self.cleanup_remote(object_key))
+            .await
+            .map_err(|_| GitStorageError::RemoteCleanupTimedOut {
+                timeout_ms: REMOTE_CLEANUP_TIMEOUT.as_millis(),
+            })?
     }
 
     pub async fn delete_local(&self, staged: &StagedGitSegment) -> Result<(), GitStorageError> {

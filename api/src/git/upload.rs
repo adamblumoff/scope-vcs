@@ -463,7 +463,7 @@ pub(crate) async fn git_upload_pack_response(
                 Some(request),
                 ProcessLimits::new(timeout),
                 "Git upload-pack",
-                move |mut stdout| {
+                move |mut stdout, _cancellation| {
                     let mut buffer = vec![0_u8; 64 * 1024];
                     loop {
                         let read = stdout.read(&mut buffer)?;

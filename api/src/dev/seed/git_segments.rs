@@ -42,20 +42,20 @@ pub(super) fn store_seed_git_pack(
     let store = git_segment_store.clone();
     let repository_id = repository_id.to_string();
     let ingest_repository_id = repository_id.clone();
-    let staged =
-        std::thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(scope_git_storage::GitStorageError::Local)?
-                .block_on(store.ingest_blocking_reader(
-                    &ingest_repository_id,
-                    std::io::Cursor::new(output.stdout),
-                ))
-        })
-        .join()
-        .map_err(|_| ApiError::internal_message("seed Git segment upload thread panicked"))?
-        .map_err(|error| ApiError::infrastructure_unavailable(error.to_string()))?;
+    let staged = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(scope_git_storage::GitStorageError::Local)?
+            .block_on(store.ingest_blocking_reader(
+                &ingest_repository_id,
+                std::io::Cursor::new(output.stdout),
+                crate::config::default_git_storage_limits().max_object_bytes() as u64,
+            ))
+    })
+    .join()
+    .map_err(|_| ApiError::internal_message("seed Git segment upload thread panicked"))?
+    .map_err(|error| ApiError::infrastructure_unavailable(error.to_string()))?;
     let stored = scope_git::prepare_git_push(
         staged.segment.clone(),
         head_oid,

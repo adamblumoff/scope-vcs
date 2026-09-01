@@ -110,11 +110,6 @@
       "path": "crates/scope-run-config/src/lib.rs",
       "owner": "workflow configuration compiler",
       "reason": "YAML decoding, validation, domain compilation, repository catalog parsing, and grammar fixtures define one compiler."
-    },
-    {
-      "path": "worker/src/git_repo.rs",
-      "owner": "Git compaction process adapter",
-      "reason": "Segment restoration, repository indexing, pack construction, and bounded replacement ingestion form one compaction workspace lifecycle."
     }
   ]
 }
