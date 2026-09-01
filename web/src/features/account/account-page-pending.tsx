@@ -12,7 +12,7 @@ export function AccountPagePending() {
           Manage Scope CLI access for this account.
         </p>
         <div className="mt-6 divide-y divide-border">
-          {[0, 1].map((row) => (
+          {['login', 'sessions'].map((row) => (
             <section
               className="grid gap-4 py-5 md:grid-cols-[240px_minmax(0,1fr)]"
               key={row}
@@ -23,8 +23,24 @@ export function AccountPagePending() {
                 <Skeleton className="mt-1.5 h-3 w-40 max-w-4/5" />
               </div>
               <div className="md:pt-0.5">
-                <Skeleton className="h-9 w-32" />
-                {row === 1 ? <Skeleton className="mt-4 h-14 w-full" /> : null}
+                {row === 'login' ? (
+                  <Skeleton className="h-8 w-32" />
+                ) : (
+                  <div className="divide-y divide-border border-y border-border">
+                    {[18, 24].map((width) => (
+                      <div
+                        className="flex items-center justify-between gap-3 py-3"
+                        key={width}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <Skeleton className="h-4" style={{ width: `${width}ch` }} />
+                          <Skeleton className="mt-2 h-3 w-64" />
+                        </div>
+                        <Skeleton className="size-8 shrink-0" />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </section>
           ))}

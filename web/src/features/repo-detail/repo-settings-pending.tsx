@@ -8,7 +8,7 @@ export function RepoSettingsPending() {
       <PageContent>
         <h1 className="sr-only">Settings</h1>
         <div className="divide-y divide-border">
-          {[0, 1, 2].map((row) => (
+          {['danger', 'invite', 'members'].map((row) => (
             <section
               className="grid gap-4 py-5 md:grid-cols-[240px_minmax(0,1fr)]"
               key={row}
@@ -19,8 +19,32 @@ export function RepoSettingsPending() {
                 <Skeleton className="mt-1.5 h-3 w-36 max-w-4/5" />
               </div>
               <div className="space-y-3 md:pt-0.5">
-                <Skeleton className="h-9 w-40" />
-                {row > 0 ? <Skeleton className="h-12 w-full" /> : null}
+                {row === 'danger' ? (
+                  <Skeleton className="h-8 w-40" />
+                ) : row === 'invite' ? (
+                  <>
+                    <div className="flex gap-2">
+                      <Skeleton className="h-10 min-w-0 flex-1" />
+                      <Skeleton className="h-10 w-24 shrink-0" />
+                    </div>
+                    <Skeleton className="h-16 w-full" />
+                  </>
+                ) : (
+                  <div className="divide-y divide-border border-y border-border">
+                    {[20, 16].map((width) => (
+                      <div
+                        className="flex items-center justify-between gap-3 py-3"
+                        key={width}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <Skeleton className="h-4" style={{ width: `${width}ch` }} />
+                          <Skeleton className="mt-2 h-3 w-48" />
+                        </div>
+                        <Skeleton className="h-6 w-12 shrink-0" />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </section>
           ))}

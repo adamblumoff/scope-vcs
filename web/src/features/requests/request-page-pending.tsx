@@ -10,20 +10,30 @@ export function RequestDetailPagePending() {
     <PendingSurface label="Loading request">
       <WorkbenchPane>
         <header className="px-5 pb-5 pt-7 sm:px-6 lg:px-8">
-          <Skeleton className="h-8 w-[34rem] max-w-4/5" />
-          <div className="mt-3 flex gap-2">
-            <Skeleton className="h-5 w-20 rounded-full" />
-            <Skeleton className="h-5 w-28 rounded-full" />
-            <Skeleton className="h-4 w-32" />
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <Skeleton className="h-8 w-[34rem]" />
+              <div className="mt-3 flex gap-2">
+                <Skeleton className="h-5 w-20 rounded-full" />
+                <Skeleton className="h-5 w-28 rounded-full" />
+                <Skeleton className="h-4 w-32" />
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Skeleton className="h-8 w-24" />
+              <Skeleton className="h-8 w-9" />
+            </div>
           </div>
         </header>
         <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div className="min-w-0">
             <div className="px-5 py-5 lg:px-7">
               <Skeleton className="h-4 w-24" />
-              <Skeleton className="mt-4 h-3 w-11/12" />
-              <Skeleton className="mt-2 h-3 w-4/5" />
-              <Skeleton className="mt-2 h-3 w-2/3" />
+              <div className="mt-4 max-w-4xl space-y-2">
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-4/5" />
+                <Skeleton className="h-3 w-2/3" />
+              </div>
             </div>
             <div className="flex h-11 gap-6 border-b border-border px-5 lg:px-7">
               <Skeleton className="h-7 w-24" />
@@ -86,8 +96,10 @@ function DiscussionSkeleton() {
             <Skeleton className="size-7 rounded-full" />
             <Skeleton className="h-3 w-28" />
           </div>
-          <Skeleton className="mt-4 h-3" style={{ width: `${width}%` }} />
-          <Skeleton className="mt-2 h-3 w-3/5" />
+          <div className="mt-4 max-w-[68ch] space-y-2">
+            <Skeleton className="h-3" style={{ width: `${width}%` }} />
+            <Skeleton className="h-3 w-3/5" />
+          </div>
         </article>
       ))}
     </section>

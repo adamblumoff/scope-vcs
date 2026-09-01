@@ -8,7 +8,7 @@ export function Skeleton({
   return (
     <div
       aria-hidden="true"
-      className={cn('scope-skeleton rounded-md bg-muted', className)}
+      className={cn('scope-skeleton max-w-full rounded-md bg-muted', className)}
       data-slot="skeleton"
       {...props}
     />

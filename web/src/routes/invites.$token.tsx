@@ -47,8 +47,23 @@ function InvitePending() {
                 <Skeleton className="mt-1.5 h-3 w-36 max-w-4/5" />
               </div>
               <div className="space-y-3">
-                <Skeleton className="h-8 w-full" />
-                <Skeleton className="h-8" style={{ width: index ? '46%' : '100%' }} />
+                {index === 0 ? (
+                  <>
+                    <div className="flex items-center justify-between gap-4">
+                      <Skeleton className="h-4 w-36" />
+                      <Skeleton className="h-5 w-9 rounded-full" />
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="h-5 w-9 rounded-full" />
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    <Skeleton className="h-9 w-32" />
+                    <Skeleton className="h-9 w-20" />
+                  </div>
+                )}
               </div>
             </section>
           ))}

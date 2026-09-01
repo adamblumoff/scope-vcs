@@ -5,6 +5,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import type { ReactNode } from 'react'
 
+const DEFAULT_ROW_TEXT_LENGTHS = [42, 30, 48, 36]
+
 export function PendingSurface({
   children,
   className,
@@ -65,10 +67,10 @@ function DefaultPageSkeleton() {
       <Skeleton className="h-8 w-52 max-w-2/3" />
       <Skeleton className="mt-3 h-4 w-96 max-w-full" />
       <div className="mt-8 divide-y divide-border border-y border-border">
-        {[72, 58, 82, 64].map((width) => (
-          <div className="py-5" key={width}>
-            <Skeleton className="h-4" style={{ width: `${width}%` }} />
-            <Skeleton className="mt-2 h-3 w-2/5" />
+        {DEFAULT_ROW_TEXT_LENGTHS.map((length) => (
+          <div className="py-5" key={length}>
+            <Skeleton className="h-4" style={{ width: `${length}ch` }} />
+            <Skeleton className="mt-2 h-3 w-48" />
           </div>
         ))}
       </div>

@@ -2,7 +2,7 @@ import { WorkbenchBar, WorkbenchPane } from '@/components/page-header'
 import { PendingSurface } from '@/components/pending-surface'
 import { Skeleton } from '@/components/ui/skeleton'
 
-const RUN_WIDTHS = [82, 64, 72, 58, 70]
+const RUN_TITLE_WIDTHS = [22, 16, 26, 19, 24]
 const PENDING_ACTIONS = (
   <div className="flex items-center gap-2">
     <Skeleton className="h-8 w-36" />
@@ -18,10 +18,15 @@ export function RunsPagePending() {
         <div className="min-w-0 border-t border-border">
           <main className="min-w-0 px-4 pb-14 sm:px-6 lg:px-8">
             <div className="divide-y divide-border pt-7">
-              {RUN_WIDTHS.map((width) => (
+              {RUN_TITLE_WIDTHS.map((width) => (
                 <div className="flex items-center gap-3 px-3 py-3" key={width}>
                   <Skeleton className="size-3.5 shrink-0 rounded-full" />
-                  <Skeleton className="h-4" style={{ width: `${width}%` }} />
+                  <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                    <Skeleton className="h-4" style={{ width: `${width}ch` }} />
+                    <Skeleton className="hidden h-3 w-28 sm:block" />
+                  </div>
+                  <Skeleton className="h-3 w-16 shrink-0" />
+                  <Skeleton className="h-3 w-24 shrink-0" />
                 </div>
               ))}
             </div>
