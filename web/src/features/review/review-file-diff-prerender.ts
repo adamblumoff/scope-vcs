@@ -1,48 +1,34 @@
-import type { ReviewFileDiff } from '@/api/types'
-import { parseDiffFromFile, type FileDiffOptions } from '@pierre/diffs'
-import { preloadFileDiff } from '@pierre/diffs/ssr'
+import { Worker } from 'node:worker_threads'
+import type { ReviewFileDiffWorkerInput } from './review-file-diff-render-contract'
+import {
+  createReviewFileDiffRenderer,
+  type ReviewDiffAdmissionState,
+  runReviewFileDiffWorker,
+} from './review-file-diff-renderer'
 
-const REVIEW_FILE_DIFF_OPTIONS = {
-  diffStyle: 'unified',
-  disableFileHeader: true,
-  hunkSeparators: 'line-info-basic',
-  lineDiffType: 'word',
-  overflow: 'wrap',
-} satisfies FileDiffOptions<undefined>
+const rendererStateKey = Symbol.for('scope.review-file-diff-renderer-state')
+const rendererStateHost = globalThis as unknown as Record<
+  symbol,
+  ReviewDiffAdmissionState | undefined
+>
+const sharedRendererState = rendererStateHost[rendererStateKey] ?? { active: 0 }
+rendererStateHost[rendererStateKey] = sharedRendererState
 
-export async function prerenderReviewFileDiff(
-  diff: ReviewFileDiff,
-): Promise<string | null> {
-  const oldText = reviewFileText(diff.old_content)
-  const newText = reviewFileText(diff.new_content)
+export const renderReviewFileDiff = createReviewFileDiffRenderer({
+  isolatedRender: runIsolatedReviewFileDiffRender,
+  state: sharedRendererState,
+})
 
-  if (oldText === null || newText === null) {
-    return null
-  }
-
-  const fileDiff = parseDiffFromFile(
-    {
-      contents: oldText,
-      name: diff.path,
-    },
-    {
-      contents: newText,
-      name: diff.path,
-    },
+function runIsolatedReviewFileDiffRender(
+  input: ReviewFileDiffWorkerInput,
+  deadlineMs: number,
+) {
+  const workerUrl = import.meta.env.PROD
+    ? new URL('../_workers/review-file-diff-render-worker.mjs', import.meta.url)
+    : new URL('./review-file-diff-render-worker.ts', import.meta.url)
+  const worker = new Worker(
+    workerUrl,
+    { workerData: input },
   )
-
-  const { prerenderedHTML } = await preloadFileDiff({
-    fileDiff,
-    options: REVIEW_FILE_DIFF_OPTIONS,
-  })
-
-  return prerenderedHTML
-}
-
-function reviewFileText(content: ReviewFileDiff['old_content']) {
-  if (!content) {
-    return ''
-  }
-
-  return content.kind === 'text' ? content.text : null
+  return runReviewFileDiffWorker(worker, deadlineMs)
 }

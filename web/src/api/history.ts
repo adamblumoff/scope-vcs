@@ -1,5 +1,5 @@
 import { createApiClient } from '@/api/client'
-import { prerenderReviewFileDiff } from '@/features/review/review-file-diff-prerender'
+import { renderReviewFileDiff } from '@/features/review/review-file-diff-prerender'
 import { parseHistoryAudience } from './history-inputs'
 import type {
   HistoryEntryDetail,
@@ -69,8 +69,5 @@ export async function loadHistoryEntryFileDiffForRequest(
     { auth: 'optional' },
   )
 
-  return {
-    ...diff,
-    prerenderedHtml: await prerenderReviewFileDiff(diff),
-  }
+  return renderReviewFileDiff(diff)
 }

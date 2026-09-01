@@ -1,4 +1,8 @@
-import type { ReviewFileDiff } from '@/api/types'
+import type {
+  ReviewDiffBinarySide,
+  ReviewDiffTextSide,
+  ReviewFileDiff,
+} from '@/api/types'
 import { PanelState } from '@/components/empty-state'
 import { displayPath } from '@/components/file-system-tree-model'
 import { PendingSurface } from '@/components/pending-surface'
@@ -9,11 +13,10 @@ import DOMPurify from 'dompurify'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useLayoutEffect, useRef } from 'react'
 import {
-  type BinaryContentSide,
-  type ReviewFileContent,
-  reviewContentSides,
-  type TextContentSide,
-} from './review-file-content'
+  reviewFileDiffEmptyLabel,
+  reviewFileDiffModeChangeLabel,
+  reviewFileDiffOmittedLabel,
+} from './review-file-diff-presentation'
 
 export function ReviewFileDiffDrawer({
   cacheKey,
@@ -38,7 +41,6 @@ export function ReviewFileDiffDrawer({
   scrollTop?: number
   selectedPath: string | null
 }) {
-  const contentSides = diff ? reviewContentSides(diff) : { binary: [], text: [] }
   const displayName = displayPath(diff?.path ?? selectedPath ?? '')
   const scrollRef = useRef<HTMLDivElement>(null)
   const restoredScrollKeyRef = useRef<string | null>(null)
@@ -70,7 +72,7 @@ export function ReviewFileDiffDrawer({
                 ? null
                 : error
                   ? 'Diff unavailable'
-                  : modeChangeLabel(diff) ?? 'Diff'}
+                  : reviewFileDiffModeChangeLabel(diff) ?? 'Diff'}
             </div>
           </div>
           {onClose && (
@@ -109,19 +111,21 @@ export function ReviewFileDiffDrawer({
                 </Button>
               )}
             </PanelState>
-          ) : contentSides.binary.length > 0 && contentSides.text.length > 0 ? (
+          ) : diff?.presentation.kind === 'mixed' ? (
             <MixedContentDiffState
-              binary={contentSides.binary}
-              text={contentSides.text}
+              binary={diff.presentation.binary}
+              text={diff.presentation.text}
             />
-          ) : contentSides.binary.length > 0 ? (
-            <BinaryDiffState sides={contentSides.binary} />
-          ) : diff?.prerenderedHtml ? (
-            <PrerenderedDiff html={diff.prerenderedHtml} />
+          ) : diff?.presentation.kind === 'binary' ? (
+            <BinaryDiffState sides={diff.presentation.sides} />
+          ) : diff?.presentation.kind === 'html' ? (
+            <PrerenderedDiff html={diff.presentation.html} />
+          ) : diff?.presentation.kind === 'omitted' ? (
+            <OmittedDiffState reason={diff.presentation.reason} />
           ) : (
             <PanelState>
               <FileText className="size-5" />
-              <span>{emptyDiffLabel(diff)}</span>
+              <span>{reviewFileDiffEmptyLabel(diff)}</span>
             </PanelState>
           )}
         </div>
@@ -175,7 +179,7 @@ function DiffSkeleton() {
   )
 }
 
-function BinaryDiffState({ sides }: { sides: BinaryContentSide[] }) {
+function BinaryDiffState({ sides }: { sides: ReviewDiffBinarySide[] }) {
   return (
     <PanelState>
       <BinarySummary sides={sides} />
@@ -187,8 +191,8 @@ function MixedContentDiffState({
   binary,
   text,
 }: {
-  binary: BinaryContentSide[]
-  text: TextContentSide[]
+  binary: ReviewDiffBinarySide[]
+  text: ReviewDiffTextSide[]
 }) {
   return (
     <div className="min-h-[220px]">
@@ -201,15 +205,20 @@ function MixedContentDiffState({
             {side.label} text
           </div>
           <pre className="overflow-auto whitespace-pre-wrap break-words px-4 py-3 font-mono text-xs leading-5 text-foreground">
-            {side.text || 'Empty text file'}
+            {side.content || 'Empty text file'}
           </pre>
+          {side.truncated && (
+            <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+              Text preview truncated
+            </div>
+          )}
         </section>
       ))}
     </div>
   )
 }
 
-function BinarySummary({ sides }: { sides: BinaryContentSide[] }) {
+function BinarySummary({ sides }: { sides: ReviewDiffBinarySide[] }) {
   return (
     <div className="w-full max-w-md space-y-3">
       <div className="flex items-center gap-2 text-foreground">
@@ -233,6 +242,19 @@ function BinarySummary({ sides }: { sides: BinaryContentSide[] }) {
   )
 }
 
+function OmittedDiffState({
+  reason,
+}: {
+  reason: Extract<ReviewFileDiff['presentation'], { kind: 'omitted' }>['reason']
+}) {
+  return (
+    <PanelState>
+      <FileText className="size-5" />
+      <span>{reviewFileDiffOmittedLabel(reason)}</span>
+    </PanelState>
+  )
+}
+
 function abbreviateOid(oid: string) {
   return oid.length > 12 ? oid.slice(0, 12) : oid
 }
@@ -245,25 +267,4 @@ function formatBytes(bytes: number) {
     return `${(bytes / 1024).toFixed(1)} KB`
   }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function emptyDiffLabel(diff: ReviewFileDiff | null) {
-  const modeChange = modeChangeLabel(diff)
-  if (modeChange) {
-    return modeChange
-  }
-  if (diff?.kind === 'Added') {
-    return 'Empty file added'
-  }
-  if (diff?.kind === 'Deleted') {
-    return 'Empty file deleted'
-  }
-  return 'No content changes'
-}
-
-function modeChangeLabel(diff: ReviewFileDiff | null) {
-  if (!diff?.old_mode || !diff.new_mode || diff.old_mode === diff.new_mode) {
-    return null
-  }
-  return `Mode ${diff.old_mode} → ${diff.new_mode}`
 }

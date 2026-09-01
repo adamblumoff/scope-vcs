@@ -134,8 +134,36 @@ export type CommitDetail = CommitSummary & {
 export type HistoryPage = HistoryPageResponse
 export type HistoryEntrySummary = HistoryEntrySummaryResponse
 export type HistoryEntryDetail = HistoryEntryDetailResponse
-export type ReviewFileDiff = ReviewFileDiffResponse & {
-  prerenderedHtml?: string | null
+export type ReviewDiffBinarySide = {
+  label: 'New' | 'Old'
+  oid: string
+  sizeBytes: number
+}
+
+export type ReviewDiffTextSide = {
+  content: string
+  label: 'New' | 'Old'
+  truncated: boolean
+}
+
+export type ReviewDiffOmittedReason = 'hunks' | 'input' | 'lines' | 'output'
+
+export type ReviewDiffPresentation =
+  | { kind: 'binary'; sides: ReviewDiffBinarySide[] }
+  | { kind: 'empty' }
+  | { html: string; kind: 'html' }
+  | {
+      binary: ReviewDiffBinarySide[]
+      kind: 'mixed'
+      text: ReviewDiffTextSide[]
+    }
+  | { kind: 'omitted'; reason: ReviewDiffOmittedReason }
+
+export type ReviewFileDiff = Pick<
+  ReviewFileDiffResponse,
+  'kind' | 'new_mode' | 'old_mode' | 'path'
+> & {
+  presentation: ReviewDiffPresentation
 }
 export type RequestList = RequestListResponse
 export type RequestListItem = RequestListItemResponse
