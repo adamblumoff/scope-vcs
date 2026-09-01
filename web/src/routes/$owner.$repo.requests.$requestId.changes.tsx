@@ -31,6 +31,16 @@ type LoadRequestRevisionsInput = ReturnType<typeof requestParamsForRoute> & {
   revision_id?: string
 }
 
+type ChangesPage = Awaited<ReturnType<typeof loadChangesPage>>
+type ChangesLoaderData = ChangesPage & {
+  pin: RequestChangesSearch | null
+}
+
+let pinnedChangesReplay: {
+  data: ChangesLoaderData
+  key: string
+} | null = null
+
 const requestRoute = getRouteApi('/$owner/$repo/requests/$requestId')
 
 const loadChangesPage = createServerFn({ method: 'GET' })
@@ -83,6 +93,8 @@ export const Route = createFileRoute(
       commit_oid: selectionSearch.commit,
       revision_id: selectionSearch.revision,
     }
+    const replay = takePinnedChangesReplay(input)
+    if (replay) return replay
     const page = await loadChangesPage({ data: input })
     const { revisions } = page
     if (!revisions) return { ...page, pin: null }
@@ -116,6 +128,11 @@ function RequestChangesRoute() {
   )
   useEffect(() => {
     if (!changes.pin || search.revision) return
+    rememberPinnedChangesReplay({
+      ...requestParams,
+      commit_oid: changes.pin.commit,
+      revision_id: changes.pin.revision,
+    }, changes)
     void navigate({
       params,
       replace: true,
@@ -123,7 +140,7 @@ function RequestChangesRoute() {
       search: (current) => ({ ...current, ...changes.pin }),
       to: '/$owner/$repo/requests/$requestId/changes',
     })
-  }, [changes.pin, navigate, params, search.revision])
+  }, [changes, navigate, params, requestParams, search.revision])
 
   if (!page.detail) return null
 
@@ -157,6 +174,31 @@ function requestChangesSelectionSearch(search: unknown): RequestChangesSearch {
     commit: typeof values.commit === 'string' ? values.commit : undefined,
     revision: typeof values.revision === 'string' ? values.revision : undefined,
   }
+}
+
+function rememberPinnedChangesReplay(
+  input: LoadRequestRevisionsInput,
+  data: ChangesLoaderData,
+) {
+  if (typeof window === 'undefined') return
+  pinnedChangesReplay = { data, key: changesSelectionKey(input) }
+}
+
+function takePinnedChangesReplay(input: LoadRequestRevisionsInput) {
+  if (typeof window === 'undefined') return null
+  const replay = pinnedChangesReplay
+  pinnedChangesReplay = null
+  return replay?.key === changesSelectionKey(input) ? replay.data : null
+}
+
+function changesSelectionKey(input: LoadRequestRevisionsInput) {
+  return [
+    input.owner,
+    input.repo,
+    input.request_id,
+    input.revision_id ?? '',
+    input.commit_oid ?? '',
+  ].join('\0')
 }
 
 async function initialDiscussionReferences(

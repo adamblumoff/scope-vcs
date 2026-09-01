@@ -42,6 +42,7 @@ test('generated validators enforce arrays and JavaScript safe integers', () => {
   }]), false)
 
   const connected = {
+    incarnation_id: 'incarnation-1',
     kind: 'Connected',
     repo_id: 'owner/repo',
     version: Number.MAX_SAFE_INTEGER,

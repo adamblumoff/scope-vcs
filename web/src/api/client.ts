@@ -15,6 +15,7 @@ const cliInstallUrlEnv = 'SCOPE_CLI_INSTALL_URL'
 const internalApiUrlEnv = 'SCOPE_API_INTERNAL_URL'
 const publicApiUrlEnv = 'SCOPE_API_PUBLIC_URL'
 const clerkApiTokenTemplateEnv = 'SCOPE_CLERK_API_TOKEN_TEMPLATE'
+const nodeEnv = 'NODE_ENV'
 const defaultClerkApiTokenTemplate = 'scope_api'
 
 export type ApiAuthMode = 'none' | 'optional' | 'required'
@@ -124,7 +125,7 @@ function configuredConnection(envName: string, fallback: string, action: string)
     return stripTrailingSlash(envBase)
   }
 
-  if (import.meta.env.DEV) {
+  if (runtimeEnv(nodeEnv) === 'development') {
     return fallback
   }
 
