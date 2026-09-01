@@ -6,8 +6,8 @@ use scope_domain::{
     account::UserAccount,
     content::{DEFAULT_GIT_FILE_MODE, SourceBlob},
     content_ref::ContentRef,
-    policy::Visibility,
-    repository::Repository,
+    policy::{ScopePath, Visibility, VisibilityRule},
+    repository::{Repository, access::RepositoryAccess},
     requests::RequestRevision,
 };
 use std::{
@@ -144,6 +144,97 @@ fn revision_response_keeps_oversized_commit_identity_and_prioritizes_selection()
     assert_eq!(selected.visible[1].oid, last);
     assert!(selected.visible[1].files.is_empty());
     assert!(selected.visible[1].files_truncated);
+}
+
+#[test]
+fn revision_response_keeps_changed_and_empty_identities_without_a_file_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    git(directory.path(), &["init", "--quiet"], None);
+    let empty_tree = git(directory.path(), &["mktree"], Some(""));
+    let base = git(
+        directory.path(),
+        &["commit-tree", &empty_tree, "-m", "base"],
+        None,
+    );
+    let blob = git(
+        directory.path(),
+        &["hash-object", "-w", "--stdin"],
+        Some("content\n"),
+    );
+    let changed_tree = git(
+        directory.path(),
+        &["mktree"],
+        Some(&format!("100644 blob {blob}\tfile.txt\n")),
+    );
+    let changed = git(
+        directory.path(),
+        &["commit-tree", &changed_tree, "-p", &base, "-m", "changed"],
+        None,
+    );
+    let empty = git(
+        directory.path(),
+        &["commit-tree", &changed_tree, "-p", &changed, "-m", "empty"],
+        None,
+    );
+    let revision = RequestRevision {
+        id: "revision-1".to_string(),
+        request_id: "request-1".to_string(),
+        position: 1,
+        actor_user_id: "owner-1".to_string(),
+        old_head_oid: base,
+        new_head_oid: empty.clone(),
+        git_snapshot: SourceBlob {
+            content_ref: ContentRef::blob_sha256("snapshot"),
+            sha256: "snapshot".to_string(),
+            git_oid: "snapshot".to_string(),
+            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+            size_bytes: 1,
+        },
+        created_at_unix: 1,
+    };
+    let owner = UserAccount {
+        id: "owner-1".to_string(),
+        handle: "owner".to_string(),
+        email: "owner@example.test".to_string(),
+        email_verified: true,
+    };
+    let mut repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
+
+    let response = request_revision_commits(
+        directory.path(),
+        &repo,
+        repo.access_for_user_id(&owner.id),
+        &revision,
+        None,
+        100,
+        0,
+    )
+    .unwrap();
+    assert_eq!(response.visible.len(), 2);
+    assert_eq!(response.visible[0].oid, changed);
+    assert_eq!(response.visible[0].change_count, 1);
+    assert!(response.visible[0].files_truncated);
+    assert_eq!(response.visible[1].oid, empty);
+    assert_eq!(response.visible[1].change_count, 0);
+    assert!(!response.visible[1].files_truncated);
+
+    repo.policy
+        .add_rule(VisibilityRule::private(
+            ScopePath::parse("/file.txt").unwrap(),
+        ))
+        .unwrap();
+    let public_response = request_revision_commits(
+        directory.path(),
+        &repo,
+        RepositoryAccess::public(),
+        &revision,
+        None,
+        100,
+        0,
+    )
+    .unwrap();
+    assert_eq!(public_response.visible.len(), 1);
+    assert_eq!(public_response.visible[0].oid, empty);
 }
 
 fn git(repo: &Path, args: &[&str], stdin: Option<&str>) -> String {

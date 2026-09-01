@@ -36,10 +36,12 @@ type ChangesLoaderData = ChangesPage & {
   pin: RequestChangesSearch | null
 }
 
-let pinnedChangesReplay: {
+type PinnedChangesReplay = {
   data: ChangesLoaderData
   key: string
-} | null = null
+}
+
+const pinnedChangesReplay: { current: PinnedChangesReplay | null } = { current: null }
 
 const requestRoute = getRouteApi('/$owner/$repo/requests/$requestId')
 
@@ -128,18 +130,24 @@ function RequestChangesRoute() {
   )
   useEffect(() => {
     if (!changes.pin || search.revision) return
-    rememberPinnedChangesReplay({
-      ...requestParams,
-      commit_oid: changes.pin.commit,
-      revision_id: changes.pin.revision,
-    }, changes)
+    const replay = rememberPinnedChangesReplay(
+      {
+        ...requestParams,
+        commit_oid: changes.pin.commit,
+        revision_id: changes.pin.revision,
+      },
+      changes,
+    )
     void navigate({
       params,
       replace: true,
       resetScroll: false,
       search: (current) => ({ ...current, ...changes.pin }),
       to: '/$owner/$repo/requests/$requestId/changes',
-    })
+    }).then(
+      () => forgetPinnedChangesReplay(replay),
+      () => forgetPinnedChangesReplay(replay),
+    )
   }, [changes, navigate, params, requestParams, search.revision])
 
   if (!page.detail) return null
@@ -180,15 +188,22 @@ function rememberPinnedChangesReplay(
   input: LoadRequestRevisionsInput,
   data: ChangesLoaderData,
 ) {
-  if (typeof window === 'undefined') return
-  pinnedChangesReplay = { data, key: changesSelectionKey(input) }
+  if (typeof window === 'undefined') return null
+  const replay = { data, key: changesSelectionKey(input) }
+  pinnedChangesReplay.current = replay
+  return replay
 }
 
 function takePinnedChangesReplay(input: LoadRequestRevisionsInput) {
   if (typeof window === 'undefined') return null
-  const replay = pinnedChangesReplay
-  pinnedChangesReplay = null
-  return replay?.key === changesSelectionKey(input) ? replay.data : null
+  const replay = pinnedChangesReplay.current
+  if (!replay || replay.key !== changesSelectionKey(input)) return null
+  pinnedChangesReplay.current = null
+  return replay.data
+}
+
+function forgetPinnedChangesReplay(replay: PinnedChangesReplay | null) {
+  if (pinnedChangesReplay.current === replay) pinnedChangesReplay.current = null
 }
 
 function changesSelectionKey(input: LoadRequestRevisionsInput) {

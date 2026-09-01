@@ -26,7 +26,7 @@ impl MigrationTrait for Migration {
 
                 CREATE TEMP TABLE scope_git_segment_v2_sources ON COMMIT DROP AS
                 SELECT repo_id, first_sequence, last_sequence,
-                       object_key AS legacy_object_key,
+                       (object_key::jsonb)::text AS legacy_object_key,
                        sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
                        geometric_tier, base_oid, head_oid
                 FROM scope_git_segments
@@ -197,7 +197,8 @@ impl MigrationTrait for Migration {
                            WHERE spans.repo_id = prepared.repo_id
                              AND spans.first_sequence = prepared.first_sequence
                              AND spans.last_sequence = prepared.last_sequence
-                             AND spans.object_key = prepared.legacy_object_key
+                             AND (spans.object_key::jsonb)::text =
+                                 prepared.legacy_object_key
                              AND spans.sha256 = prepared.legacy_sha256
                              AND spans.size_bytes = prepared.legacy_size_bytes
                        ) THEN 'published' ELSE 'retained' END,
@@ -215,7 +216,7 @@ impl MigrationTrait for Migration {
                 WHERE prepared.repo_id = spans.repo_id
                   AND prepared.first_sequence = spans.first_sequence
                   AND prepared.last_sequence = spans.last_sequence
-                  AND prepared.legacy_object_key = spans.object_key
+                  AND prepared.legacy_object_key = (spans.object_key::jsonb)::text
                   AND prepared.legacy_sha256 = spans.sha256
                   AND prepared.legacy_size_bytes = spans.size_bytes;
 

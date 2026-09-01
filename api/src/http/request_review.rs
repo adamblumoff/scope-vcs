@@ -38,7 +38,9 @@ use std::path::Path as FsPath;
 mod inspection;
 
 pub(crate) use inspection::RequestRevisionCommitVisibility;
-use inspection::{inspect_request_commit, request_revision_commit_files};
+use inspection::{
+    inspect_request_commit, inspect_request_commits_identity_only, request_revision_commit_files,
+};
 
 const MAX_LISTED_REQUEST_REVISIONS: usize = 50;
 const MAX_LISTED_COMMITS_PER_REVISION: usize = 100;
@@ -312,12 +314,32 @@ fn request_revision_commits(
     let mut visible = Vec::new();
     let mut file_budget_incomplete = false;
     let mut metadata_incomplete = false;
+    let mut identity_only_indexes = Vec::new();
     for index in inspection_order {
+        if remaining_files == 0 {
+            identity_only_indexes.push(index);
+            continue;
+        }
         let commit = inspect_request_commit(raw_repo, repo, access, &commit_oids[index])?;
         metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
         if let Some(mut summary) = commit.commit {
             file_budget_incomplete |= truncate_commit_files(&mut summary, &mut remaining_files);
             visible.push((index, summary));
+        }
+    }
+    if !identity_only_indexes.is_empty() {
+        let identity_only_oids = identity_only_indexes
+            .iter()
+            .map(|index| commit_oids[*index].clone())
+            .collect::<Vec<_>>();
+        let identity_only =
+            inspect_request_commits_identity_only(raw_repo, repo, access, &identity_only_oids)?;
+        for (index, commit) in identity_only_indexes.into_iter().zip(identity_only) {
+            metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
+            if let Some(summary) = commit.commit {
+                file_budget_incomplete |= summary.files_truncated;
+                visible.push((index, summary));
+            }
         }
     }
     visible.sort_by_key(|(index, _)| *index);

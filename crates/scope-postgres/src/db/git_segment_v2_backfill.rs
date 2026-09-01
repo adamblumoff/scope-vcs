@@ -167,7 +167,8 @@ impl GitSegmentV2Backfill {
             &self.db,
             r#"
             WITH legacy_sources AS (
-                SELECT repo_id, first_sequence, last_sequence, object_key AS legacy_object_key,
+                SELECT repo_id, first_sequence, last_sequence,
+                       (object_key::jsonb)::text AS legacy_object_key,
                        sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
                        geometric_tier, base_oid, head_oid
                 FROM scope_git_segments
@@ -248,7 +249,7 @@ impl GitSegmentV2Backfill {
                 r#"
                 WITH legacy_sources AS (
                     SELECT repo_id, first_sequence, last_sequence,
-                           object_key AS legacy_object_key,
+                           (object_key::jsonb)::text AS legacy_object_key,
                            sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
                            geometric_tier, base_oid, head_oid
                     FROM scope_git_segments

@@ -1,8 +1,15 @@
 use super::*;
-use std::collections::{BTreeMap, BTreeSet};
+use crate::runtime_budgets::RuntimeBudgets;
+use scope_git_process::{ProcessLimits, StreamingProcessError, run_with_stdout, truncated_stderr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::{BufRead, BufReader, Read},
+    process::Command,
+};
 
 const MAX_REQUEST_COMMIT_IDENTITY_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_COMMIT_METADATA_BYTES: usize = 64 * 1024;
+const MAX_REQUEST_DIFF_FIELD_BYTES: usize = 64 * 1024;
 
 pub(super) fn request_revision_commit_files(
     raw_repo: &FsPath,
@@ -162,9 +169,231 @@ pub(super) fn inspect_request_commit(
     })
 }
 
+pub(super) fn inspect_request_commits_identity_only(
+    raw_repo: &FsPath,
+    repo: &Repository,
+    access: RepositoryAccess,
+    commit_oids: &[String],
+) -> Result<Vec<InspectedRequestCommit>, ApiError> {
+    let mut changes = request_commit_change_summaries(raw_repo, repo, access, commit_oids)?;
+    commit_oids
+        .iter()
+        .map(|commit_oid| {
+            let changes = changes.remove(commit_oid).ok_or_else(|| {
+                ApiError::internal_message("request identity diff omitted a commit")
+            })?;
+            if changes.hidden {
+                return Ok(InspectedRequestCommit {
+                    commit: None,
+                    inspection: RequestRevisionInspectionState::Complete,
+                });
+            }
+            let identity = request_commit_identity(raw_repo, commit_oid)?;
+            let metadata = request_commit_display_metadata(raw_repo, commit_oid)?;
+            Ok(InspectedRequestCommit {
+                commit: Some(RequestRevisionCommitResponse {
+                    oid: commit_oid.clone(),
+                    parent_oids: if access.can_read_private_files {
+                        identity.parent_oids
+                    } else {
+                        Vec::new()
+                    },
+                    author: metadata.author,
+                    authored_at_unix: identity.authored_at_unix,
+                    message: metadata.message,
+                    change_count: changes.change_count,
+                    files: Vec::new(),
+                    files_truncated: changes.change_count != 0,
+                }),
+                inspection: if metadata.complete && changes.change_count == 0 {
+                    RequestRevisionInspectionState::Complete
+                } else {
+                    RequestRevisionInspectionState::Incomplete
+                },
+            })
+        })
+        .collect()
+}
+
 pub(super) struct InspectedRequestCommit {
     pub(super) commit: Option<RequestRevisionCommitResponse>,
     pub(super) inspection: RequestRevisionInspectionState,
+}
+
+#[derive(Default)]
+struct RequestCommitChangeSummary {
+    change_count: usize,
+    hidden: bool,
+}
+
+fn request_commit_change_summaries(
+    raw_repo: &FsPath,
+    repo: &Repository,
+    access: RepositoryAccess,
+    commit_oids: &[String],
+) -> Result<BTreeMap<String, RequestCommitChangeSummary>, ApiError> {
+    if commit_oids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let expected = commit_oids.iter().cloned().collect::<BTreeSet<_>>();
+    let policy = repo.policy.clone();
+    let mut input = commit_oids.join("\n").into_bytes();
+    input.push(b'\n');
+    let mut command = Command::new("git");
+    command.arg("-C").arg(raw_repo).args([
+        "diff-tree",
+        "--stdin",
+        "--raw",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--abbrev=64",
+        "--diff-merges=first-parent",
+        "--always",
+    ]);
+    let output = run_with_stdout(
+        &mut command,
+        Some(input),
+        ProcessLimits::new(RuntimeBudgets::default_git_command_timeout()),
+        "reading bounded request commit identities",
+        move |stdout, _cancellation| {
+            parse_request_commit_change_summaries(
+                stdout,
+                &policy,
+                access.can_read_private_files,
+                &expected,
+            )
+        },
+    )
+    .map_err(|error| match error {
+        StreamingProcessError::Process(error) => {
+            ApiError::infrastructure_unavailable(error.to_string())
+        }
+        StreamingProcessError::Consumer(error) => error,
+    })?;
+    if !output.status.success() {
+        return Err(ApiError::infrastructure_unavailable(format!(
+            "reading bounded request commit identities: {}",
+            truncated_stderr(&output.stderr, scope_git_process::STDERR_DIAGNOSTIC_BYTES).trim()
+        )));
+    }
+    Ok(output.value)
+}
+
+fn parse_request_commit_change_summaries(
+    stdout: Box<dyn Read + Send>,
+    policy: &scope_domain::policy::Policy,
+    can_read_private_files: bool,
+    expected: &BTreeSet<String>,
+) -> Result<BTreeMap<String, RequestCommitChangeSummary>, ApiError> {
+    let mut reader = BufReader::new(stdout);
+    let mut summaries = BTreeMap::<String, RequestCommitChangeSummary>::new();
+    let mut current_oid = None;
+    while let Some(field) = read_nul_field_bounded(&mut reader)? {
+        if field.bytes.starts_with(b":") {
+            let oid = current_oid.as_ref().ok_or_else(|| {
+                ApiError::internal_message("request identity diff is missing a commit header")
+            })?;
+            validate_request_diff_header(&field)?;
+            let path = read_nul_field_bounded(&mut reader)?.ok_or_else(|| {
+                ApiError::internal_message("request identity diff is missing a path")
+            })?;
+            let summary = summaries
+                .get_mut(oid)
+                .expect("current request identity diff commit must exist");
+            summary.change_count = summary.change_count.checked_add(1).ok_or_else(|| {
+                ApiError::internal_message("request identity diff change count overflowed")
+            })?;
+            if !can_read_private_files && !summary.hidden {
+                summary.hidden = path.truncated || !request_path_is_public(policy, &path.bytes)?;
+            }
+            continue;
+        }
+        if field.truncated {
+            return Err(ApiError::internal_message(
+                "request identity diff commit header is too large",
+            ));
+        }
+        let oid = std::str::from_utf8(&field.bytes)
+            .map_err(ApiError::bad_request)?
+            .to_string();
+        if !expected.contains(&oid) || summaries.insert(oid.clone(), Default::default()).is_some() {
+            return Err(ApiError::internal_message(
+                "request identity diff returned an unexpected commit",
+            ));
+        }
+        current_oid = Some(oid);
+    }
+    if summaries.len() != expected.len() {
+        return Err(ApiError::internal_message(
+            "request identity diff did not inspect every commit",
+        ));
+    }
+    Ok(summaries)
+}
+
+fn validate_request_diff_header(field: &BoundedNulField) -> Result<(), ApiError> {
+    if field.truncated {
+        return Err(ApiError::internal_message(
+            "request identity diff header is too large",
+        ));
+    }
+    let header = std::str::from_utf8(&field.bytes).map_err(ApiError::bad_request)?;
+    let columns = header.split_ascii_whitespace().collect::<Vec<_>>();
+    if columns.len() != 5 || !columns[0].starts_with(':') {
+        return Err(ApiError::internal_message(format!(
+            "invalid request identity diff header {header}"
+        )));
+    }
+    Ok(())
+}
+
+fn request_path_is_public(
+    policy: &scope_domain::policy::Policy,
+    raw_path: &[u8],
+) -> Result<bool, ApiError> {
+    let path = std::str::from_utf8(raw_path).map_err(ApiError::bad_request)?;
+    let scope_path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
+    Ok(policy.can_read(&scope_path, false))
+}
+
+struct BoundedNulField {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn read_nul_field_bounded(reader: &mut impl BufRead) -> Result<Option<BoundedNulField>, ApiError> {
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    loop {
+        let available = reader.fill_buf().map_err(|error| {
+            ApiError::infrastructure_unavailable(format!(
+                "reading request identity diff failed: {error}"
+            ))
+        })?;
+        if available.is_empty() {
+            if bytes.is_empty() && !truncated {
+                return Ok(None);
+            }
+            return Err(ApiError::internal_message(
+                "request identity diff ended inside a field",
+            ));
+        }
+        let consumed = available
+            .iter()
+            .position(|byte| *byte == 0)
+            .map_or(available.len(), |position| position + 1);
+        let content =
+            &available[..consumed.saturating_sub(usize::from(available[consumed - 1] == 0))];
+        let remaining = MAX_REQUEST_DIFF_FIELD_BYTES.saturating_sub(bytes.len());
+        bytes.extend_from_slice(&content[..content.len().min(remaining)]);
+        truncated |= content.len() > remaining;
+        let terminated = available[consumed - 1] == 0;
+        reader.consume(consumed);
+        if terminated {
+            return Ok(Some(BoundedNulField { bytes, truncated }));
+        }
+    }
 }
 
 fn request_commit_identity(

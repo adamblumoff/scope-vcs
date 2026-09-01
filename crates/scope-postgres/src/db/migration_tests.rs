@@ -11,6 +11,7 @@ mod cache_service_cutover;
 mod git_compaction_scheduler;
 mod git_pack_spans;
 mod git_segment_streaming_v2;
+mod git_segment_streaming_v2_support;
 mod logical_run_sources;
 mod maintenance_cutover;
 mod repository_incarnations;
