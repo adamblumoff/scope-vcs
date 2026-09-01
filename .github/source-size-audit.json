@@ -27,11 +27,6 @@
       "reason": "Commit reachability, path disclosure checks, and adversarial fixtures jointly enforce one public-request invariant."
     },
     {
-      "path": "api/src/git/storage.rs",
-      "owner": "local Git repository process adapter",
-      "reason": "Repository paths, receive hooks, process-group lifetime, and CGI parsing are the local Git execution boundary."
-    },
-    {
       "path": "api/src/http/request_discussions.rs",
       "owner": "request discussion HTTP delivery",
       "reason": "Discussion queries and mutations share visibility projection, cursor, anchor, and response mapping rules."
