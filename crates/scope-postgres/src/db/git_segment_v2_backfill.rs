@@ -45,6 +45,43 @@ ALTER TABLE scope_git_segment_v2_backfill
         PRIMARY KEY (repo_id, first_sequence, last_sequence, legacy_object_key);
 "#;
 
+pub(crate) const LEGACY_GIT_SEGMENT_SOURCES: &str = r#"
+SELECT repo_id, first_sequence, last_sequence,
+       (object_key::jsonb)::text AS legacy_object_key,
+       sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
+       geometric_tier, base_oid, head_oid
+FROM scope_git_segments
+UNION ALL
+SELECT runs.source->>'repository_id',
+       (span->>'first_sequence')::bigint,
+       (span->>'last_sequence')::bigint,
+       (span#>'{object,content_ref}')::text,
+       span#>>'{object,sha256}',
+       (span#>>'{object,size_bytes}')::bigint,
+       (span->>'geometric_tier')::integer,
+       span->>'base_oid', span->>'head_oid'
+FROM scope_runs runs
+CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
+WHERE runs.source->>'kind' = 'accepted-git-head'
+UNION ALL
+SELECT jobs.repo_id,
+       (span->>'first_sequence')::bigint,
+       (span->>'last_sequence')::bigint,
+       (span#>'{object,content_ref}')::text,
+       span#>>'{object,sha256}',
+       (span#>>'{object,size_bytes}')::bigint,
+       (span->>'geometric_tier')::integer,
+       span->>'base_oid', span->>'head_oid'
+FROM scope_outbox_jobs jobs
+CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
+WHERE jobs.kind = 'push_main_trigger_evaluation'
+  AND jobs.completed_at_unix IS NULL
+"#;
+
+fn with_legacy_sources(query: &str) -> String {
+    format!("WITH legacy_sources AS (\n{LEGACY_GIT_SEGMENT_SOURCES}\n)\n{query}")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LegacyGitSegment {
     pub repository_id: String,
@@ -163,41 +200,8 @@ impl GitSegmentV2Backfill {
     }
 
     pub async fn legacy_segments(&self) -> anyhow::Result<Vec<LegacyGitSegment>> {
-        let conflicts = scalar_i64(
-            &self.db,
+        let conflict_query = with_legacy_sources(
             r#"
-            WITH legacy_sources AS (
-                SELECT repo_id, first_sequence, last_sequence,
-                       (object_key::jsonb)::text AS legacy_object_key,
-                       sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
-                       geometric_tier, base_oid, head_oid
-                FROM scope_git_segments
-                UNION ALL
-                SELECT runs.source->>'repository_id',
-                       (span->>'first_sequence')::bigint,
-                       (span->>'last_sequence')::bigint,
-                       (span#>'{object,content_ref}')::text,
-                       span#>>'{object,sha256}',
-                       (span#>>'{object,size_bytes}')::bigint,
-                       (span->>'geometric_tier')::integer,
-                       span->>'base_oid', span->>'head_oid'
-                FROM scope_runs runs
-                CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
-                WHERE runs.source->>'kind' = 'accepted-git-head'
-                UNION ALL
-                SELECT jobs.repo_id,
-                       (span->>'first_sequence')::bigint,
-                       (span->>'last_sequence')::bigint,
-                       (span#>'{object,content_ref}')::text,
-                       span#>>'{object,sha256}',
-                       (span#>>'{object,size_bytes}')::bigint,
-                       (span->>'geometric_tier')::integer,
-                       span->>'base_oid', span->>'head_oid'
-                FROM scope_outbox_jobs jobs
-                CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
-                WHERE jobs.kind = 'push_main_trigger_evaluation'
-                  AND jobs.completed_at_unix IS NULL
-            )
             SELECT count(*) AS value
             FROM (
                 SELECT 1
@@ -235,9 +239,12 @@ impl GitSegmentV2Backfill {
                 )) > 1
             ) conflicts
             "#,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("legacy Git segment metadata is malformed: {error}"))?;
+        );
+        let conflicts = scalar_i64(&self.db, &conflict_query)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("legacy Git segment metadata is malformed: {error}")
+            })?;
         if conflicts != 0 {
             anyhow::bail!("legacy Git segment metadata is invalid or conflicting");
         }
@@ -246,39 +253,9 @@ impl GitSegmentV2Backfill {
             .db
             .query_all(Statement::from_string(
                 DatabaseBackend::Postgres,
-                r#"
-                WITH legacy_sources AS (
-                    SELECT repo_id, first_sequence, last_sequence,
-                           (object_key::jsonb)::text AS legacy_object_key,
-                           sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
-                           geometric_tier, base_oid, head_oid
-                    FROM scope_git_segments
-                    UNION ALL
-                    SELECT runs.source->>'repository_id',
-                           (span->>'first_sequence')::bigint,
-                           (span->>'last_sequence')::bigint,
-                           (span#>'{object,content_ref}')::text,
-                           span#>>'{object,sha256}',
-                           (span#>>'{object,size_bytes}')::bigint,
-                           (span->>'geometric_tier')::integer,
-                           span->>'base_oid', span->>'head_oid'
-                    FROM scope_runs runs
-                    CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
-                    WHERE runs.source->>'kind' = 'accepted-git-head'
-                    UNION ALL
-                    SELECT jobs.repo_id,
-                           (span->>'first_sequence')::bigint,
-                           (span->>'last_sequence')::bigint,
-                           (span#>'{object,content_ref}')::text,
-                           span#>>'{object,sha256}',
-                           (span#>>'{object,size_bytes}')::bigint,
-                           (span->>'geometric_tier')::integer,
-                           span->>'base_oid', span->>'head_oid'
-                    FROM scope_outbox_jobs jobs
-                    CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
-                    WHERE jobs.kind = 'push_main_trigger_evaluation'
-                      AND jobs.completed_at_unix IS NULL
-                ), legacy_segments AS (
+                with_legacy_sources(
+                    r#",
+                legacy_segments AS (
                     SELECT DISTINCT repo_id, first_sequence, last_sequence,
                            legacy_object_key, legacy_sha256, legacy_size_bytes,
                            geometric_tier, base_oid, head_oid
@@ -304,8 +281,8 @@ impl GitSegmentV2Backfill {
                       jsonb_build_object('GitSegmentSha256', spans.legacy_sha256)
                 ORDER BY spans.repo_id, spans.first_sequence, spans.last_sequence,
                          spans.legacy_object_key
-                "#
-                .to_string(),
+                "#,
+                ),
             ))
             .await?;
         let mut segments = Vec::with_capacity(rows.len());

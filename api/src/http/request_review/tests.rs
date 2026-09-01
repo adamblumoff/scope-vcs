@@ -81,29 +81,8 @@ fn revision_response_keeps_oversized_commit_identity_and_prioritizes_selection()
         &["commit-tree", &last_tree, "-p", &oversized, "-m", "last"],
         None,
     );
-    let revision = RequestRevision {
-        id: "revision-1".to_string(),
-        request_id: "request-1".to_string(),
-        position: 1,
-        actor_user_id: "owner-1".to_string(),
-        old_head_oid: base,
-        new_head_oid: last.clone(),
-        git_snapshot: SourceBlob {
-            content_ref: ContentRef::blob_sha256("snapshot"),
-            sha256: "snapshot".to_string(),
-            git_oid: "snapshot".to_string(),
-            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-            size_bytes: 1,
-        },
-        created_at_unix: 1,
-    };
-    let owner = UserAccount {
-        id: "owner-1".to_string(),
-        handle: "owner".to_string(),
-        email: "owner@example.test".to_string(),
-        email_verified: true,
-    };
-    let repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
+    let revision = request_revision(base, last.clone());
+    let (owner, repo) = public_repository();
     let access = repo.access_for_user_id(&owner.id);
 
     let default = request_revision_commits(
@@ -176,29 +155,8 @@ fn revision_response_keeps_changed_and_empty_identities_without_a_file_budget() 
         &["commit-tree", &changed_tree, "-p", &changed, "-m", "empty"],
         None,
     );
-    let revision = RequestRevision {
-        id: "revision-1".to_string(),
-        request_id: "request-1".to_string(),
-        position: 1,
-        actor_user_id: "owner-1".to_string(),
-        old_head_oid: base,
-        new_head_oid: empty.clone(),
-        git_snapshot: SourceBlob {
-            content_ref: ContentRef::blob_sha256("snapshot"),
-            sha256: "snapshot".to_string(),
-            git_oid: "snapshot".to_string(),
-            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
-            size_bytes: 1,
-        },
-        created_at_unix: 1,
-    };
-    let owner = UserAccount {
-        id: "owner-1".to_string(),
-        handle: "owner".to_string(),
-        email: "owner@example.test".to_string(),
-        email_verified: true,
-    };
-    let mut repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
+    let revision = request_revision(base, empty.clone());
+    let (owner, mut repo) = public_repository();
 
     let response = request_revision_commits(
         directory.path(),
@@ -235,6 +193,36 @@ fn revision_response_keeps_changed_and_empty_identities_without_a_file_budget() 
     .unwrap();
     assert_eq!(public_response.visible.len(), 1);
     assert_eq!(public_response.visible[0].oid, empty);
+}
+
+fn request_revision(old_head_oid: String, new_head_oid: String) -> RequestRevision {
+    RequestRevision {
+        id: "revision-1".to_string(),
+        request_id: "request-1".to_string(),
+        position: 1,
+        actor_user_id: "owner-1".to_string(),
+        old_head_oid,
+        new_head_oid,
+        git_snapshot: SourceBlob {
+            content_ref: ContentRef::blob_sha256("snapshot"),
+            sha256: "snapshot".to_string(),
+            git_oid: "snapshot".to_string(),
+            git_file_mode: DEFAULT_GIT_FILE_MODE.to_string(),
+            size_bytes: 1,
+        },
+        created_at_unix: 1,
+    }
+}
+
+fn public_repository() -> (UserAccount, Repository) {
+    let owner = UserAccount {
+        id: "owner-1".to_string(),
+        handle: "owner".to_string(),
+        email: "owner@example.test".to_string(),
+        email_verified: true,
+    };
+    let repository = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
+    (owner, repository)
 }
 
 fn git(repo: &Path, args: &[&str], stdin: Option<&str>) -> String {

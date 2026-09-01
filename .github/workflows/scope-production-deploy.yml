@@ -41,6 +41,7 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       deployed_revisions: ${{ steps.progress.outputs.revisions }}
+      deployed_components: ${{ steps.progress.outputs.deployments }}
       checks_image: ${{ steps.plan.outputs.checks_image }}
       cache: ${{ steps.plan.outputs.cache }}
       worker: ${{ steps.plan.outputs.worker }}
@@ -264,7 +265,7 @@ jobs:
       deploy_worker: ${{ needs.plan.outputs.worker == 'true' }}
       deploy_router: ${{ needs.plan.outputs.router == 'true' }}
       deploy_api: ${{ needs.plan.outputs.api == 'true' }}
-      successful_deployment_revisions: ${{ needs.plan.outputs.deployed_revisions || '{}' }}
+      successful_deployments: ${{ needs.plan.outputs.deployed_components || '{}' }}
     secrets: inherit
 
   web-deploy:

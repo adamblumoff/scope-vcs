@@ -16,45 +16,14 @@ impl MigrationTrait for Migration {
         connection
             .execute_unprepared(crate::db::git_segment_v2_backfill::CREATE_BACKFILL_TABLE)
             .await?;
-        connection
-            .execute_unprepared(
-                r#"
+        let migration_sql = r#"
                 LOCK TABLE scope_git_segments, scope_object_references,
                     scope_runs, scope_outbox_jobs, scope_orphan_object_jobs,
                     scope_git_segment_v2_backfill
                     IN ACCESS EXCLUSIVE MODE;
 
                 CREATE TEMP TABLE scope_git_segment_v2_sources ON COMMIT DROP AS
-                SELECT repo_id, first_sequence, last_sequence,
-                       (object_key::jsonb)::text AS legacy_object_key,
-                       sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
-                       geometric_tier, base_oid, head_oid
-                FROM scope_git_segments
-                UNION ALL
-                SELECT runs.source->>'repository_id',
-                       (span->>'first_sequence')::bigint,
-                       (span->>'last_sequence')::bigint,
-                       (span#>'{object,content_ref}')::text,
-                       span#>>'{object,sha256}',
-                       (span#>>'{object,size_bytes}')::bigint,
-                       (span->>'geometric_tier')::integer,
-                       span->>'base_oid', span->>'head_oid'
-                FROM scope_runs runs
-                CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
-                WHERE runs.source->>'kind' = 'accepted-git-head'
-                UNION ALL
-                SELECT jobs.repo_id,
-                       (span->>'first_sequence')::bigint,
-                       (span->>'last_sequence')::bigint,
-                       (span#>'{object,content_ref}')::text,
-                       span#>>'{object,sha256}',
-                       (span#>>'{object,size_bytes}')::bigint,
-                       (span->>'geometric_tier')::integer,
-                       span->>'base_oid', span->>'head_oid'
-                FROM scope_outbox_jobs jobs
-                CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
-                WHERE jobs.kind = 'push_main_trigger_evaluation'
-                  AND jobs.completed_at_unix IS NULL;
+                __LEGACY_GIT_SEGMENT_SOURCES__;
 
                 DO $$
                 BEGIN
@@ -349,9 +318,13 @@ impl MigrationTrait for Migration {
                    );
 
                 DROP TABLE scope_git_segment_v2_backfill;
-                "#,
-            )
-            .await?;
+                "#
+        .replacen(
+            "__LEGACY_GIT_SEGMENT_SOURCES__",
+            crate::db::git_segment_v2_backfill::LEGACY_GIT_SEGMENT_SOURCES,
+            1,
+        );
+        connection.execute_unprepared(&migration_sql).await?;
         Ok(())
     }
 }
