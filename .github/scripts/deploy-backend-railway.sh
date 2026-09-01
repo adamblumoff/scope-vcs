@@ -602,21 +602,16 @@ restart_service() {
 }
 
 successful_deployment_field() {
-  COMPONENT="$1" FIELD="$2" DEPLOYMENTS="$successful_deployments" node -e '
-const deployments = JSON.parse(process.env.DEPLOYMENTS || "{}");
-const deployment = deployments[process.env.COMPONENT];
-if (deployment == null) process.exit(0);
-if (typeof deployment !== "object" || deployment.provider !== "railway") {
-  console.error(`Invalid durable Railway deployment for ${process.env.COMPONENT}.`);
-  process.exit(1);
-}
-const value = deployment[process.env.FIELD];
-if (typeof value !== "string" || value.length === 0) {
-  console.error(`Durable Railway deployment for ${process.env.COMPONENT} has no ${process.env.FIELD}.`);
-  process.exit(1);
-}
-process.stdout.write(value);
-'
+  jq -er --arg component "$1" --arg field "$2" '
+    .[$component] as $deployment
+    | if $deployment == null then ""
+      elif $deployment.provider == "railway"
+        and ($deployment[$field] | type) == "string"
+        and ($deployment[$field] | length) > 0
+      then $deployment[$field]
+      else error("invalid durable Railway deployment for \($component)")
+      end
+  ' <<< "$successful_deployments"
 }
 
 require_successful_deployment_id() {
