@@ -1,5 +1,5 @@
 use super::*;
-use crate::repo_events::{RepoChangeReason, repository_change_event};
+use crate::repo_events::{RepoChangeReason, repository_change_event, run_change_event};
 use scope_api_contract::RunChangeKind;
 use scope_domain::requests::{RequestActorRole, RequestAudience, StartRequestInput};
 use std::time::Duration;
@@ -449,13 +449,11 @@ async fn run_changes_are_visible_to_members_and_hidden_from_public_repo_streams(
     assert!(next_event(&mut public_stream).await.contains("Connected"));
     assert!(next_event(&mut member_stream).await.contains("Connected"));
 
-    state
-        .publish_run_change(
-            TEST_REPO_ID,
-            "run_private".to_string(),
-            RunChangeKind::Created,
-        )
-        .await;
+    state.repo_events.publish_event(run_change_event(
+        &test_repo_incarnation(),
+        "run_private".to_string(),
+        RunChangeKind::Created,
+    ));
 
     let member_event = next_event(&mut member_stream).await;
     assert!(member_event.contains(r#""RunChanged""#));
