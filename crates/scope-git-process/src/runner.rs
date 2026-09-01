@@ -10,6 +10,41 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use tokio::sync::watch;
+
+/// Lets a streaming stdout consumer stop its downstream work when the process
+/// runner reaches its deadline.
+#[derive(Clone, Debug)]
+pub struct ProcessCancellation {
+    cancelled: watch::Sender<bool>,
+}
+
+impl ProcessCancellation {
+    fn new() -> Self {
+        let (cancelled, _) = watch::channel(false);
+        Self { cancelled }
+    }
+
+    fn cancel(&self) {
+        self.cancelled.send_replace(true);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancelled.borrow()
+    }
+
+    pub async fn cancelled(&self) {
+        let mut cancelled = self.cancelled.subscribe();
+        loop {
+            if *cancelled.borrow_and_update() {
+                return;
+            }
+            if cancelled.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct ProcessLimits {
@@ -168,6 +203,11 @@ where
 /// The consumer executes on a dedicated thread so this function can retain the
 /// existing timeout and process-group cleanup guarantees. Unlike [`run`], this
 /// path never collects stdout into a `Vec` owned by the process runner.
+///
+/// The runner signals the supplied [`ProcessCancellation`] before killing a
+/// timed-out process group. The consumer must stop all work it owns and return
+/// after cancellation. The runner joins the consumer thread and never detaches
+/// it.
 pub fn run_with_stdout<T, E, F>(
     command: &mut Command,
     input: Option<Vec<u8>>,
@@ -178,7 +218,7 @@ pub fn run_with_stdout<T, E, F>(
 where
     T: Send + 'static,
     E: Send + 'static,
-    F: FnOnce(Box<dyn Read + Send>) -> Result<T, E> + Send + 'static,
+    F: FnOnce(Box<dyn Read + Send>, ProcessCancellation) -> Result<T, E> + Send + 'static,
 {
     if input.is_some() {
         command.stdin(Stdio::piped());
@@ -223,7 +263,11 @@ where
             action: action.to_string(),
             pipe: "stderr",
         })?;
-    let mut stdout_consumer = Some(thread::spawn(move || consume(Box::new(stdout))));
+    let cancellation = ProcessCancellation::new();
+    let consumer_cancellation = cancellation.clone();
+    let mut stdout_consumer = Some(thread::spawn(move || {
+        consume(Box::new(stdout), consumer_cancellation)
+    }));
     let stderr_reader =
         thread::spawn(move || read_stderr_diagnostic(stderr, STDERR_DIAGNOSTIC_BYTES));
 
@@ -242,12 +286,14 @@ where
             {
                 Ok(Ok(consumed)) => value = Some(consumed),
                 Ok(Err(error)) => {
+                    cancellation.cancel();
                     terminate_and_reap(&mut child);
                     let _ = join_writer(stdin_writer, action);
                     let _ = join_reader(stderr_reader, action);
                     return Err(StreamingProcessError::Consumer(error));
                 }
                 Err(_) => {
+                    cancellation.cancel();
                     terminate_and_reap(&mut child);
                     let _ = join_writer(stdin_writer, action);
                     let _ = join_reader(stderr_reader, action);
@@ -259,10 +305,23 @@ where
             }
         }
         if status.is_none() {
-            status = child.try_wait().map_err(|source| ProcessError::Io {
-                action: action.to_string(),
-                source,
-            })?;
+            status = match child.try_wait() {
+                Ok(status) => status,
+                Err(source) => {
+                    cancellation.cancel();
+                    terminate_and_reap(&mut child);
+                    let _ = join_writer(stdin_writer, action);
+                    if let Some(stdout_consumer) = stdout_consumer {
+                        let _ = stdout_consumer.join();
+                    }
+                    let _ = join_reader(stderr_reader, action);
+                    return Err(ProcessError::Io {
+                        action: action.to_string(),
+                        source,
+                    }
+                    .into());
+                }
+            };
         }
         let stdin_done = stdin_writer
             .as_ref()
@@ -271,6 +330,7 @@ where
             break;
         }
         if started_at.elapsed() >= limits.timeout {
+            cancellation.cancel();
             terminate_and_reap(&mut child);
             let _ = join_writer(stdin_writer, action);
             if let Some(stdout_consumer) = stdout_consumer {

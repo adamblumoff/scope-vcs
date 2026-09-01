@@ -10,13 +10,9 @@ use scope_git_storage::{
 use scope_postgres::db::GitCompactionCandidate;
 use std::{
     fs,
-    io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::io::AsyncReadExt;
@@ -339,19 +335,14 @@ async fn ingest_compacted_pack(
             Some(revisions),
             ProcessLimits::new(timeout),
             "git pack-objects --revs --stdout",
-            move |stdout| {
-                let exceeded = Arc::new(AtomicBool::new(false));
-                let reader = BoundedReader::new(stdout, max_bytes, Arc::clone(&exceeded));
-                let result = runtime.block_on(segment_store.ingest_reserved_blocking_reader(
+            move |stdout, cancellation| {
+                runtime.block_on(segment_store.ingest_reserved_blocking_reader_cancellable(
                     &repository_id,
                     reservation,
-                    reader,
-                ));
-                if exceeded.load(Ordering::Relaxed) {
-                    Err(PackConsumerError::TooLarge)
-                } else {
-                    result.map_err(PackConsumerError::Storage)
-                }
+                    stdout,
+                    max_bytes as u64,
+                    cancellation,
+                ))
             },
         )
     })
@@ -364,7 +355,9 @@ async fn ingest_compacted_pack(
         Err(StreamingProcessError::Process(error)) => {
             return Err(CompactedPackFailure::from(anyhow::Error::new(error)));
         }
-        Err(StreamingProcessError::Consumer(PackConsumerError::TooLarge)) => {
+        Err(StreamingProcessError::Consumer(
+            scope_git_storage::GitStorageError::PlaintextLimitExceeded { .. },
+        )) => {
             return Err(CompactedPackFailure::from(anyhow::Error::new(
                 ProcessError::StdoutLimitExceeded {
                     action: "git pack-objects --revs --stdout".to_string(),
@@ -373,7 +366,7 @@ async fn ingest_compacted_pack(
                 },
             )));
         }
-        Err(StreamingProcessError::Consumer(PackConsumerError::Storage(error))) => {
+        Err(StreamingProcessError::Consumer(error)) => {
             return Err(CompactedPackFailure::from(anyhow::Error::new(error)));
         }
     };
@@ -384,46 +377,6 @@ async fn ingest_compacted_pack(
         )));
     }
     Ok(output.value)
-}
-
-enum PackConsumerError {
-    TooLarge,
-    Storage(scope_git_storage::GitStorageError),
-}
-
-struct BoundedReader<R> {
-    inner: R,
-    remaining: usize,
-    exceeded: Arc<AtomicBool>,
-}
-
-impl<R> BoundedReader<R> {
-    fn new(inner: R, max_bytes: usize, exceeded: Arc<AtomicBool>) -> Self {
-        Self {
-            inner,
-            remaining: max_bytes,
-            exceeded,
-        }
-    }
-}
-
-impl<R: Read> Read for BoundedReader<R> {
-    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        if self.remaining == 0 {
-            let mut probe = [0_u8; 1];
-            if self.inner.read(&mut probe)? == 0 {
-                return Ok(0);
-            }
-            self.exceeded.store(true, Ordering::Relaxed);
-            return Err(std::io::Error::other(
-                "Git compacted pack exceeds its byte limit",
-            ));
-        }
-        let allowed = output.len().min(self.remaining);
-        let read = self.inner.read(&mut output[..allowed])?;
-        self.remaining -= read;
-        Ok(read)
-    }
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
@@ -547,7 +500,7 @@ mod tests {
         pack: Vec<u8>,
     ) -> GitPackSpan {
         let staged = store
-            .ingest_blocking_reader(repository_id, Cursor::new(pack))
+            .ingest_blocking_reader(repository_id, Cursor::new(pack), u64::MAX)
             .await
             .unwrap();
         GitPackSpan {
@@ -722,29 +675,6 @@ mod tests {
             .is_err(),
             "the compacted range must not absorb its predecessor"
         );
-    }
-
-    #[test]
-    fn bounded_reader_accepts_the_limit_and_rejects_one_more_byte() {
-        let exact_exceeded = Arc::new(AtomicBool::new(false));
-        let mut exact = BoundedReader::new(
-            Cursor::new(b"four".to_vec()),
-            4,
-            Arc::clone(&exact_exceeded),
-        );
-        let mut bytes = Vec::new();
-        exact.read_to_end(&mut bytes).unwrap();
-        assert_eq!(bytes, b"four");
-        assert!(!exact_exceeded.load(Ordering::Relaxed));
-
-        let too_large_exceeded = Arc::new(AtomicBool::new(false));
-        let mut too_large = BoundedReader::new(
-            Cursor::new(b"five!".to_vec()),
-            4,
-            Arc::clone(&too_large_exceeded),
-        );
-        assert!(too_large.read_to_end(&mut Vec::new()).is_err());
-        assert!(too_large_exceeded.load(Ordering::Relaxed));
     }
 
     #[test]

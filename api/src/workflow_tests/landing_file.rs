@@ -73,7 +73,9 @@ async fn readme_html_uses_postgres_when_git_cache_and_pack_objects_are_absent() 
             .await
             .unwrap();
     }
-    let cache_path = state.repository_engine.repository_path(TEST_REPO_ID);
+    let cache_path = state
+        .repository_engine
+        .repository_path(&test_repo_incarnation());
     if cache_path.exists() {
         fs::remove_dir_all(cache_path).unwrap();
     }

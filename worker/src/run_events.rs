@@ -8,9 +8,22 @@ pub(crate) async fn publish_run_change(
     run_id: &str,
     change: RunChangeKind,
 ) {
+    let incarnation = match metadata
+        .repositories()
+        .run_repository_incarnation(run_id, repo_id)
+        .await
+    {
+        Ok(Some(incarnation)) => incarnation,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(repo_id, run_id, error = %error.message, "failed to resolve run repository incarnation");
+            return;
+        }
+    };
     let payload = match serde_json::to_string(&RepoChangeNotification {
         event: RepoChangeEvent {
             repo_id: repo_id.to_string(),
+            incarnation_id: incarnation.incarnation_id().to_string(),
             version: 0,
             kind: RepoChangeKind::RunChanged {
                 run_id: run_id.to_string(),

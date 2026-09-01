@@ -30,6 +30,7 @@ use http::public_get_json;
 async fn assert_restored_request_head(state: &AppState, expected: &str) -> PathBuf {
     let staging = crate::use_cases::git_receive::request_ref::prepare_request_staging_repo(
         state,
+        &test_repo_incarnation(),
         TEST_REPO_OWNER,
         TEST_REPO_NAME,
         &public_user_id(),
@@ -102,7 +103,7 @@ async fn start_request_for_author(
     );
     let projection_repo = projection_bare_repo_for_state(
         state,
-        &repo.record.id,
+        &repo.incarnation(),
         &projection,
         repo.git_head.as_ref(),
         &repo.git_pack_spans,

@@ -3549,7 +3549,9 @@ name = "scope-git-process"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -3564,6 +3566,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "scope-domain",
+ "scope-git-process",
  "sha2 0.10.9",
  "tempfile",
  "thiserror",

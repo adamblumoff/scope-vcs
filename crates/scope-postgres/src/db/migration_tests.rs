@@ -11,8 +11,10 @@ mod cache_service_cutover;
 mod git_compaction_scheduler;
 mod git_pack_spans;
 mod git_segment_streaming_v2;
+mod git_segment_streaming_v2_support;
 mod logical_run_sources;
 mod maintenance_cutover;
+mod repository_incarnations;
 mod repository_landing_files;
 mod repository_workflow_catalogs;
 mod request_revisions;
@@ -60,6 +62,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0031_provider_neutral_run_attempts",
     "m0032_flat_discussion_replies",
     "m0033_git_segment_streaming_v2",
+    "m0034_repository_incarnations",
 ];
 
 pub(super) async fn isolated_database() -> (
@@ -193,7 +196,7 @@ fn without_migration_rewritten_state(snapshot: String) -> serde_json::Value {
     snapshot
 }
 
-fn without_removed_repo_visibility(snapshot: serde_json::Value) -> serde_json::Value {
+fn without_migrated_repository_fields(snapshot: serde_json::Value) -> serde_json::Value {
     let mut snapshot = snapshot;
     if let Some(repositories) = snapshot["repositories"].as_array_mut() {
         for repository in repositories {
@@ -201,6 +204,7 @@ fn without_removed_repo_visibility(snapshot: serde_json::Value) -> serde_json::V
                 .as_object_mut()
                 .expect("repository snapshot is an object");
             repository.remove("default_visibility");
+            repository.remove("incarnation_id");
             if repository
                 .get("publication_state")
                 .and_then(|state| state.as_str())
@@ -545,14 +549,15 @@ async fn populated_v6_is_adopted_without_changing_business_rows() {
     )
     .await
     .unwrap();
-    let before = without_removed_repo_visibility(without_migration_rewritten_state(
+    let before = without_migrated_repository_fields(without_migration_rewritten_state(
         representative_business_snapshot(db.as_ref()).await,
     ));
 
     migrations::apply_in_maintenance(db.as_ref()).await.unwrap();
 
-    let after =
-        without_migration_rewritten_state(representative_business_snapshot(db.as_ref()).await);
+    let after = without_migrated_repository_fields(without_migration_rewritten_state(
+        representative_business_snapshot(db.as_ref()).await,
+    ));
     assert_eq!(after, before);
     let migrated_event = db
         .query_one(Statement::from_string(

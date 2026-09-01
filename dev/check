@@ -75,6 +75,7 @@ ops() {
   node --test .github/scripts/verify-staging-target.test.mjs
   node --test .github/scripts/stop-staging-writers.test.mjs
   bash .github/scripts/test-deploy-backend-railway.sh
+  bash .github/scripts/test-staging-git-smoke.sh
   node --test bench/*.test.mjs
 }
 

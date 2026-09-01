@@ -168,7 +168,7 @@ fn published_test_repo(default_visibility: Visibility) -> Repository {
         email: "owner@example.com".to_string(),
         email_verified: true,
     };
-    let mut repo = Repository::new(&owner, "repo", default_visibility).unwrap();
+    let mut repo = Repository::new(&owner, "repo", default_visibility, "repoi_test").unwrap();
     repo.record.lifecycle_state = RepoLifecycleState::Ready;
     let rules_path = path("/.scope/RULES.md");
     repo.live_files.insert(rules_path.clone(), blob(""));

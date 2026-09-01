@@ -9,11 +9,11 @@ use crate::{
             write_receive_pack_hook,
         },
     },
-    repo_access::find_repo,
     state::AppState,
 };
 use scope_domain::{
     content::SourceBlob,
+    repository::{Repository, RepositoryIncarnation},
     requests::{Request, RequestAudience, RequestRevision, canonical_request_ref},
 };
 use scope_object_store::source_blob_bytes;
@@ -128,11 +128,10 @@ pub(crate) fn non_request_refs_changed(
 
 pub(crate) fn create_request_receive_pack_staging_repo(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
     seed_repo: &FsPath,
 ) -> Result<PathBuf, ApiError> {
-    let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
+    let repo_root = receive_pack_staging_repo_path(state, incarnation)?;
     if let Some(parent) = repo_root.parent() {
         crate::persistence::ensure_private_dir(parent)?;
     }
@@ -164,16 +163,15 @@ pub(crate) fn install_request_receive_pack_hook(repo_root: &FsPath) -> Result<()
 
 pub(crate) fn with_request_revision_store_repo<T>(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
     request: &Request,
     revision: &RequestRevision,
     action: impl FnOnce(&FsPath) -> Result<T, ApiError>,
 ) -> Result<T, ApiError> {
     let request_ref = canonical_request_ref(&request.name);
-    let _update_lock = acquire_request_ref_update_lock(state, owner, repo_name, &request_ref)?;
-    let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
-    let store_repo = ensure_request_ref_store_repo_locked(state, owner, repo_name)?;
+    let _update_lock = acquire_request_ref_update_lock(state, incarnation, &request_ref)?;
+    let _store_lock = acquire_request_ref_store_lock(state, incarnation)?;
+    let store_repo = ensure_request_ref_store_repo_locked(state, incarnation)?;
     let bundle_path =
         store_repo.with_extension(format!("request-revision-{}.bundle.tmp", revision.id));
     let temporary_ref = format!("refs/scope/internal/request-revision/{}", revision.id);
@@ -291,16 +289,15 @@ pub(crate) fn attach_visible_request_refs(
 
 pub(crate) fn delete_request_ref_from_store(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
     request_ref: &str,
 ) -> Result<(), ApiError> {
-    let _update_lock = acquire_request_ref_update_lock(state, owner, repo_name, request_ref)?;
-    let store_repo = request_ref_store_repo_path(state, owner, repo_name);
+    let _update_lock = acquire_request_ref_update_lock(state, incarnation, request_ref)?;
+    let store_repo = request_ref_store_repo_path(state, incarnation);
     if !store_repo.exists() {
         return Ok(());
     }
-    let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
+    let _store_lock = acquire_request_ref_store_lock(state, incarnation)?;
     if request_ref_exists(&store_repo, request_ref)? {
         run_git(
             Some(&store_repo),
@@ -358,8 +355,7 @@ pub(crate) struct PersistedRequestRef {
 
 pub(crate) async fn persist_request_ref_to_store(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    repo: &Repository,
     staging_repo: &FsPath,
     request: &Request,
     update: &RequestRefUpdate,
@@ -370,12 +366,12 @@ pub(crate) async fn persist_request_ref_to_store(
         &request.base_main_oid,
         &update.new_head_oid,
     )?;
-    let repo = find_repo(state, owner, repo_name).await?;
     if request.audience == RequestAudience::Public {
-        ensure_public_request_ref_is_public_safe(&repo, state, staging_repo, &update.new_head_oid)?;
+        ensure_public_request_ref_is_public_safe(repo, state, staging_repo, &update.new_head_oid)?;
     }
-    let _store_lock = acquire_request_ref_store_lock(state, owner, repo_name)?;
-    let store_repo = ensure_request_ref_store_repo_locked(state, owner, repo_name)?;
+    let incarnation = repo.incarnation();
+    let _store_lock = acquire_request_ref_store_lock(state, &incarnation)?;
+    let store_repo = ensure_request_ref_store_repo_locked(state, &incarnation)?;
     ensure_request_ref_available_in_store_locked(state, &store_repo, request)?;
     let previous_head = request_ref_head(&store_repo, &update.request_ref)?;
     let expected_stored_head = previous_head.as_deref().or_else(|| {
@@ -401,7 +397,7 @@ pub(crate) async fn persist_request_ref_to_store(
         match git_snapshot_from_ref(&store_repo, &update.request_ref) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                rollback_request_ref(state, owner, repo_name, &update.request_ref, previous_head);
+                rollback_request_ref(state, &incarnation, &update.request_ref, previous_head);
                 return Err(error);
             }
         };
@@ -412,7 +408,7 @@ pub(crate) async fn persist_request_ref_to_store(
     {
         Ok(fence) => fence,
         Err(error) => {
-            rollback_request_ref(state, owner, repo_name, &update.request_ref, previous_head);
+            rollback_request_ref(state, &incarnation, &update.request_ref, previous_head);
             return Err(error.into());
         }
     };
@@ -420,7 +416,7 @@ pub(crate) async fn persist_request_ref_to_store(
         &scope_object_store::object_key(&git_snapshot),
         &snapshot_bytes,
     ) {
-        rollback_request_ref(state, owner, repo_name, &update.request_ref, previous_head);
+        rollback_request_ref(state, &incarnation, &update.request_ref, previous_head);
         fence.release().await;
         return Err(error.into());
     }
@@ -559,10 +555,9 @@ fn ensure_request_ref_store_head_matches_push(
 
 fn ensure_request_ref_store_repo_locked(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
 ) -> Result<PathBuf, ApiError> {
-    let store_repo = request_ref_store_repo_path(state, owner, repo_name);
+    let store_repo = request_ref_store_repo_path(state, incarnation);
     if store_repo.join("objects").is_dir() {
         return Ok(store_repo);
     }
@@ -611,12 +606,11 @@ fn request_ref_head(store_repo: &FsPath, request_ref: &str) -> Result<Option<Str
 
 pub(crate) fn rollback_request_ref(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
     request_ref: &str,
     previous_head: Option<String>,
 ) {
-    let store_repo = request_ref_store_repo_path(state, owner, repo_name);
+    let store_repo = request_ref_store_repo_path(state, incarnation);
     let result = match previous_head {
         Some(head) => run_git(
             Some(&store_repo),
@@ -637,8 +631,8 @@ pub(crate) fn rollback_request_ref(
     };
     if let Err(error) = result {
         tracing::warn!(
-            owner,
-            repo = repo_name,
+            repository_id = incarnation.repository_id(),
+            repository_incarnation_id = incarnation.incarnation_id(),
             request_ref,
             error = error.operator_diagnostic(),
             "failed to roll back request ref after metadata rejection"

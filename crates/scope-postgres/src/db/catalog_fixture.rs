@@ -49,7 +49,15 @@ impl CatalogFixture {
         name: &str,
         default_visibility: Visibility,
     ) -> Result<&Repository, CatalogError> {
-        let repository = Repository::new(owner, name, default_visibility)?;
+        let repository = Repository::new(
+            owner,
+            name,
+            default_visibility,
+            format!(
+                "repoi_fixture_{}",
+                scope_domain::repository::repo_id(&owner.handle, name)
+            ),
+        )?;
         let id = repository.record.id.clone();
         self.repositories.insert(id.clone(), repository);
         Ok(self.repositories.get(&id).expect("repository was inserted"))

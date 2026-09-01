@@ -58,6 +58,7 @@ export function useRepoLiveRefresh(
     const onStreamInterrupted = () => {
       coordinator.onStreamInterrupted()
       const event: RepoChangeEvent = {
+        incarnation_id: 'local-stream-interruption',
         kind: 'Lagged',
         repo_id: live.repo.id,
         version: 0,

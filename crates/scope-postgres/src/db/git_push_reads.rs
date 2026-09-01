@@ -11,13 +11,14 @@ use {
         repo_config::RepoConfig,
         repository::access::RepositoryAccess,
         repository::git::{GitHead, GitPackSpan},
-        repository::{RepoLifecycleState, repo_id},
+        repository::{RepoLifecycleState, RepositoryIncarnation, repo_id},
     },
 };
 
 #[derive(Clone, Debug)]
 pub struct GitPushContext {
     pub repo_id: String,
+    pub incarnation: RepositoryIncarnation,
     pub owner_user_id: String,
     pub lifecycle_state: RepoLifecycleState,
     pub access: RepositoryAccess,
@@ -28,6 +29,35 @@ pub struct GitPushContext {
 }
 
 impl RepositoryStore {
+    pub async fn run_repository_incarnation(
+        &self,
+        run_id: &str,
+        expected_repository_id: &str,
+    ) -> Result<Option<RepositoryIncarnation>, PostgresError> {
+        let tx = begin_metadata_read_snapshot(self.db.as_ref()).await?;
+        let Some(run) = entities::run::Entity::find_by_id(run_id)
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?
+        else {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(None);
+        };
+        if run.repo_id != expected_repository_id {
+            tx.commit().await.map_err(PostgresError::internal)?;
+            return Ok(None);
+        }
+        let repository = entities::repository::Entity::find_by_id(&run.repo_id)
+            .one(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        tx.commit().await.map_err(PostgresError::internal)?;
+        repository
+            .map(|row| RepositoryIncarnation::new(row.id, row.incarnation_id))
+            .transpose()
+            .map_err(PostgresError::internal)
+    }
+
     pub async fn git_push_context(
         &self,
         owner: &str,
@@ -80,6 +110,7 @@ impl RepositoryStore {
         )?;
         let context = GitPushContext {
             repo_id: id,
+            incarnation: repo.incarnation(),
             owner_user_id: repo.record.owner_user_id.clone(),
             lifecycle_state: repo.record.lifecycle_state,
             access: repo.access_for_user_id(user_id),

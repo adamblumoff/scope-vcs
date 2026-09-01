@@ -33,7 +33,34 @@ async function githubRequest(path, options = {}, fetchImpl = fetch) {
   return response.json();
 }
 
-export async function latestSuccessfulRevisions(fetchImpl = fetch) {
+function deploymentEvidence(component, deployment) {
+  let payload = deployment.payload;
+  if (typeof payload === "string") {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  if (
+    payload?.component !== component
+    || payload.sourceSha !== deployment.sha
+    || !SOURCE_SHA_PATTERN.test(payload.sourceSha ?? "")
+    || typeof payload.provider !== "string"
+    || payload.provider.length === 0
+    || typeof payload.evidenceId !== "string"
+    || payload.evidenceId.length === 0
+  ) {
+    return null;
+  }
+  return {
+    sourceSha: payload.sourceSha,
+    provider: payload.provider,
+    evidenceId: payload.evidenceId,
+  };
+}
+
+export async function latestSuccessfulDeployments(fetchImpl = fetch) {
   const entries = await Promise.all(COMPONENTS.map(async (component) => {
     const environment = encodeURIComponent(`production/${component}`);
     const deployments = await githubRequest(
@@ -49,13 +76,22 @@ export async function latestSuccessfulRevisions(fetchImpl = fetch) {
         fetchImpl,
       );
       if (statuses.some(({ state }) => state === "success")) {
-        return [component, deployment.sha];
+        const evidence = deploymentEvidence(component, deployment);
+        if (evidence) return [component, evidence];
       }
     }
     return [component, null];
   }));
 
   return Object.fromEntries(entries);
+}
+
+export async function latestSuccessfulRevisions(fetchImpl = fetch) {
+  const deployments = await latestSuccessfulDeployments(fetchImpl);
+  return Object.fromEntries(COMPONENTS.map((component) => [
+    component,
+    deployments[component]?.sourceSha ?? null,
+  ]));
 }
 
 export async function recordSuccessfulDeployment({
@@ -120,9 +156,17 @@ export async function recordEvidenceFile(path, logUrl = "", fetchImpl = fetch) {
 async function main() {
   const command = process.argv[2];
   if (command === "read") {
-    const revisions = JSON.stringify(await latestSuccessfulRevisions());
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `revisions=${revisions}\n`);
-    else process.stdout.write(`${revisions}\n`);
+    const deployments = await latestSuccessfulDeployments();
+    const revisions = Object.fromEntries(COMPONENTS.map((component) => [
+      component,
+      deployments[component]?.sourceSha ?? null,
+    ]));
+    if (process.env.GITHUB_OUTPUT) {
+      appendFileSync(process.env.GITHUB_OUTPUT, `revisions=${JSON.stringify(revisions)}\n`);
+      appendFileSync(process.env.GITHUB_OUTPUT, `deployments=${JSON.stringify(deployments)}\n`);
+    } else {
+      process.stdout.write(`${JSON.stringify({ deployments, revisions })}\n`);
+    }
     return;
   }
   if (command === "record") {

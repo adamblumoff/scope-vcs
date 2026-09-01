@@ -20,8 +20,8 @@ deploy_cache_requested="${SCOPE_DEPLOY_CACHE:-1}"
 deploy_worker_requested="${SCOPE_DEPLOY_WORKER:-1}"
 deploy_router_requested="${SCOPE_DEPLOY_ROUTER:-1}"
 deploy_api_requested="${SCOPE_DEPLOY_API:-1}"
-successful_deployment_revisions="${SCOPE_SUCCESSFUL_DEPLOYMENT_REVISIONS:-}"
-[[ -n "$successful_deployment_revisions" ]] || successful_deployment_revisions='{}'
+successful_deployments="${SCOPE_SUCCESSFUL_DEPLOYMENTS:-}"
+[[ -n "$successful_deployments" ]] || successful_deployments='{}'
 deployment_evidence_path="${SCOPE_DEPLOYMENT_EVIDENCE_PATH:-}"
 pending_evidence_path=""
 if [[ -n "$deployment_evidence_path" ]]; then
@@ -270,29 +270,31 @@ console.log([
 
 wait_for_service_health() {
   local service_name="$1"
-  local deadline=$((SECONDS + 600))
-  local line status running crashed configured stopped id
-  while (( SECONDS < deadline )); do
-    line="$(service_state_line "$service_name" || true)"
-    if [[ -n "$line" ]]; then
-      IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
-      if [[ "$status" == "SUCCESS" && "$stopped" == "0" && "$configured" -gt 0 \
-        && "$running" == "$configured" && "${crashed:-0}" == "0" ]]; then
-        return 0
-      fi
+  local expected_deployment_id="${2:-}"
+  local timeout="${SCOPE_SERVICE_HEALTH_TIMEOUT_SECONDS:-600}"
+  local interval="${SCOPE_SERVICE_HEALTH_POLL_SECONDS:-10}"
+  local deadline=$((SECONDS + timeout))
+  while true; do
+    if service_is_healthy "$service_name" "$expected_deployment_id" 2>/dev/null; then
+      return 0
     fi
-    sleep 10
+    (( SECONDS < deadline )) || break
+    sleep "$interval"
   done
+  service_is_healthy "$service_name" "$expected_deployment_id" || true
   echo "Timed out waiting for $service_name to reach its configured healthy replica count." >&2
   return 1
 }
 
 service_is_healthy() {
-  local line status running crashed configured stopped id
-  line="$(service_state_line "$1")"
-  IFS=$'\t' read -r status running crashed configured stopped id <<< "$line"
-  [[ "$status" == "SUCCESS" && "$stopped" == "0" && "$configured" -gt 0 \
-    && "$running" == "$configured" && "${crashed:-0}" == "0" ]]
+  local service_name="$1"
+  local expected_deployment_id="${2:-}"
+  local services_json
+  services_json="$(railway service list "${railway_scope[@]}" --json)"
+  SCOPE_RAILWAY_SERVICES_JSON="$services_json" \
+    SCOPE_RAILWAY_SERVICE_ID="$service_name" \
+    SCOPE_EXPECTED_RAILWAY_DEPLOYMENT_ID="$expected_deployment_id" \
+    node .github/scripts/railway-service-health.mjs >/dev/null
 }
 
 running_replicas() {
@@ -550,8 +552,13 @@ deployment_id() {
 deployment_action() {
   local action="$1"
   local service_name="$2"
+  local expected_deployment_id="${3:-}"
   local id request response
   id="$(deployment_id "$service_name")"
+  if [[ -n "$expected_deployment_id" && "$id" != "$expected_deployment_id" ]]; then
+    echo "Refusing to $action $service_name: active deployment $id does not match expected deployment $expected_deployment_id." >&2
+    return 1
+  fi
   request="$(
     DEPLOYMENT_ACTION="$action" \
       DEPLOYMENT_ID="$id" \
@@ -588,13 +595,47 @@ if (response.data?.[field] !== true) {
 }
 
 restart_service() {
-  deployment_action Restart "$1"
-  wait_for_service_health "$1"
+  local service_name="$1"
+  local expected_deployment_id="$2"
+  deployment_action Restart "$service_name" "$expected_deployment_id"
+  wait_for_service_health "$service_name" "$expected_deployment_id"
+}
+
+successful_deployment_field() {
+  jq -er --arg component "$1" --arg field "$2" '
+    .[$component] as $deployment
+    | if $deployment == null then ""
+      elif $deployment.provider == "railway"
+        and ($deployment[$field] | type) == "string"
+        and ($deployment[$field] | length) > 0
+      then $deployment[$field]
+      else error("invalid durable Railway deployment for \($component)")
+      end
+  ' <<< "$successful_deployments"
+}
+
+require_successful_deployment_id() {
+  local component="$1"
+  local deployment_id
+  deployment_id="$(successful_deployment_field "$component" evidenceId)"
+  if [[ -z "$deployment_id" ]]; then
+    echo "No durable Railway deployment identity exists for $component." >&2
+    return 1
+  fi
+  printf '%s\n' "$deployment_id"
+}
+
+carried_service_is_healthy() {
+  local component="$1"
+  local service_name="$2"
+  local expected_deployment_id
+  expected_deployment_id="$(require_successful_deployment_id "$component")" || return 1
+  service_is_healthy "$service_name" "$expected_deployment_id"
 }
 
 quiesce_writers() {
   if [[ "$api_closed" == "0" ]]; then
-    if [[ "$cutover_committed" == "0" ]] && ! service_is_healthy "$api_service"; then
+    if [[ "$cutover_committed" == "0" ]] && ! carried_service_is_healthy api "$api_service"; then
       echo "Refusing maintenance because $api_service is not healthy before shutdown." >&2
       return 1
     fi
@@ -602,7 +643,7 @@ quiesce_writers() {
     api_closed=1
   fi
   if [[ "$worker_closed" == "0" ]]; then
-    if [[ "$cutover_committed" == "0" ]] && ! service_is_healthy "$worker_service"; then
+    if [[ "$cutover_committed" == "0" ]] && ! carried_service_is_healthy worker "$worker_service"; then
       echo "Refusing maintenance because $worker_service is not healthy before shutdown." >&2
       return 1
     fi
@@ -610,7 +651,7 @@ quiesce_writers() {
     worker_closed=1
   fi
   if [[ "$cache_closed" == "0" ]]; then
-    if [[ "$cutover_committed" == "0" ]] && ! service_is_healthy "$cache_service"; then
+    if [[ "$cutover_committed" == "0" ]] && ! carried_service_is_healthy cache "$cache_service"; then
       echo "Refusing maintenance because $cache_service is not healthy before shutdown." >&2
       return 1
     fi
@@ -625,24 +666,17 @@ quiesce_writers() {
 restore_old_release() {
   echo "Migration did not commit; restoring the previous metadata-writer deployments." >&2
   if [[ "$cache_closed" == "1" ]]; then
-    restart_service "$cache_service"
+    restart_service "$cache_service" "$(require_successful_deployment_id cache)"
     cache_closed=0
   fi
   if [[ "$worker_closed" == "1" ]]; then
-    restart_service "$worker_service"
+    restart_service "$worker_service" "$(require_successful_deployment_id worker)"
     worker_closed=0
   fi
   if [[ "$api_closed" == "1" ]]; then
-    restart_service "$api_service"
+    restart_service "$api_service" "$(require_successful_deployment_id api)"
     api_closed=0
   fi
-}
-
-successful_revision() {
-  COMPONENT="$1" REVISIONS="$successful_deployment_revisions" node -e '
-const revisions = JSON.parse(process.env.REVISIONS || "{}");
-process.stdout.write(revisions[process.env.COMPONENT] || "");
-'
 }
 
 deploy_release() {
@@ -650,23 +684,44 @@ deploy_release() {
   local service_name="$2"
   local upload_root="$3"
   local verified_sha
-  verified_sha="$(successful_revision "$component")"
+  verified_sha="$(successful_deployment_field "$component" sourceSha)"
   SCOPE_DEPLOYMENT_COMPONENT="$component" \
     SCOPE_DEPLOYMENT_EVIDENCE_PATH="$pending_evidence_path" \
+    SCOPE_DEFER_SERVICE_HEALTH=1 \
     SCOPE_VERIFIED_SUCCESSFUL_SHA="$verified_sha" \
     bash .github/scripts/deploy-railway.sh "$service_name" "$upload_root"
+}
+
+pending_deployment_id() {
+  local component="$1"
+  [[ -n "$pending_evidence_path" && -s "$pending_evidence_path" ]] || return 0
+  COMPONENT="$component" EVIDENCE_PATH="$pending_evidence_path" node -e '
+const { readFileSync } = require("node:fs");
+const records = readFileSync(process.env.EVIDENCE_PATH, "utf8")
+  .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+const evidence = records.findLast(({component}) => component === process.env.COMPONENT);
+process.stdout.write(evidence?.evidenceId || "");
+'
 }
 
 activate_release() {
   local component="$1"
   local service_name="$2"
   local upload_root="$3"
+  local actual_deployment_id expected_deployment_id
   deploy_release "$component" "$service_name" "$upload_root"
-  if [[ "$(running_replicas "$service_name")" == "0" ]]; then
-    restart_service "$service_name"
-  else
-    wait_for_service_health "$service_name"
+  expected_deployment_id="$(pending_deployment_id "$component")"
+  [[ -n "$expected_deployment_id" ]] \
+    || expected_deployment_id="$(require_successful_deployment_id "$component")"
+  actual_deployment_id="$(deployment_id "$service_name")"
+  if [[ "$actual_deployment_id" != "$expected_deployment_id" ]]; then
+    echo "Refusing to activate $service_name: active deployment $actual_deployment_id does not match expected deployment $expected_deployment_id." >&2
+    return 1
   fi
+  if [[ "$(running_replicas "$service_name")" == "0" ]]; then
+    deployment_action Restart "$service_name" "$expected_deployment_id"
+  fi
+  wait_for_service_health "$service_name" "$expected_deployment_id"
 }
 
 promote_pending_evidence() {
@@ -690,11 +745,11 @@ deploy_selected_releases() {
     promote_pending_evidence
   fi
   if [[ "$deploy_worker_requested" == "1" ]]; then
-    deploy_release worker "$worker_service" "$worker_upload_root"
+    activate_release worker "$worker_service" "$worker_upload_root"
     promote_pending_evidence
   fi
   if [[ "$deploy_api_requested" == "1" ]]; then
-    deploy_release api "$api_service" "$api_upload_root"
+    activate_release api "$api_service" "$api_upload_root"
     promote_pending_evidence
   fi
 }
@@ -739,8 +794,8 @@ if [[ "$deploy_router_requested" == "1" ]]; then
   activate_release router "$router_service" "$router_upload_root"
   assert_router_topology
   promote_pending_evidence
-elif ! assert_router_topology; then
-  echo "Production router must match the reviewed topology before deploying another backend service." >&2
+elif ! assert_router_topology || ! carried_service_is_healthy router "$router_service"; then
+  echo "Production router must match the reviewed topology and durable deployment before deploying another backend service." >&2
   exit 1
 fi
 
@@ -797,8 +852,9 @@ case "$plan_status" in
     ;;
 esac
 
-if ! service_is_healthy "$api_service" || ! service_is_healthy "$worker_service" \
-  || ! service_is_healthy "$cache_service"; then
+if ! carried_service_is_healthy api "$api_service" \
+  || ! carried_service_is_healthy worker "$worker_service" \
+  || ! carried_service_is_healthy cache "$cache_service"; then
   echo "Maintenance cutover requires healthy metadata-writer deployments before closing writers." >&2
   exit 1
 fi

@@ -8,8 +8,8 @@ import {
   type LoadDiscussionsInput,
   loadRequestDiscussionsForRequest,
 } from '@/features/requests/request-discussion-api'
-import type { RequestDiscussionPage } from '@/features/requests/request-discussion-types'
 import { RequestChangesView } from '@/features/requests/request-changes-view'
+import { loadCompleteDiscussionReferencePages } from '@/features/requests/request-changes-discussion-references'
 import type {
   RequestChangesDiscussionReferences,
   RequestChangesSearch,
@@ -30,6 +30,18 @@ type LoadRequestRevisionsInput = ReturnType<typeof requestParamsForRoute> & {
   commit_oid?: string
   revision_id?: string
 }
+
+type ChangesPage = Awaited<ReturnType<typeof loadChangesPage>>
+type ChangesLoaderData = ChangesPage & {
+  pin: RequestChangesSearch | null
+}
+
+type PinnedChangesReplay = {
+  data: ChangesLoaderData
+  key: string
+}
+
+const pinnedChangesReplay: { current: PinnedChangesReplay | null } = { current: null }
 
 const requestRoute = getRouteApi('/$owner/$repo/requests/$requestId')
 
@@ -76,14 +88,15 @@ const loadDiscussionsForView = (data: LoadDiscussionsInput) =>
 export const Route = createFileRoute(
   '/$owner/$repo/requests/$requestId/changes',
 )({
-  loaderDeps: () => ({}),
-  loader: async ({ location, params }) => {
-    const selectionSearch = requestChangesSelectionSearch(location.search)
+  loaderDeps: ({ search }) => requestChangesSelectionSearch(search),
+  loader: async ({ deps: selectionSearch, params }) => {
     const input = {
       ...requestParamsForRoute(params),
       commit_oid: selectionSearch.commit,
       revision_id: selectionSearch.revision,
     }
+    const replay = takePinnedChangesReplay(input)
+    if (replay) return replay
     const page = await loadChangesPage({ data: input })
     const { revisions } = page
     if (!revisions) return { ...page, pin: null }
@@ -117,14 +130,25 @@ function RequestChangesRoute() {
   )
   useEffect(() => {
     if (!changes.pin || search.revision) return
+    const replay = rememberPinnedChangesReplay(
+      {
+        ...requestParams,
+        commit_oid: changes.pin.commit,
+        revision_id: changes.pin.revision,
+      },
+      changes,
+    )
     void navigate({
       params,
       replace: true,
       resetScroll: false,
       search: (current) => ({ ...current, ...changes.pin }),
       to: '/$owner/$repo/requests/$requestId/changes',
-    })
-  }, [changes.pin, navigate, params, search.revision])
+    }).then(
+      () => forgetPinnedChangesReplay(replay),
+      () => forgetPinnedChangesReplay(replay),
+    )
+  }, [changes, navigate, params, requestParams, search.revision])
 
   if (!page.detail) return null
 
@@ -160,6 +184,38 @@ function requestChangesSelectionSearch(search: unknown): RequestChangesSearch {
   }
 }
 
+function rememberPinnedChangesReplay(
+  input: LoadRequestRevisionsInput,
+  data: ChangesLoaderData,
+) {
+  if (typeof window === 'undefined') return null
+  const replay = { data, key: changesSelectionKey(input) }
+  pinnedChangesReplay.current = replay
+  return replay
+}
+
+function takePinnedChangesReplay(input: LoadRequestRevisionsInput) {
+  if (typeof window === 'undefined') return null
+  const replay = pinnedChangesReplay.current
+  if (!replay || replay.key !== changesSelectionKey(input)) return null
+  pinnedChangesReplay.current = null
+  return replay.data
+}
+
+function forgetPinnedChangesReplay(replay: PinnedChangesReplay | null) {
+  if (pinnedChangesReplay.current === replay) pinnedChangesReplay.current = null
+}
+
+function changesSelectionKey(input: LoadRequestRevisionsInput) {
+  return [
+    input.owner,
+    input.repo,
+    input.request_id,
+    input.revision_id ?? '',
+    input.commit_oid ?? '',
+  ].join('\0')
+}
+
 async function initialDiscussionReferences(
   params: RequestParams,
   revisions: RequestRevisions | null,
@@ -180,18 +236,21 @@ async function initialDiscussionReferences(
       }
     }),
   )
-  const pages = await queries.reduce<Promise<Array<readonly [string, RequestDiscussionPage | null]>>>(
-    (loaded, query) => loaded.then((pages) => loadRequestDiscussionsForRequest({
-      ...params,
-      commit_oid: query.commit_oid,
-      include_revision_anchor: query.include_revision_anchor,
-      limit: 100,
-      revision_id: query.revision_id,
-    }).catch((error: unknown) => {
+  const byCommit = await loadCompleteDiscussionReferencePages(
+    queries.map((query) => ({
+      input: {
+        ...params,
+        commit_oid: query.commit_oid,
+        include_revision_anchor: query.include_revision_anchor,
+        limit: 100,
+        revision_id: query.revision_id,
+      },
+      key: query.key,
+    })),
+    loadRequestDiscussionsForRequest,
+    (error) => {
       console.error('Loading request commit discussion references failed', error)
-      return null
-    }).then((page) => [...pages, [query.key, page] as const])),
-    Promise.resolve([]),
+    },
   )
-  return { all: null, byCommit: Object.fromEntries(pages) }
+  return { all: null, byCommit }
 }

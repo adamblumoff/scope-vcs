@@ -44,4 +44,5 @@ jobs:
         env:
           CHANGE_SET_ARN: ${{ inputs.change_set_arn }}
           COMMAND: ${{ inputs.command }}
+          SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN: ${{ vars.SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN }}
         run: deploy/aws/apply-cloud-runner.sh "$COMMAND" "$CHANGE_SET_ARN"

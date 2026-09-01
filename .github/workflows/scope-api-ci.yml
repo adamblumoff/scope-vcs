@@ -31,6 +31,9 @@ jobs:
       - name: Test Railway cutover orchestration
         run: bash .github/scripts/test-deploy-backend-railway.sh
 
+      - name: Test AWS runner infrastructure contract
+        run: node --test deploy/aws/cloud-runner-contract.test.mjs
+
   maintenance-artifact:
     name: Build maintenance command
     if: inputs.build_maintenance_artifact

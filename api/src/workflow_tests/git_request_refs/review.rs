@@ -49,6 +49,7 @@ async fn oversized_commit_metadata_remains_identifiable_and_inspectable() {
     assert_eq!(latest["commits"][0]["author"], serde_json::Value::Null);
     assert_eq!(latest["commits"][0]["message"], "");
     assert_eq!(latest["commits"][0]["files"][0]["path"], "oversized.txt");
+    assert_eq!(latest["commits"][0]["files_truncated"], false);
 
     let missing_revision = app
         .oneshot(
@@ -113,7 +114,7 @@ async fn open_revision_stays_open_and_publishes_refresh() {
         event.request_id == REQUEST_ID && event.kind == RequestEventKind::RevisionPushed
     }));
     let store_repo =
-        crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+        crate::git::storage::request_ref_store_repo_path(&state, &test_repo_incarnation());
     let stored_head = git_stdout_text(
         &store_repo,
         &["rev-parse", REQUEST_REF],

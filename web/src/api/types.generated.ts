@@ -18,7 +18,7 @@ export type RepositoryInviteState = "Pending" | "Accepted" | "Revoked" | "Expire
 
 export type RepoLifecycleState = "AwaitingFirstPush" | "Ready";
 
-export type RepoChangeEvent = { repo_id: string, version: number, kind: RepoChangeKind, };
+export type RepoChangeEvent = { repo_id: string, incarnation_id: string, version: number, kind: RepoChangeKind, };
 
 export type FirstPushTokenStatus = "Active" | "Expired" | "Used";
 
@@ -234,7 +234,7 @@ export type RequestDiscussionAnchor = { revision_id: string, revision_position: 
 
 export type RequestDiscussionAnchorInput = { revision_id: string, commit_oid: string | null, path: string | null, };
 
-export type RequestRevisionCommitResponse = { oid: string, parent_oids: Array<string>, author: string | null, authored_at_unix: number, message: string, change_count: number, files: Array<CommitFileResponse>, };
+export type RequestRevisionCommitResponse = { oid: string, parent_oids: Array<string>, author: string | null, authored_at_unix: number, message: string, change_count: number, files: Array<CommitFileResponse>, files_truncated: boolean, };
 
 export type RequestRevisionInspectionState = "Complete" | "Incomplete" | "Unavailable";
 

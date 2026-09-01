@@ -255,6 +255,27 @@ impl RepositoryStore {
         tx.commit().await.map_err(PostgresError::internal)
     }
 
+    pub async fn recreate_repository_for_tests(
+        &self,
+        repo: Repository,
+    ) -> Result<(), PostgresError> {
+        let tx = self.db.begin().await.map_err(PostgresError::internal)?;
+        ensure_repository_users_for_tests(&tx, &repo).await?;
+        acquire_aggregate_lock(&tx, "repository", &repo.record.id).await?;
+        entities::repository::Entity::delete_by_id(repo.record.id.clone())
+            .exec(&tx)
+            .await
+            .map_err(PostgresError::internal)?;
+        insert_repository(
+            &tx,
+            &repo,
+            CATALOG_SEED_NOW_UNIX,
+            &super::generated_ids::test_generated_id,
+        )
+        .await?;
+        tx.commit().await.map_err(PostgresError::internal)
+    }
+
     pub async fn mutate_repository_for_tests(
         &self,
         repo_id: &str,

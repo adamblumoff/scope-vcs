@@ -9,9 +9,10 @@
   },
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "vite build && node scripts/build-review-diff-worker.mjs && pnpm check:diff-worker-bundle",
     "check": "pnpm typecheck && pnpm check:api-contract && pnpm check:observer-boundary && pnpm check:react-doctor && pnpm check:konsistent",
     "check:api-contract": "node scripts/check-api-contract.mjs",
+    "check:diff-worker-bundle": "node scripts/check-review-diff-worker-bundle.mjs",
     "check:observer-boundary": "node scripts/check-observer-boundary.mjs",
     "check:konsistent": "konsistent check",
     "check:react-doctor": "react-doctor --blocking warning --no-score --yes",

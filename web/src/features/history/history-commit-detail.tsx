@@ -91,6 +91,7 @@ function CommitDetailPanelContent({
 
   const commit = commitState.commit
   const diffOpen = selectedFilePath !== null
+  const filesTruncated = commit.files_truncated
   function closeDiff() {
     onCloseDiff()
     requestAnimationFrame(() => fileNavigatorRef.current?.focus())
@@ -128,7 +129,9 @@ function CommitDetailPanelContent({
             <EmptyState
               inline
               className="px-5 py-8 sm:px-6"
-              title={`No file changes in this ${terminology}.`}
+              title={filesTruncated
+                ? `${commit.change_count} changed files are outside the bounded file list.`
+                : `No file changes in this ${terminology}.`}
             />
           ) : commit.files.length > 0 ? (
             <FileSystemTree
@@ -157,6 +160,10 @@ function CommitDetailPanelContent({
           ) : commit.files.length === 0 && visibilityChanges.length > 0 ? (
             <PanelState>
               <span>Visibility changes do not have a content diff</span>
+            </PanelState>
+          ) : commit.files.length === 0 && filesTruncated ? (
+            <PanelState>
+              <span>Changed files are outside the bounded file list</span>
             </PanelState>
           ) : (
             <PanelState>

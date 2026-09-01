@@ -88,7 +88,7 @@ export async function assertFileSelectionSkipsRevisionReload(page, fileName, pat
   assert.deepEqual(serverFunctions, ['loadRevisionDiff_createServerFn_handler'])
 }
 
-export async function assertUpdateSelectionUsesInitialPayload(page) {
+export async function assertUpdateSelectionReloadsSelectedPayload(page) {
   await page.locator('[data-slot="pending-surface"]').waitFor({ state: 'detached' })
   const updates = page.getByRole('button', {
     name: /, commit .+, \d+ files?$/,
@@ -96,7 +96,10 @@ export async function assertUpdateSelectionUsesInitialPayload(page) {
   assert(await updates.count() > 1, 'expected more than one request update')
   const target = updates.nth(1)
   const commit = await target.getAttribute('title')
+  const targetLabel = await target.getAttribute('aria-label')
   assert(commit)
+  assert(targetLabel)
+  const title = targetLabel.split(', commit ', 1)[0]
   const serverFunctions = []
   const recordServerFunction = (request) => {
     if (request.url().includes('/_serverFn/')) {
@@ -104,19 +107,6 @@ export async function assertUpdateSelectionUsesInitialPayload(page) {
       serverFunctions.push(JSON.parse(Buffer.from(id, 'base64url')).export)
     }
   }
-  await page.evaluate(() => {
-    window.__requestChangesPendingLabels = []
-    window.__requestChangesPendingObserver = new MutationObserver(() => {
-      for (const surface of document.querySelectorAll('[data-slot="pending-surface"]')) {
-        const label = surface.getAttribute('aria-label')
-        if (label) window.__requestChangesPendingLabels.push(label)
-      }
-    })
-    window.__requestChangesPendingObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-    })
-  })
   page.on('request', recordServerFunction)
   try {
     await target.click()
@@ -124,17 +114,11 @@ export async function assertUpdateSelectionUsesInitialPayload(page) {
       url.searchParams.get('commit') === commit &&
       !url.searchParams.has('path')
     ))
-    await target.locator('span').first().waitFor()
-    await page.waitForTimeout(100)
+    await page.getByRole('heading', { level: 3, name: title }).waitFor()
   } finally {
     page.off('request', recordServerFunction)
   }
-  const pendingLabels = await page.evaluate(() => {
-    window.__requestChangesPendingObserver.disconnect()
-    return window.__requestChangesPendingLabels
-  })
-  assert.deepEqual(serverFunctions, [])
-  assert.deepEqual(pendingLabels, [])
+  assert.deepEqual(serverFunctions, ['loadChangesPage_createServerFn_handler'])
 }
 
 export async function assertRequestShellPreserved(page, shell) {

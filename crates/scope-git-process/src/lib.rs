@@ -7,8 +7,8 @@ pub use lifecycle::{
     install_pid1_reaper_if_needed, kill_process_group,
 };
 pub use runner::{
-    ProcessError, ProcessLimits, StreamedOutput, StreamingProcessError, run, run_with_stdin_reader,
-    run_with_stdout,
+    ProcessCancellation, ProcessError, ProcessLimits, StreamedOutput, StreamingProcessError, run,
+    run_with_stdin_reader, run_with_stdout,
 };
 pub use stdio::{STDERR_DIAGNOSTIC_BYTES, truncated_stderr};
 

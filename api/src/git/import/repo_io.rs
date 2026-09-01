@@ -1,3 +1,7 @@
+use super::segment_upload::{
+    GitSegmentUploadHeartbeat, RemoteCleanup, begin_git_segment_upload,
+    best_effort_delete_git_segment_identity, best_effort_delete_staged_git_segment,
+};
 use crate::{
     config::{DEFAULT_GIT_BRANCH, MAX_PENDING_IMPORT_BLOB_BYTES, MAX_PENDING_IMPORT_FILES},
     error::ApiError,
@@ -15,15 +19,10 @@ use scope_domain::{
 };
 use scope_git::{GitTreePath, StoredGitPush, prepare_git_push};
 use scope_git_process::{ProcessLimits, StreamingProcessError, run_with_stdout};
-use scope_git_storage::{ENCODING_VERSION, StagedGitSegment};
+use scope_git_storage::{GitStorageError, StagedGitSegment};
 use scope_object_store::{ContentObjectKind, content_object_for_bytes, object_key};
 use scope_postgres::db::ContentRefFence;
-use sha2::{Digest, Sha256};
-use std::{
-    path::Path as FsPath,
-    process::Command,
-    time::{Duration, Instant},
-};
+use std::{path::Path as FsPath, process::Command, time::Instant};
 
 pub(super) fn pushed_commit_message(
     staging_repo: &FsPath,
@@ -328,48 +327,6 @@ pub(crate) struct FencedGitPush {
     pub(crate) upload_heartbeat: GitSegmentUploadHeartbeat,
 }
 
-pub(crate) struct GitSegmentUploadHeartbeat {
-    task: tokio::task::JoinHandle<()>,
-}
-
-impl GitSegmentUploadHeartbeat {
-    pub(crate) fn start(state: &AppState, segment_id: String) -> Self {
-        let metadata = state.metadata.clone();
-        let task = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                interval.tick().await;
-                let now = match crate::persistence::unix_now() {
-                    Ok(now) => now,
-                    Err(error) => {
-                        tracing::warn!(segment_id, error = %error.into_operator_diagnostic(), "Git segment upload heartbeat clock failed");
-                        continue;
-                    }
-                };
-                match metadata
-                    .repositories()
-                    .touch_git_segment_upload(&segment_id, now)
-                    .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => return,
-                    Err(error) => {
-                        tracing::warn!(segment_id, error = %error.message, "Git segment upload heartbeat failed")
-                    }
-                }
-            }
-        });
-        Self { task }
-    }
-}
-
-impl Drop for GitSegmentUploadHeartbeat {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
 pub(crate) async fn git_push_from_repo(
     state: &AppState,
     repository_id: &str,
@@ -388,24 +345,9 @@ pub(crate) async fn git_push_from_repo(
         revisions.push_str(&previous.head_oid);
         revisions.push('\n');
     }
-    let reservation = state
-        .git_segment_store
-        .reserve(repository_id)
-        .map_err(|error| ApiError::infrastructure_unavailable(error.to_string()))?;
+    let (reservation, upload_heartbeat) = begin_git_segment_upload(state, repository_id).await?;
     let segment_id = reservation.segment_id.clone();
     let object_key = reservation.object_key.clone();
-    state
-        .metadata
-        .repositories()
-        .begin_git_segment_upload(
-            repository_id,
-            &segment_id,
-            &object_key,
-            ENCODING_VERSION,
-            crate::persistence::unix_now()?,
-        )
-        .await?;
-    let upload_heartbeat = GitSegmentUploadHeartbeat::start(state, segment_id.clone());
 
     let pack_started = Instant::now();
     let segment_store = state.git_segment_store.clone();
@@ -423,11 +365,13 @@ pub(crate) async fn git_push_from_repo(
             Some(revisions.into_bytes()),
             ProcessLimits::new(timeout),
             "creating incremental Git pack",
-            move |stdout| {
-                runtime.block_on(segment_store.ingest_reserved_blocking_reader(
+            move |stdout, cancellation| {
+                runtime.block_on(segment_store.ingest_reserved_blocking_reader_cancellable(
                     &repository_id_for_ingest,
                     reservation,
                     stdout,
+                    storage_limits.max_object_bytes() as u64,
+                    cancellation,
                 ))
             },
         )
@@ -436,8 +380,14 @@ pub(crate) async fn git_push_from_repo(
     let output = match output {
         Ok(output) => output,
         Err(error) => {
-            best_effort_delete_git_segment_identity(state, repository_id, &segment_id, &object_key)
-                .await;
+            best_effort_delete_git_segment_identity(
+                state,
+                repository_id,
+                &segment_id,
+                &object_key,
+                RemoteCleanup::Attempt,
+            )
+            .await;
             return Err(ApiError::internal(error));
         }
     };
@@ -445,12 +395,32 @@ pub(crate) async fn git_push_from_repo(
     let output = match output {
         Ok(output) => output,
         Err(error) => {
-            best_effort_delete_git_segment_identity(state, repository_id, &segment_id, &object_key)
-                .await;
+            let remote_cleanup = if matches!(
+                &error,
+                StreamingProcessError::Process(error) if error.is_timeout()
+            ) {
+                RemoteCleanup::Deferred
+            } else {
+                RemoteCleanup::Attempt
+            };
+            best_effort_delete_git_segment_identity(
+                state,
+                repository_id,
+                &segment_id,
+                &object_key,
+                remote_cleanup,
+            )
+            .await;
             return Err(match error {
                 StreamingProcessError::Process(error) => {
                     ApiError::infrastructure_unavailable(error.to_string())
                 }
+                StreamingProcessError::Consumer(GitStorageError::PlaintextLimitExceeded {
+                    ..
+                }) => ApiError::payload_too_large(format!(
+                    "Git pack exceeds the {} byte repository storage limit",
+                    storage_limits.max_object_bytes()
+                )),
                 StreamingProcessError::Consumer(error) => {
                     ApiError::infrastructure_unavailable(error.to_string())
                 }
@@ -578,69 +548,6 @@ fn disk_free_bytes(path: &FsPath) -> u64 {
 #[cfg(not(unix))]
 fn disk_free_bytes(_path: &FsPath) -> u64 {
     0
-}
-
-pub(crate) async fn best_effort_delete_staged_git_segment(
-    state: &AppState,
-    repository_id: &str,
-    staged: &StagedGitSegment,
-) {
-    best_effort_delete_git_segment_identity(
-        state,
-        repository_id,
-        &staged.segment.segment_id,
-        &staged.object_key,
-    )
-    .await;
-    if let Err(error) = state.git_segment_store.delete_local(staged).await {
-        tracing::warn!(
-            repository_id,
-            segment_id = staged.segment.segment_id,
-            error = %error,
-            "failed to delete local Git segment"
-        );
-    }
-}
-
-async fn best_effort_delete_git_segment_identity(
-    state: &AppState,
-    repository_id: &str,
-    segment_id: &str,
-    object_key: &str,
-) {
-    let now = crate::persistence::unix_now().unwrap_or(0);
-    let abandoned = match state
-        .metadata
-        .repositories()
-        .abandon_git_segment_upload(segment_id, now)
-        .await
-    {
-        Ok(abandoned) => abandoned,
-        Err(error) => {
-            tracing::warn!(repository_id, segment_id, error = %error.message, "failed to abandon Git segment");
-            return;
-        }
-    };
-    if !abandoned {
-        tracing::warn!(
-            repository_id,
-            segment_id,
-            "Git segment may already be published; leaving remote bytes untouched"
-        );
-        return;
-    }
-    if let Err(error) = state.git_segment_store.cleanup_remote(object_key).await {
-        tracing::warn!(repository_id, segment_id, error = %error, "failed to delete remote Git segment");
-        return;
-    }
-    if let Err(error) = state
-        .metadata
-        .repositories()
-        .mark_git_segment_upload_deleted(segment_id, crate::persistence::unix_now().unwrap_or(now))
-        .await
-    {
-        tracing::warn!(repository_id, segment_id, error = %error.message, "failed to mark Git segment deleted");
-    }
 }
 
 pub(super) async fn queue_failed_git_objects(
@@ -809,12 +716,6 @@ pub(crate) fn run_git_output_bounded(
         }
         _ => error,
     })
-}
-
-pub(crate) fn safe_repo_key(owner: &str, repo_name: &str) -> String {
-    let repo_id = scope_domain::repository::repo_id(owner, repo_name);
-    let digest = Sha256::digest(repo_id.as_bytes());
-    format!("repo-{digest:x}")
 }
 
 #[cfg(test)]

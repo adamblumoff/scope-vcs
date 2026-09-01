@@ -14,11 +14,12 @@ async fn store_with_repository(repo_id: &str) -> MetadataStore {
              VALUES ('segment_user', 'segment-user', 'segment@scope.test', TRUE);
              INSERT INTO scope_repositories (
                 id, owner_handle, name, owner_user_id, publication_state,
-                change_version, repo_config, policy
+                change_version, repo_config, policy, incarnation_id
              ) VALUES (
                 '{repo_id}', 'segment-user', 'repo', 'segment_user', 'Ready', 1,
                 '{{\"kind\":\"scope.repo-config\",\"version\":1,\"visibility\":{{\"default\":\"private\",\"rules\":[]}}}}'::jsonb,
-                '{{\"default_visibility\":\"Private\",\"rules\":[]}}'::jsonb
+                '{{\"default_visibility\":\"Private\",\"rules\":[]}}'::jsonb,
+                'segment-test-incarnation'
              )"
         ))
         .await
@@ -199,11 +200,18 @@ async fn repository_deletion_keeps_segment_ledger_for_physical_cleanup() {
         .mark_git_segment_upload_published(&segment.segment_id, 12)
         .await
         .unwrap();
+    let incarnation = repositories
+        .repository("segment-user", "repo")
+        .await
+        .unwrap()
+        .unwrap()
+        .incarnation();
 
     repositories
         .delete_repo(
             "segment-user",
             "repo",
+            &incarnation,
             "segment_user",
             20,
             &crate::db::generated_ids::test_generated_id,
@@ -223,87 +231,92 @@ async fn repository_deletion_keeps_segment_ledger_for_physical_cleanup() {
 async fn trigger_and_run_pins_block_compaction_retirement() {
     let store = store_with_repository("segment-user/repo").await;
     let repositories = store.repositories();
-    for (index, ref_kind) in ["push_trigger_source", "run_source"]
-        .into_iter()
-        .enumerate()
-    {
-        let segment = segment_named(&format!("segment-pin-{index}"), ['b', 'c'][index]);
-        repositories
-            .begin_git_segment_upload(
-                "segment-user/repo",
-                &segment.segment_id,
-                &format!("git/segments/v2/segment-user/repo/{}", segment.segment_id),
-                segment.encoding_version,
-                10,
-            )
-            .await
-            .unwrap();
-        repositories
-            .mark_git_segment_upload_ready(&segment, 1_100, 11)
-            .await
-            .unwrap();
-        entities::git_pack_span::Model::from_domain(
+    let segment = segment_named("segment-pin", 'b');
+    repositories
+        .begin_git_segment_upload(
             "segment-user/repo",
-            &GitPackSpan {
-                first_sequence: index as u64 + 1,
-                last_sequence: index as u64 + 1,
-                geometric_tier: 0,
-                base_oid: (index > 0).then(|| "a".repeat(40)),
-                head_oid: ['a', 'd'][index].to_string().repeat(40),
-                segment: segment.clone(),
-            },
+            &segment.segment_id,
+            "git/segments/v2/segment-user/repo/segment-pin",
+            segment.encoding_version,
+            10,
         )
-        .unwrap()
-        .into_active_model()
-        .insert(store.db.as_ref())
         .await
         .unwrap();
-        repositories
-            .mark_git_segment_upload_published(&segment.segment_id, 12)
+    repositories
+        .mark_git_segment_upload_ready(&segment, 1_100, 11)
+        .await
+        .unwrap();
+    entities::git_pack_span::Model::from_domain(
+        "segment-user/repo",
+        &GitPackSpan {
+            first_sequence: 1,
+            last_sequence: 1,
+            geometric_tier: 0,
+            base_oid: None,
+            head_oid: "a".repeat(40),
+            segment: segment.clone(),
+        },
+    )
+    .unwrap()
+    .into_active_model()
+    .insert(store.db.as_ref())
+    .await
+    .unwrap();
+    repositories
+        .mark_git_segment_upload_published(&segment.segment_id, 12)
+        .await
+        .unwrap();
+    for (ref_kind, ref_id) in [
+        ("push_trigger_source", "trigger-pin"),
+        ("run_source", "run-pin"),
+    ] {
+        insert_git_segment_references(store.db.as_ref(), ref_kind, ref_id, [&segment])
             .await
             .unwrap();
-        insert_git_segment_references(
-            store.db.as_ref(),
-            ref_kind,
-            &format!("pin-{index}"),
-            [&segment],
-        )
-        .await
-        .unwrap();
+    }
 
-        entities::git_pack_span::Entity::delete_by_id((
-            "segment-user/repo".to_string(),
-            i64::try_from(index + 1).unwrap(),
-        ))
+    entities::git_pack_span::Entity::delete_by_id(("segment-user/repo".to_string(), 1))
         .exec(store.db.as_ref())
         .await
         .unwrap();
-        assert!(
-            !retire_git_segment(store.db.as_ref(), &segment.segment_id, 13)
-                .await
-                .unwrap()
-        );
-        let row = entities::git_segment_upload::Entity::find_by_id(&segment.segment_id)
-            .one(store.db.as_ref())
+    assert!(
+        retire_git_segment(store.db.as_ref(), &segment.segment_id, 13)
             .await
             .unwrap()
-            .unwrap();
-        assert_eq!(
-            row.try_into_domain().unwrap().state,
-            GitSegmentUploadState::Published
-        );
+    );
+    let row = entities::git_segment_upload::Entity::find_by_id(&segment.segment_id)
+        .one(store.db.as_ref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_into_domain().unwrap().state,
+        GitSegmentUploadState::Retained
+    );
 
-        release_git_segment_references(store.db.as_ref(), ref_kind, &format!("pin-{index}"), 14)
-            .await
-            .unwrap();
-        let row = entities::git_segment_upload::Entity::find_by_id(&segment.segment_id)
-            .one(store.db.as_ref())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            row.try_into_domain().unwrap().state,
-            GitSegmentUploadState::Deleting
-        );
-    }
+    release_git_segment_references(store.db.as_ref(), "push_trigger_source", "trigger-pin", 14)
+        .await
+        .unwrap();
+    let row = entities::git_segment_upload::Entity::find_by_id(&segment.segment_id)
+        .one(store.db.as_ref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_into_domain().unwrap().state,
+        GitSegmentUploadState::Retained
+    );
+
+    release_git_segment_references(store.db.as_ref(), "run_source", "run-pin", 15)
+        .await
+        .unwrap();
+    let row = entities::git_segment_upload::Entity::find_by_id(&segment.segment_id)
+        .one(store.db.as_ref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.try_into_domain().unwrap().state,
+        GitSegmentUploadState::Deleting
+    );
 }

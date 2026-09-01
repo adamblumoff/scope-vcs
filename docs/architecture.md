@@ -6,7 +6,7 @@ layers.
 
 ## Dependency direction
 
-The root Cargo workspace contains fourteen packages and excludes `cli/`, which
+The root Cargo workspace contains sixteen packages and excludes `cli/`, which
 is a separate workspace. Current `cargo metadata` gives these internal
 dependencies:
 
@@ -15,6 +15,7 @@ dependencies:
 | `scope-domain` | Repository, request, projection, reviewed-update, and run rules and persisted shapes | none |
 | `scope-cache-domain` | Cache identities, policy, state, and decisions | none |
 | `scope-git-process` | Git subprocess lifetime, limits, reaping, and telemetry | none |
+| `scope-git-storage` | Bounded, encrypted Git segment ingest, restore, and cleanup across local and remote storage | `scope-domain`, `scope-git-process` |
 | `scope-api-contract` | API routes and serialized API/runtime DTOs | `scope-domain` |
 | `scope-cache-contract` | Cache grant and endpoint DTOs | `scope-cache-domain` |
 | `scope-run-config` | Workflow YAML decoding and compilation | `scope-domain` |
@@ -25,12 +26,16 @@ dependencies:
 | `api` | Authentication, HTTP/SSE delivery, application use cases, and composition | the contracts, domain crates, orchestration crate, and infrastructure adapters |
 | `worker` | Run control, Git compaction, and cleanup polling | domain, API contract, orchestration, and infrastructure adapters |
 | `scope-cache-service` | Cache authorization, signed transfers, and reconciliation | cache contract/domain, object store, Postgres |
+| `scope-repo-router` | Repository Git/HTTP routing proxy | none |
 | `scope-runner-runtime` | Claimed-job setup, cache transfer, process execution, logs, and completion | API/cache contracts and domain crates |
 
 The enforced laws are:
 
-- `scope-domain`, `scope-cache-domain`, and `scope-git-process` are internal
-  leaves. They do not depend on another workspace package.
+- `scope-domain`, `scope-cache-domain`, `scope-git-process`, and
+  `scope-repo-router` are internal leaves. They do not depend on another
+  workspace package. `scope-git-storage` depends on the process leaf only for
+  the cooperative cancellation signal shared by a Git producer and its
+  storage consumer; it does not own subprocess policy.
 - Contract crates may depend only on their corresponding domain crate.
 - Reusable crates do not depend on `api`, `worker`, `scope-cache-service`, or
   `scope-runner-runtime`.
@@ -39,7 +44,9 @@ The enforced laws are:
   `worker`.
 - Delivery code translates and authorizes. Domain crates decide allowed state;
   Postgres modules own atomic metadata changes; use cases coordinate explicit
-  non-database side effects.
+  non-database side effects. `scope-git-storage` is the single enforcement
+  point for exact plaintext ingest limits, including the first byte beyond the
+  accepted boundary, for both API pushes and worker compaction.
 
 `.github/scripts/check-rust-boundaries.mjs` reads both workspaces with
 `cargo metadata --locked`. It also verifies the required behavior-owned source
@@ -106,7 +113,7 @@ Follow these paths from application coordination to durable rules and storage:
 | Behavior | Application path | Domain or shared behavior | Persistence and adapters |
 | --- | --- | --- | --- |
 | Request merge | `api/src/use_cases/request_merge.rs` | `scope-domain/src/reviewed_updates/`, `repository/updates.rs`, request policy | `scope-postgres/src/db/request_merge.rs`, `content_push_transactions.rs`; Git preparation under `api/src/git/` |
-| Git receive | `api/src/use_cases/git_receive/` | reviewed-update, repository, request-revision, and workflow-catalog rules in `scope-domain` | `repo_mutation.rs`, `content_push_transactions.rs`, request persistence; Git protocol/storage under `api/src/git/` |
+| Git receive | `api/src/use_cases/git_receive/` | reviewed-update, repository, request-revision, and workflow-catalog rules in `scope-domain` | `repo_mutation.rs`, `content_push_transactions.rs`, request persistence; upload lifecycle under `api/src/git/import/segment_upload.rs`; bounded ingest under `scope-git-storage` |
 | Discussion mutation | `api/src/use_cases/request_discussion_mutation.rs` | `scope-domain/src/requests/discussions.rs` | `scope-postgres/src/db/request_discussions.rs`; HTTP projection in `api/src/http/request_discussions.rs` |
 | Run inspection and control | `api/src/use_cases/run_inspection.rs`, `run_control.rs` | `scope-domain/src/runs/` | `run_details.rs`, `run_log_reads.rs`, `runs.rs`, and run-attempt modules; response mapping in `api/src/http/run_*` |
 | Content cleanup | `api/src/use_cases/content_cleanup.rs`, `worker/src/cleanup.rs` | `scope-content-lifecycle/src/lib.rs` and `scope-domain::repo_actions` | `scope-postgres/src/db/cleanup_queue/` and `scope-object-store` |

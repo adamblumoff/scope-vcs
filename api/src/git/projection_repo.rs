@@ -13,6 +13,7 @@ use scope_domain::{
     content::is_supported_git_file_mode,
     content_ref::ContentRef,
     projection::{Projection, ProjectionMaterialization},
+    repository::RepositoryIncarnation,
 };
 use scope_git::GitTreePath;
 use sha1::{Digest, Sha1};
@@ -41,11 +42,12 @@ impl Drop for ProjectionBuildArtifacts {
 
 fn projection_bare_repo_with_loader(
     cache_root: &FsPath,
+    incarnation: Option<&RepositoryIncarnation>,
     projection: &Projection,
     native_source_repo: Option<&FsPath>,
     load_content: impl Fn(&scope_domain::content::SourceBlob) -> Result<Vec<u8>, ApiError>,
 ) -> Result<PathBuf, ApiError> {
-    let cache_key = projection_cache_key(projection);
+    let cache_key = projection_cache_key(incarnation, projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
     if repo_path
         .join("refs")
@@ -394,17 +396,17 @@ fn git_is_ancestor(
 
 pub(crate) fn projection_bare_repo_for_state(
     state: &AppState,
-    repository_id: &str,
+    incarnation: &RepositoryIncarnation,
     projection: &Projection,
     git_head: Option<&scope_domain::repository::git::GitHead>,
     git_pack_spans: &[scope_domain::repository::git::GitPackSpan],
 ) -> Result<GitRepoHandle, ApiError> {
     let cache_root = state.repository_engine.cache_root().to_path_buf();
-    let cache_key = projection_cache_key(projection);
+    let cache_key = projection_cache_key(Some(incarnation), projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
     let is_ready = || projection_cache_is_ready(&repo_path);
     state.repository_engine.materialize_derived(
-        repository_id,
+        incarnation,
         GitDerivedCacheNamespace::Projection,
         cache_key,
         &repo_path,
@@ -418,7 +420,7 @@ pub(crate) fn projection_bare_repo_for_state(
                 })?;
                 Some(state.repository_engine.materialize_repository(
                     state,
-                    repository_id,
+                    incarnation,
                     head,
                     git_pack_spans,
                 )?)
@@ -428,6 +430,7 @@ pub(crate) fn projection_bare_repo_for_state(
             let _permit = state.runtime_budgets.try_git_materialization()?;
             projection_bare_repo_with_loader(
                 &cache_root,
+                Some(incarnation),
                 projection,
                 raw_source_repo.as_deref(),
                 |blob| source_content_bytes_from_repo(state, blob, raw_source_repo.as_deref()),
@@ -453,6 +456,7 @@ pub(crate) fn verify_projection_materialization(
     fs::create_dir_all(&verification_root).map_err(ApiError::internal)?;
     let verification = projection_bare_repo_with_loader(
         &verification_root,
+        None,
         projection,
         Some(native_source_repo),
         |blob| source_content_bytes_from_repo(state, blob, Some(native_source_repo)),
@@ -488,13 +492,23 @@ fn projection_cache_is_ready(repo_path: &FsPath) -> bool {
         .is_file()
 }
 
-fn projection_cache_key(projection: &Projection) -> String {
+fn projection_cache_key(
+    incarnation: Option<&RepositoryIncarnation>,
+    projection: &Projection,
+) -> String {
     let mut hasher = Sha1::new();
     hash_field(
         &mut hasher,
         b"semantics",
         PROJECTION_CACHE_SEMANTICS_VERSION.as_bytes(),
     );
+    if let Some(incarnation) = incarnation {
+        hash_field(
+            &mut hasher,
+            b"incarnation",
+            incarnation.incarnation_id().as_bytes(),
+        );
+    }
     hash_field(&mut hasher, b"repo", projection.repo_id.as_bytes());
     hash_field(
         &mut hasher,

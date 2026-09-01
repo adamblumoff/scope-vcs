@@ -141,7 +141,7 @@ async fn draft_request_ref_push_replaces_snapshot_without_touching_main() {
     .unwrap();
     assert_eq!(request_event_count(&state).await, before_event_count + 1);
     let store_repo =
-        crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+        crate::git::storage::request_ref_store_repo_path(&state, &test_repo_incarnation());
     let stored_head = git_stdout_text(&store_repo, &["rev-parse", REQUEST_REF], "read request ref")
         .unwrap()
         .trim()
@@ -158,6 +158,104 @@ async fn draft_request_ref_push_replaces_snapshot_without_touching_main() {
     fs::remove_dir_all(&store_repo).unwrap();
     let staging_repo = assert_restored_request_head(&state, &request_head).await;
     let _ = fs::remove_dir_all(staging_repo);
+}
+
+#[tokio::test]
+async fn request_ref_completion_cannot_cross_repository_recreation() {
+    let state = test_state_with_request().await;
+    let predecessor_request = stored_request(&state, REQUEST_ID).await;
+    let preparation = git_receive_use_case::prepare(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        ReceivePackAccess::RequestContributor {
+            author_id: public_user_id(),
+            incarnation: test_repo_incarnation(),
+        },
+        false,
+    )
+    .await
+    .unwrap();
+    let staging_repo = preparation.staging_repo.clone();
+    let predecessor_head = git_stdout_text(
+        &staging_repo,
+        &["rev-parse", REQUEST_REF],
+        "read predecessor request ref",
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let treeish = format!("{predecessor_head}^{{tree}}");
+    let tree = git_stdout_text(
+        &staging_repo,
+        &["rev-parse", &treeish],
+        "read predecessor request tree",
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let delayed_head = git_stdout_text(
+        &staging_repo,
+        &[
+            "-c",
+            "user.name=Scope Test",
+            "-c",
+            "user.email=scope@example.test",
+            "commit-tree",
+            &tree,
+            "-p",
+            &predecessor_head,
+            "-m",
+            "delayed predecessor request update",
+        ],
+        "create delayed predecessor request commit",
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    run_git(
+        Some(&staging_repo),
+        &["update-ref", REQUEST_REF, &delayed_head],
+        "stage delayed predecessor request update",
+    )
+    .unwrap();
+
+    let mut recreated = test_repo(&test_owner_id());
+    recreated.record.incarnation_id = "repoi_recreated_request_ref".to_string();
+    state
+        .metadata
+        .repositories()
+        .recreate_repository_for_tests(recreated)
+        .await
+        .unwrap();
+    state
+        .metadata
+        .requests()
+        .insert_request_for_tests(predecessor_request.clone())
+        .await
+        .unwrap();
+
+    let error = git_receive_use_case::complete(
+        &state,
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &staging_repo,
+        preparation,
+        std::time::Duration::ZERO,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::CONFLICT);
+    assert!(
+        error
+            .public_message()
+            .contains("changed after receive-pack")
+    );
+    assert_eq!(
+        stored_request(&state, REQUEST_ID).await.head_oid,
+        predecessor_request.head_oid
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -198,7 +296,7 @@ async fn failed_request_snapshot_put_rolls_back_the_request_ref_cache() {
         accepted_head
     );
     let store_repo =
-        crate::git::storage::request_ref_store_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+        crate::git::storage::request_ref_store_repo_path(&state, &test_repo_incarnation());
     assert_eq!(
         git_stdout_text(
             &store_repo,

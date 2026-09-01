@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 import {
   classifyChanges,
@@ -12,6 +13,18 @@ import {
 const manifest = JSON.parse(readFileSync(new URL("../deployment-services.json", import.meta.url), "utf8"));
 const productionWorkflow = readFileSync(
   new URL("../workflows/scope-production-deploy.yml", import.meta.url),
+  "utf8",
+);
+const cliDeployWorkflow = readFileSync(
+  new URL("../workflows/scope-cli-deploy.yml", import.meta.url),
+  "utf8",
+);
+const stagingWorkflow = readFileSync(
+  new URL("../workflows/scope-railway-staging.yml", import.meta.url),
+  "utf8",
+);
+const webDeployWorkflow = readFileSync(
+  new URL("../workflows/scope-web-deploy.yml", import.meta.url),
   "utf8",
 );
 
@@ -30,6 +43,65 @@ function deploymentSelection(overrides = {}) {
     cli: false,
     cliDistribution: false,
     ...overrides,
+  };
+}
+
+function productionJobCondition(jobName) {
+  const block = productionWorkflow.match(
+    new RegExp(`\\n  ${jobName}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z-]+:|$)`),
+  )?.[1];
+  assert.ok(block, `${jobName} job is present`);
+  const condition = block.match(/\n    if: >-\n([\s\S]*?)(?=\n    [a-z])/i)?.[1];
+  assert.ok(condition, `${jobName} has a multiline condition`);
+  return condition.trim().replace(/\s+/g, " ");
+}
+
+function evaluateProductionCondition(expression, context) {
+  const resolve = (path) => path.split(".").reduce((value, key) => value?.[key], context);
+  const executable = expression.replace(
+    /cancelled\(\)|(?:github|needs)(?:\.[A-Za-z0-9_-]+)+/g,
+    (reference) => JSON.stringify(
+      reference === "cancelled()" ? context.cancelled : resolve(reference),
+    ),
+  );
+  const unsupported = executable.replace(
+    /true|false|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|&&|\|\||==|!=|!|\(|\)|\s+/g,
+    "",
+  );
+  assert.equal(unsupported, "", `unsupported workflow expression syntax: ${unsupported}`);
+  return Boolean(runInNewContext(executable, Object.create(null), { timeout: 100 }));
+}
+
+function productionConditionContext(overrides = {}) {
+  const backendSelected = overrides.backendSelected ?? false;
+  return {
+    cancelled: overrides.cancelled ?? false,
+    github: {
+      event_name: overrides.eventName ?? "push",
+      ref: overrides.ref ?? "refs/heads/main",
+    },
+    needs: {
+      "backend-deploy": { result: overrides.backendResult ?? "skipped" },
+      "cli-deploy": {
+        result: overrides.cliResult ?? (overrides.cliSelected === false ? "skipped" : "success"),
+      },
+      plan: {
+        outputs: {
+          api: backendSelected ? "true" : "false",
+          cache: backendSelected ? "true" : "false",
+          cli: overrides.cliSelected === false ? "false" : "true",
+          router: backendSelected ? "true" : "false",
+          web: overrides.webSelected === false ? "false" : "true",
+          worker: backendSelected ? "true" : "false",
+        },
+      },
+      "production-validation-gate": {
+        result: overrides.validationResult ?? "success",
+      },
+      "web-deploy": {
+        result: overrides.webResult ?? (overrides.webSelected === false ? "skipped" : "success"),
+      },
+    },
   };
 }
 
@@ -110,6 +182,11 @@ test("changes select the required deployment lanes", () => {
       [".github/workflows/scope-production-deploy.yml"],
       allLanes,
     ],
+    [
+      "production health policy changes exercise every lane",
+      [".github/scripts/railway-service-health.mjs"],
+      allLanes,
+    ],
   ];
 
   for (const [name, paths, lanes] of cases) {
@@ -182,9 +259,105 @@ test("skipped components remain selected across a later backend-only change", ()
 });
 
 test("skipped validation ancestors do not suppress a selected backend deployment", () => {
-  const backendDeploy = productionWorkflow.match(/\n  backend-deploy:\n[\s\S]*?\n  web-deploy:/)?.[0];
-  assert.ok(backendDeploy, "backend deploy job is present");
-  assert.match(backendDeploy, /\n    if: >-\n      !cancelled\(\) && github\.event_name/);
+  assert.match(
+    productionJobCondition("backend-deploy"),
+    /^!cancelled\(\) && github\.event_name/,
+  );
+});
+
+test("web and CLI deployment conditions are cancellation-safe after optional backend jobs", () => {
+  const conditions = Object.fromEntries(["web-deploy", "cli-deploy"].map((job) => [
+    job,
+    productionJobCondition(job),
+  ]));
+  for (const condition of Object.values(conditions)) {
+    assert.match(condition, /^!cancelled\(\) && github\.event_name/);
+    assert.match(condition, /needs\.production-validation-gate\.result == 'success'/);
+    assert.match(condition, /needs\.backend-deploy\.result == 'success'/);
+    assert.match(condition, /needs\.backend-deploy\.result == 'skipped'/);
+  }
+  assert.equal(
+    conditions["web-deploy"].replace("needs.plan.outputs.web", "needs.plan.outputs.component"),
+    conditions["cli-deploy"].replace("needs.plan.outputs.cli", "needs.plan.outputs.component"),
+  );
+});
+
+test("frontend production deployment eligibility covers optional backend and failure states", () => {
+  const fixtures = [
+    ["backend selected", { backendSelected: true, backendResult: "success" }, true],
+    ["backend skipped", { backendSelected: false, backendResult: "skipped" }, true],
+    [
+      "failed validation",
+      { backendSelected: false, backendResult: "skipped", validationResult: "failure" },
+      false,
+    ],
+    ["failed backend", { backendSelected: true, backendResult: "failure" }, false],
+    [
+      "canceled workflow",
+      { backendSelected: false, backendResult: "skipped", cancelled: true },
+      false,
+    ],
+  ];
+
+  for (const job of ["web-deploy", "cli-deploy"]) {
+    const condition = productionJobCondition(job);
+    for (const [name, input, expected] of fixtures) {
+      assert.equal(
+        evaluateProductionCondition(condition, productionConditionContext(input)),
+        expected,
+        `${job}: ${name}`,
+      );
+    }
+  }
+});
+
+test("the final production gate verifies selected and carried-forward services", () => {
+  const condition = productionJobCondition("production-health-gate");
+  assert.match(condition, /^!cancelled\(\) && github\.event_name/);
+  const fixtures = [
+    [
+      "all Railway components carried forward",
+      { backendSelected: false, cliSelected: false, webSelected: false },
+      true,
+    ],
+    [
+      "backend selected and frontend carried forward",
+      {
+        backendSelected: true,
+        backendResult: "success",
+        cliSelected: false,
+        webSelected: false,
+      },
+      true,
+    ],
+    [
+      "selected web deployment failed",
+      { backendSelected: false, cliSelected: false, webResult: "failure" },
+      false,
+    ],
+    [
+      "selected backend deployment failed",
+      {
+        backendSelected: true,
+        backendResult: "failure",
+        cliSelected: false,
+        webSelected: false,
+      },
+      false,
+    ],
+    [
+      "workflow canceled after deploy jobs",
+      { backendSelected: false, cancelled: true, cliSelected: false, webSelected: false },
+      false,
+    ],
+  ];
+  for (const [name, input, expected] of fixtures) {
+    assert.equal(
+      evaluateProductionCondition(condition, productionConditionContext(input)),
+      expected,
+      name,
+    );
+  }
 });
 
 test("CLI deployment progress selects distribution builds only for binary inputs", () => {
@@ -242,17 +415,30 @@ test("deployment manifest is a single coherent production graph", () => {
 });
 
 test("service config does not override Railway scaling or restart defaults", () => {
-  for (const path of [
-    "api/railway.json",
-    "worker/railway.json",
-    "cache-service/railway.json",
-    "repo-router/railway.json",
-  ]) {
+  const configs = {
+    "api/railway.json": "/healthz",
+    "worker/railway.json": "/healthz",
+    "cache-service/railway.json": "/readyz",
+    "repo-router/railway.json": "/readyz",
+    "cli/railway.json": "/readyz",
+    "web/railway.json": "/",
+  };
+  for (const [path, healthcheckPath] of Object.entries(configs)) {
     const { deploy } = repositoryJson(path);
 
+    assert.equal(deploy.healthcheckPath, healthcheckPath);
     assert.equal(deploy.healthcheckTimeout, 60);
     assert.equal(deploy.multiRegionConfig, undefined);
     assert.equal(deploy.restartPolicyType, undefined);
     assert.equal(deploy.restartPolicyMaxRetries, undefined);
   }
+});
+
+test("web and CLI healthcheck configs are staged at Railway upload roots", () => {
+  assert.match(cliDeployWorkflow, /cp cli\/railway\.json \.railway-upload\/railway\.json/);
+  assert.match(webDeployWorkflow, /cp web\/railway\.json \.railway-upload\/railway\.json/);
+  assert.match(
+    stagingWorkflow,
+    /cp candidate\/web\/railway\.json \.railway-staging-upload\/web-root\/railway\.json/,
+  );
 });

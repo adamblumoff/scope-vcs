@@ -1,5 +1,5 @@
 import { createApiClient } from '@/api/client'
-import { prerenderReviewFileDiff } from '@/features/review/review-file-diff-prerender'
+import { renderReviewFileDiff } from '@/features/review/review-file-diff-prerender'
 import type {
   RequestDetail,
   RequestList,
@@ -93,10 +93,7 @@ export async function loadRequestRevisionCommitFileDiffForRequest(
     { auth: 'optional' },
   )
 
-  return {
-    ...diff,
-    prerenderedHtml: await prerenderReviewFileDiff(diff),
-  }
+  return renderReviewFileDiff(diff)
 }
 
 function requestQueuePath(data: LoadRequestQueueInput) {

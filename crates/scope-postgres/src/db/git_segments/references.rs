@@ -53,7 +53,7 @@ where
          SET state = 'deleting',
              updated_at_unix = GREATEST(updated_at_unix, $3)
          WHERE uploads.segment_id IN (SELECT segment_id FROM released)
-           AND uploads.state = 'published'
+           AND uploads.state = 'retained'
            AND NOT EXISTS (
                SELECT 1 FROM scope_git_segments spans
                WHERE spans.segment_id = uploads.segment_id

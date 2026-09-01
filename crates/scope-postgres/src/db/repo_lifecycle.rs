@@ -1,11 +1,12 @@
 use super::{
-    GeneratedIdSource, RepositoryStore, acquire_aggregate_lock,
+    GeneratedIdKind, GeneratedIdSource, RepositoryStore, acquire_aggregate_lock,
     cleanup_queue::{
         claim::claim_pending_repo_storage_cleanup,
         completion::complete_claimed_repo_storage_cleanup,
         queue::{pending_repo_storage_cleanup_exists, queue_pending_source_blob_deletion_rows},
     },
     entities,
+    generated_ids::generate_id,
     object_references::delete_repository_object_references,
     repo_effects::save_repo_effects,
     repository_from_model,
@@ -19,7 +20,7 @@ use scope_domain::{
     policy::Visibility,
     repo_actions::{create_repo as create_repo_command, delete_repo as delete_repo_command},
     repository::credentials::{FirstPushToken, GitPushToken},
-    repository::{Repository, repo_id},
+    repository::{Repository, RepositoryIncarnation, repo_id},
     requests::Request,
 };
 use sea_orm::sea_query::Query;
@@ -60,7 +61,9 @@ impl RepositoryStore {
         cleanup_pending_storage: F,
     ) -> Result<Repository, RepositoryCreationError<E>>
     where
-        F: FnOnce(&str, &str) -> Result<(), E> + Send + 'static,
+        F: FnOnce(&scope_domain::repo_actions::RepoStorageCleanup) -> Result<(), E>
+            + Send
+            + 'static,
         E: Send + 'static,
     {
         let CreateRepositoryCommand {
@@ -76,12 +79,14 @@ impl RepositoryStore {
             .map_err(PostgresError::internal)?
             .ok_or_else(|| PostgresError::internal_message("signed-in user was not persisted"))?
             .try_into_domain()?;
+        let incarnation_id = generate_id(generated_ids, GeneratedIdKind::RepositoryIncarnation)?;
         let mutation = create_repo_command(
             &owner,
             &name,
             default_visibility,
             first_push_token,
             git_push_token,
+            incarnation_id,
         )
         .map_err(PostgresError::from)?;
         let repo = mutation.result;
@@ -100,8 +105,8 @@ impl RepositoryStore {
             .await?;
             claim_tx.commit().await.map_err(PostgresError::internal)?;
 
-            if cleanup_claim.is_some() {
-                cleanup_pending_storage(&repo.record.owner_handle, &repo.record.name)
+            if let Some(claim) = cleanup_claim.as_ref() {
+                cleanup_pending_storage(&claim.cleanup)
                     .map_err(RepositoryCreationError::Cleanup)?;
             }
 
@@ -134,6 +139,7 @@ impl RepositoryStore {
         &self,
         owner: &str,
         name: &str,
+        expected_incarnation: &RepositoryIncarnation,
         user_id: &str,
         now_unix: u64,
         generated_ids: &dyn GeneratedIdSource,
@@ -151,6 +157,11 @@ impl RepositoryStore {
             .map_err(PostgresError::internal)?
             .ok_or_else(|| scope_domain::repo_actions::hidden_repo_not_found(&owner, &name))?;
         let repo = repository_from_model(&tx, repo).await?;
+        if &repo.incarnation() != expected_incarnation {
+            return Err(PostgresError::conflict(
+                "repository changed during deletion; retry",
+            ));
+        }
         let mutation = delete_repo_command(&repo, &user_id, &owner, &name)?;
         let requests = lock_requests_for_repo_postgres(&tx, &repo_id).await?;
         let request_ids = requests
@@ -219,7 +230,7 @@ impl RepositoryStore {
             DatabaseBackend::Postgres,
             "UPDATE scope_git_segment_uploads
              SET state = 'deleting', updated_at_unix = GREATEST(updated_at_unix, $2)
-             WHERE repo_id = $1 AND state IN ('uploading', 'ready', 'published')",
+             WHERE repo_id = $1 AND state IN ('uploading', 'ready', 'published', 'retained')",
             [
                 repo_id.clone().into(),
                 i64::try_from(now_unix)
@@ -378,6 +389,11 @@ mod tests {
             RepoStorageCleanup {
                 owner_handle: "owner".to_string(),
                 repo_name: "repo".to_string(),
+                incarnation: scope_domain::repository::RepositoryIncarnation::new(
+                    "owner/repo",
+                    "repoi_deleted",
+                )
+                .unwrap(),
             },
             1_700_000_000,
             &super::super::generated_ids::test_generated_id,
@@ -401,7 +417,8 @@ mod tests {
                         now_unix: 1_700_000_000,
                     },
                     &super::super::generated_ids::test_generated_id,
-                    move |_, _| {
+                    move |cleanup| {
+                        assert_eq!(cleanup.incarnation.incarnation_id(), "repoi_deleted");
                         cleanup_started_tx.send(()).unwrap();
                         release_cleanup_rx.recv().unwrap();
                         Ok::<(), PostgresError>(())
@@ -427,7 +444,7 @@ mod tests {
                         now_unix: 1_700_000_000,
                     },
                     &super::super::generated_ids::test_generated_id,
-                    move |_, _| {
+                    move |_| {
                         second_cleanup_called.store(true, Ordering::SeqCst);
                         Ok::<(), PostgresError>(())
                     },
@@ -459,6 +476,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_delete_cannot_remove_a_recreated_repository() {
+        let target = super::super::TestDatabaseTarget::required().unwrap();
+        let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
+        let owner = UserAccount {
+            id: "user_owner".to_string(),
+            handle: "owner".to_string(),
+            email: "owner@example.com".to_string(),
+            email_verified: true,
+        };
+        let mut catalog = crate::db::CatalogFixture::default();
+        let recreated = catalog
+            .create_repository(&owner, "repo", Visibility::Private)
+            .unwrap()
+            .clone();
+        catalog.users.insert(owner.id.clone(), owner);
+        store.admin().seed_catalog_for_tests(catalog).unwrap();
+        let predecessor =
+            scope_domain::repository::RepositoryIncarnation::new("owner/repo", "repoi_predecessor")
+                .unwrap();
+
+        let error = store
+            .repositories()
+            .delete_repo(
+                "owner",
+                "repo",
+                &predecessor,
+                "user_owner",
+                1_700_000_001,
+                &super::super::generated_ids::test_generated_id,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.message.contains("changed during deletion"));
+        let persisted = store
+            .repositories()
+            .repository("owner", "repo")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.incarnation(), recreated.incarnation());
+    }
+
+    #[tokio::test]
     async fn expired_creation_cleanup_claim_cannot_commit_after_worker_reclaims_it() {
         let target = super::super::TestDatabaseTarget::required().unwrap();
         let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
@@ -467,6 +528,11 @@ mod tests {
             RepoStorageCleanup {
                 owner_handle: "owner".to_string(),
                 repo_name: "repo".to_string(),
+                incarnation: scope_domain::repository::RepositoryIncarnation::new(
+                    "owner/repo",
+                    "repoi_deleted",
+                )
+                .unwrap(),
             },
             1_700_000_000,
             &super::super::generated_ids::test_generated_id,

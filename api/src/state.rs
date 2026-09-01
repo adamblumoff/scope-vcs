@@ -143,14 +143,16 @@ impl AppState {
                         .await?
                 }
                 GitSegmentUploadState::Deleting => true,
-                GitSegmentUploadState::Published | GitSegmentUploadState::Deleted => false,
+                GitSegmentUploadState::Published
+                | GitSegmentUploadState::Retained
+                | GitSegmentUploadState::Deleted => false,
             };
             if !may_delete {
                 continue;
             }
             if let Err(error) = self
                 .git_segment_store
-                .cleanup_remote(&upload.object_key)
+                .cleanup_remote_bounded(&upload.object_key)
                 .await
             {
                 tracing::warn!(

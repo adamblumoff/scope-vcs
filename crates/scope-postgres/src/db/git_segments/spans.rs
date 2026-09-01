@@ -67,7 +67,8 @@ where
             "UPDATE scope_git_segment_uploads
              SET state = 'published',
                  updated_at_unix = GREATEST(updated_at_unix, $6)
-             WHERE segment_id = $1 AND repo_id = $2 AND state IN ('ready', 'published')
+             WHERE segment_id = $1 AND repo_id = $2
+               AND state IN ('ready', 'published', 'retained')
                AND sha256 = $3 AND plaintext_bytes = $4 AND encoding_version = $5",
             [
                 segment.segment_id.clone().into(),

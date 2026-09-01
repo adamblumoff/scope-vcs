@@ -527,8 +527,16 @@ fn seed_owner_request(
 }
 
 fn repo(owner: &UserAccount, name: &str, visibility: Visibility) -> Result<Repository, ApiError> {
-    Repository::new(owner, name, visibility)
-        .map_err(|error| ApiError::internal_message(error.to_string()))
+    Repository::new(
+        owner,
+        name,
+        visibility,
+        format!(
+            "repoi_seed_{}",
+            scope_domain::repository::repo_id(&owner.handle, name)
+        ),
+    )
+    .map_err(|error| ApiError::internal_message(error.to_string()))
 }
 
 fn commit(repo: &Repository, id: &str, message: &str, changes: Vec<FileChange>) -> LogicalCommit {

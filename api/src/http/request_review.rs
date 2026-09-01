@@ -38,7 +38,9 @@ use std::path::Path as FsPath;
 mod inspection;
 
 pub(crate) use inspection::RequestRevisionCommitVisibility;
-use inspection::{inspect_request_commit, request_revision_commit_files};
+use inspection::{
+    inspect_request_commit, inspect_request_commits_identity_only, request_revision_commit_files,
+};
 
 const MAX_LISTED_REQUEST_REVISIONS: usize = 50;
 const MAX_LISTED_COMMITS_PER_REVISION: usize = 100;
@@ -115,8 +117,7 @@ pub(crate) async fn list_request_revisions(
         let (commits, inspection) = if let Some(commit_limit) = commit_limit {
             let inspected = with_request_revision_store_repo(
                 &state,
-                &owner,
-                &repo_name,
+                &repo.incarnation(),
                 &request,
                 revision,
                 |raw_repo| {
@@ -194,7 +195,6 @@ impl RequestRevisionListWorkBudget {
     fn claim_revision(&mut self, snapshot_bytes: u64) -> Option<usize> {
         let commit_limit = self.remaining_commits.min(MAX_LISTED_COMMITS_PER_REVISION);
         if commit_limit == 0
-            || self.remaining_files == 0
             || self.remaining_revisions == 0
             || snapshot_bytes > self.remaining_snapshot_bytes
         {
@@ -243,8 +243,7 @@ pub(crate) async fn get_request_revision_commit_file_diff(
     let path = normalized_path(&input.path)?;
     let (file, old_content, new_content) = with_request_revision_store_repo(
         &state,
-        &owner,
-        &repo_name,
+        &repo.incarnation(),
         &request,
         &revision,
         |raw_repo| {
@@ -315,16 +314,32 @@ fn request_revision_commits(
     let mut visible = Vec::new();
     let mut file_budget_incomplete = false;
     let mut metadata_incomplete = false;
+    let mut identity_only_indexes = Vec::new();
     for index in inspection_order {
+        if remaining_files == 0 {
+            identity_only_indexes.push(index);
+            continue;
+        }
         let commit = inspect_request_commit(raw_repo, repo, access, &commit_oids[index])?;
         metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
-        if let Some(summary) = commit.commit {
-            if summary.files.len() > remaining_files {
-                file_budget_incomplete = true;
-                continue;
-            }
-            remaining_files -= summary.files.len();
+        if let Some(mut summary) = commit.commit {
+            file_budget_incomplete |= truncate_commit_files(&mut summary, &mut remaining_files);
             visible.push((index, summary));
+        }
+    }
+    if !identity_only_indexes.is_empty() {
+        let identity_only_oids = identity_only_indexes
+            .iter()
+            .map(|index| commit_oids[*index].clone())
+            .collect::<Vec<_>>();
+        let identity_only =
+            inspect_request_commits_identity_only(raw_repo, repo, access, &identity_only_oids)?;
+        for (index, commit) in identity_only_indexes.into_iter().zip(identity_only) {
+            metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
+            if let Some(summary) = commit.commit {
+                file_budget_incomplete |= summary.files_truncated;
+                visible.push((index, summary));
+            }
         }
     }
     visible.sort_by_key(|(index, _)| *index);
@@ -338,6 +353,17 @@ fn request_revision_commits(
             RequestRevisionInspectionState::Complete
         },
     })
+}
+
+fn truncate_commit_files(
+    commit: &mut RequestRevisionCommitResponse,
+    remaining_files: &mut usize,
+) -> bool {
+    let listed = commit.files.len().min(*remaining_files);
+    commit.files.truncate(listed);
+    commit.files_truncated = listed < commit.change_count;
+    *remaining_files = remaining_files.saturating_sub(listed);
+    commit.files_truncated
 }
 
 struct InspectedRequestCommits {
@@ -583,35 +609,4 @@ fn normalized_scope_path(path: &str) -> Result<ScopePath, ApiError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        MAX_IMPORTED_REQUEST_REVISIONS, MAX_IMPORTED_REQUEST_SNAPSHOT_BYTES,
-        RequestRevisionListWorkBudget,
-    };
-
-    #[test]
-    fn revision_listing_budget_caps_snapshot_count_bytes_and_commit_work() {
-        let mut count_budget = RequestRevisionListWorkBudget::new();
-        for _ in 0..MAX_IMPORTED_REQUEST_REVISIONS {
-            assert!(count_budget.claim_revision(1).is_some());
-            count_budget.record_inspected(1, 0);
-        }
-        assert_eq!(count_budget.claim_revision(1), None);
-
-        let mut byte_budget = RequestRevisionListWorkBudget::new();
-        assert!(
-            byte_budget
-                .claim_revision(MAX_IMPORTED_REQUEST_SNAPSHOT_BYTES)
-                .is_some()
-        );
-        assert_eq!(byte_budget.claim_revision(1), None);
-
-        let mut commit_budget = RequestRevisionListWorkBudget::new();
-        commit_budget.record_inspected(usize::MAX, 0);
-        assert_eq!(commit_budget.claim_revision(1), None);
-
-        let mut file_budget = RequestRevisionListWorkBudget::new();
-        file_budget.record_inspected(0, usize::MAX);
-        assert_eq!(file_budget.claim_revision(1), None);
-    }
-}
+mod tests;

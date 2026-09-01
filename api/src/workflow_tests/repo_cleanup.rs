@@ -1,16 +1,17 @@
 use super::*;
 
 fn cleanup_paths(state: &AppState, suffix: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let owner = owner_git_repo_path(state, TEST_REPO_OWNER, TEST_REPO_NAME);
-    let staged = staged_git_repo_path(state, TEST_REPO_OWNER, TEST_REPO_NAME);
+    let incarnation = test_repo_incarnation();
+    let raw = state.repository_engine.repository_path(&incarnation);
+    let request_refs = request_ref_store_repo_path(state, &incarnation);
     let rx = git_repo_storage_root(state).join("git-rx").join(format!(
         "{}-{suffix}.git",
-        receive_pack_staging_repo_prefix(TEST_REPO_OWNER, TEST_REPO_NAME)
+        receive_pack_staging_repo_prefix(&incarnation)
     ));
-    for path in [&owner, &staged, &rx] {
+    for path in [&raw, &request_refs, &rx] {
         fs::create_dir_all(path).unwrap();
     }
-    (owner, staged, rx)
+    (raw, request_refs, rx)
 }
 
 fn assert_cleanup_paths(paths: &(PathBuf, PathBuf, PathBuf), exist: bool) {
@@ -88,6 +89,59 @@ async fn delete_repo_route_requires_owner_and_removes_storage() {
 }
 
 #[tokio::test]
+async fn cleanup_removes_only_the_deleted_repository_incarnation() {
+    let state = test_state_with_repo();
+    let deleted =
+        scope_domain::repository::RepositoryIncarnation::new(TEST_REPO_ID, "repoi_deleted_cleanup")
+            .unwrap();
+    let recreated = scope_domain::repository::RepositoryIncarnation::new(
+        TEST_REPO_ID,
+        "repoi_recreated_cleanup",
+    )
+    .unwrap();
+    let deleted_raw = state.repository_engine.repository_path(&deleted);
+    let recreated_raw = state.repository_engine.repository_path(&recreated);
+    let deleted_refs = request_ref_store_repo_path(&state, &deleted);
+    let recreated_refs = request_ref_store_repo_path(&state, &recreated);
+    let rx_root = git_repo_storage_root(&state).join("git-rx");
+    let deleted_rx = rx_root.join(format!(
+        "{}-test.git",
+        receive_pack_staging_repo_prefix(&deleted)
+    ));
+    let recreated_rx = rx_root.join(format!(
+        "{}-test.git",
+        receive_pack_staging_repo_prefix(&recreated)
+    ));
+    for path in [
+        &deleted_raw,
+        &recreated_raw,
+        &deleted_refs,
+        &recreated_refs,
+        &deleted_rx,
+        &recreated_rx,
+    ] {
+        fs::create_dir_all(path).unwrap();
+    }
+
+    crate::git::storage::delete_repo_storage(
+        &state,
+        &scope_domain::repo_actions::RepoStorageCleanup {
+            owner_handle: TEST_REPO_OWNER.to_string(),
+            repo_name: TEST_REPO_NAME.to_string(),
+            incarnation: deleted,
+        },
+    )
+    .unwrap();
+
+    assert!(!deleted_raw.exists());
+    assert!(!deleted_refs.exists());
+    assert!(!deleted_rx.exists());
+    assert!(recreated_raw.exists());
+    assert!(recreated_refs.exists());
+    assert!(recreated_rx.exists());
+}
+
+#[tokio::test]
 async fn delete_repo_route_records_pending_cleanup_when_bucket_delete_fails() {
     let mut state = test_state_with_repo();
     cache_test_jwks(&state);
@@ -129,12 +183,14 @@ async fn delete_repo_route_records_pending_filesystem_cleanup_when_storage_delet
             .await
             .unwrap();
     }
-    let owner_repo = owner_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
-    let staged_repo = staged_git_repo_path(&state, TEST_REPO_OWNER, TEST_REPO_NAME);
+    let raw_repo = state
+        .repository_engine
+        .repository_path(&test_repo_incarnation());
+    let request_ref_repo = request_ref_store_repo_path(&state, &test_repo_incarnation());
     let storage_root = git_repo_storage_root(&state);
     let rx_root = storage_root.join("git-rx");
-    fs::create_dir_all(&owner_repo).unwrap();
-    fs::create_dir_all(&staged_repo).unwrap();
+    fs::create_dir_all(&raw_repo).unwrap();
+    fs::create_dir_all(&request_ref_repo).unwrap();
     fs::create_dir_all(&storage_root).unwrap();
     if rx_root.is_dir() {
         fs::remove_dir_all(&rx_root).unwrap();
@@ -148,8 +204,8 @@ async fn delete_repo_route_records_pending_filesystem_cleanup_when_storage_delet
     assert_eq!(response.status(), StatusCode::OK);
     assert_repo_deleted(&state).await;
     assert_eq!(pending_cleanup_count(&state).await, 1);
-    assert!(!owner_repo.exists());
-    assert!(!staged_repo.exists());
+    assert!(!raw_repo.exists());
+    assert!(!request_ref_repo.exists());
     assert!(rx_root.exists());
 
     fs::remove_file(&rx_root).unwrap();

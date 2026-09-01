@@ -17,6 +17,8 @@ use tokio::{
 
 const REPOSITORY_ID: &str = "repository-123";
 
+mod ingest_control;
+
 #[tokio::test]
 async fn ingest_writes_both_destinations_and_restore_verifies_the_stream() {
     let fixture = Fixture::new(4, 13, 2);
@@ -29,7 +31,7 @@ async fn ingest_writes_both_destinations_and_restore_verifies_the_stream() {
     );
     let staged = fixture
         .store
-        .ingest_reserved(REPOSITORY_ID, reservation, &input[..])
+        .ingest_reserved(REPOSITORY_ID, reservation, &input[..], u64::MAX)
         .await
         .unwrap();
 
@@ -88,6 +90,7 @@ async fn blocking_reader_uses_the_reserved_identity() {
             REPOSITORY_ID,
             reservation,
             std::io::Cursor::new(input.clone()),
+            u64::MAX,
         )
         .await
         .unwrap();
@@ -105,7 +108,7 @@ async fn preferred_restore_reads_and_verifies_the_stable_local_pack() {
     let input = b"warm local pack";
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &input[..])
+        .ingest(REPOSITORY_ID, &input[..], u64::MAX)
         .await
         .unwrap();
     fixture.backend.delete(&staged.object_key).await.unwrap();
@@ -126,7 +129,7 @@ async fn preferred_restore_uses_remote_only_when_local_pack_is_missing() {
     let input = b"cold remote pack";
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &input[..])
+        .ingest(REPOSITORY_ID, &input[..], u64::MAX)
         .await
         .unwrap();
     tokio::fs::remove_file(staged.local_pack_path())
@@ -148,7 +151,7 @@ async fn preferred_restore_does_not_hide_local_corruption_with_remote_fallback()
     let input = b"valid local pack";
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &input[..])
+        .ingest(REPOSITORY_ID, &input[..], u64::MAX)
         .await
         .unwrap();
     tokio::fs::write(staged.local_pack_path(), b"broken local pac")
@@ -173,7 +176,7 @@ async fn preferred_restore_does_not_fall_back_on_local_io_errors() {
     let fixture = Fixture::new(4, 13, 1);
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"valid remote copy"[..])
+        .ingest(REPOSITORY_ID, &b"valid remote copy"[..], u64::MAX)
         .await
         .unwrap();
     tokio::fs::remove_file(staged.local_pack_path())
@@ -200,7 +203,10 @@ async fn filesystem_backend_completes_atomically_and_rejects_path_traversal() {
     let store = GitSegmentStore::new(backend.clone(), test_key(), config).unwrap();
     let input = b"filesystem multipart segment";
 
-    let staged = store.ingest(REPOSITORY_ID, &input[..]).await.unwrap();
+    let staged = store
+        .ingest(REPOSITORY_ID, &input[..], u64::MAX)
+        .await
+        .unwrap();
     let (restored, _) = restore_bytes(&store, &staged.segment).await.unwrap();
     assert_eq!(restored, input);
     assert!(
@@ -227,7 +233,11 @@ async fn failed_part_aborts_multipart_and_removes_local_output() {
 
     let error = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"a pack that reaches the first part"[..])
+        .ingest(
+            REPOSITORY_ID,
+            &b"a pack that reaches the first part"[..],
+            u64::MAX,
+        )
         .await
         .unwrap_err();
 
@@ -245,7 +255,7 @@ async fn cleanup_remote_aborts_only_the_exact_key_then_deletes_its_object() {
     let fixture = Fixture::new(8, 64, 1);
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"published object"[..])
+        .ingest(REPOSITORY_ID, &b"published object"[..], u64::MAX)
         .await
         .unwrap();
     fixture.backend.begin(&staged.object_key).await.unwrap();
@@ -291,7 +301,7 @@ async fn startup_cleanup_removes_only_the_local_staging_root() {
     let fixture = Fixture::new(8, 64, 1);
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"published object"[..])
+        .ingest(REPOSITORY_ID, &b"published object"[..], u64::MAX)
         .await
         .unwrap();
 
@@ -308,7 +318,7 @@ async fn failed_complete_is_followed_by_abort() {
 
     let error = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"complete must fail"[..])
+        .ingest(REPOSITORY_ID, &b"complete must fail"[..], u64::MAX)
         .await
         .unwrap_err();
 
@@ -328,7 +338,7 @@ async fn local_failure_aborts_the_remote_upload() {
     let store = GitSegmentStore::new(backend.clone(), test_key(), config).unwrap();
 
     store
-        .ingest(REPOSITORY_ID, &b"local write fails"[..])
+        .ingest(REPOSITORY_ID, &b"local write fails"[..], u64::MAX)
         .await
         .unwrap_err();
 
@@ -346,8 +356,11 @@ async fn bounded_channels_stop_a_blocking_reader_while_remote_is_slow() {
         reads: Arc::clone(&reads),
     };
     let store = fixture.store.clone();
-    let task =
-        tokio::spawn(async move { store.ingest_blocking_reader(REPOSITORY_ID, reader).await });
+    let task = tokio::spawn(async move {
+        store
+            .ingest_blocking_reader(REPOSITORY_ID, reader, u64::MAX)
+            .await
+    });
 
     tokio::time::timeout(
         Duration::from_secs(2),
@@ -371,7 +384,7 @@ async fn restore_rejects_tampered_ciphertext() {
     let fixture = Fixture::new(4, 11, 1);
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"tamper this ciphertext"[..])
+        .ingest(REPOSITORY_ID, &b"tamper this ciphertext"[..], u64::MAX)
         .await
         .unwrap();
     let mut object = fixture.backend.object(&staged.object_key).unwrap().to_vec();
@@ -392,7 +405,7 @@ async fn restore_authenticates_the_envelope_header() {
     let fixture = Fixture::new(4, 11, 1);
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"header authentication"[..])
+        .ingest(REPOSITORY_ID, &b"header authentication"[..], u64::MAX)
         .await
         .unwrap();
     let mut object = fixture.backend.object(&staged.object_key).unwrap().to_vec();
@@ -412,7 +425,11 @@ async fn restore_verifies_plaintext_size_and_whole_sha() {
     let fixture = Fixture::new(8, 32, 1);
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"whole plaintext verification"[..])
+        .ingest(
+            REPOSITORY_ID,
+            &b"whole plaintext verification"[..],
+            u64::MAX,
+        )
         .await
         .unwrap();
 
@@ -443,7 +460,7 @@ async fn restore_rejects_reordered_frames() {
     let fixture = Fixture::new(4, 9, 1);
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"three-data-frames"[..])
+        .ingest(REPOSITORY_ID, &b"three-data-frames"[..], u64::MAX)
         .await
         .unwrap();
     let object = fixture.backend.object(&staged.object_key).unwrap().to_vec();
@@ -473,7 +490,7 @@ async fn restore_rejects_truncation_and_bytes_after_final_frame() {
     let fixture = Fixture::new(4, 12, 1);
     let staged = fixture
         .store
-        .ingest(REPOSITORY_ID, &b"authenticated final frame"[..])
+        .ingest(REPOSITORY_ID, &b"authenticated final frame"[..], u64::MAX)
         .await
         .unwrap();
     let original = fixture.backend.object(&staged.object_key).unwrap().to_vec();
@@ -632,6 +649,7 @@ struct TestMultipartStore {
     fail_part: AtomicBool,
     fail_complete: AtomicBool,
     block_parts: AtomicBool,
+    block_cleanup: AtomicBool,
     part_started: Notify,
     part_gate: Semaphore,
 }
@@ -643,6 +661,7 @@ impl Default for TestMultipartStore {
             fail_part: AtomicBool::new(false),
             fail_complete: AtomicBool::new(false),
             block_parts: AtomicBool::new(false),
+            block_cleanup: AtomicBool::new(false),
             part_started: Notify::new(),
             part_gate: Semaphore::new(0),
         }
@@ -777,6 +796,9 @@ impl MultipartStore for TestMultipartStore {
     }
 
     async fn abort_incomplete(&self, key: &str) -> Result<(), MultipartError> {
+        if self.block_cleanup.load(Ordering::SeqCst) {
+            std::future::pending::<()>().await;
+        }
         let mut state = self.state.lock().unwrap();
         let aborted = state
             .uploads

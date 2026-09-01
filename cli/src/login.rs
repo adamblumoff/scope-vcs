@@ -17,20 +17,39 @@ use crate::{
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use std::{
+    fs,
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
+    path::Path,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-pub fn login(headless: bool, exchange: Option<String>) -> anyhow::Result<()> {
-    if headless && exchange.is_some() {
-        return Err(CliError::usage("--headless and --exchange cannot be used together").into());
+pub fn login(
+    headless: bool,
+    exchange: Option<String>,
+    exchange_file: Option<&Path>,
+) -> anyhow::Result<()> {
+    if headless && (exchange.is_some() || exchange_file.is_some()) {
+        return Err(CliError::usage(
+            "--headless and either --exchange or --exchange-file cannot be used together",
+        )
+        .into());
     }
 
     let api_url = api_url();
     let client = http_client()?;
-    if let Some(exchange_token) = exchange {
+    let exchange_token = match (exchange, exchange_file) {
+        (Some(token), None) => Some(token),
+        (None, Some(path)) => Some(read_private_exchange_token(path)?),
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            return Err(
+                CliError::usage("--exchange and --exchange-file cannot be used together").into(),
+            );
+        }
+    };
+    if let Some(exchange_token) = exchange_token {
         let session = exchange_login(&client, &api_url, &exchange_token)?;
         store_session_token(&api_url, &session.token)?;
         println!("Signed in as {}", display_user(&session.user));
@@ -46,6 +65,26 @@ pub fn login(headless: bool, exchange: Option<String>) -> anyhow::Result<()> {
     };
     println!("Signed in as {}", display_user(&session.user));
     Ok(())
+}
+
+fn read_private_exchange_token(path: &Path) -> anyhow::Result<String> {
+    let metadata = fs::symlink_metadata(path).context("inspect Scope exchange token file")?;
+    if !metadata.file_type().is_file() {
+        bail!("Scope exchange token path must be a regular file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            bail!("Scope exchange token file must not be accessible by group or other users");
+        }
+    }
+    let token = fs::read_to_string(path).context("read Scope exchange token file")?;
+    let token = token.trim();
+    if token.is_empty() {
+        bail!("Scope exchange token file is empty");
+    }
+    Ok(token.to_string())
 }
 
 pub fn logout() -> anyhow::Result<()> {
@@ -365,6 +404,24 @@ fn unix_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn exchange_token_file_must_be_private() {
+        use crate::test_support::TestDir;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TestDir::new("exchange-token-file");
+        let path = temp.path().join("exchange-token");
+        fs::write(&path, "scope_otc_test\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            read_private_exchange_token(&path).unwrap(),
+            "scope_otc_test"
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_private_exchange_token(&path).is_err());
+    }
 
     #[test]
     fn browser_callback_target_returns_code_for_matching_request() {

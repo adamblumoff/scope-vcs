@@ -13,7 +13,10 @@ use crate::{
     },
     state::AppState,
 };
-use scope_domain::repository::git::{GitHead, GitPackSpan, validate_git_pack_layout};
+use scope_domain::repository::{
+    RepositoryIncarnation,
+    git::{GitHead, GitPackSpan, validate_git_pack_layout},
+};
 use scope_git_process::{ProcessLimits, run_with_stdin_reader};
 use std::{
     fs,
@@ -29,8 +32,7 @@ use std::{
 static REPOSITORY_MATERIALIZATION_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 const MATERIALIZATION_PATH_HIT: u8 = 0;
 const MATERIALIZATION_PATH_CATCH_UP: u8 = 1;
-const MATERIALIZATION_PATH_REPAIR: u8 = 2;
-const MATERIALIZATION_PATH_RESTORE: u8 = 3;
+const MATERIALIZATION_PATH_RESTORE: u8 = 2;
 
 /// Owns this API process's disposable Git replicas and coordinates mutations of
 /// each replica through one repository-scoped stream. Durable publication is
@@ -53,15 +55,23 @@ impl RepositoryEngine {
         self.cache.root()
     }
 
-    pub(crate) fn repository_path(&self, repository_id: &str) -> PathBuf {
-        self.cache.path_for(repository_id)
+    #[cfg(test)]
+    pub(crate) fn repository_path(&self, incarnation: &RepositoryIncarnation) -> PathBuf {
+        self.cache.path_for(incarnation)
+    }
+
+    pub(crate) fn delete_repository_cache(
+        &self,
+        incarnation: &RepositoryIncarnation,
+    ) -> Result<bool, ApiError> {
+        self.cache.remove(incarnation)
     }
 
     /// Coalesces immutable derived views by their content-derived key. These
     /// views do not participate in the repository replica's mutation stream.
     pub(crate) fn materialize_derived(
         &self,
-        repository_id: &str,
+        incarnation: &RepositoryIncarnation,
         namespace: GitDerivedCacheNamespace,
         key: String,
         path: &Path,
@@ -79,7 +89,8 @@ impl RepositoryEngine {
             })
             .and_then(|()| self.cache.lease_derived(path.to_path_buf()));
         tracing::info!(
-            repository_id,
+            repository_id = incarnation.repository_id(),
+            repository_incarnation_id = incarnation.incarnation_id(),
             namespace = ?namespace,
             cache_outcome = materialization_outcome(cache_hit, built.load(Ordering::Relaxed)),
             elapsed_us = started_at.elapsed().as_micros(),
@@ -94,29 +105,30 @@ impl RepositoryEngine {
     pub(crate) fn materialize_repository(
         &self,
         state: &AppState,
-        repository_id: &str,
+        incarnation: &RepositoryIncarnation,
         head: &GitHead,
         pack_spans: &[GitPackSpan],
     ) -> Result<GitRepoHandle, ApiError> {
-        let repo = self.cache.lease(repository_id)?;
+        let repository_id = incarnation.repository_id();
+        let repo = self.cache.lease(incarnation)?;
         let repo_path = repo.as_ref().to_path_buf();
         let cache_root = self.cache_root();
         let is_ready = || {
             repository_cache_is_ready(&repo_path)
                 && self
                     .cache
-                    .applied_sequence(&repo_path)
+                    .applied_sequence(incarnation, &repo_path)
                     .is_some_and(|applied| applied >= head.push_sequence)
         };
         let started_at = Instant::now();
-        let applied_before = self.cache.applied_sequence(&repo_path);
+        let applied_before = self.cache.applied_sequence(incarnation, &repo_path);
         let cache_hit = is_ready();
         let built = AtomicBool::new(false);
         let materialization_path = AtomicU8::new(MATERIALIZATION_PATH_HIT);
-        let result = self.coordinate_repository(repository_id, is_ready, || {
+        let result = self.coordinate_repository(incarnation, is_ready, || {
             built.store(true, Ordering::Relaxed);
             let _permit = state.runtime_budgets.try_git_materialization()?;
-            match self.cache.applied_sequence(&repo_path) {
+            match self.cache.applied_sequence(incarnation, &repo_path) {
                 Some(applied) if applied < head.push_sequence && repo_path.is_dir() => {
                     materialization_path.store(MATERIALIZATION_PATH_CATCH_UP, Ordering::Relaxed);
                     self.catch_up(
@@ -127,44 +139,13 @@ impl RepositoryEngine {
                         applied,
                         &repo_path,
                     )?;
-                    self.cache.note_applied(&repo_path, head.push_sequence)
+                    self.cache
+                        .note_applied(incarnation, &repo_path, head.push_sequence)
                 }
                 Some(applied)
                     if applied == head.push_sequence && repository_cache_is_ready(&repo_path) =>
                 {
                     Ok(())
-                }
-                None if repo_path.is_dir() => {
-                    materialization_path.store(MATERIALIZATION_PATH_REPAIR, Ordering::Relaxed);
-                    for (index, span) in pack_spans.iter().enumerate() {
-                        index_git_pack(
-                            state,
-                            &repo_path,
-                            repository_id,
-                            span,
-                            index + 1,
-                            pack_spans.len(),
-                        )?;
-                    }
-                    run_timed_git_restore_phase(
-                        repository_id,
-                        "update_ref",
-                        Some(&repo_path),
-                        &[
-                            "update-ref",
-                            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
-                            &head.head_oid,
-                        ],
-                        "repairing repository Git cache head",
-                    )?;
-                    run_timed_git_restore_phase(
-                        repository_id,
-                        "fsck",
-                        Some(&repo_path),
-                        &["fsck", "--connectivity-only", &head.head_oid],
-                        "verifying repaired repository Git cache",
-                    )?;
-                    self.cache.note_applied(&repo_path, head.push_sequence)
                 }
                 // Replicas are monotonic. A reader with an older database
                 // frontier may safely use the newer local object set.
@@ -192,7 +173,14 @@ impl RepositoryEngine {
                         let _ = fs::remove_dir_all(&temp_path);
                         return Err(error);
                     }
-                    self.cache.note_applied(&temp_path, head.push_sequence)?;
+                    self.cache
+                        .note_applied(incarnation, &temp_path, head.push_sequence)?;
+                    if repo_path.exists()
+                        && let Err(error) = fs::remove_dir_all(&repo_path)
+                    {
+                        let _ = fs::remove_dir_all(&temp_path);
+                        return Err(ApiError::internal(error));
+                    }
                     match fs::rename(&temp_path, &repo_path) {
                         Ok(()) => Ok(()),
                         Err(error) if is_ready() => {
@@ -219,7 +207,7 @@ impl RepositoryEngine {
             elapsed_us = started_at.elapsed().as_micros(),
             requested_sequence = head.push_sequence,
             applied_sequence_before = applied_before,
-            applied_sequence_after = self.cache.applied_sequence(&repo_path),
+            applied_sequence_after = self.cache.applied_sequence(incarnation, &repo_path),
             pack_span_count = pack_spans.len(),
             total_pack_bytes = pack_spans
                 .iter()
@@ -234,7 +222,7 @@ impl RepositoryEngine {
 
     pub(crate) fn sync_after_push(
         &self,
-        repository_id: &str,
+        incarnation: &RepositoryIncarnation,
         local_pack: &Path,
         expected_head: &str,
         push_sequence: u64,
@@ -242,18 +230,19 @@ impl RepositoryEngine {
         // Post-commit synchronization mutates the same disposable replica as
         // readers. Keep it leased so the periodic cache reaper cannot remove it
         // while Git is replacing refs or pack files.
-        let repo = self.cache.lease(repository_id)?;
+        let repository_id = incarnation.repository_id();
+        let repo = self.cache.lease(incarnation)?;
         let target = repo.as_ref().to_path_buf();
         let is_ready = || {
             self.cache
-                .applied_sequence(&target)
+                .applied_sequence(incarnation, &target)
                 .is_some_and(|applied| applied >= push_sequence)
                 && target.is_dir()
         };
         let started_at = Instant::now();
         let cache_hit = is_ready();
         let built = AtomicBool::new(false);
-        let result = self.coordinate_repository(repository_id, is_ready, || {
+        let result = self.coordinate_repository(incarnation, is_ready, || {
             built.store(true, Ordering::Relaxed);
             if target.is_dir() {
                 index_local_pack(&target, local_pack)?;
@@ -300,7 +289,7 @@ impl RepositoryEngine {
                         "seeding repository Git cache head",
                     )?;
                     sanitize_repository_git_cache_repo(&temp, expected_head)?;
-                    self.cache.note_applied(&temp, push_sequence)?;
+                    self.cache.note_applied(incarnation, &temp, push_sequence)?;
                     fs::rename(&temp, &target).map_err(ApiError::internal)
                 })();
                 if build.is_err() {
@@ -309,14 +298,14 @@ impl RepositoryEngine {
                 return build;
             }
             sanitize_repository_git_cache_repo(&target, expected_head)?;
-            self.cache.note_applied(&target, push_sequence)
+            self.cache.note_applied(incarnation, &target, push_sequence)
         });
         tracing::info!(
             repository_id,
             cache_outcome = materialization_outcome(cache_hit, built.load(Ordering::Relaxed)),
             elapsed_us = started_at.elapsed().as_micros(),
             requested_sequence = push_sequence,
-            applied_sequence = self.cache.applied_sequence(&target),
+            applied_sequence = self.cache.applied_sequence(incarnation, &target),
             success = result.is_ok(),
             "repository Git replica post-push synchronization completed"
         );
@@ -338,13 +327,18 @@ impl RepositoryEngine {
 
     fn coordinate_repository(
         &self,
-        repository_id: &str,
+        incarnation: &RepositoryIncarnation,
         is_ready: impl Fn() -> bool,
         operation: impl FnOnce() -> Result<(), ApiError>,
     ) -> Result<(), ApiError> {
         self.materializations.materialize(
             GitDerivedCacheNamespace::Repository,
-            repository_id.to_string(),
+            format!(
+                "{}:{}{}",
+                incarnation.repository_id().len(),
+                incarnation.repository_id(),
+                incarnation.incarnation_id()
+            ),
             is_ready,
             operation,
         )
@@ -456,7 +450,6 @@ fn materialization_path_name(path: u8, cache_hit: bool, built: bool) -> &'static
     }
     match path {
         MATERIALIZATION_PATH_CATCH_UP => "catch_up",
-        MATERIALIZATION_PATH_REPAIR => "repair",
         MATERIALIZATION_PATH_RESTORE => "restore",
         _ => "hit",
     }
@@ -487,6 +480,11 @@ mod tests {
         RepositoryEngine::new(root, 1024 * 1024 * 1024).unwrap()
     }
 
+    fn incarnation(repository_id: &str) -> RepositoryIncarnation {
+        RepositoryIncarnation::new(repository_id, format!("repoi_{repository_id}"))
+            .expect("test repository identity is valid")
+    }
+
     #[test]
     fn materialization_path_distinguishes_hits_waits_and_builds() {
         assert_eq!(
@@ -500,10 +498,6 @@ mod tests {
         assert_eq!(
             materialization_path_name(MATERIALIZATION_PATH_CATCH_UP, false, true),
             "catch_up"
-        );
-        assert_eq!(
-            materialization_path_name(MATERIALIZATION_PATH_REPAIR, false, true),
-            "repair"
         );
         assert_eq!(
             materialization_path_name(MATERIALIZATION_PATH_RESTORE, false, true),
@@ -521,15 +515,17 @@ mod tests {
         let second_ready = Arc::new(AtomicBool::new(false));
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
+        let repo = incarnation("owner/repo");
 
         let first = {
             let engine = engine.clone();
             let active = active.clone();
             let max_active = max_active.clone();
             let first_ready = first_ready.clone();
+            let repo = repo.clone();
             thread::spawn(move || {
                 engine.coordinate_repository(
-                    "owner/repo",
+                    &repo,
                     || first_ready.load(Ordering::SeqCst),
                     || {
                         let now = active.fetch_add(1, Ordering::SeqCst) + 1;
@@ -549,9 +545,10 @@ mod tests {
             let active = active.clone();
             let max_active = max_active.clone();
             let second_ready = second_ready.clone();
+            let repo = repo.clone();
             thread::spawn(move || {
                 engine.coordinate_repository(
-                    "owner/repo",
+                    &repo,
                     || second_ready.load(Ordering::SeqCst),
                     || {
                         let now = active.fetch_add(1, Ordering::SeqCst) + 1;
@@ -578,11 +575,13 @@ mod tests {
         let root = engine.cache_root().to_path_buf();
         let (first_started_tx, first_started_rx) = mpsc::channel();
         let (release_first_tx, release_first_rx) = mpsc::channel();
+        let first_repo = incarnation("owner/one");
         let first = {
             let engine = engine.clone();
+            let first_repo = first_repo.clone();
             thread::spawn(move || {
                 engine.coordinate_repository(
-                    "owner/one",
+                    &first_repo,
                     || false,
                     || {
                         first_started_tx.send(()).unwrap();
@@ -597,9 +596,10 @@ mod tests {
         let (second_done_tx, second_done_rx) = mpsc::channel();
         let second = {
             let engine = engine.clone();
+            let second_repo = incarnation("owner/two");
             thread::spawn(move || {
                 engine.coordinate_repository(
-                    "owner/two",
+                    &second_repo,
                     || false,
                     || {
                         second_done_tx.send(()).unwrap();
@@ -710,13 +710,14 @@ mod tests {
         let engine = test_engine("repository-engine-missing-incremental-base");
         let root = engine.cache_root().to_path_buf();
         let fixture = incremental_push_fixture(&engine);
+        let repo = incarnation("owner/repo");
         let error = engine
-            .sync_after_push("owner/repo", &fixture.second_pack, &fixture.second_head, 2)
+            .sync_after_push(&repo, &fixture.second_pack, &fixture.second_head, 2)
             .unwrap_err();
 
-        let replica = engine.repository_path("owner/repo");
+        let replica = engine.repository_path(&repo);
         assert!(!replica.exists());
-        assert_eq!(engine.cache.applied_sequence(&replica), None);
+        assert_eq!(engine.cache.applied_sequence(&repo, &replica), None);
         assert!(
             error
                 .operator_diagnostic()
@@ -730,20 +731,51 @@ mod tests {
         let engine = test_engine("repository-engine-monotonic-sync");
         let root = engine.cache_root().to_path_buf();
         let fixture = incremental_push_fixture(&engine);
+        let repo = incarnation("owner/repo");
 
         engine
-            .sync_after_push("owner/repo", &fixture.first_pack, &fixture.first_head, 1)
+            .sync_after_push(&repo, &fixture.first_pack, &fixture.first_head, 1)
             .unwrap();
         engine
-            .sync_after_push("owner/repo", &fixture.second_pack, &fixture.second_head, 2)
+            .sync_after_push(&repo, &fixture.second_pack, &fixture.second_head, 2)
             .unwrap();
         engine
-            .sync_after_push("owner/repo", &fixture.first_pack, &fixture.first_head, 1)
+            .sync_after_push(&repo, &fixture.first_pack, &fixture.first_head, 1)
             .unwrap();
 
-        let replica = engine.repository_path("owner/repo");
+        let replica = engine.repository_path(&repo);
         assert_eq!(git_head(&replica), fixture.second_head);
-        assert_eq!(engine.cache.applied_sequence(&replica), Some(2));
+        assert_eq!(engine.cache.applied_sequence(&repo, &replica), Some(2));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn separate_engines_do_not_reuse_a_predecessor_incarnation_cache() {
+        let predecessor_engine = test_engine("repository-engine-recreated-multi-engine");
+        let root = predecessor_engine.cache_root().to_path_buf();
+        let recreated_engine = RepositoryEngine::new(root.clone(), 1024 * 1024 * 1024).unwrap();
+        let fixture = incremental_push_fixture(&predecessor_engine);
+        let predecessor = RepositoryIncarnation::new("owner/repo", "repoi_predecessor").unwrap();
+        let recreated = RepositoryIncarnation::new("owner/repo", "repoi_recreated").unwrap();
+
+        predecessor_engine
+            .sync_after_push(&predecessor, &fixture.first_pack, &fixture.first_head, 1)
+            .unwrap();
+        recreated_engine
+            .sync_after_push(&recreated, &fixture.first_pack, &fixture.first_head, 1)
+            .unwrap();
+
+        let predecessor_path = predecessor_engine.repository_path(&predecessor);
+        let recreated_path = recreated_engine.repository_path(&recreated);
+        assert_ne!(predecessor_path, recreated_path);
+        assert!(predecessor_path.exists());
+        assert!(recreated_path.exists());
+        assert_eq!(
+            recreated_engine
+                .cache
+                .applied_sequence(&recreated, &recreated_path),
+            Some(1)
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

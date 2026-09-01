@@ -118,11 +118,7 @@ pub(crate) async fn drain_pending_repo_storage_deletions_report(
                 }
                 Ok::<_, ApiError>((
                     false,
-                    crate::git::storage::delete_repo_storage(
-                        &state,
-                        &cleanup.owner_handle,
-                        &cleanup.repo_name,
-                    ),
+                    crate::git::storage::delete_repo_storage(&state, cleanup),
                 ))
             })
             .await?;

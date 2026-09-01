@@ -670,7 +670,8 @@ mod tests {
             email: "cache-service@example.com".to_string(),
             email_verified: true,
         };
-        let mut repository = Repository::new(&owner, "e2e", Visibility::Private).unwrap();
+        let mut repository =
+            Repository::new(&owner, "e2e", Visibility::Private, "repoi_test").unwrap();
         repository.record.lifecycle_state = RepoLifecycleState::Ready;
         let repository_id = repository.record.id.clone();
         let mut catalog = CatalogFixture::default();

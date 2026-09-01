@@ -4,54 +4,29 @@ use crate::{
     git::import::{run_git, run_git_output},
     persistence::ensure_private_dir,
 };
+use scope_domain::repository::RepositoryIncarnation;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
     ops::Deref,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, SystemTime},
 };
 
+mod coordinator;
+pub(crate) use coordinator::{GitDerivedCacheCoordinator, GitDerivedCacheNamespace};
+
 const STALE_MATERIALIZATION_MAX_IDLE: Duration = Duration::from_secs(30 * 60);
 const REPOSITORY_GIT_CACHE_TOUCH_INTERVAL: Duration = Duration::from_secs(60);
-const APPLIED_SEQUENCE_FILE: &str = "scope-cache-applied-sequence";
+const APPLIED_FRONTIER_FILE: &str = "scope-cache-applied-frontier";
 const LAST_USED_FILE: &str = "scope-cache-last-used";
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum GitDerivedCacheNamespace {
-    Projection,
-    Repository,
-    RequestReadView,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct GitDerivedCacheKey {
-    namespace: GitDerivedCacheNamespace,
-    value: String,
-}
-
-type CacheBuildOutcome = Result<(), ApiError>;
-
-#[derive(Default)]
-struct CacheBuildState {
-    outcome: Mutex<Option<CacheBuildOutcome>>,
-    completed: Condvar,
-    #[cfg(test)]
-    followers: std::sync::atomic::AtomicUsize,
-}
-
-#[derive(Default)]
-pub(crate) struct GitDerivedCacheCoordinator {
-    builds: Mutex<BTreeMap<GitDerivedCacheKey, Arc<CacheBuildState>>>,
-}
 
 pub(crate) struct RepositoryGitCache {
     root: PathBuf,
     max_bytes: usize,
-    users: Mutex<BTreeMap<PathBuf, usize>>,
 }
 
 pub(crate) struct GitRepoHandle {
@@ -59,117 +34,20 @@ pub(crate) struct GitRepoHandle {
     _lease: RepositoryGitCacheLease,
 }
 
-impl GitDerivedCacheCoordinator {
-    pub(crate) fn materialize(
-        &self,
-        namespace: GitDerivedCacheNamespace,
-        value: String,
-        is_ready: impl Fn() -> bool,
-        build: impl FnOnce() -> Result<(), ApiError>,
-    ) -> Result<(), ApiError> {
-        let key = GitDerivedCacheKey { namespace, value };
-        let mut build = Some(build);
-        loop {
-            if is_ready() {
-                return Ok(());
-            }
-
-            let (state, is_leader) = {
-                let mut builds = self.builds.lock().map_err(|_| {
-                    ApiError::internal_message("Git cache build coordinator is poisoned")
-                })?;
-                match builds.get(&key) {
-                    Some(state) => (state.clone(), false),
-                    None => {
-                        let state = Arc::new(CacheBuildState::default());
-                        builds.insert(key.clone(), state.clone());
-                        (state, true)
-                    }
-                }
-            };
-
-            if !is_leader {
-                #[cfg(test)]
-                state
-                    .followers
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                wait_for_cache_build(&state)?;
-                continue;
-            }
-
-            // Leader election and the build are separate. Another process may have
-            // finished the requested materialization between those operations.
-            let build = build
-                .take()
-                .expect("a cache request can become leader only once");
-            let built = catch_unwind(AssertUnwindSafe(
-                || {
-                    if is_ready() { Ok(()) } else { build() }
-                },
-            ));
-            let outcome = match &built {
-                Ok(result) => result.clone(),
-                Err(_) => Err(ApiError::internal_message("Git cache build panicked")),
-            };
-
-            {
-                let mut completed = state
-                    .outcome
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                *completed = Some(outcome.clone());
-                state.completed.notify_all();
-            }
-            if let Ok(mut builds) = self.builds.lock()
-                && builds
-                    .get(&key)
-                    .is_some_and(|current| Arc::ptr_eq(current, &state))
-            {
-                builds.remove(&key);
-            }
-
-            return match built {
-                Ok(result) => result,
-                Err(payload) => resume_unwind(payload),
-            };
-        }
-    }
-
-    #[cfg(test)]
-    fn follower_count(&self, namespace: GitDerivedCacheNamespace, value: &str) -> usize {
-        let key = GitDerivedCacheKey {
-            namespace,
-            value: value.to_string(),
-        };
-        self.builds
-            .lock()
-            .unwrap()
-            .get(&key)
-            .map(|state| state.followers.load(std::sync::atomic::Ordering::SeqCst))
-            .unwrap_or_default()
-    }
-}
-
-fn wait_for_cache_build(state: &CacheBuildState) -> Result<(), ApiError> {
-    let mut outcome = state
-        .outcome
-        .lock()
-        .map_err(|_| ApiError::internal_message("Git cache build state is poisoned"))?;
-    while outcome.is_none() {
-        outcome = state
-            .completed
-            .wait(outcome)
-            .map_err(|_| ApiError::internal_message("Git cache build state is poisoned"))?;
-    }
-    outcome
-        .as_ref()
-        .expect("cache build outcome checked")
-        .clone()
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct AppliedRepositoryFrontier {
+    version: u8,
+    incarnation: RepositoryIncarnation,
+    push_sequence: u64,
 }
 
 struct RepositoryGitCacheLease {
-    registry: Arc<RepositoryGitCache>,
     path: PathBuf,
+}
+
+fn cache_users() -> &'static Mutex<BTreeMap<PathBuf, usize>> {
+    static USERS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
+    USERS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
 impl RepositoryGitCache {
@@ -180,11 +58,7 @@ impl RepositoryGitCache {
             ));
         }
         ensure_private_dir(&root)?;
-        let registry = Arc::new(Self {
-            root,
-            max_bytes,
-            users: Mutex::new(BTreeMap::new()),
-        });
+        let registry = Arc::new(Self { root, max_bytes });
         registry.prune()?;
         Ok(registry)
     }
@@ -193,15 +67,18 @@ impl RepositoryGitCache {
         &self.root
     }
 
-    pub(crate) fn path_for(&self, repository_id: &str) -> PathBuf {
+    pub(crate) fn path_for(&self, incarnation: &RepositoryIncarnation) -> PathBuf {
         self.root.join(format!(
             "repo-{}.git",
-            repository_git_cache_key(repository_id)
+            repository_git_cache_key(incarnation)
         ))
     }
 
-    pub(crate) fn lease(self: &Arc<Self>, repository_id: &str) -> Result<GitRepoHandle, ApiError> {
-        self.lease_path(self.path_for(repository_id))
+    pub(crate) fn lease(
+        self: &Arc<Self>,
+        incarnation: &RepositoryIncarnation,
+    ) -> Result<GitRepoHandle, ApiError> {
+        self.lease_path(self.path_for(incarnation))
     }
 
     pub(crate) fn lease_derived(
@@ -223,7 +100,7 @@ impl RepositoryGitCache {
 
     fn lease_path(self: &Arc<Self>, path: PathBuf) -> Result<GitRepoHandle, ApiError> {
         {
-            let mut users = self.users.lock().map_err(|_| {
+            let mut users = cache_users().lock().map_err(|_| {
                 ApiError::internal_message("repository Git cache registry is poisoned")
             })?;
             touch_if_materialized(&path)?;
@@ -231,28 +108,52 @@ impl RepositoryGitCache {
         }
         Ok(GitRepoHandle {
             path: path.clone(),
-            _lease: RepositoryGitCacheLease {
-                registry: self.clone(),
-                path,
-            },
+            _lease: RepositoryGitCacheLease { path },
         })
     }
 
-    pub(crate) fn note_applied(&self, path: &Path, push_sequence: u64) -> Result<(), ApiError> {
-        fs::write(path.join(APPLIED_SEQUENCE_FILE), push_sequence.to_string())
-            .map_err(ApiError::internal)?;
+    pub(crate) fn note_applied(
+        &self,
+        incarnation: &RepositoryIncarnation,
+        path: &Path,
+        push_sequence: u64,
+    ) -> Result<(), ApiError> {
+        let frontier = AppliedRepositoryFrontier {
+            version: 1,
+            incarnation: incarnation.clone(),
+            push_sequence,
+        };
+        let bytes = serde_json::to_vec(&frontier).map_err(ApiError::internal)?;
+        fs::write(path.join(APPLIED_FRONTIER_FILE), bytes).map_err(ApiError::internal)?;
         touch_if_materialized(path)
     }
 
-    pub(crate) fn applied_sequence(&self, path: &Path) -> Option<u64> {
-        fs::read_to_string(path.join(APPLIED_SEQUENCE_FILE))
+    pub(crate) fn applied_sequence(
+        &self,
+        incarnation: &RepositoryIncarnation,
+        path: &Path,
+    ) -> Option<u64> {
+        fs::read(path.join(APPLIED_FRONTIER_FILE))
             .ok()
-            .and_then(|value| value.parse().ok())
+            .and_then(|bytes| serde_json::from_slice::<AppliedRepositoryFrontier>(&bytes).ok())
+            .filter(|frontier| frontier.version == 1 && &frontier.incarnation == incarnation)
+            .map(|frontier| frontier.push_sequence)
+    }
+
+    pub(crate) fn remove(&self, incarnation: &RepositoryIncarnation) -> Result<bool, ApiError> {
+        let path = self.path_for(incarnation);
+        let users = cache_users()
+            .lock()
+            .map_err(|_| ApiError::internal_message("repository Git cache registry is poisoned"))?;
+        if users.get(&path).copied().unwrap_or_default() > 0 {
+            return Ok(false);
+        }
+        remove_dir_if_exists(&path)?;
+        Ok(true)
     }
 
     pub(crate) fn prune(&self) -> Result<(), ApiError> {
-        let users = self
-            .users
+        let users = cache_users()
             .lock()
             .map_err(|_| ApiError::internal_message("repository Git cache registry is poisoned"))?;
         let mut caches = repository_cache_directories(&self.root)?;
@@ -389,7 +290,7 @@ impl AsRef<Path> for GitRepoHandle {
 
 impl Drop for RepositoryGitCacheLease {
     fn drop(&mut self) {
-        if let Ok(mut users) = self.registry.users.lock() {
+        if let Ok(mut users) = cache_users().lock() {
             match users.get_mut(&self.path) {
                 Some(count) if *count > 1 => *count -= 1,
                 Some(_) => {
@@ -408,8 +309,16 @@ impl Drop for RepositoryGitCacheLease {
     }
 }
 
-fn repository_git_cache_key(repository_id: &str) -> String {
-    let digest = Sha256::digest(repository_id.as_bytes());
+fn repository_git_cache_key(incarnation: &RepositoryIncarnation) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        incarnation.repository_id().as_bytes(),
+        incarnation.incarnation_id().as_bytes(),
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value);
+    }
+    let digest = hasher.finalize();
     hex::encode(&digest[..16])
 }
 
@@ -520,15 +429,22 @@ mod tests {
         ))
     }
 
+    fn incarnation(repository_id: &str) -> RepositoryIncarnation {
+        RepositoryIncarnation::new(repository_id, format!("repoi_{repository_id}"))
+            .expect("test repository identity is valid")
+    }
+
     #[test]
     fn active_repository_is_not_evicted_when_the_cache_exceeds_its_byte_budget() {
         let root = temp_cache_root("git-cache-active");
         let registry = RepositoryGitCache::new(root.clone(), 50).unwrap();
-        let active_path = registry.path_for("owner/active");
+        let active = incarnation("owner/active");
+        let active_path = registry.path_for(&active);
         fs::create_dir_all(&active_path).unwrap();
         fs::write(active_path.join("pack"), [0_u8; 40]).unwrap();
-        let lease = registry.lease("owner/active").unwrap();
-        let inactive_path = registry.path_for("owner/inactive");
+        let lease = registry.lease(&active).unwrap();
+        let inactive = incarnation("owner/inactive");
+        let inactive_path = registry.path_for(&inactive);
         fs::create_dir_all(&inactive_path).unwrap();
         fs::write(inactive_path.join("pack"), [0_u8; 40]).unwrap();
 
@@ -543,11 +459,12 @@ mod tests {
     #[test]
     fn idle_repository_is_retained_while_the_cache_fits_its_byte_budget() {
         let root = temp_cache_root("git-cache-idle-retention");
-        let registry = RepositoryGitCache::new(root.clone(), 100).unwrap();
-        let repo_path = registry.path_for("owner/idle");
+        let registry = RepositoryGitCache::new(root.clone(), 1_000).unwrap();
+        let repo = incarnation("owner/idle");
+        let repo_path = registry.path_for(&repo);
         fs::create_dir_all(&repo_path).unwrap();
         fs::write(repo_path.join("pack"), [0_u8; 40]).unwrap();
-        registry.note_applied(&repo_path, 1).unwrap();
+        registry.note_applied(&repo, &repo_path, 1).unwrap();
         fs::File::options()
             .write(true)
             .open(repo_path.join(LAST_USED_FILE))
@@ -558,6 +475,58 @@ mod tests {
         registry.prune().unwrap();
 
         assert!(repo_path.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exact_repository_removal_waits_for_active_lease() {
+        let root = temp_cache_root("git-cache-lease-safe-delete");
+        let registry = RepositoryGitCache::new(root.clone(), 100).unwrap();
+        let repo = incarnation("owner/recreated");
+        let path = registry.path_for(&repo);
+        fs::create_dir_all(&path).unwrap();
+        let lease = registry.lease(&repo).unwrap();
+
+        assert!(!registry.remove(&repo).unwrap());
+        assert!(path.exists());
+        drop(lease);
+        assert!(registry.remove(&repo).unwrap());
+        assert!(!path.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn exact_repository_removal_waits_for_lease_from_another_registry() {
+        let root = temp_cache_root("git-cache-cross-registry-lease-safe-delete");
+        let leasing_registry = RepositoryGitCache::new(root.clone(), 100).unwrap();
+        let deleting_registry = RepositoryGitCache::new(root.clone(), 100).unwrap();
+        let repo = incarnation("owner/shared-root");
+        let path = leasing_registry.path_for(&repo);
+        fs::create_dir_all(&path).unwrap();
+        let lease = leasing_registry.lease(&repo).unwrap();
+
+        assert!(!deleting_registry.remove(&repo).unwrap());
+        assert!(path.exists());
+        drop(lease);
+        assert!(deleting_registry.remove(&repo).unwrap());
+        assert!(!path.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn applied_frontier_requires_the_exact_repository_incarnation() {
+        let root = temp_cache_root("git-cache-incarnation-marker");
+        let registry = RepositoryGitCache::new(root.clone(), 100).unwrap();
+        let predecessor = RepositoryIncarnation::new("owner/repo", "repoi_predecessor").unwrap();
+        let recreated = RepositoryIncarnation::new("owner/repo", "repoi_recreated").unwrap();
+        let recreated_path = registry.path_for(&recreated);
+        fs::create_dir_all(&recreated_path).unwrap();
+        registry
+            .note_applied(&predecessor, &recreated_path, 41)
+            .unwrap();
+
+        assert_eq!(registry.applied_sequence(&recreated, &recreated_path), None);
+        assert_ne!(registry.path_for(&predecessor), recreated_path);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -582,7 +551,8 @@ mod tests {
         fs::create_dir_all(&derived_path).unwrap();
         fs::write(derived_path.join("pack"), [0_u8; 40]).unwrap();
         let lease = registry.lease_derived(derived_path.clone()).unwrap();
-        let inactive_path = registry.path_for("owner/inactive");
+        let inactive = incarnation("owner/inactive");
+        let inactive_path = registry.path_for(&inactive);
         fs::create_dir_all(&inactive_path).unwrap();
         fs::write(inactive_path.join("pack"), [0_u8; 40]).unwrap();
 
@@ -597,17 +567,19 @@ mod tests {
     #[test]
     fn least_recently_used_repository_is_evicted_when_cache_exceeds_byte_budget() {
         let root = temp_cache_root("git-cache-lru");
-        let registry = RepositoryGitCache::new(root.clone(), 50).unwrap();
-        let old_path = registry.path_for("owner/old");
+        let registry = RepositoryGitCache::new(root.clone(), 250).unwrap();
+        let old = incarnation("owner/old");
+        let old_path = registry.path_for(&old);
         fs::create_dir_all(&old_path).unwrap();
         fs::write(old_path.join("pack"), [0_u8; 40]).unwrap();
-        registry.note_applied(&old_path, 1).unwrap();
+        registry.note_applied(&old, &old_path, 1).unwrap();
         thread::sleep(Duration::from_millis(10));
 
-        let new_path = registry.path_for("owner/new");
+        let new = incarnation("owner/new");
+        let new_path = registry.path_for(&new);
         fs::create_dir_all(&new_path).unwrap();
         fs::write(new_path.join("pack"), [0_u8; 40]).unwrap();
-        registry.note_applied(&new_path, 1).unwrap();
+        registry.note_applied(&new, &new_path, 1).unwrap();
 
         assert!(old_path.exists());
         assert!(new_path.exists());

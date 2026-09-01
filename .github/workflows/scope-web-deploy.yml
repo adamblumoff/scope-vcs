@@ -35,11 +35,13 @@ jobs:
           rm -rf .railway-upload
           mkdir -p .railway-upload/web
           cp -a web/. .railway-upload/web/
+          cp web/railway.json .railway-upload/railway.json
           printf '%s\n' "$GITHUB_SHA" > .railway-upload/web/.scope-deployment-sha
           if [[ "$VERIFIED_SUCCESSFUL_SHA" != "$GITHUB_SHA" ]]; then
             printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-upload/web/.scope-deployment-attempt
           fi
           test -s .railway-upload/web/package.json
+          test -s .railway-upload/railway.json
           test ! -e .railway-upload/package.json
 
       - name: Install Railway CLI

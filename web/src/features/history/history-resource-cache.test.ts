@@ -20,6 +20,7 @@ function commit(projectedId: string): CommitDetail {
     audience: 'public',
     author: null,
     change_count: 0,
+    files_truncated: false,
     files: [],
     logical_commit_id: projectedId,
     message: projectedId,
@@ -33,11 +34,10 @@ function commit(projectedId: string): CommitDetail {
 function diff(path: string, text = 'content'): ReviewFileDiff {
   return {
     kind: 'Modified',
-    new_content: { kind: 'text', text },
     new_mode: '100644',
-    old_content: { kind: 'text', text: '' },
     old_mode: '100644',
     path,
+    presentation: { html: text, kind: 'html' },
   }
 }
 

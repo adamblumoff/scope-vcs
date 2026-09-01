@@ -10,6 +10,7 @@ const SCOPE_OBJECT_STORE_MAX_BYTES_ENV: &str = "SCOPE_OBJECT_STORE_MAX_BYTES";
 const SCOPE_GIT_SEGMENT_CHUNK_BYTES_ENV: &str = "SCOPE_GIT_SEGMENT_CHUNK_BYTES";
 const SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES_ENV: &str = "SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES";
 const SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY_ENV: &str = "SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY";
+const SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN_ENV: &str = "SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN";
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -73,6 +74,7 @@ pub(crate) struct CloudExecutionSettings {
     pub(crate) ecs_execution_role_arn: String,
     pub(crate) ecs_log_group: String,
     pub(crate) ecs_secret_name_key: [u8; 32],
+    pub(crate) registry_credentials_secret_arn: Option<String>,
     pub(crate) runtime_version: String,
     pub(crate) max_concurrency: usize,
 }
@@ -195,19 +197,50 @@ fn cloud_execution_from_env() -> anyhow::Result<Option<CloudExecutionSettings>> 
             "SCOPE_CLOUD_RUNS_MAX_CONCURRENCY must be between 1 and {MAX_CLOUD_RUN_CONCURRENCY}"
         );
     }
+    let aws_region = required_env("AWS_REGION")?;
+    let registry_credentials_secret_arn = parse_registry_credentials_secret_arn(
+        non_empty_env(SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN_ENV).as_deref(),
+        &aws_region,
+    )?;
     Ok(Some(CloudExecutionSettings {
         api_url,
-        aws_region: required_env("AWS_REGION")?,
+        aws_region,
         ecs_cluster_arn: required_env("SCOPE_ECS_CLUSTER_ARN")?,
         ecs_subnet_ids: comma_separated_env("SCOPE_ECS_SUBNET_IDS")?,
         ecs_security_group_id: required_env("SCOPE_ECS_SECURITY_GROUP_ID")?,
         ecs_execution_role_arn: required_env("SCOPE_ECS_EXECUTION_ROLE_ARN")?,
         ecs_log_group: required_env("SCOPE_ECS_LOG_GROUP")?,
         ecs_secret_name_key: secret_name_key_from_env()?,
+        registry_credentials_secret_arn,
         runtime_version: non_empty_env("SCOPE_RUNTIME_VERSION")
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
         max_concurrency,
     }))
+}
+
+fn parse_registry_credentials_secret_arn(
+    value: Option<&str>,
+    aws_region: &str,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let fields = value.splitn(7, ':').collect::<Vec<_>>();
+    if fields.len() != 7
+        || fields[0] != "arn"
+        || !matches!(fields[1], "aws" | "aws-us-gov" | "aws-cn")
+        || fields[2] != "secretsmanager"
+        || fields[3] != aws_region
+        || fields[4].len() != 12
+        || !fields[4].bytes().all(|byte| byte.is_ascii_digit())
+        || fields[5] != "secret"
+        || fields[6].is_empty()
+    {
+        anyhow::bail!(
+            "{SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN_ENV} must be a Secrets Manager ARN in AWS_REGION"
+        );
+    }
+    Ok(Some(value.to_string()))
 }
 
 fn secret_name_key_from_env() -> anyhow::Result<[u8; 32]> {
@@ -319,5 +352,28 @@ mod tests {
         assert_eq!(parse_secret_name_key(&"ab".repeat(32)).unwrap(), [0xab; 32]);
         assert!(parse_secret_name_key(&"ab".repeat(31)).is_err());
         assert!(parse_secret_name_key(&"xy".repeat(32)).is_err());
+    }
+
+    #[test]
+    fn registry_credentials_are_optional_and_region_bound() {
+        assert_eq!(
+            parse_registry_credentials_secret_arn(None, "us-east-1").unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_registry_credentials_secret_arn(Some("  "), "us-east-1").unwrap(),
+            None
+        );
+
+        let arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:scope-registry-AbCdEf";
+        assert_eq!(
+            parse_registry_credentials_secret_arn(Some(arn), "us-east-1").unwrap(),
+            Some(arn.to_string())
+        );
+        assert!(parse_registry_credentials_secret_arn(Some(arn), "us-west-2").is_err());
+        assert!(
+            parse_registry_credentials_secret_arn(Some("scope-registry-AbCdEf"), "us-east-1")
+                .is_err()
+        );
     }
 }

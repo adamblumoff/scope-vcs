@@ -28,6 +28,7 @@ import { compactDiscussionSummary } from './discussion-preview-text'
 import type { LoadDiscussionsInput } from './request-discussion-api'
 import {
   discussionsForRequestCommit,
+  missingRequestCommitFileError,
   orderedRequestCommits,
   requestCommitForListId,
   requestChangeSelection,
@@ -110,6 +111,7 @@ export function RequestChangesWorkbench({
   const commitContext = useMemo(
     () => model.selectedRevision ? (
       <RequestCommitContext
+        commit={model.selectedCommitSummary}
         discussions={references}
         discussionReferences={discussionReferences}
         hasEarlierRevisions={revisions.has_earlier_revisions}
@@ -117,7 +119,7 @@ export function RequestChangesWorkbench({
         revision={model.selectedRevision}
       />
     ) : undefined,
-    [discussionReferences, model.selectedRevision, params, references, revisions.has_earlier_revisions],
+    [discussionReferences, model.selectedCommitSummary, model.selectedRevision, params, references, revisions.has_earlier_revisions],
   )
   const emptyDescription = model.commitState.status === 'failed'
     ? model.commitState.error ?? 'Request changes are unavailable.'
@@ -335,7 +337,13 @@ function useRequestChangesModel({
       : { commit: null, error: null, status: 'idle' }
   const fileDiffState: CommitFileDiffState =
     selectedFilePath && selectedCommit && !selectedFile
-      ? { diff: null, error: 'This file is not part of the selected commit.', status: 'failed' }
+      ? {
+          diff: null,
+          error: selectedCommitSummary
+            ? missingRequestCommitFileError(selectedCommitSummary)
+            : 'This file is not part of the selected commit.',
+          status: 'failed',
+        }
       : resourceToDiffState(diffResource)
 
   function replaceSelection(
@@ -368,18 +376,21 @@ function useRequestChangesModel({
       replaceSelection(selectedRevision, selectedCommitOid, file.path),
     selectedCommitId,
     selectedCommitOid,
+    selectedCommitSummary,
     selectedFilePath,
     selectedRevision,
   }
 }
 
 function RequestCommitContext({
+  commit,
   discussionReferences,
   discussions,
   hasEarlierRevisions,
   params,
   revision,
 }: {
+  commit: RequestRevisions['revisions'][number]['commits'][number] | null
   discussionReferences: DiscussionReferenceState
   discussions: RequestDiscussion[]
   hasEarlierRevisions: boolean
@@ -408,6 +419,11 @@ function RequestCommitContext({
               : null,
             hasEarlierRevisions ? 'Earlier request revisions are omitted.' : null,
           ].filter(Boolean).join(' ')}
+        </p>
+      ) : null}
+      {commit?.files_truncated ? (
+        <p className="mt-2">
+          Showing {commit.files.length} of {commit.change_count} changed files because the file list is bounded.
         </p>
       ) : null}
       {discussions.length > 0 ? (
@@ -492,7 +508,8 @@ function commitDetail(
   return {
     audience,
     author: commit.author,
-    change_count: commit.files.length,
+    change_count: commit.change_count,
+    files_truncated: commit.files_truncated,
     files: commit.files.map((file) => ({
       ...file,
       path: `/${file.path.replace(/^\/+/, '')}`,

@@ -1,7 +1,7 @@
 use crate::{
     config::{DEFAULT_GIT_BRANCH, EMPTY_GIT_OID, RECEIVE_PACK_STAGING_BYTES},
     error::ApiError,
-    git::import::{run_git, safe_repo_key},
+    git::import::run_git,
     git::projection_repo::projection_bare_repo_for_state,
     git::upload::git_command_output_with_timeout,
     persistence::ensure_private_dir,
@@ -14,7 +14,7 @@ use futures_util::StreamExt;
 use scope_domain::policy::Principal;
 use scope_domain::{
     projection::{ProjectionViewKey, project_graph},
-    repository::RepoLifecycleState,
+    repository::{RepoLifecycleState, RepositoryIncarnation},
 };
 use sha2::{Digest, Sha256};
 use std::time::Instant;
@@ -30,8 +30,7 @@ use tokio::{
 
 pub(crate) fn receive_pack_staging_repo_path(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
 ) -> Result<PathBuf, ApiError> {
     let mut bytes = [0_u8; RECEIVE_PACK_STAGING_BYTES];
     getrandom::fill(&mut bytes).map_err(|error| {
@@ -40,42 +39,36 @@ pub(crate) fn receive_pack_staging_repo_path(
         ))
     })?;
     let base_dir = state.data_dir.as_ref().clone();
-    let repo_id = scope_domain::repository::repo_id(owner, repo_name);
-    let digest = Sha256::digest(repo_id.as_bytes());
-    let digest = hex::encode(digest);
+    let digest = repository_storage_key(incarnation);
     ensure_private_dir(&base_dir)?;
     Ok(base_dir
         .join("git-rx")
-        .join(format!("{}-{}.git", &digest[..16], hex::encode(bytes))))
+        .join(format!("{digest}-{}.git", hex::encode(bytes))))
 }
 
-pub(crate) fn receive_pack_staging_repo_prefix(owner: &str, repo_name: &str) -> String {
-    let repo_id = scope_domain::repository::repo_id(owner, repo_name);
-    let digest = Sha256::digest(repo_id.as_bytes());
-    let digest = hex::encode(digest);
-    digest[..16].to_string()
-}
-
-pub(crate) fn owner_git_repo_path(state: &AppState, owner: &str, repo_name: &str) -> PathBuf {
-    git_repo_storage_root(state)
-        .join("git-repos")
-        .join(format!("{}.git", safe_repo_key(owner, repo_name)))
-}
-
-pub(crate) fn staged_git_repo_path(state: &AppState, owner: &str, repo_name: &str) -> PathBuf {
-    git_repo_storage_root(state)
-        .join("git-staged")
-        .join(format!("{}.git", safe_repo_key(owner, repo_name)))
+pub(crate) fn receive_pack_staging_repo_prefix(incarnation: &RepositoryIncarnation) -> String {
+    repository_storage_key(incarnation)
 }
 
 pub(crate) fn request_ref_store_repo_path(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
 ) -> PathBuf {
     git_repo_storage_root(state)
         .join("git-request-refs")
-        .join(format!("{}.git", safe_repo_key(owner, repo_name)))
+        .join(format!("{}.git", repository_storage_key(incarnation)))
+}
+
+pub(crate) fn repository_storage_key(incarnation: &RepositoryIncarnation) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        incarnation.repository_id().as_bytes(),
+        incarnation.incarnation_id().as_bytes(),
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value);
+    }
+    hex::encode(&hasher.finalize()[..16])
 }
 
 pub(crate) fn git_repo_storage_root(state: &AppState) -> PathBuf {
@@ -84,21 +77,20 @@ pub(crate) fn git_repo_storage_root(state: &AppState) -> PathBuf {
 
 pub(crate) fn delete_repo_storage(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    cleanup: &scope_domain::repo_actions::RepoStorageCleanup,
 ) -> Result<(), ApiError> {
-    remove_dir_if_exists(
-        &state
-            .repository_engine
-            .repository_path(&scope_domain::repository::repo_id(owner, repo_name)),
-    )?;
-    remove_dir_if_exists(&owner_git_repo_path(state, owner, repo_name))?;
-    remove_dir_if_exists(&staged_git_repo_path(state, owner, repo_name))?;
-    remove_dir_if_exists(&request_ref_store_repo_path(state, owner, repo_name))?;
-    delete_request_ref_locks(state, owner, repo_name)?;
+    if !state
+        .repository_engine
+        .delete_repository_cache(&cleanup.incarnation)?
+    {
+        return Err(ApiError::infrastructure_unavailable(
+            "repository Git cache is still in use",
+        ));
+    }
+    remove_dir_if_exists(&request_ref_store_repo_path(state, &cleanup.incarnation))?;
 
     let rx_root = git_repo_storage_root(state).join("git-rx");
-    let prefix = receive_pack_staging_repo_prefix(owner, repo_name);
+    let prefix = receive_pack_staging_repo_prefix(&cleanup.incarnation);
     let entries = match fs::read_dir(&rx_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -115,32 +107,6 @@ pub(crate) fn delete_repo_storage(
     Ok(())
 }
 
-fn delete_request_ref_locks(
-    state: &AppState,
-    owner: &str,
-    repo_name: &str,
-) -> Result<(), ApiError> {
-    let lock_root = git_repo_storage_root(state).join("git-request-refs-locks");
-    let entries = match fs::read_dir(&lock_root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(ApiError::internal(error)),
-    };
-    let prefix = format!("{}-", safe_repo_key(owner, repo_name));
-    for entry in entries {
-        let entry = entry.map_err(ApiError::internal)?;
-        let file_name = entry.file_name();
-        if file_name.to_string_lossy().starts_with(&prefix) {
-            match fs::remove_file(entry.path()) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(ApiError::internal(error)),
-            }
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn remove_dir_if_exists(path: &FsPath) -> Result<(), ApiError> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
@@ -151,10 +117,9 @@ pub(crate) fn remove_dir_if_exists(path: &FsPath) -> Result<(), ApiError> {
 
 pub(crate) fn ensure_first_push_receive_pack_staging_repo(
     state: &AppState,
-    owner: &str,
-    repo_name: &str,
+    incarnation: &RepositoryIncarnation,
 ) -> Result<PathBuf, ApiError> {
-    let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
+    let repo_root = receive_pack_staging_repo_path(state, incarnation)?;
     if let Some(parent) = repo_root.parent() {
         ensure_private_dir(parent)?;
     }
@@ -183,6 +148,7 @@ pub(crate) fn ensure_first_push_receive_pack_staging_repo(
 
 pub(crate) async fn ensure_ready_receive_pack_staging_repo(
     state: &AppState,
+    incarnation: &RepositoryIncarnation,
     owner: &str,
     repo_name: &str,
     author_id: &str,
@@ -196,14 +162,19 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
     if repo.lifecycle_state != RepoLifecycleState::Ready {
         return Err(ApiError::conflict("repo must be ready before push"));
     }
-    let repo_root = receive_pack_staging_repo_path(state, owner, repo_name)?;
+    if repo.incarnation != *incarnation {
+        return Err(ApiError::conflict(
+            "repository was recreated during push preparation",
+        ));
+    }
+    let repo_root = receive_pack_staging_repo_path(state, incarnation)?;
     if let Some(parent) = repo_root.parent() {
         ensure_private_dir(parent)?;
     }
     if let Some(head) = repo.git_head.as_ref() {
         let seed_repo = state.repository_engine.materialize_repository(
             state,
-            &repo.repo_id,
+            incarnation,
             head,
             &repo.git_pack_spans,
         )?;
@@ -224,7 +195,7 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
         let projection = project_graph(&repo.graph, &repo.visibility_change_sets, view_key);
         let seed_repo = projection_bare_repo_for_state(
             state,
-            &repo.graph.repo_id,
+            incarnation,
             &projection,
             repo.git_head.as_ref(),
             &repo.git_pack_spans,

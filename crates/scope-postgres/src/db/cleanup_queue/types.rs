@@ -34,4 +34,5 @@ pub enum SourceBlobCleanupDecision {
 pub struct RepoStorageCleanupClaim {
     pub(super) generation: String,
     pub(super) claim_until: i64,
+    pub(crate) cleanup: RepoStorageCleanup,
 }

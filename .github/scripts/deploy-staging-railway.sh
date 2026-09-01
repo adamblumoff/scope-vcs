@@ -125,6 +125,7 @@ case "$action" in
       echo "usage: deploy-staging-railway.sh prepare <cache-root> <worker-root> <api-root> <router-root>" >&2
       exit 2
     fi
+    : "${SCOPE_SMOKE_SEED_EXCHANGE_TOKEN_PATH:?SCOPE_SMOKE_SEED_EXCHANGE_TOKEN_PATH is required}"
     assert_writer_state 0
     # The remote shell expands the Railway-provided database URL.
     # shellcheck disable=SC2016
@@ -144,10 +145,12 @@ case "$action" in
     export SCOPE_PRODUCTION_ENVIRONMENT_ID="$production_environment_id"
     export SCOPE_SMOKE_SEED_USER_EMAIL="smoke@example.test"
     export SCOPE_SMOKE_SEED_USER_HANDLE="dev"
+    # `railway run` executes this runner-local binary with Railway variables, so the
+    # exchange file remains on the same runner that later invokes the candidate CLI.
     # Reset the catalog while every metadata writer is still fenced.
     # shellcheck disable=SC2016
     railway run "${railway_scope[@]}" --service "$api_service" --no-local -- \
-      sh -c 'DATABASE_URL="$SCOPE_STAGING_DATABASE_PUBLIC_URL" exec "$@"' \
+      sh -c 'DATABASE_URL="$SCOPE_STAGING_DATABASE_PUBLIC_URL" SCOPE_SMOKE_SEED_EXCHANGE_TOKEN_PATH="$SCOPE_SMOKE_SEED_EXCHANGE_TOKEN_PATH" exec "$@"' \
       scope-smoke-seed "$seed_binary"
     workflow_backfill_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/scope-workflow-catalog-backfill.XXXXXX")"
     SCOPE_STAGING_WORKFLOW_BACKFILL_DIR="$workflow_backfill_dir" \

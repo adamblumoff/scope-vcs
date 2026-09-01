@@ -146,14 +146,17 @@ pub(crate) async fn merge_request(
     state.product_analytics.capture(analytics_event);
     state
         .publish_repo_change(
-            &repo.record.id,
+            &repo.incarnation(),
             mutation.repo_change_version,
             RepoChangeReason::RequestMerged,
         )
         .await;
     let committed_repo = find_repo(state, &command.owner, &command.repo_name).await?;
     state
-        .publish_request_summary_refresh(&committed_repo.record.id, RepoChangeReason::RequestMerged)
+        .publish_request_summary_refresh(
+            &committed_repo.incarnation(),
+            RepoChangeReason::RequestMerged,
+        )
         .await;
     Ok(MergeRequestResult {
         repo: committed_repo,
@@ -246,11 +249,11 @@ pub(crate) async fn prepare_request_merge(
         .ok_or_else(|| ApiError::conflict("repo has no accepted Git head"))?;
     let base_repo = state.repository_engine.materialize_repository(
         state,
-        &repo.record.id,
+        &repo.incarnation(),
         current,
         &repo.git_pack_spans,
     )?;
-    let staging_repo = receive_pack_staging_repo_path(state, owner, repo_name)?;
+    let staging_repo = receive_pack_staging_repo_path(state, &repo.incarnation())?;
     if let Some(parent) = staging_repo.parent() {
         ensure_private_dir(parent)?;
     }

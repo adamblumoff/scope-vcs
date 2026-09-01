@@ -42,11 +42,17 @@ Parameters:
     Type: String
     Default: ""
     Description: Supply the account's token.actions.githubusercontent.com provider ARN, or leave empty for this stack to create it.
+  RegistryCredentialsSecretArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$"
+    Description: Optional Secrets Manager ARN containing private registry username and password JSON.
 
 Conditions:
   HasBudgetNotification: !Not [!Equals [!Ref BudgetNotificationEmail, ""]]
   CreateGitHubOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
   UseExistingGitHubOidcProvider: !Not [!Equals [!Ref ExistingGitHubOidcProviderArn, ""]]
+  HasRegistryCredentialsSecret: !Not [!Equals [!Ref RegistryCredentialsSecretArn, ""]]
 
 Resources:
   RunnerVpc:
@@ -392,6 +398,13 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:scope-vcs/${RunnerCluster}/attempts/*
+              - !If
+                - HasRegistryCredentialsSecret
+                - Sid: ReadPrivateRegistryCredentials
+                  Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref RegistryCredentialsSecretArn
+                - !Ref AWS::NoValue
               - Effect: Allow
                 Action: ecr:GetAuthorizationToken
                 Resource: "*"
@@ -434,6 +447,15 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          - Sid: DenySecretReads
+            Effect: Deny
+            Action:
+              - secretsmanager:BatchGetSecretValue
+              - secretsmanager:DescribeSecret
+              - secretsmanager:GetSecretValue
+              - secretsmanager:ListSecretVersionIds
+              - secretsmanager:ListSecrets
+            Resource: "*"
           - Sid: ListTaskDefinitions
             Effect: Allow
             Action: ecs:ListTaskDefinitions

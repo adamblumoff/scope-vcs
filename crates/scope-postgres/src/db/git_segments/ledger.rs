@@ -161,7 +161,7 @@ impl RepositoryStore {
         transition(
             self.db.as_ref(),
             segment_id,
-            "state IN ('uploading', 'ready', 'published') AND NOT EXISTS (
+            "state IN ('uploading', 'ready', 'published', 'retained') AND NOT EXISTS (
                 SELECT 1 FROM scope_git_segments spans
                 WHERE spans.segment_id = scope_git_segment_uploads.segment_id
             ) AND NOT EXISTS (

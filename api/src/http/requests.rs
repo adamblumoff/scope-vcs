@@ -222,7 +222,7 @@ async fn lifecycle_response(
     )
     .await?;
     state
-        .publish_request_summary_refresh(&repo.record.id, refresh_reason)
+        .publish_request_summary_refresh(&repo.incarnation(), refresh_reason)
         .await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -287,9 +287,12 @@ pub(crate) async fn close_request(
                     actor_role,
                     RequestCloseOutcome::DraftDeleted,
                 ));
-            delete_request_ref_from_store(&state, &owner, &repo_name, &request_ref)?;
+            delete_request_ref_from_store(&state, &repo.incarnation(), &request_ref)?;
             state
-                .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestDeleted)
+                .publish_request_summary_refresh(
+                    &repo.incarnation(),
+                    RepoChangeReason::RequestDeleted,
+                )
                 .await;
             Ok(Json(RequestCloseResponse {
                 deleted: true,
@@ -315,7 +318,10 @@ pub(crate) async fn close_request(
             )
             .await?;
             state
-                .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestClosed)
+                .publish_request_summary_refresh(
+                    &repo.incarnation(),
+                    RepoChangeReason::RequestClosed,
+                )
                 .await;
             Ok(Json(RequestCloseResponse {
                 deleted: false,
@@ -380,7 +386,7 @@ pub(crate) async fn start_request(
     )
     .await?;
     state
-        .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestStarted)
+        .publish_request_summary_refresh(&repo.incarnation(), RepoChangeReason::RequestStarted)
         .await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -417,7 +423,10 @@ pub(crate) async fn edit_request_identity(
     )
     .await?;
     state
-        .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestIdentityEdited)
+        .publish_request_summary_refresh(
+            &repo.incarnation(),
+            RepoChangeReason::RequestIdentityEdited,
+        )
         .await;
     Ok(Json(RequestMutationResponse { request }))
 }
@@ -508,7 +517,7 @@ pub(crate) async fn leave_request(
         created_at_unix: invitee.invitee.created_at_unix,
     };
     state
-        .publish_request_summary_refresh(&repo.record.id, RepoChangeReason::RequestInviteeLeft)
+        .publish_request_summary_refresh(&repo.incarnation(), RepoChangeReason::RequestInviteeLeft)
         .await;
     Ok(Json(LeaveRequestResponse { invitee }))
 }
@@ -546,7 +555,7 @@ async fn invitee_mutation_response(
         created_at_unix: invitee.invitee.created_at_unix,
     };
     state
-        .publish_request_summary_refresh(&repo.record.id, refresh_reason)
+        .publish_request_summary_refresh(&repo.incarnation(), refresh_reason)
         .await;
     Ok(Json(RequestInviteeMutationResponse { request, invitee }))
 }

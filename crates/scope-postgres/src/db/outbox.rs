@@ -628,6 +628,13 @@ mod tests {
         let target = super::super::TestDatabaseTarget::required().unwrap();
         let store = MetadataStore::connect_fresh_for_tests(&target).unwrap();
         seed_outbox_repo(&store).await;
+        let incarnation = store
+            .repositories()
+            .repository("owner", "repo")
+            .await
+            .unwrap()
+            .unwrap()
+            .incarnation();
 
         let (claimed_tx, claimed_rx) = tokio::sync::oneshot::channel();
         let (deleted_tx, deleted_rx) = tokio::sync::oneshot::channel();
@@ -665,6 +672,7 @@ mod tests {
             .delete_repo(
                 "owner",
                 "repo",
+                &incarnation,
                 "user_owner",
                 unix_now().unwrap(),
                 &super::super::generated_ids::test_generated_id,

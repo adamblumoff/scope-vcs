@@ -530,6 +530,7 @@ async fn ready_test_git_segment(
             TEST_REPO_ID,
             reservation,
             std::io::Cursor::new(format!("test segment {label}").into_bytes()),
+            u64::MAX,
         )
         .await
         .unwrap();
@@ -591,6 +592,7 @@ async fn persist_and_promote_test_update(
                     TEST_REPO_ID,
                     reservation,
                     std::io::Cursor::new(b"test Git pack segment".to_vec()),
+                    u64::MAX,
                 )
                 .await
                 .map_err(|error| crate::error::ApiError::internal_message(error.to_string()))?;
@@ -637,6 +639,7 @@ async fn persist_and_promote_test_update(
         TEST_REPO_NAME,
         prepared,
         actor_id,
+        &test_repo_incarnation(),
     )
     .await?;
     let head = persisted.head;
@@ -667,9 +670,20 @@ async fn receive_pack_access(
 }
 
 async fn published_staging_repo(state: &AppState) -> PathBuf {
-    ensure_ready_receive_pack_staging_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME, &test_owner_id())
-        .await
-        .unwrap()
+    ensure_ready_receive_pack_staging_repo(
+        state,
+        &test_repo_incarnation(),
+        TEST_REPO_OWNER,
+        TEST_REPO_NAME,
+        &test_owner_id(),
+    )
+    .await
+    .unwrap()
+}
+
+fn test_repo_incarnation() -> scope_domain::repository::RepositoryIncarnation {
+    scope_domain::repository::RepositoryIncarnation::new(TEST_REPO_ID, "repoi_workflow_test")
+        .expect("test repository identity is valid")
 }
 
 fn git_head_oid(repo: &FsPath) -> String {
@@ -683,6 +697,7 @@ fn test_repo(owner_id: &str) -> Repository {
     Repository {
         record: RepoRecord {
             id: TEST_REPO_ID.to_string(),
+            incarnation_id: "repoi_workflow_test".to_string(),
             owner_handle: TEST_REPO_OWNER.to_string(),
             name: TEST_REPO_NAME.to_string(),
             owner_user_id: owner_id.to_string(),
@@ -763,13 +778,10 @@ fn blob_content(
     blob: &scope_domain::content::SourceBlob,
     repo: &Repository,
 ) -> String {
-    let git_source = repo.git_head.as_ref().map(|head| {
-        (
-            repo.record.id.as_str(),
-            head,
-            repo.git_pack_spans.as_slice(),
-        )
-    });
+    let git_source = repo
+        .git_head
+        .as_ref()
+        .map(|head| (repo.incarnation(), head, repo.git_pack_spans.as_slice()));
     String::from_utf8(crate::git::content::source_content_bytes(state, blob, git_source).unwrap())
         .unwrap()
 }

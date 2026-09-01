@@ -3,8 +3,10 @@ use super::*;
 const IMAGE: &str =
     "ghcr.io/scope/checks@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const SECRET_ARN: &str = "arn:aws:secretsmanager:us-east-1:123456789012:secret:scope/attempt";
+const REGISTRY_SECRET_ARN: &str =
+    "arn:aws:secretsmanager:us-east-1:123456789012:secret:scope/registry-AbCdEf";
 
-fn settings() -> CloudExecutionSettings {
+fn settings(registry_credentials_secret_arn: Option<&str>) -> CloudExecutionSettings {
     CloudExecutionSettings {
         api_url: "https://scope.test".to_string(),
         aws_region: "us-east-1".to_string(),
@@ -14,13 +16,14 @@ fn settings() -> CloudExecutionSettings {
         ecs_execution_role_arn: "arn:aws:iam::123456789012:role/scope-task-execution".to_string(),
         ecs_log_group: "/scope/production/runner".to_string(),
         ecs_secret_name_key: [7; 32],
+        registry_credentials_secret_arn: registry_credentials_secret_arn.map(str::to_string),
         runtime_version: "test".to_string(),
         max_concurrency: 1,
     }
 }
 
-fn task_definition(image: &str) -> TaskDefinition {
-    let settings = settings();
+fn task_definition(image: &str, registry_credentials_secret_arn: Option<&str>) -> TaskDefinition {
+    let settings = settings(registry_credentials_secret_arn);
     TaskDefinition::builder()
         .network_mode(NetworkMode::Awsvpc)
         .requires_compatibilities(Compatibility::Fargate)
@@ -34,6 +37,7 @@ fn task_definition(image: &str) -> TaskDefinition {
                 &settings.aws_region,
                 &settings.ecs_log_group,
                 SECRET_ARN,
+                registry_credentials_secret_arn,
             )
             .unwrap(),
         )
@@ -87,13 +91,20 @@ fn task_definition_arn_must_match_the_exact_family() {
 
 #[test]
 fn task_definition_preserves_image_entrypoint_and_log_destination() {
-    let container =
-        runner_container(IMAGE, "us-east-1", "/scope/production/runner", SECRET_ARN).unwrap();
+    let container = runner_container(
+        IMAGE,
+        "us-east-1",
+        "/scope/production/runner",
+        SECRET_ARN,
+        None,
+    )
+    .unwrap();
     assert_eq!(container.name(), Some(CONTAINER_NAME));
     assert_eq!(container.image(), Some(IMAGE));
     assert_eq!(container.entry_point(), [RUNTIME_ENTRYPOINT]);
     assert_eq!(container.secrets()[0].name(), BOOTSTRAP_SECRET_ENV);
     assert_eq!(container.secrets()[0].value_from(), SECRET_ARN);
+    assert!(container.repository_credentials().is_none());
     let logs = container.log_configuration().unwrap();
     assert_eq!(logs.log_driver(), &LogDriver::Awslogs);
     assert_eq!(
@@ -110,6 +121,27 @@ fn task_definition_preserves_image_entrypoint_and_log_destination() {
             .map(String::as_str),
         Some("us-east-1")
     );
+}
+
+#[test]
+fn private_registry_credentials_are_attached_only_when_configured() {
+    let container = runner_container(
+        IMAGE,
+        "us-east-1",
+        "/scope/production/runner",
+        SECRET_ARN,
+        Some(REGISTRY_SECRET_ARN),
+    )
+    .unwrap();
+    assert_eq!(
+        container
+            .repository_credentials()
+            .unwrap()
+            .credentials_parameter(),
+        REGISTRY_SECRET_ARN
+    );
+    assert_eq!(container.secrets().len(), 1);
+    assert_eq!(container.secrets()[0].value_from(), SECRET_ARN);
 }
 
 #[test]
@@ -131,31 +163,66 @@ fn task_override_contains_only_non_secret_attempt_runtime_values() {
 
 #[test]
 fn stored_task_definition_must_match_the_whole_launch_contract() {
-    let settings = settings();
+    let settings = settings(None);
     assert!(
-        verify_task_definition_contract(&task_definition(IMAGE), IMAGE, SECRET_ARN, &settings)
-            .is_ok()
+        verify_task_definition_contract(
+            &task_definition(IMAGE, None),
+            IMAGE,
+            SECRET_ARN,
+            &settings
+        )
+        .is_ok()
     );
 
-    let mut altered = task_definition(IMAGE);
+    let mut altered = task_definition(IMAGE, None);
     altered.task_role_arn = Some("arn:aws:iam::123456789012:role/unexpected".to_string());
     assert!(verify_task_definition_contract(&altered, IMAGE, SECRET_ARN, &settings).is_err());
 
-    let mut normalized = task_definition(IMAGE);
+    let mut normalized = task_definition(IMAGE, None);
     let normalized_container = &mut normalized.container_definitions.as_mut().unwrap()[0];
     normalized_container.cpu = 0;
     normalized_container.port_mappings = Some(Vec::new());
     normalized_container.environment = Some(Vec::new());
     assert!(verify_task_definition_contract(&normalized, IMAGE, SECRET_ARN, &settings).is_ok());
 
-    let mut altered = task_definition(IMAGE);
+    let mut altered = task_definition(IMAGE, None);
     altered.container_definitions.as_mut().unwrap()[0].command =
         Some(vec!["unexpected".to_string()]);
     assert!(verify_task_definition_contract(&altered, IMAGE, SECRET_ARN, &settings).is_err());
 
-    let mut altered = task_definition(IMAGE);
+    let mut altered = task_definition(IMAGE, None);
     altered.container_definitions.as_mut().unwrap()[0].secrets = Some(Vec::new());
     assert!(verify_task_definition_contract(&altered, IMAGE, SECRET_ARN, &settings).is_err());
+}
+
+#[test]
+fn stored_task_definition_requires_the_configured_registry_credentials() {
+    let private_settings = settings(Some(REGISTRY_SECRET_ARN));
+    let definition = task_definition(IMAGE, Some(REGISTRY_SECRET_ARN));
+    assert!(
+        verify_task_definition_contract(&definition, IMAGE, SECRET_ARN, &private_settings).is_ok()
+    );
+
+    let missing = task_definition(IMAGE, None);
+    assert!(
+        verify_task_definition_contract(&missing, IMAGE, SECRET_ARN, &private_settings).is_err()
+    );
+
+    let public_settings = settings(None);
+    assert!(
+        verify_task_definition_contract(&definition, IMAGE, SECRET_ARN, &public_settings).is_err()
+    );
+
+    let mut wrong = task_definition(IMAGE, Some(REGISTRY_SECRET_ARN));
+    wrong.container_definitions.as_mut().unwrap()[0].repository_credentials = Some(
+        RepositoryCredentials::builder()
+            .credentials_parameter(
+                "arn:aws:secretsmanager:us-east-1:123456789012:secret:wrong-AbCdEf",
+            )
+            .build()
+            .unwrap(),
+    );
+    assert!(verify_task_definition_contract(&wrong, IMAGE, SECRET_ARN, &private_settings).is_err());
 }
 
 #[test]

@@ -99,13 +99,16 @@ jobs:
           cache-bin: false
           shared-key: staging-proof
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: candidate -> target
+          workspaces: |
+            candidate -> target
+            candidate/cli -> target
 
       - name: Build staging commands
         working-directory: candidate
         run: |
           cargo build --release --locked -p api --bin scope-maintenance
           cargo build --release --locked -p api --bin scope-smoke-seed --features smoke-seed
+          cargo build --release --locked --manifest-path cli/Cargo.toml --bin scope
 
       - name: Stage exact upload roots
         shell: bash
@@ -136,6 +139,7 @@ jobs:
           mv .railway-staging-upload/repo-router/railway.json.tmp .railway-staging-upload/repo-router/railway.json
           mkdir -p .railway-staging-upload/web-root/web
           cp -a candidate/web/. .railway-staging-upload/web-root/web/
+          cp candidate/web/railway.json .railway-staging-upload/web-root/railway.json
           printf '%s\n' "$SOURCE_SHA" > .railway-staging-upload/web-root/web/.scope-deployment-sha
           printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .railway-staging-upload/web-root/web/.scope-deployment-attempt
           test -s .railway-staging-upload/api/api/.scope-deployment-sha
@@ -144,6 +148,7 @@ jobs:
           test -s .railway-staging-upload/repo-router/repo-router/.scope-deployment-sha
           test -s .railway-staging-upload/web-root/web/.scope-deployment-sha
           test -s .railway-staging-upload/web-root/web/package.json
+          test -s .railway-staging-upload/web-root/railway.json
 
       - name: Migrate, seed, and deploy staging services
         shell: bash
@@ -152,6 +157,10 @@ jobs:
           SCOPE_MAINTENANCE_BINARY: ./candidate/target/release/scope-maintenance
           SCOPE_SMOKE_SEED_BINARY: ./candidate/target/release/scope-smoke-seed
         run: |
+          smoke_dir="$(mktemp -d "${RUNNER_TEMP}/scope-staging-git-smoke.XXXXXX")"
+          chmod 0700 "$smoke_dir"
+          echo "SCOPE_GIT_SMOKE_DIR=$smoke_dir" >> "$GITHUB_ENV"
+          export SCOPE_SMOKE_SEED_EXCHANGE_TOKEN_PATH="$smoke_dir/exchange-token"
           bash .github/scripts/deploy-staging-railway.sh prepare \
             .railway-staging-upload/cache-service \
             .railway-staging-upload/worker \
@@ -185,6 +194,27 @@ jobs:
         run: |
           web_domain="$(jq -er '.railway.staging.webDomain' ../../.github/deployment-services.json)"
           SCOPE_WEB_BASE_URL="https://$web_domain" pnpm test:smoke
+
+      - name: Run Git router smoke against staging
+        shell: bash
+        env:
+          GITHUB_SHA: ${{ inputs.source_sha }}
+          SCOPE_CLI_BINARY: ${{ github.workspace }}/candidate/cli/target/release/scope
+        run: |
+          api_domain="$(jq -er '.railway.staging.apiDomain' .github/deployment-services.json)"
+          router_domain="$(jq -er '.railway.staging.routerDomain' .github/deployment-services.json)"
+          SCOPE_API_URL="https://$api_domain" \
+            SCOPE_GIT_ROUTER_URL="https://$router_domain" \
+            SCOPE_EXCHANGE_TOKEN_PATH="$SCOPE_GIT_SMOKE_DIR/exchange-token" \
+            bash .github/scripts/staging-git-smoke.sh
+
+      - name: Remove staging Git smoke credentials
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${SCOPE_GIT_SMOKE_DIR:-}" && "$SCOPE_GIT_SMOKE_DIR" == "${RUNNER_TEMP}/"* ]]; then
+            rm -rf -- "$SCOPE_GIT_SMOKE_DIR"
+          fi
 
       - name: Upload staging deployment evidence
         if: always() && hashFiles('staging-deployments.json') != ''

@@ -135,8 +135,6 @@ pub(crate) async fn list_discussions(
         .flatten();
     let projection = DiscussionProjection {
         state: &state,
-        owner: &owner,
-        repo_name: &repo_name,
         request: &request,
         repo: &repo,
         access,
@@ -384,8 +382,6 @@ pub(crate) async fn changed_discussions(
         .unwrap_or(request.activity_version);
     let projection = DiscussionProjection {
         state: &state,
-        owner: &owner,
-        repo_name: &repo_name,
         request: &request,
         repo: &repo,
         access,
@@ -571,8 +567,6 @@ fn discussion_summary(
 
 struct DiscussionProjection<'a> {
     state: &'a AppState,
-    owner: &'a str,
-    repo_name: &'a str,
     request: &'a scope_domain::requests::Request,
     repo: &'a scope_domain::repository::Repository,
     access: scope_domain::repository::access::RepositoryAccess,
@@ -625,8 +619,6 @@ async fn discussion_anchor_visibility<'a>(
     }
     RequestRevisionCommitVisibility::new(
         projection.state,
-        projection.owner,
-        projection.repo_name,
         projection.repo,
         projection.access,
         projection.request,

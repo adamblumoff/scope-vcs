@@ -439,7 +439,7 @@ async fn publish_timeline_change(
 ) {
     state
         .publish_request_timeline_change(
-            &context.repo.record.id,
+            &context.repo.incarnation(),
             context.request.id.clone(),
             discussion_id,
             through_position,

@@ -14,10 +14,10 @@ async fn insert_repository(db: &DatabaseConnection) {
         VALUES ('landing-owner', 'landing-owner', 'landing@scope.test', TRUE);
         INSERT INTO scope_repositories (
             id, owner_handle, name, owner_user_id, publication_state,
-            change_version, repo_config, policy
+            change_version, repo_config, policy, incarnation_id
         ) VALUES (
             'landing-owner/repo', 'landing-owner', 'repo', 'landing-owner', 'Ready',
-            1, '{}'::jsonb, '{}'::jsonb
+            1, '{}'::jsonb, '{}'::jsonb, 'repoi_landing_owner_repo'
         );
         ",
     )

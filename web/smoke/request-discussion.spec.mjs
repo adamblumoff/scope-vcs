@@ -5,7 +5,7 @@ import {
   assertFileSelectionSkipsRevisionReload,
   assertRequestCrossLinksStayInDocument,
   assertRequestShellPreserved,
-  assertUpdateSelectionUsesInitialPayload,
+  assertUpdateSelectionReloadsSelectedPayload,
   waitForClientHydration,
 } from './request-changes-smoke.mjs'
 
@@ -188,7 +188,7 @@ test('seeded request discussion and changes stay reciprocal and ordered', async 
       navigation: requestNavigation,
     })
     await assertFileSelectionSkipsRevisionReload(page, 'retry.ts', '/src/retry.ts')
-    await assertUpdateSelectionUsesInitialPayload(page)
+    await assertUpdateSelectionReloadsSelectedPayload(page)
     await page.getByRole('navigation', { name: 'Request views' })
       .getByRole('link', { name: 'Discussion' })
       .click()

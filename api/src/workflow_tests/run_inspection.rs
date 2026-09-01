@@ -241,6 +241,7 @@ async fn run_inspection_hides_a_run_from_another_repository() {
     let fixture = inspectable_run(false).await;
     let mut other = test_repo(&test_owner_id());
     other.record.id = "owner/other".to_string();
+    other.record.incarnation_id = "repoi_owner_other".to_string();
     other.record.name = "other".to_string();
     other.graph.repo_id = other.record.id.clone();
     fixture

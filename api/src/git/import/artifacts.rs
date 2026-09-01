@@ -1,8 +1,9 @@
 use super::repo_io::{
-    FencedGitPush, GitSegmentUploadHeartbeat, GitTreeFile, describe_refs, git_changed_tree_entries,
-    git_push_from_repo, git_refs, git_tree_entries_under, pushed_commit_message,
-    queue_failed_git_objects, run_git_output_bounded, validate_pushed_commit_range,
+    FencedGitPush, GitTreeFile, describe_refs, git_changed_tree_entries, git_push_from_repo,
+    git_refs, git_tree_entries_under, pushed_commit_message, queue_failed_git_objects,
+    run_git_output_bounded, validate_pushed_commit_range,
 };
+use super::segment_upload::{GitSegmentUploadHeartbeat, best_effort_delete_staged_git_segment};
 use super::staging::{ReceivePackFileChange, ReceivePackUpdate, ensure_default_branch};
 use crate::{error::ApiError, git::content::git_blob_reference, state::AppState};
 use scope_domain::landing_file::{
@@ -276,8 +277,7 @@ async fn cleanup_prepared_git_push(
     staged_segment: &StagedGitSegment,
     durable_objects: Vec<scope_domain::content::SourceBlob>,
 ) -> Result<(), ApiError> {
-    super::repo_io::best_effort_delete_staged_git_segment(state, repository_id, staged_segment)
-        .await;
+    best_effort_delete_staged_git_segment(state, repository_id, staged_segment).await;
     queue_failed_git_objects(state, durable_objects).await
 }
 

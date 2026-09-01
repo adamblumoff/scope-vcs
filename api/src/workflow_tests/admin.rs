@@ -82,6 +82,11 @@ async fn admin_cleanup_status_shows_pending_cleanup_queues() {
             RepoStorageCleanup {
                 owner_handle: TEST_REPO_OWNER.to_string(),
                 repo_name: TEST_REPO_NAME.to_string(),
+                incarnation: scope_domain::repository::RepositoryIncarnation::new(
+                    TEST_REPO_ID,
+                    "repoi_admin_cleanup",
+                )
+                .unwrap(),
             },
             unix_now(),
         )

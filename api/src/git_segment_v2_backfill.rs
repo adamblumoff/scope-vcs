@@ -83,7 +83,9 @@ async fn backfill_segments(
             completed_at_unix: unix_now()?,
         };
         if let Err(error) = require_expected_record(legacy, &prepared, &expected) {
-            let _ = segment_store.cleanup_remote(&staged.object_key).await;
+            let _ = segment_store
+                .cleanup_remote_bounded(&staged.object_key)
+                .await;
             let _ = segment_store.delete_local(&staged).await;
             return Err(error);
         }
@@ -113,6 +115,7 @@ async fn rewrite_legacy_segment(
                 object_key: expected.object_key.clone(),
             },
             Cursor::new(bytes),
+            legacy.size_bytes,
         )
         .await
         .map_err(anyhow::Error::from)

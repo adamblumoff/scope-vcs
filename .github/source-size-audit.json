@@ -27,11 +27,6 @@
       "reason": "Commit reachability, path disclosure checks, and adversarial fixtures jointly enforce one public-request invariant."
     },
     {
-      "path": "api/src/git/storage.rs",
-      "owner": "local Git repository process adapter",
-      "reason": "Repository paths, receive hooks, process-group lifetime, and CGI parsing are the local Git execution boundary."
-    },
-    {
       "path": "api/src/http/request_discussions.rs",
       "owner": "request discussion HTTP delivery",
       "reason": "Discussion queries and mutations share visibility projection, cursor, anchor, and response mapping rules."
@@ -110,11 +105,6 @@
       "path": "crates/scope-run-config/src/lib.rs",
       "owner": "workflow configuration compiler",
       "reason": "YAML decoding, validation, domain compilation, repository catalog parsing, and grammar fixtures define one compiler."
-    },
-    {
-      "path": "worker/src/git_repo.rs",
-      "owner": "Git compaction process adapter",
-      "reason": "Segment restoration, repository indexing, pack construction, and bounded replacement ingestion form one compaction workspace lifecycle."
     }
   ]
 }

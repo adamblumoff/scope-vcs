@@ -6,6 +6,12 @@ pub enum GitStorageError {
     InvalidConfiguration(String),
     #[error("Git segment input failed: {0}")]
     Input(#[source] io::Error),
+    #[error("Git segment plaintext exceeds {max_bytes} bytes")]
+    PlaintextLimitExceeded { max_bytes: u64 },
+    #[error("Git segment ingest was cancelled")]
+    Cancelled,
+    #[error("Git segment remote cleanup exceeded {timeout_ms} ms")]
+    RemoteCleanupTimedOut { timeout_ms: u128 },
     #[error("Git segment local storage failed: {0}")]
     Local(#[source] io::Error),
     #[error("Git segment encryption failed")]

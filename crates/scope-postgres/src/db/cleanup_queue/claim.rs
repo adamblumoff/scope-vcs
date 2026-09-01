@@ -139,6 +139,7 @@ where
         .checked_add(CLEANUP_CLAIM_SECONDS)
         .ok_or_else(|| PostgresError::internal_message("cleanup claim time exceeds i64 range"))?;
     let generation = generate_id(generated_ids, GeneratedIdKind::CleanupGeneration)?;
+    let cleanup = row.clone().into_domain();
     let mut active = row.into_active_model();
     active.generation = Set(generation.clone());
     active.next_run_at_unix = Set(claim_until);
@@ -147,6 +148,7 @@ where
     Ok(Some(RepoStorageCleanupClaim {
         generation,
         claim_until,
+        cleanup,
     }))
 }
 async fn claim_pending_source_blob_cleanup_rows<C>(

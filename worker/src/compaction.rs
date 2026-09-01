@@ -188,12 +188,17 @@ pub(crate) async fn compact_one_git_repository(
         Ok(compaction) => compaction,
         Err(failure) => {
             let failure_now_unix = super::unix_now()?;
+            let attempt_remote_cleanup = !failure
+                .error
+                .downcast_ref::<ProcessError>()
+                .is_some_and(ProcessError::is_timeout);
             if let Err(cleanup_error) = abandon_upload(
                 metadata,
                 segment_store.as_ref(),
                 &candidate.repo_id,
                 &reservation,
                 failure_now_unix,
+                attempt_remote_cleanup,
             )
             .await
             {
@@ -231,6 +236,7 @@ pub(crate) async fn compact_one_git_repository(
             &candidate.repo_id,
             &reservation,
             cleanup_now_unix,
+            true,
         )
         .await
         {
@@ -264,6 +270,7 @@ pub(crate) async fn compact_one_git_repository(
             &candidate.repo_id,
             &reservation,
             cleanup_now_unix,
+            true,
         )
         .await
         {
@@ -354,6 +361,7 @@ pub(crate) async fn compact_one_git_repository(
                 &candidate.repo_id,
                 &reservation,
                 failure_now_unix,
+                true,
             )
             .await
             {
@@ -430,6 +438,7 @@ async fn abandon_upload(
     repository_id: &str,
     reservation: &GitSegmentReservation,
     now_unix: u64,
+    attempt_remote_cleanup: bool,
 ) -> anyhow::Result<()> {
     let can_delete = metadata
         .repositories()
@@ -437,8 +446,11 @@ async fn abandon_upload(
         .await
         .map_err(|error| anyhow::anyhow!(error.message))?;
     let mut cleanup_error = None;
-    let remote_deleted = if can_delete {
-        match segment_store.cleanup_remote(&reservation.object_key).await {
+    let remote_deleted = if can_delete && attempt_remote_cleanup {
+        match segment_store
+            .cleanup_remote_bounded(&reservation.object_key)
+            .await
+        {
             Ok(()) => true,
             Err(error) => {
                 cleanup_error = Some(anyhow::Error::new(error));
@@ -461,6 +473,7 @@ async fn abandon_upload(
         }
     };
     if can_delete
+        && attempt_remote_cleanup
         && remote_deleted
         && local_deleted
         && let Err(error) = metadata
@@ -484,11 +497,13 @@ async fn delete_deleting_upload(
     reservation: &GitSegmentReservation,
     now_unix: u64,
 ) -> anyhow::Result<()> {
-    let (remote_deleted, mut cleanup_error) =
-        match segment_store.delete_remote(&reservation.object_key).await {
-            Ok(()) => (true, None),
-            Err(error) => (false, Some(anyhow::Error::new(error))),
-        };
+    let (remote_deleted, mut cleanup_error) = match segment_store
+        .cleanup_remote_bounded(&reservation.object_key)
+        .await
+    {
+        Ok(()) => (true, None),
+        Err(error) => (false, Some(anyhow::Error::new(error))),
+    };
     let local_deleted = match segment_store
         .cleanup_local(repository_id, &reservation.segment_id)
         .await

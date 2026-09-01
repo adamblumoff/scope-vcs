@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS scope_git_segment_v2_backfill (
     encrypted_bytes bigint NOT NULL,
     encoding_version integer NOT NULL,
     completed_at_unix bigint NOT NULL,
-    PRIMARY KEY (repo_id, first_sequence),
+    PRIMARY KEY (repo_id, first_sequence, last_sequence, legacy_object_key),
     CONSTRAINT scope_git_segment_v2_backfill_values CHECK (
         first_sequence > 0 AND
         last_sequence >= first_sequence AND
@@ -39,7 +39,48 @@ CREATE TABLE IF NOT EXISTS scope_git_segment_v2_backfill (
         completed_at_unix > 0
     )
 );
+ALTER TABLE scope_git_segment_v2_backfill
+    DROP CONSTRAINT IF EXISTS scope_git_segment_v2_backfill_pkey,
+    ADD CONSTRAINT scope_git_segment_v2_backfill_pkey
+        PRIMARY KEY (repo_id, first_sequence, last_sequence, legacy_object_key);
 "#;
+
+pub(crate) const LEGACY_GIT_SEGMENT_SOURCES: &str = r#"
+SELECT repo_id, first_sequence, last_sequence,
+       (object_key::jsonb)::text AS legacy_object_key,
+       sha256 AS legacy_sha256, size_bytes AS legacy_size_bytes,
+       geometric_tier, base_oid, head_oid
+FROM scope_git_segments
+UNION ALL
+SELECT runs.source->>'repository_id',
+       (span->>'first_sequence')::bigint,
+       (span->>'last_sequence')::bigint,
+       (span#>'{object,content_ref}')::text,
+       span#>>'{object,sha256}',
+       (span#>>'{object,size_bytes}')::bigint,
+       (span->>'geometric_tier')::integer,
+       span->>'base_oid', span->>'head_oid'
+FROM scope_runs runs
+CROSS JOIN LATERAL jsonb_array_elements(runs.source->'pack_spans') span
+WHERE runs.source->>'kind' = 'accepted-git-head'
+UNION ALL
+SELECT jobs.repo_id,
+       (span->>'first_sequence')::bigint,
+       (span->>'last_sequence')::bigint,
+       (span#>'{object,content_ref}')::text,
+       span#>>'{object,sha256}',
+       (span#>>'{object,size_bytes}')::bigint,
+       (span->>'geometric_tier')::integer,
+       span->>'base_oid', span->>'head_oid'
+FROM scope_outbox_jobs jobs
+CROSS JOIN LATERAL jsonb_array_elements(jobs.payload->'pack_spans') span
+WHERE jobs.kind = 'push_main_trigger_evaluation'
+  AND jobs.completed_at_unix IS NULL
+"#;
+
+fn with_legacy_sources(query: &str) -> String {
+    format!("WITH legacy_sources AS (\n{LEGACY_GIT_SEGMENT_SOURCES}\n)\n{query}")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LegacyGitSegment {
@@ -159,30 +200,89 @@ impl GitSegmentV2Backfill {
     }
 
     pub async fn legacy_segments(&self) -> anyhow::Result<Vec<LegacyGitSegment>> {
+        let conflict_query = with_legacy_sources(
+            r#"
+            SELECT count(*) AS value
+            FROM (
+                SELECT 1
+                FROM legacy_sources spans
+                WHERE spans.repo_id IS NULL
+                   OR length(btrim(spans.repo_id)) = 0
+                   OR spans.first_sequence IS NULL
+                   OR spans.first_sequence <= 0
+                   OR spans.last_sequence IS NULL
+                   OR spans.last_sequence < spans.first_sequence
+                   OR spans.geometric_tier IS NULL
+                   OR spans.geometric_tier NOT BETWEEN 0 AND 62
+                   OR spans.last_sequence - spans.first_sequence + 1 <>
+                      power(2::numeric, spans.geometric_tier)
+                   OR spans.legacy_sha256 IS NULL
+                   OR length(spans.legacy_sha256) <> 64
+                   OR spans.legacy_sha256 !~ '^[0-9a-f]+$'
+                   OR spans.legacy_size_bytes IS NULL
+                   OR spans.legacy_size_bytes < 0
+                   OR spans.legacy_object_key IS NULL
+                   OR spans.legacy_object_key::jsonb <>
+                      jsonb_build_object('GitSegmentSha256', spans.legacy_sha256)
+                   OR spans.head_oid IS NULL
+                   OR length(btrim(spans.head_oid)) = 0
+                UNION ALL
+                SELECT 1
+                FROM legacy_sources
+                GROUP BY repo_id, first_sequence, last_sequence, legacy_object_key
+                HAVING count(DISTINCT jsonb_build_object(
+                    'sha256', legacy_sha256,
+                    'size_bytes', legacy_size_bytes,
+                    'geometric_tier', geometric_tier,
+                    'base_oid', base_oid,
+                    'head_oid', head_oid
+                )) > 1
+            ) conflicts
+            "#,
+        );
+        let conflicts = scalar_i64(&self.db, &conflict_query)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("legacy Git segment metadata is malformed: {error}")
+            })?;
+        if conflicts != 0 {
+            anyhow::bail!("legacy Git segment metadata is invalid or conflicting");
+        }
+
         let rows = self
             .db
             .query_all(Statement::from_string(
                 DatabaseBackend::Postgres,
-                r#"
+                with_legacy_sources(
+                    r#",
+                legacy_segments AS (
+                    SELECT DISTINCT repo_id, first_sequence, last_sequence,
+                           legacy_object_key, legacy_sha256, legacy_size_bytes,
+                           geometric_tier, base_oid, head_oid
+                    FROM legacy_sources
+                )
                 SELECT spans.repo_id, spans.first_sequence, spans.last_sequence,
-                       spans.object_key, spans.sha256, spans.size_bytes,
+                       spans.legacy_object_key AS object_key,
+                       spans.legacy_sha256 AS sha256,
+                       spans.legacy_size_bytes AS size_bytes,
                        prepared.segment_id, prepared.object_key AS prepared_object_key,
                        prepared.sha256 AS prepared_sha256,
                        prepared.plaintext_bytes, prepared.encrypted_bytes,
                        prepared.encoding_version, prepared.completed_at_unix
-                FROM scope_git_segments spans
+                FROM legacy_segments spans
                 LEFT JOIN scope_git_segment_v2_backfill prepared
                   ON prepared.repo_id = spans.repo_id
                  AND prepared.first_sequence = spans.first_sequence
                  AND prepared.last_sequence = spans.last_sequence
-                 AND prepared.legacy_object_key = spans.object_key
-                 AND prepared.legacy_sha256 = spans.sha256
-                 AND prepared.legacy_size_bytes = spans.size_bytes
-                WHERE spans.object_key::jsonb =
-                      jsonb_build_object('GitSegmentSha256', spans.sha256)
-                ORDER BY spans.repo_id, spans.first_sequence
-                "#
-                .to_string(),
+                 AND prepared.legacy_object_key = spans.legacy_object_key
+                 AND prepared.legacy_sha256 = spans.legacy_sha256
+                 AND prepared.legacy_size_bytes = spans.legacy_size_bytes
+                WHERE spans.legacy_object_key::jsonb =
+                      jsonb_build_object('GitSegmentSha256', spans.legacy_sha256)
+                ORDER BY spans.repo_id, spans.first_sequence, spans.last_sequence,
+                         spans.legacy_object_key
+                "#,
+                ),
             ))
             .await?;
         let mut segments = Vec::with_capacity(rows.len());
@@ -212,11 +312,6 @@ impl GitSegmentV2Backfill {
             });
         }
 
-        let total =
-            scalar_i64(&self.db, "SELECT count(*) AS value FROM scope_git_segments").await?;
-        if usize::try_from(total)? != segments.len() {
-            anyhow::bail!("legacy Git segment metadata contains an unsupported object reference");
-        }
         Ok(segments)
     }
 
@@ -235,7 +330,8 @@ impl GitSegmentV2Backfill {
                     segment_id, object_key, sha256, plaintext_bytes,
                     encrypted_bytes, encoding_version, completed_at_unix
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                ON CONFLICT (repo_id, first_sequence) DO NOTHING
+                ON CONFLICT (repo_id, first_sequence, last_sequence, legacy_object_key)
+                DO NOTHING
                 "#,
                 [
                     legacy.repository_id.clone().into(),

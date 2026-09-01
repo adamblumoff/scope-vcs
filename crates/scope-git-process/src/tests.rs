@@ -62,7 +62,7 @@ fn streaming_stdout_is_consumed_without_process_owned_buffering() {
         Some(b"streamed input".to_vec()),
         ProcessLimits::new(Duration::from_secs(1)),
         "streaming output",
-        |mut stdout| {
+        |mut stdout, _cancellation| {
             let mut retained = Vec::new();
             stdout.read_to_end(&mut retained)?;
             Ok::<_, std::io::Error>(retained)
@@ -103,7 +103,7 @@ fn streaming_stdout_timeout_kills_the_child() {
         None,
         ProcessLimits::new(Duration::from_millis(50)),
         "slow stream",
-        |mut stdout| {
+        |mut stdout, _cancellation| {
             std::io::copy(&mut stdout, &mut std::io::sink())?;
             Ok::<_, std::io::Error>(())
         },
@@ -128,7 +128,7 @@ fn streaming_stdout_consumer_failure_kills_the_child() {
         None,
         ProcessLimits::new(Duration::from_secs(10)),
         "rejected stream",
-        |_stdout| Err::<(), _>("disk full"),
+        |_stdout, _cancellation| Err::<(), _>("disk full"),
     )
     .unwrap_err();
 
@@ -190,4 +190,66 @@ fn timeout_kills_descendants_holding_output_pipes() {
 
     assert!(error.is_timeout());
     assert!(started_at.elapsed() < Duration::from_secs(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn streaming_timeout_cancels_downstream_work_and_kills_descendants() {
+    let pid_file = tempfile::NamedTempFile::new().unwrap();
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg("sleep 30 & descendant=$!; printf '%s' \"$descendant\" > \"$1\"; wait")
+        .arg("sh")
+        .arg(pid_file.path());
+    let started_at = Instant::now();
+
+    let error = run_with_stdout(
+        &mut command,
+        None,
+        ProcessLimits::new(Duration::from_millis(100)),
+        "stalled downstream consumer",
+        |_stdout, cancellation| {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(cancellation.cancelled());
+            assert!(cancellation.is_cancelled());
+            Ok::<_, std::io::Error>(())
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        StreamingProcessError::Process(ProcessError::TimedOut { .. })
+    ));
+    assert!(started_at.elapsed() < Duration::from_secs(2));
+
+    let descendant = std::fs::read_to_string(pid_file.path())
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let state = process_state(descendant);
+        if state.as_deref().is_none_or(|state| state == "Z") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "descendant {descendant} survived timeout in state {state:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(unix)]
+fn process_state(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let command_end = stat.rfind(')')?;
+    stat.get(command_end + 2..)?
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
 }

@@ -96,9 +96,7 @@ pub(crate) async fn create_repo(
                 now_unix: now,
             },
             &crate::persistence_ids::generate_persistence_id,
-            move |owner_handle, repo_name| {
-                crate::git::storage::delete_repo_storage(&cleanup_state, owner_handle, repo_name)
-            },
+            move |cleanup| crate::git::storage::delete_repo_storage(&cleanup_state, cleanup),
         )
         .await?;
 
@@ -149,6 +147,7 @@ pub(crate) async fn delete_repo(
 ) -> Result<Json<DeleteRepoResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let repo = find_repo(&state, &owner, &repo_name).await?;
+    let incarnation = repo.incarnation();
     let delete_version = repo.record.change_version.saturating_add(1);
     let repo_id = state
         .metadata
@@ -156,13 +155,14 @@ pub(crate) async fn delete_repo(
         .delete_repo(
             &owner,
             &repo_name,
+            &incarnation,
             &user.id,
             unix_now()?,
             &crate::persistence_ids::generate_persistence_id,
         )
         .await?;
     state
-        .publish_repo_change(&repo_id, delete_version, RepoChangeReason::RepoDeleted)
+        .publish_repo_change(&incarnation, delete_version, RepoChangeReason::RepoDeleted)
         .await;
 
     crate::use_cases::content_cleanup::best_effort_drain_pending_repo_storage_deletions(&state)
@@ -309,7 +309,7 @@ pub(crate) async fn create_push_intent(
                 })?;
             state
                 .publish_repo_change(
-                    &repo.repo_id,
+                    &repo.incarnation,
                     repo.change_version,
                     RepoChangeReason::ConfigApplied,
                 )
@@ -461,13 +461,9 @@ pub(crate) async fn get_file_content(
             crate::http::file_diffs::review_content_response_for_blob(
                 &state,
                 &projected.projected.blob,
-                repo.git_head.as_ref().map(|head| {
-                    (
-                        repo.record.id.as_str(),
-                        head,
-                        repo.git_pack_spans.as_slice(),
-                    )
-                }),
+                repo.git_head
+                    .as_ref()
+                    .map(|head| (repo.incarnation(), head, repo.git_pack_spans.as_slice())),
             )
         })?
     };

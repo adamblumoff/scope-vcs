@@ -14,7 +14,7 @@ use futures_util::stream;
 use scope_domain::{
     account::UserAccount,
     repository::access::RepositoryActor,
-    repository::repo_id,
+    repository::{RepositoryIncarnation, repo_id},
     requests::{RequestViewer, request_policy},
 };
 use std::{convert::Infallible, time::Duration};
@@ -46,11 +46,12 @@ pub(crate) async fn repo_events(
         return Err(error);
     }
 
+    let incarnation = repo.incarnation();
     let initial = event_for_principal(
         &repo,
         &principal,
         repository_change_event(
-            &repo_id,
+            &incarnation,
             repo.record.change_version,
             RepoChangeReason::Connected,
         ),
@@ -59,7 +60,7 @@ pub(crate) async fn repo_events(
     let updates = stream::unfold(
         RepoEventStreamState {
             finished: false,
-            lagged_repo_id: repo_id,
+            incarnation,
             owner,
             receiver: BroadcastStream::new(receiver),
             repo_name,
@@ -75,7 +76,7 @@ pub(crate) async fn repo_events(
                 let event = match event {
                     Ok(event) => event,
                     Err(_) => repository_change_event(
-                        &stream_state.lagged_repo_id,
+                        &stream_state.incarnation,
                         CLIENT_RESYNC_VERSION,
                         RepoChangeReason::Lagged,
                     ),
@@ -85,6 +86,7 @@ pub(crate) async fn repo_events(
                     &stream_state.state,
                     &stream_state.owner,
                     &stream_state.repo_name,
+                    &stream_state.incarnation,
                     stream_state.user.as_ref(),
                     event,
                 )
@@ -112,7 +114,7 @@ pub(crate) async fn repo_events(
 
 struct RepoEventStreamState {
     finished: bool,
-    lagged_repo_id: String,
+    incarnation: RepositoryIncarnation,
     owner: String,
     receiver: BroadcastStream<RepoChangeEvent>,
     repo_name: String,
@@ -124,10 +126,21 @@ async fn stream_event_for_user(
     state: &AppState,
     owner: &str,
     repo_name: &str,
+    expected_incarnation: &RepositoryIncarnation,
     user: Option<&UserAccount>,
     event: RepoChangeEvent,
 ) -> Result<Option<RepoChangeEvent>, ApiError> {
     let repo = find_repo(state, owner, repo_name).await?;
+    if repo.incarnation() != *expected_incarnation {
+        return Err(ApiError::conflict(
+            "repository was recreated; reconnect event stream",
+        ));
+    }
+    if event.repo_id != expected_incarnation.repository_id()
+        || event.incarnation_id != expected_incarnation.incarnation_id()
+    {
+        return Ok(None);
+    }
     let principal = principal_for_scope_user(&repo, user);
     ensure_repo_events_allowed(state, &repo, &principal)?;
     if let RepoChangeKind::RequestTimelineChanged { request_id, .. } = &event.kind {
@@ -201,6 +214,7 @@ fn event_for_principal(
             },
         },
         repo_id: event.repo_id,
+        incarnation_id: event.incarnation_id,
         version: 0,
     })
 }

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub struct RepoStorageCleanup {
     pub owner_handle: String,
     pub repo_name: String,
+    pub incarnation: crate::repository::RepositoryIncarnation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,7 +122,8 @@ pub fn secretless_first_push_token(mut token: FirstPushToken) -> FirstPushToken 
 
 pub fn catalog_error(error: CatalogError) -> DomainError {
     match error {
-        CatalogError::InvalidRepositoryName(message) => DomainError::invalid_input(message),
+        CatalogError::InvalidRepositoryName(message)
+        | CatalogError::InvalidRepositoryIdentity(message) => DomainError::invalid_input(message),
     }
 }
 
@@ -139,8 +141,10 @@ pub fn create_repo(
     default_visibility: Visibility,
     first_push_token: FirstPushToken,
     git_push_token: GitPushToken,
+    incarnation_id: impl Into<String>,
 ) -> Result<RepoMutation<Repository>, DomainError> {
-    let mut repo = Repository::new(owner, name, default_visibility).map_err(catalog_error)?;
+    let mut repo =
+        Repository::new(owner, name, default_visibility, incarnation_id).map_err(catalog_error)?;
     repo.first_push_token = Some(secretless_first_push_token(first_push_token));
     repo.git_push_token = Some(git_push_token);
     Ok(RepoMutation::new(repo))
@@ -228,6 +232,7 @@ pub fn delete_repo(
     effects.delete_repo_storage(RepoStorageCleanup {
         owner_handle: owner.to_string(),
         repo_name: name.to_string(),
+        incarnation: repo.incarnation(),
     });
     effects.delete_source_blobs(repo.source_blobs());
     Ok(RepoMutation::with_effects(repo.record.id.clone(), effects))
@@ -246,7 +251,7 @@ mod tests {
     #[test]
     fn deleting_repo_returns_storage_and_source_blob_cleanup_effects() {
         let owner = test_owner();
-        let mut repo = Repository::new(&owner, "repo", Visibility::Private).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Private, "repoi_test").unwrap();
         let snapshot = source_blob("live-snapshot");
         repo.git_head = Some(GitHead {
             head_oid: snapshot.git_oid.clone(),
@@ -265,6 +270,7 @@ mod tests {
                     RepoEffect::DeleteRepoStorage(RepoStorageCleanup {
                         owner_handle: owner.handle,
                         repo_name: "repo".to_string(),
+                        incarnation: repo.incarnation(),
                     }),
                     RepoEffect::DeleteSourceBlobs(vec![snapshot]),
                 ],
@@ -275,7 +281,7 @@ mod tests {
     #[test]
     fn direct_visibility_update_mirrors_repo_config() {
         let owner = test_owner();
-        let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
         let path = ScopePath::parse("/README.md").unwrap();
 
         set_visibility(
@@ -296,7 +302,7 @@ mod tests {
     #[test]
     fn direct_visibility_update_omits_scope_managed_policy_rules_from_config() {
         let owner = test_owner();
-        let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
         let rules_path = ScopePath::parse("/.scope/RULES.md").unwrap();
         repo.policy
             .add_rule(VisibilityRule::public(rules_path))
@@ -327,7 +333,7 @@ mod tests {
     #[test]
     fn direct_bulk_visibility_update_records_one_change_set() {
         let owner = test_owner();
-        let mut repo = Repository::new(&owner, "repo", Visibility::Public).unwrap();
+        let mut repo = Repository::new(&owner, "repo", Visibility::Public, "repoi_test").unwrap();
         repo.record.lifecycle_state = RepoLifecycleState::Ready;
         let first = ScopePath::parse("/one.md").unwrap();
         let second = ScopePath::parse("/two.md").unwrap();

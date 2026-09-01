@@ -78,6 +78,7 @@ where
                 entities::repo_storage_cleanup_job::Column::Generation,
                 entities::repo_storage_cleanup_job::Column::OwnerHandle,
                 entities::repo_storage_cleanup_job::Column::RepoName,
+                entities::repo_storage_cleanup_job::Column::IncarnationId,
                 entities::repo_storage_cleanup_job::Column::Attempts,
                 entities::repo_storage_cleanup_job::Column::NextRunAtUnix,
                 entities::repo_storage_cleanup_job::Column::LastError,

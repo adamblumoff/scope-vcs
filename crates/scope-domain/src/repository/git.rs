@@ -33,6 +33,7 @@ pub enum GitSegmentUploadState {
     Uploading,
     Ready,
     Published,
+    Retained,
     Deleting,
     Deleted,
 }

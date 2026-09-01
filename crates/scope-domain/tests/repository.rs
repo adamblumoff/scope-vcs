@@ -8,7 +8,7 @@ use scope_domain::{
     repo_config::ConfigVisibility,
     repository::{
         RepoLifecycleState::{AwaitingFirstPush, Ready},
-        Repository,
+        Repository, RepositoryIncarnation,
         access::MainPushMode,
         collaboration::{RepositoryMember, RepositoryMemberPermissions},
         credentials::{FirstPushToken, FirstPushTokenStatus},
@@ -27,7 +27,7 @@ fn test_owner() -> UserAccount {
 }
 
 fn test_repo(visibility: Visibility) -> Repository {
-    let mut repo = Repository::new(&test_owner(), "repo", visibility).unwrap();
+    let mut repo = Repository::new(&test_owner(), "repo", visibility, "repoi_test").unwrap();
     repo.record.lifecycle_state = Ready;
     repo
 }
@@ -55,9 +55,13 @@ fn add_member(repo: &mut Repository, user_id: &str, can_push: bool) {
 #[test]
 fn create_repository_makes_private_owner_repo_pending_first_push() {
     let owner = test_owner();
-    let repo = Repository::new(&owner, "Draft.Repo", Private).unwrap();
+    let repo = Repository::new(&owner, "Draft.Repo", Private, "repoi_test").unwrap();
 
     assert_eq!(repo.record.id, "owner/draft.repo");
+    assert_eq!(
+        repo.incarnation(),
+        RepositoryIncarnation::new("owner/draft.repo", "repoi_test").unwrap()
+    );
     assert_eq!(repo.record.lifecycle_state, AwaitingFirstPush);
     assert_eq!(
         repo.repo_config.visibility.default_visibility(),
@@ -77,6 +81,12 @@ fn create_repository_makes_private_owner_repo_pending_first_push() {
     ] {
         assert_eq!(repo.push_policy_for_user_id(user).mode, mode);
     }
+}
+
+#[test]
+fn repository_incarnation_requires_both_durable_identity_parts() {
+    assert!(RepositoryIncarnation::new("", "repoi_test").is_err());
+    assert!(RepositoryIncarnation::new("owner/repo", " ").is_err());
 }
 
 #[test]

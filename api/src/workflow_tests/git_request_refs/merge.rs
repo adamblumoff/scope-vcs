@@ -235,7 +235,7 @@ async fn merge_route_persists_git_content_once() {
     );
     let public_repo = projection_bare_repo_for_state(
         &state,
-        &repo.record.id,
+        &repo.incarnation(),
         &public_projection,
         repo.git_head.as_ref(),
         &repo.git_pack_spans,

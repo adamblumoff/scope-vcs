@@ -2,6 +2,7 @@ use crate::{error::ApiError, git::import::run_git_output, state::AppState};
 use scope_domain::{
     content::SourceBlob,
     content_ref::ContentRef,
+    repository::RepositoryIncarnation,
     repository::git::{GitHead, GitPackSpan},
 };
 use scope_git::git_blob_reference as segment_git_blob_reference;
@@ -25,7 +26,7 @@ pub(crate) fn git_blob_reference(
 pub(crate) fn source_content_bytes(
     state: &AppState,
     blob: &SourceBlob,
-    git_source: Option<(&str, &GitHead, &[GitPackSpan])>,
+    git_source: Option<(RepositoryIncarnation, &GitHead, &[GitPackSpan])>,
 ) -> Result<Vec<u8>, ApiError> {
     if !matches!(blob.content_ref, ContentRef::GitBlob { .. }) {
         return Ok(source_blob_bytes(state.object_store.as_ref(), blob)?);
@@ -41,7 +42,7 @@ pub(crate) fn source_content_bytes(
     let repo =
         state
             .repository_engine
-            .materialize_repository(state, repository_id, head, pack_spans)?;
+            .materialize_repository(state, &repository_id, head, pack_spans)?;
     source_content_bytes_from_repo(state, blob, Some(&repo))
 }
 
