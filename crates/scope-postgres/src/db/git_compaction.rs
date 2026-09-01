@@ -588,12 +588,13 @@ mod tests {
                     VALUES ('scheduler_user', 'scheduler-user', 'scheduler@scope.test', TRUE);
                     INSERT INTO scope_repositories (
                         id, owner_handle, name, owner_user_id, publication_state,
-                        change_version, repo_config, policy
+                        change_version, repo_config, policy, incarnation_id
                     ) VALUES (
                         'scheduler/repo', 'scheduler-user', 'repo', 'scheduler_user', 'Ready',
                         1,
                         '{"kind":"scope.repo-config","version":1,"visibility":{"default":"private","rules":[]}}'::jsonb,
-                        '{"default_visibility":"Private","rules":[]}'::jsonb
+                        '{"default_visibility":"Private","rules":[]}'::jsonb,
+                        'repoi_scheduler_repo'
                     );
                 "#,
             )
@@ -821,12 +822,13 @@ mod tests {
                     VALUES ('user_compaction', 'compaction', 'compaction@scope.test', TRUE);
                     INSERT INTO scope_repositories (
                         id, owner_handle, name, owner_user_id, publication_state,
-                        change_version, repo_config, policy
+                        change_version, repo_config, policy, incarnation_id
                     ) VALUES (
                         'repo_compaction', 'compaction', 'repo', 'user_compaction', 'Ready',
                         4,
                         '{"kind":"scope.repo-config","version":1,"visibility":{"default":"private","rules":[]}}'::jsonb,
-                        '{"default_visibility":"Private","rules":[]}'::jsonb
+                        '{"default_visibility":"Private","rules":[]}'::jsonb,
+                        'repoi_compaction_repo'
                     );
                     INSERT INTO scope_git_heads (
                         repo_id, head_oid, push_sequence, change_version,

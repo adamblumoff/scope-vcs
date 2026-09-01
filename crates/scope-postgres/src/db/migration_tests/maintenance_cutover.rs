@@ -54,7 +54,7 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 16);
+    assert_eq!(plan.pending.len(), 17);
     assert_eq!(plan.pending[0].name, "m0018_truthful_run_log_truncation");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0019_run_attempt_cache_observations");
@@ -105,6 +105,11 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
         plan.pending[15].impact,
         MigrationImpact::MaintenanceRequired
     );
+    assert_eq!(plan.pending[16].name, "m0034_repository_incarnations");
+    assert_eq!(
+        plan.pending[16].impact,
+        MigrationImpact::MaintenanceRequired
+    );
 }
 
 #[tokio::test]
@@ -116,7 +121,7 @@ async fn cache_service_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 13);
+    assert_eq!(plan.pending.len(), 14);
     assert_eq!(plan.pending[0].name, "m0021_cache_service_cutover");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0022_git_pack_spans");
@@ -152,6 +157,11 @@ async fn cache_service_cutover_requires_maintenance() {
         plan.pending[12].impact,
         MigrationImpact::MaintenanceRequired
     );
+    assert_eq!(plan.pending[13].name, "m0034_repository_incarnations");
+    assert_eq!(
+        plan.pending[13].impact,
+        MigrationImpact::MaintenanceRequired
+    );
 }
 
 #[tokio::test]
@@ -162,7 +172,7 @@ async fn compaction_scheduler_is_an_online_additive_migration() {
         .unwrap();
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
-    assert_eq!(plan.pending.len(), 10);
+    assert_eq!(plan.pending.len(), 11);
     assert_eq!(plan.pending[0].name, "m0024_git_compaction_scheduler");
     assert_eq!(plan.pending[0].impact, MigrationImpact::Online);
     assert_eq!(plan.pending[1].name, "m0025_visibility_change_sets");
@@ -183,6 +193,11 @@ async fn compaction_scheduler_is_an_online_additive_migration() {
     assert_eq!(plan.pending[8].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[9].name, "m0033_git_segment_streaming_v2");
     assert_eq!(plan.pending[9].impact, MigrationImpact::MaintenanceRequired);
+    assert_eq!(plan.pending[10].name, "m0034_repository_incarnations");
+    assert_eq!(
+        plan.pending[10].impact,
+        MigrationImpact::MaintenanceRequired
+    );
 
     let error = migrations::apply_online(db.as_ref()).await.unwrap_err();
     assert!(error.to_string().contains("m0025_visibility_change_sets"));

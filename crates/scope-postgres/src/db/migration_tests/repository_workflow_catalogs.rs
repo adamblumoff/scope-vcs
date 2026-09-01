@@ -14,7 +14,7 @@ const REPO_ID: &str = "workflow-owner/repo";
 const HEAD_OID: &str = "1111111111111111111111111111111111111111";
 const BLOB_OID: &str = "2222222222222222222222222222222222222222";
 
-async fn insert_repository(db: &DatabaseConnection) {
+async fn insert_legacy_repository(db: &DatabaseConnection) {
     db.execute_unprepared(
         "
         INSERT INTO scope_users (id, handle, email, email_verified)
@@ -25,6 +25,24 @@ async fn insert_repository(db: &DatabaseConnection) {
         ) VALUES (
             'workflow-owner/repo', 'workflow-owner', 'repo', 'workflow-owner', 'Ready',
             7, '{}'::jsonb, '{}'::jsonb
+        );
+        ",
+    )
+    .await
+    .unwrap();
+}
+
+async fn insert_repository(db: &DatabaseConnection) {
+    db.execute_unprepared(
+        "
+        INSERT INTO scope_users (id, handle, email, email_verified)
+        VALUES ('workflow-owner', 'workflow-owner', 'workflow@scope.test', TRUE);
+        INSERT INTO scope_repositories (
+            id, owner_handle, name, owner_user_id, publication_state,
+            change_version, repo_config, policy, incarnation_id
+        ) VALUES (
+            'workflow-owner/repo', 'workflow-owner', 'repo', 'workflow-owner', 'Ready',
+            7, '{}'::jsonb, '{}'::jsonb, 'repoi_workflow_owner_repo'
         );
         ",
     )
@@ -50,7 +68,7 @@ async fn maintenance_reads_catalogs_from_the_canonical_pre_migration_schema() {
     migrations::Migrator::up(db.as_ref(), Some(28))
         .await
         .unwrap();
-    insert_repository(db.as_ref()).await;
+    insert_legacy_repository(db.as_ref()).await;
     let file = RepositoryWorkflowFile::from_content(
         "/.scope/runs/checks.yml",
         DEFAULT_GIT_FILE_MODE,

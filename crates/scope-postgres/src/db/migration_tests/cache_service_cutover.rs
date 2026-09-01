@@ -70,10 +70,10 @@ async fn cache_service_schema_enforces_content_and_lifecycle_invariants() {
         VALUES ('cache-user', 'cache-owner', 'cache@scope.test', TRUE);
         INSERT INTO scope_repositories (
             id, owner_handle, name, owner_user_id, publication_state,
-            change_version, repo_config, policy
+            change_version, repo_config, policy, incarnation_id
         ) VALUES (
             '{REPOSITORY_ID}', 'cache-owner', 'cache-repo', 'cache-user', 'Ready',
-            1, '{{}}'::jsonb, '{{}}'::jsonb
+            1, '{{}}'::jsonb, '{{}}'::jsonb, 'repoi_cache_owner_repo'
         );
         INSERT INTO scope_cache_objects (
             repository_id, checksum_sha256, storage_backend, object_key,
