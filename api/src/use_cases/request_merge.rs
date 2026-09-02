@@ -247,12 +247,10 @@ pub(crate) async fn prepare_request_merge(
         .git_head
         .as_ref()
         .ok_or_else(|| ApiError::conflict("repo has no accepted Git head"))?;
-    let base_repo = state.repository_engine.materialize_repository(
-        state,
-        &repo.incarnation(),
-        current,
-        &repo.git_pack_spans,
-    )?;
+    let base_repo = state
+        .repository_engine
+        .materialize_repository(state, &repo.incarnation(), current, &repo.git_pack_spans)
+        .await?;
     let staging_repo = receive_pack_staging_repo_path(state, &repo.incarnation())?;
     if let Some(parent) = staging_repo.parent() {
         ensure_private_dir(parent)?;
@@ -278,7 +276,8 @@ pub(crate) async fn prepare_request_merge(
                     state,
                     &staging_repo,
                     &request.head_oid,
-                )?;
+                )
+                .await?;
                 let merge_base_oid = validated.public_base_oid.clone();
                 (
                     RequestMergeOrigin::Public {

@@ -240,6 +240,7 @@ async fn merge_route_persists_git_content_once() {
         repo.git_head.as_ref(),
         &repo.git_pack_spans,
     )
+    .await
     .unwrap();
     assert_eq!(
         git_stdout_text(

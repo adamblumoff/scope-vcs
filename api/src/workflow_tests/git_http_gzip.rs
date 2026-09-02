@@ -66,13 +66,14 @@ async fn receive_pack_accepts_gzip_encoded_request_body() {
         .unwrap();
     assert_eq!(repo.record.lifecycle_state, RepoLifecycleState::Ready);
     assert!(repo.first_push_token.is_none());
-    assert_eq!(
-        repo.live_tree()
-            .get(&ScopePath::parse("/README.md").unwrap())
-            .map(|blob| { blob_content(&state, blob, &repo,) })
-            .as_deref(),
-        Some("hello over gzip receive-pack\n")
-    );
+    let readme = match repo
+        .live_tree()
+        .get(&ScopePath::parse("/README.md").unwrap())
+    {
+        Some(blob) => Some(blob_content(&state, blob, &repo).await),
+        None => None,
+    };
+    assert_eq!(readme.as_deref(), Some("hello over gzip receive-pack\n"));
 }
 
 #[tokio::test]

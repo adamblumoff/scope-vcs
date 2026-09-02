@@ -175,7 +175,8 @@ async fn seed_catalog_git_segments_restore_raw_repositories() {
         "public-demo-live",
         "README.html",
         PUBLIC_DEMO_README_HTML,
-    );
+    )
+    .await;
 
     let update_demo = catalog.repository("dev", "update-demo").unwrap();
     assert_repository_file(
@@ -184,7 +185,8 @@ async fn seed_catalog_git_segments_restore_raw_repositories() {
         "update-demo-live",
         "README.md",
         UPDATE_DEMO_INITIAL_README,
-    );
+    )
+    .await;
     for request in catalog.requests.values() {
         let snapshot = request
             .git_snapshot
@@ -235,7 +237,7 @@ fn request_state(catalog: &scope_postgres::db::CatalogFixture, request_id: &str)
     catalog.requests.get(request_id).unwrap().state()
 }
 
-fn assert_repository_file(
+async fn assert_repository_file(
     state: &AppState,
     repo: &Repository,
     label: &str,
@@ -250,6 +252,7 @@ fn assert_repository_file(
         &repo.git_pack_spans,
         &repo_root,
     )
+    .await
     .unwrap();
     let actual = git_stdout_text(
         &repo_root,

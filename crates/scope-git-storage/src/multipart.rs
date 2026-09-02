@@ -2,13 +2,19 @@ use crate::error::MultipartError;
 use async_trait::async_trait;
 use aws_sdk_s3::{
     Client,
-    config::{BehaviorVersion, Credentials, Region, SharedCredentialsProvider},
+    config::{BehaviorVersion, Credentials, Region, SharedCredentialsProvider, retry::RetryConfig},
+    error::SdkError,
+    operation::get_object::GetObjectError,
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart},
 };
 use bytes::Bytes;
-use std::{pin::Pin, sync::Arc};
+use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::io::AsyncRead;
+
+const REMOTE_READ_ATTEMPTS: usize = 3;
+
+type GetObjectSdkError = SdkError<GetObjectError>;
 
 pub type RemoteReader = Pin<Box<dyn AsyncRead + Send>>;
 
@@ -103,6 +109,63 @@ impl S3MultipartStore {
     }
 }
 
+fn s3_request_error(
+    operation: &str,
+    key: &str,
+    error: impl Error + Send + Sync + 'static,
+) -> MultipartError {
+    MultipartError::with_source(format!("S3 {operation} failed for object {key}"), error)
+}
+
+fn is_retryable_get_error(error: &GetObjectSdkError) -> bool {
+    match error {
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
+            true
+        }
+        SdkError::ServiceError(error) => {
+            matches!(error.raw().status().as_u16(), 429 | 502 | 503 | 504)
+        }
+        SdkError::ConstructionFailure(_) => false,
+        _ => false,
+    }
+}
+
+async fn retry_remote_read<T, E, Operation, OperationFuture, Retryable, Sleep, SleepFuture>(
+    mut operation: Operation,
+    retryable: Retryable,
+    mut sleep: Sleep,
+) -> Result<T, E>
+where
+    Operation: FnMut() -> OperationFuture,
+    OperationFuture: Future<Output = Result<T, E>>,
+    Retryable: Fn(&E) -> bool,
+    Sleep: FnMut(Duration) -> SleepFuture,
+    SleepFuture: Future<Output = ()>,
+{
+    let mut attempt = 1;
+    loop {
+        match operation().await {
+            Ok(value) => return Ok(value),
+            Err(error) if attempt < REMOTE_READ_ATTEMPTS && retryable(&error) => {
+                sleep(remote_read_delay(attempt)).await;
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn remote_read_delay(failed_attempt: usize) -> Duration {
+    let base_millis = 25_u64 << failed_attempt.saturating_sub(1);
+    let mut random = [0_u8; 1];
+    let jitter = if getrandom::fill(&mut random).is_ok() {
+        u64::from(random[0]) * base_millis / 510
+    } else {
+        0
+    };
+    Duration::from_millis(base_millis + jitter)
+}
+
 #[async_trait]
 impl MultipartStore for S3MultipartStore {
     fn minimum_part_bytes(&self) -> usize {
@@ -117,7 +180,7 @@ impl MultipartStore for S3MultipartStore {
             .key(key)
             .send()
             .await
-            .map_err(|error| MultipartError::new(error.to_string()))?;
+            .map_err(|error| s3_request_error("create multipart upload", key, error))?;
         let upload_id = response
             .upload_id()
             .filter(|value| !value.is_empty())
@@ -144,7 +207,7 @@ impl MultipartStore for S3MultipartStore {
             .body(ByteStream::from(bytes))
             .send()
             .await
-            .map_err(|error| MultipartError::new(error.to_string()))?;
+            .map_err(|error| s3_request_error("upload part", &upload.key, error))?;
         let etag = response
             .e_tag()
             .filter(|value| !value.is_empty())
@@ -175,12 +238,12 @@ impl MultipartStore for S3MultipartStore {
         self.client
             .complete_multipart_upload()
             .bucket(self.bucket.as_ref())
-            .key(upload.key)
+            .key(&upload.key)
             .upload_id(upload.upload_id)
             .multipart_upload(completed)
             .send()
             .await
-            .map_err(|error| MultipartError::new(error.to_string()))?;
+            .map_err(|error| s3_request_error("complete multipart upload", &upload.key, error))?;
         Ok(())
     }
 
@@ -188,11 +251,11 @@ impl MultipartStore for S3MultipartStore {
         self.client
             .abort_multipart_upload()
             .bucket(self.bucket.as_ref())
-            .key(upload.key)
+            .key(&upload.key)
             .upload_id(upload.upload_id)
             .send()
             .await
-            .map_err(|error| MultipartError::new(error.to_string()))?;
+            .map_err(|error| s3_request_error("abort multipart upload", &upload.key, error))?;
         Ok(())
     }
 
@@ -209,7 +272,7 @@ impl MultipartStore for S3MultipartStore {
                 .set_upload_id_marker(upload_id_marker.clone())
                 .send()
                 .await
-                .map_err(|error| MultipartError::new(error.to_string()))?;
+                .map_err(|error| s3_request_error("list multipart uploads", key, error))?;
             for upload in response.uploads() {
                 let Some(upload_key) = upload.key() else {
                     continue;
@@ -225,7 +288,9 @@ impl MultipartStore for S3MultipartStore {
                         .upload_id(upload_id)
                         .send()
                         .await
-                        .map_err(|error| MultipartError::new(error.to_string()))?;
+                        .map_err(|error| {
+                            s3_request_error("abort multipart upload", upload_key, error)
+                        })?;
                 }
             }
             if response.is_truncated() != Some(true) {
@@ -242,14 +307,24 @@ impl MultipartStore for S3MultipartStore {
     }
 
     async fn read(&self, key: &str) -> Result<RemoteReader, MultipartError> {
-        let response = self
-            .client
-            .get_object()
-            .bucket(self.bucket.as_ref())
-            .key(key)
-            .send()
-            .await
-            .map_err(|error| MultipartError::new(error.to_string()))?;
+        let response = retry_remote_read(
+            || {
+                self.client
+                    .get_object()
+                    .bucket(self.bucket.as_ref())
+                    .key(key)
+                    .customize()
+                    .config_override(
+                        aws_sdk_s3::config::Builder::new()
+                            .retry_config(RetryConfig::standard().with_max_attempts(1)),
+                    )
+                    .send()
+            },
+            is_retryable_get_error,
+            tokio::time::sleep,
+        )
+        .await
+        .map_err(|error| s3_request_error("get object", key, error))?;
         Ok(Box::pin(response.body.into_async_read()))
     }
 
@@ -260,7 +335,99 @@ impl MultipartStore for S3MultipartStore {
             .key(key)
             .send()
             .await
-            .map_err(|error| MultipartError::new(error.to_string()))?;
+            .map_err(|error| s3_request_error("delete object", key, error))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_s3::{config::http::HttpResponse, error::ErrorMetadata, primitives::SdkBody};
+    use std::io;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("test read failed")]
+    struct TestReadError {
+        retryable: bool,
+    }
+
+    fn service_error(code: &str, status: u16) -> GetObjectSdkError {
+        let error = GetObjectError::generic(ErrorMetadata::builder().code(code).build());
+        let response = HttpResponse::new(status.try_into().unwrap(), SdkBody::empty());
+        SdkError::service_error(error, response)
+    }
+
+    #[test]
+    fn get_object_retries_only_temporary_failures() {
+        let timeout = GetObjectSdkError::timeout_error(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "request timed out",
+        ));
+        let construction = GetObjectSdkError::construction_failure(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid request",
+        ));
+
+        assert!(is_retryable_get_error(&timeout));
+        assert!(is_retryable_get_error(&service_error(
+            "ServiceUnavailable",
+            503,
+        )));
+        assert!(is_retryable_get_error(&service_error("SlowDown", 429)));
+        assert!(!is_retryable_get_error(
+            &service_error("AccessDenied", 403,)
+        ));
+        assert!(!is_retryable_get_error(&service_error("NoSuchKey", 404)));
+        assert!(!is_retryable_get_error(&construction));
+    }
+
+    #[tokio::test]
+    async fn remote_read_succeeds_after_retryable_failures() {
+        let attempts = AtomicUsize::new(0);
+        let sleeps = AtomicUsize::new(0);
+
+        let result = retry_remote_read(
+            || async {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                if attempt < 2 {
+                    Err(TestReadError { retryable: true })
+                } else {
+                    Ok("object")
+                }
+            },
+            |error| error.retryable,
+            |_| async {
+                sleeps.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await;
+
+        assert_eq!(result.unwrap(), "object");
+        assert_eq!(attempts.load(Ordering::SeqCst), REMOTE_READ_ATTEMPTS);
+        assert_eq!(sleeps.load(Ordering::SeqCst), REMOTE_READ_ATTEMPTS - 1);
+    }
+
+    #[tokio::test]
+    async fn remote_read_stops_after_non_retryable_failure() {
+        let attempts = AtomicUsize::new(0);
+        let sleeps = AtomicUsize::new(0);
+
+        let result = retry_remote_read(
+            || async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>(TestReadError { retryable: false })
+            },
+            |error| error.retryable,
+            |_| async {
+                sleeps.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await;
+
+        assert!(!result.unwrap_err().retryable);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(sleeps.load(Ordering::SeqCst), 0);
     }
 }

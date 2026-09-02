@@ -454,14 +454,26 @@ async fn best_effort_sync_cache(
                 && repo.git_head.as_ref().is_some_and(|head| {
                     head.manifest.content_ref == committed_git_head.manifest.content_ref
                 });
-            if is_still_current
-                && let Err(error) = state.repository_engine.sync_after_push(
-                    committed_incarnation,
-                    local_pack,
-                    &committed_git_head.head_oid,
-                    committed_git_head.push_sequence,
-                )
-            {
+            let sync_result = if is_still_current {
+                let engine = state.repository_engine.clone();
+                let incarnation = committed_incarnation.clone();
+                let local_pack = local_pack.to_path_buf();
+                let head_oid = committed_git_head.head_oid.clone();
+                let push_sequence = committed_git_head.push_sequence;
+                tokio::task::spawn_blocking(move || {
+                    engine.sync_after_push(&incarnation, &local_pack, &head_oid, push_sequence)
+                })
+                .await
+                .map_err(|error| {
+                    ApiError::internal_message(format!(
+                        "repository Git cache synchronization task failed: {error}"
+                    ))
+                })
+                .and_then(|result| result)
+            } else {
+                Ok(())
+            };
+            if let Err(error) = sync_result {
                 tracing::warn!(
                     owner,
                     repo = repo_name,

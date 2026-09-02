@@ -190,7 +190,7 @@ async fn consecutive_content_only_pushes_advance_the_live_projection() {
             .await
             .unwrap();
         assert_eq!(
-            blob_content(&state, &projected.blob, &repo,),
+            blob_content(&state, &projected.blob, &repo).await,
             expected_content
         );
 

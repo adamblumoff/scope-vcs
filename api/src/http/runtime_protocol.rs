@@ -212,19 +212,13 @@ pub(crate) async fn source(
     let claim = require_attempt(&state, &headers, &attempt_id).await?;
     let source_identity = claim.run.source.source_identity().to_string();
     let source = claim.run.source.clone();
-    let source_state = state.clone();
     let _materialization_permit = source
         .logical_git_head()
         .is_some()
         .then(|| state.runtime_budgets.try_git_materialization())
         .transpose()?;
-    let materialized = tokio::task::spawn_blocking(move || {
-        materialize_run_source_bundle(&source_state, &source, MAX_SOURCE_BUNDLE_BYTES)
-    })
-    .await
-    .map_err(|error| {
-        ApiError::internal_message(format!("run source materialization failed: {error}"))
-    })??;
+    let materialized =
+        materialize_run_source_bundle(&state, &source, MAX_SOURCE_BUNDLE_BYTES).await?;
     let mut response_headers = HeaderMap::new();
     response_headers.insert(
         CONTENT_TYPE,

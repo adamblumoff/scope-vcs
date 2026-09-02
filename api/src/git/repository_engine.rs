@@ -9,7 +9,10 @@ use crate::{
             RepositoryGitCache, sanitize_repository_git_cache_repo,
         },
         import::run_git,
-        restore::{index_git_pack, restore_git_pack_spans, run_timed_git_restore_phase},
+        restore::{
+            index_git_pack, restore_git_pack_spans, run_timed_git_restore_phase,
+            run_timed_git_restore_phase_async,
+        },
     },
     state::AppState,
 };
@@ -69,24 +72,29 @@ impl RepositoryEngine {
 
     /// Coalesces immutable derived views by their content-derived key. These
     /// views do not participate in the repository replica's mutation stream.
-    pub(crate) fn materialize_derived(
+    pub(crate) async fn materialize_derived<Build, BuildFuture>(
         &self,
         incarnation: &RepositoryIncarnation,
         namespace: GitDerivedCacheNamespace,
         key: String,
         path: &Path,
         is_ready: impl Fn() -> bool,
-        build: impl FnOnce() -> Result<(), ApiError>,
-    ) -> Result<GitRepoHandle, ApiError> {
+        build: Build,
+    ) -> Result<GitRepoHandle, ApiError>
+    where
+        Build: FnOnce() -> BuildFuture,
+        BuildFuture: std::future::Future<Output = Result<(), ApiError>>,
+    {
         let started_at = Instant::now();
         let cache_hit = is_ready();
         let built = AtomicBool::new(false);
         let result = self
             .materializations
-            .materialize(namespace, key, is_ready, || {
+            .materialize_async(namespace, key, is_ready, || async {
                 built.store(true, Ordering::Relaxed);
-                build()
+                build().await
             })
+            .await
             .and_then(|()| self.cache.lease_derived(path.to_path_buf()));
         tracing::info!(
             repository_id = incarnation.repository_id(),
@@ -102,7 +110,7 @@ impl RepositoryEngine {
 
     /// Opens the local replica at or beyond the requested durable frontier,
     /// serializing any repair or catch-up with post-push replica updates.
-    pub(crate) fn materialize_repository(
+    pub(crate) async fn materialize_repository(
         &self,
         state: &AppState,
         incarnation: &RepositoryIncarnation,
@@ -125,7 +133,7 @@ impl RepositoryEngine {
         let cache_hit = is_ready();
         let built = AtomicBool::new(false);
         let materialization_path = AtomicU8::new(MATERIALIZATION_PATH_HIT);
-        let result = self.coordinate_repository(incarnation, is_ready, || {
+        let result = self.coordinate_repository(incarnation, is_ready, || async {
             built.store(true, Ordering::Relaxed);
             let _permit = state.runtime_budgets.try_git_materialization()?;
             match self.cache.applied_sequence(incarnation, &repo_path) {
@@ -138,7 +146,8 @@ impl RepositoryEngine {
                         pack_spans,
                         applied,
                         &repo_path,
-                    )?;
+                    )
+                    .await?;
                     self.cache
                         .note_applied(incarnation, &repo_path, head.push_sequence)
                 }
@@ -169,7 +178,9 @@ impl RepositoryEngine {
                         head,
                         pack_spans,
                         &temp_path,
-                    ) {
+                    )
+                    .await
+                    {
                         let _ = fs::remove_dir_all(&temp_path);
                         return Err(error);
                     }
@@ -195,7 +206,8 @@ impl RepositoryEngine {
                     }
                 }
             }
-        });
+        })
+        .await;
         tracing::info!(
             repository_id,
             cache_outcome = materialization_outcome(cache_hit, built.load(Ordering::Relaxed)),
@@ -242,7 +254,7 @@ impl RepositoryEngine {
         let started_at = Instant::now();
         let cache_hit = is_ready();
         let built = AtomicBool::new(false);
-        let result = self.coordinate_repository(incarnation, is_ready, || {
+        let result = self.coordinate_repository_blocking(incarnation, is_ready, || {
             built.store(true, Ordering::Relaxed);
             if target.is_dir() {
                 index_local_pack(&target, local_pack)?;
@@ -325,7 +337,32 @@ impl RepositoryEngine {
         });
     }
 
-    fn coordinate_repository(
+    async fn coordinate_repository<Operation, OperationFuture>(
+        &self,
+        incarnation: &RepositoryIncarnation,
+        is_ready: impl Fn() -> bool,
+        operation: Operation,
+    ) -> Result<(), ApiError>
+    where
+        Operation: FnOnce() -> OperationFuture,
+        OperationFuture: std::future::Future<Output = Result<(), ApiError>>,
+    {
+        self.materializations
+            .materialize_async(
+                GitDerivedCacheNamespace::Repository,
+                format!(
+                    "{}:{}{}",
+                    incarnation.repository_id().len(),
+                    incarnation.repository_id(),
+                    incarnation.incarnation_id()
+                ),
+                is_ready,
+                operation,
+            )
+            .await
+    }
+
+    fn coordinate_repository_blocking(
         &self,
         incarnation: &RepositoryIncarnation,
         is_ready: impl Fn() -> bool,
@@ -344,7 +381,7 @@ impl RepositoryEngine {
         )
     }
 
-    fn catch_up(
+    async fn catch_up(
         &self,
         state: &AppState,
         repository_id: &str,
@@ -382,26 +419,33 @@ impl RepositoryEngine {
                 span,
                 index + 1,
                 missing_count,
-            )?;
+            )
+            .await?;
         }
-        run_timed_git_restore_phase(
+        run_timed_git_restore_phase_async(
             repository_id,
             "update_ref",
-            Some(repo_root),
-            &[
-                "update-ref",
-                &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
-                &head.head_oid,
+            Some(repo_root.to_path_buf()),
+            vec![
+                "update-ref".to_string(),
+                format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+                head.head_oid.clone(),
             ],
             "advancing repository Git cache head",
-        )?;
-        run_timed_git_restore_phase(
+        )
+        .await?;
+        run_timed_git_restore_phase_async(
             repository_id,
             "fsck",
-            Some(repo_root),
-            &["fsck", "--connectivity-only", &head.head_oid],
+            Some(repo_root.to_path_buf()),
+            vec![
+                "fsck".to_string(),
+                "--connectivity-only".to_string(),
+                head.head_oid.clone(),
+            ],
             "verifying caught-up repository Git cache",
         )
+        .await
     }
 }
 
@@ -524,7 +568,7 @@ mod tests {
             let first_ready = first_ready.clone();
             let repo = repo.clone();
             thread::spawn(move || {
-                engine.coordinate_repository(
+                engine.coordinate_repository_blocking(
                     &repo,
                     || first_ready.load(Ordering::SeqCst),
                     || {
@@ -547,7 +591,7 @@ mod tests {
             let second_ready = second_ready.clone();
             let repo = repo.clone();
             thread::spawn(move || {
-                engine.coordinate_repository(
+                engine.coordinate_repository_blocking(
                     &repo,
                     || second_ready.load(Ordering::SeqCst),
                     || {
@@ -580,7 +624,7 @@ mod tests {
             let engine = engine.clone();
             let first_repo = first_repo.clone();
             thread::spawn(move || {
-                engine.coordinate_repository(
+                engine.coordinate_repository_blocking(
                     &first_repo,
                     || false,
                     || {
@@ -598,7 +642,7 @@ mod tests {
             let engine = engine.clone();
             let second_repo = incarnation("owner/two");
             thread::spawn(move || {
-                engine.coordinate_repository(
+                engine.coordinate_repository_blocking(
                     &second_repo,
                     || false,
                     || {

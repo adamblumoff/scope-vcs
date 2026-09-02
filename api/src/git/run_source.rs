@@ -28,15 +28,24 @@ pub(crate) struct MaterializedRunSource {
     pub(crate) sha256: String,
 }
 
-pub(crate) fn materialize_run_source_bundle(
+pub(crate) async fn materialize_run_source_bundle(
     state: &AppState,
     source: &RunSource,
     max_bytes: usize,
 ) -> Result<MaterializedRunSource, ApiError> {
     let bytes = if let Some(bundle) = source.ephemeral_bundle() {
-        source_blob_bytes_bounded(state.object_store.as_ref(), bundle, max_bytes)?
+        let object_store = state.object_store.clone();
+        let bundle = bundle.clone();
+        tokio::task::spawn_blocking(move || {
+            source_blob_bytes_bounded(object_store.as_ref(), &bundle, max_bytes)
+                .map_err(ApiError::from)
+        })
+        .await
+        .map_err(|error| {
+            ApiError::internal_message(format!("run source object read task failed: {error}"))
+        })??
     } else {
-        materialize_accepted_git_head_bundle(state, source, max_bytes)?
+        materialize_accepted_git_head_bundle(state, source, max_bytes).await?
     };
     Ok(MaterializedRunSource {
         sha256: hex::encode(Sha256::digest(&bytes)),
@@ -44,7 +53,7 @@ pub(crate) fn materialize_run_source_bundle(
     })
 }
 
-fn materialize_accepted_git_head_bundle(
+async fn materialize_accepted_git_head_bundle(
     state: &AppState,
     source: &RunSource,
     max_bytes: usize,
@@ -53,17 +62,25 @@ fn materialize_accepted_git_head_bundle(
         ApiError::internal_message("run source does not contain a materializable Git head")
     })?;
     let repo = TemporaryRunSourceRepository::new(state)?;
-    restore_git_pack_spans(state, repository_id, head, pack_spans, repo.path())?;
+    restore_git_pack_spans(state, repository_id, head, pack_spans, repo.path()).await?;
     let main_ref = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
-    let output = git_process_output_with_limits(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(repo.path())
-            .args(["bundle", "create", "-", &main_ref]),
-        None,
-        state.runtime_budgets.git_command_timeout(),
-        max_bytes,
-    )?;
+    let repo_path = repo.path().to_path_buf();
+    let timeout = state.runtime_budgets.git_command_timeout();
+    let output = tokio::task::spawn_blocking(move || {
+        git_process_output_with_limits(
+            Command::new("git")
+                .arg("--git-dir")
+                .arg(repo_path)
+                .args(["bundle", "create", "-", &main_ref]),
+            None,
+            timeout,
+            max_bytes,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal_message(format!("run source Git bundle task failed: {error}"))
+    })??;
     if !output.status.success() {
         return Err(ApiError::infrastructure_unavailable(format!(
             "materializing run source bundle: {}",
@@ -314,7 +331,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn accepted_git_head_materializes_a_non_durable_bundle_at_run_start() {
+    async fn concurrent_git_head_materializations_restore_remote_segments_on_the_api_runtime() {
         let state = AppState::test_state();
         let owner = UserAccount {
             id: "user-owner".to_string(),
@@ -382,8 +399,20 @@ mod tests {
         )
         .unwrap();
 
-        let materialized = materialize_run_source_bundle(&state, &source, 4 * 1024 * 1024).unwrap();
+        state
+            .git_segment_store
+            .cleanup_local("owner/repo", &pushed.stored.pack_span.segment.segment_id)
+            .await
+            .unwrap();
+        let (first, second) = tokio::join!(
+            materialize_run_source_bundle(&state, &source, 4 * 1024 * 1024),
+            materialize_run_source_bundle(&state, &source, 4 * 1024 * 1024),
+        );
+        let materialized = first.unwrap();
+        let concurrent = second.unwrap();
         assert!(!materialized.bytes.is_empty());
+        assert_eq!(concurrent.bytes, materialized.bytes);
+        assert_eq!(concurrent.sha256, materialized.sha256);
         assert_eq!(
             materialized.sha256,
             hex::encode(Sha256::digest(&materialized.bytes))

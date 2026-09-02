@@ -484,9 +484,10 @@ async fn live_file_content(state: &AppState, path: &str) -> Option<String> {
     let repo = find_repo(state, TEST_REPO_OWNER, TEST_REPO_NAME)
         .await
         .unwrap();
-    repo.live_tree()
-        .get(&ScopePath::parse(path).unwrap())
-        .map(|blob| blob_content(state, blob, &repo))
+    match repo.live_tree().get(&ScopePath::parse(path).unwrap()) {
+        Some(blob) => Some(blob_content(state, blob, &repo).await),
+        None => None,
+    }
 }
 
 async fn persist_test_update(
@@ -773,7 +774,7 @@ fn source_blob_from_bytes(state: &AppState, bytes: &[u8]) -> scope_domain::conte
     put_source_blob(state.object_store.as_ref(), bytes).unwrap()
 }
 
-fn blob_content(
+async fn blob_content(
     state: &AppState,
     blob: &scope_domain::content::SourceBlob,
     repo: &Repository,
@@ -782,8 +783,12 @@ fn blob_content(
         .git_head
         .as_ref()
         .map(|head| (repo.incarnation(), head, repo.git_pack_spans.as_slice()));
-    String::from_utf8(crate::git::content::source_content_bytes(state, blob, git_source).unwrap())
-        .unwrap()
+    String::from_utf8(
+        crate::git::content::source_content_bytes(state, blob, git_source)
+            .await
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 fn repo_with_readme(state: &AppState) -> Repository {

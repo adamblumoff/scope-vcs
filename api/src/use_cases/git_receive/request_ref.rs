@@ -80,15 +80,13 @@ pub(crate) async fn prepare_request_staging_repo(
     }
 
     let seed_repo = match access.actor {
-        RepositoryActor::Public => public_projection_repo(state, &repo)?,
+        RepositoryActor::Public => public_projection_repo(state, &repo).await?,
         RepositoryActor::Owner | RepositoryActor::Member => {
             if let Some(head) = repo.git_head.as_ref() {
-                state.repository_engine.materialize_repository(
-                    state,
-                    &repo.incarnation(),
-                    head,
-                    &repo.git_pack_spans,
-                )?
+                state
+                    .repository_engine
+                    .materialize_repository(state, &repo.incarnation(), head, &repo.git_pack_spans)
+                    .await?
             } else {
                 let principal = principal_for_user_id(&repo, actor_user_id);
                 let projection = project_graph(
@@ -102,7 +100,8 @@ pub(crate) async fn prepare_request_staging_repo(
                     &projection,
                     repo.git_head.as_ref(),
                     &repo.git_pack_spans,
-                )?
+                )
+                .await?
             }
         }
     };
@@ -161,14 +160,17 @@ async fn seed_editable_request_refs_for_repo(
         && requests.iter().any(|request| {
             request.audience == RequestAudience::Public && request.git_snapshot.is_none()
         }) {
-        Some(public_projection_repo(state, repo)?)
+        Some(public_projection_repo(state, repo).await?)
     } else {
         None
     };
     attach_visible_request_refs(state, &requests, staging_repo, public_base_repo.as_deref())
 }
 
-fn public_projection_repo(state: &AppState, repo: &Repository) -> Result<GitRepoHandle, ApiError> {
+async fn public_projection_repo(
+    state: &AppState,
+    repo: &Repository,
+) -> Result<GitRepoHandle, ApiError> {
     let projection = project_graph(
         &repo.graph,
         &repo.visibility_change_sets,
@@ -181,6 +183,7 @@ fn public_projection_repo(state: &AppState, repo: &Repository) -> Result<GitRepo
         repo.git_head.as_ref(),
         &repo.git_pack_spans,
     )
+    .await
 }
 
 pub(super) async fn persist_request_ref_revision(

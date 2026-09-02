@@ -7,9 +7,14 @@ use crate::{
 use scope_domain::repository::git::{GitHead, GitPackSpan, validate_git_pack_layout};
 use scope_git_process::{ProcessLimits, run_with_stdin_reader};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path, process::Command, time::Instant};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{Duration, Instant},
+};
 
-pub(crate) fn restore_git_pack_spans(
+pub(crate) async fn restore_git_pack_spans(
     state: &AppState,
     repository_id: &str,
     head: &GitHead,
@@ -21,7 +26,8 @@ pub(crate) fn restore_git_pack_spans(
         .iter()
         .map(|span| span.segment.plaintext_bytes)
         .sum::<u64>();
-    let result = restore_git_pack_spans_inner(state, repository_id, head, pack_spans, repo_root);
+    let result =
+        restore_git_pack_spans_inner(state, repository_id, head, pack_spans, repo_root).await;
     tracing::info!(
         repository_id,
         operation = "restore_pack_layout",
@@ -35,7 +41,7 @@ pub(crate) fn restore_git_pack_spans(
     result
 }
 
-fn restore_git_pack_spans_inner(
+async fn restore_git_pack_spans_inner(
     state: &AppState,
     repository_id: &str,
     head: &GitHead,
@@ -52,16 +58,29 @@ fn restore_git_pack_spans_inner(
             "Git pack layout frontier does not match the logical head",
         ));
     }
-    if repo_root.exists() {
-        fs::remove_dir_all(repo_root).map_err(ApiError::internal)?;
-    }
-    run_timed_git_restore_phase(
+    let repo_root_for_cleanup = repo_root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        if repo_root_for_cleanup.exists() {
+            fs::remove_dir_all(repo_root_for_cleanup).map_err(ApiError::internal)?;
+        }
+        Ok::<_, ApiError>(())
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal_message(format!("Git restore cleanup task failed: {error}"))
+    })??;
+    run_timed_git_restore_phase_async(
         repository_id,
         "init",
         None,
-        &["init", "--bare", repo_root.to_string_lossy().as_ref()],
+        vec![
+            "init".to_string(),
+            "--bare".to_string(),
+            repo_root.to_string_lossy().into_owned(),
+        ],
         "initializing Git snapshot repo",
-    )?;
+    )
+    .await?;
     for (index, span) in pack_spans.iter().enumerate() {
         index_git_pack(
             state,
@@ -70,41 +89,49 @@ fn restore_git_pack_spans_inner(
             span,
             index + 1,
             pack_spans.len(),
-        )?;
+        )
+        .await?;
     }
-    run_timed_git_restore_phase(
+    run_timed_git_restore_phase_async(
         repository_id,
         "update_ref",
-        Some(repo_root),
-        &[
-            "update-ref",
-            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
-            &head.head_oid,
+        Some(repo_root.to_path_buf()),
+        vec![
+            "update-ref".to_string(),
+            format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+            head.head_oid.clone(),
         ],
         "restoring Git pack-layout head",
-    )?;
-    run_timed_git_restore_phase(
+    )
+    .await?;
+    run_timed_git_restore_phase_async(
         repository_id,
         "fsck",
-        Some(repo_root),
-        &["fsck", "--connectivity-only", &head.head_oid],
+        Some(repo_root.to_path_buf()),
+        vec![
+            "fsck".to_string(),
+            "--connectivity-only".to_string(),
+            head.head_oid.clone(),
+        ],
         "verifying restored Git pack layout",
-    )?;
-    run_timed_git_restore_phase(
+    )
+    .await?;
+    run_timed_git_restore_phase_async(
         repository_id,
         "symbolic_ref",
-        Some(repo_root),
-        &[
-            "symbolic-ref",
-            "HEAD",
-            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+        Some(repo_root.to_path_buf()),
+        vec![
+            "symbolic-ref".to_string(),
+            "HEAD".to_string(),
+            format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
         ],
         "setting restored Git snapshot head",
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
-pub(crate) fn index_git_pack(
+pub(crate) async fn index_git_pack(
     state: &AppState,
     repo_root: &Path,
     repository_id: &str,
@@ -117,32 +144,22 @@ pub(crate) fn index_git_pack(
         hex::encode(Sha256::digest(span.segment.segment_id.as_bytes()))
     );
     let temp_pack = repo_root.join(temp_name);
-    let segment_store = state.git_segment_store.clone();
-    let repository_id_for_restore = repository_id.to_string();
-    let segment = span.segment.clone();
-    let temp_pack_for_restore = temp_pack.clone();
     let retrieval_started = Instant::now();
-    let restore = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
+    let restore = async {
+        let mut output = tokio::fs::File::create(&temp_pack)
+            .await
             .map_err(scope_git_storage::GitStorageError::Local)?;
-        runtime.block_on(async move {
-            let mut output = tokio::fs::File::create(&temp_pack_for_restore)
-                .await
-                .map_err(scope_git_storage::GitStorageError::Local)?;
-            let timings = segment_store
-                .restore_to_prefer_local(&repository_id_for_restore, &segment, &mut output)
-                .await?;
-            output
-                .sync_all()
-                .await
-                .map_err(scope_git_storage::GitStorageError::Local)?;
-            Ok::<_, scope_git_storage::GitStorageError>(timings)
-        })
-    })
-    .join()
-    .map_err(|_| ApiError::internal_message("Git segment restore thread panicked"))?;
+        let timings = state
+            .git_segment_store
+            .restore_to_prefer_local(repository_id, &span.segment, &mut output)
+            .await?;
+        output
+            .sync_all()
+            .await
+            .map_err(scope_git_storage::GitStorageError::Local)?;
+        Ok::<_, scope_git_storage::GitStorageError>(timings)
+    }
+    .await;
     let retrieval_elapsed = retrieval_started.elapsed();
     tracing::info!(
         phase = "verified",
@@ -155,23 +172,54 @@ pub(crate) fn index_git_pack(
         "Git segment restore telemetry"
     );
     if let Err(error) = restore {
-        let _ = fs::remove_file(&temp_pack);
+        let _ = tokio::fs::remove_file(&temp_pack).await;
         return Err(ApiError::infrastructure_unavailable(error.to_string()));
     }
+    let timeout = state.runtime_budgets.git_command_timeout();
+    let repo_root = repo_root.to_path_buf();
+    let repository_id = repository_id.to_string();
+    let span = span.clone();
+    let temp_pack_for_index = temp_pack.clone();
+    let indexed = tokio::task::spawn_blocking(move || {
+        index_restored_git_pack(
+            &repo_root,
+            &repository_id,
+            &span,
+            span_index,
+            span_count,
+            &temp_pack_for_index,
+            timeout,
+        )
+    })
+    .await;
+    let _ = tokio::fs::remove_file(&temp_pack).await;
+    indexed.map_err(|error| {
+        ApiError::internal_message(format!("Git index-pack task failed: {error}"))
+    })?
+}
+
+fn index_restored_git_pack(
+    repo_root: &Path,
+    repository_id: &str,
+    span: &GitPackSpan,
+    span_index: usize,
+    span_count: usize,
+    temp_pack: &Path,
+    timeout: Duration,
+) -> Result<(), ApiError> {
     let size_bytes = span.segment.plaintext_bytes;
     let started_at = Instant::now();
-    let pack_file = fs::File::open(&temp_pack).map_err(ApiError::internal)?;
+    let pack_file = fs::File::open(temp_pack).map_err(ApiError::internal)?;
     let output = run_with_stdin_reader(
         Command::new("git")
             .arg("--git-dir")
             .arg(repo_root)
             .args(["index-pack", "--stdin"]),
         pack_file,
-        ProcessLimits::new(state.runtime_budgets.git_command_timeout()),
+        ProcessLimits::new(timeout),
         "restoring Git pack",
     )
     .map_err(|error| ApiError::infrastructure_unavailable(error.to_string()));
-    let _ = fs::remove_file(&temp_pack);
     let success = output.as_ref().is_ok_and(|output| output.status.success());
     let duration_ms = started_at.elapsed().as_millis();
     tracing::info!(
@@ -197,6 +245,28 @@ pub(crate) fn index_git_pack(
         )));
     }
     Ok(())
+}
+
+pub(crate) async fn run_timed_git_restore_phase_async(
+    repository_id: &str,
+    operation: &'static str,
+    repo_root: Option<PathBuf>,
+    args: Vec<String>,
+    context: &'static str,
+) -> Result<(), ApiError> {
+    let repository_id = repository_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_timed_git_restore_phase(
+            &repository_id,
+            operation,
+            repo_root.as_deref(),
+            &args,
+            context,
+        )
+    })
+    .await
+    .map_err(|error| ApiError::internal_message(format!("Git restore task failed: {error}")))?
 }
 
 pub(crate) fn run_timed_git_restore_phase(

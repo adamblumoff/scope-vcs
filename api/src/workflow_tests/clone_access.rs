@@ -133,6 +133,7 @@ async fn permissioned_public_git_read_view_physically_excludes_private_objects()
         repo.git_head.as_ref(),
         &repo.git_pack_spans,
     )
+    .await
     .unwrap();
     let base_main_oid = git_stdout_text(
         &public_repo,

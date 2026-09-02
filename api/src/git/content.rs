@@ -23,13 +23,21 @@ pub(crate) fn git_blob_reference(
     )?)
 }
 
-pub(crate) fn source_content_bytes(
+pub(crate) async fn source_content_bytes(
     state: &AppState,
     blob: &SourceBlob,
     git_source: Option<(RepositoryIncarnation, &GitHead, &[GitPackSpan])>,
 ) -> Result<Vec<u8>, ApiError> {
     if !matches!(blob.content_ref, ContentRef::GitBlob { .. }) {
-        return Ok(source_blob_bytes(state.object_store.as_ref(), blob)?);
+        let object_store = state.object_store.clone();
+        let blob = blob.clone();
+        return tokio::task::spawn_blocking(move || {
+            source_blob_bytes(object_store.as_ref(), &blob).map_err(ApiError::from)
+        })
+        .await
+        .map_err(|error| {
+            ApiError::internal_message(format!("source object read task failed: {error}"))
+        })?;
     }
     let (repository_id, head, pack_spans) = git_source.ok_or_else(|| {
         ApiError::internal_message("Git blob content requires a current pack layout")
@@ -39,11 +47,17 @@ pub(crate) fn source_content_bytes(
             "Git blob content locator must be a Git manifest",
         ));
     }
-    let repo =
-        state
-            .repository_engine
-            .materialize_repository(state, &repository_id, head, pack_spans)?;
-    source_content_bytes_from_repo(state, blob, Some(&repo))
+    let repo = state
+        .repository_engine
+        .materialize_repository(state, &repository_id, head, pack_spans)
+        .await?;
+    let state = state.clone();
+    let blob = blob.clone();
+    tokio::task::spawn_blocking(move || {
+        source_content_bytes_from_repo(&state, &blob, Some(repo.as_ref()))
+    })
+    .await
+    .map_err(|error| ApiError::internal_message(format!("Git blob read task failed: {error}")))?
 }
 
 pub(crate) fn source_content_bytes_from_repo(
