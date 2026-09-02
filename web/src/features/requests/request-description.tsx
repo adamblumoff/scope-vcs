@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils'
 import { Check, Pencil, X } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
+import { REQUEST_DESCRIPTION_CONTENT_CLASS } from './request-content-layout'
 
 export function RequestDescription({
   canEdit,
@@ -89,7 +90,10 @@ export function RequestDescription({
           ) : null}
         </form>
       ) : description ? (
-        <RequestDiscussionMarkdown className="max-w-4xl" source={description} />
+        <RequestDiscussionMarkdown
+          className={REQUEST_DESCRIPTION_CONTENT_CLASS}
+          source={description}
+        />
       ) : (
         <p className="text-sm leading-6 text-muted-foreground">
           No description yet.

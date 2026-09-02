@@ -4,6 +4,11 @@ import { Button } from '@/components/ui/button'
 import { historyEntryLabels } from '@/features/history/history-row-labels'
 import { cn } from '@/lib/utils'
 import { History, LoaderCircle } from 'lucide-react'
+import {
+  HISTORY_ENTRY_PRIMARY_CLASS,
+  HISTORY_ENTRY_ROW_CLASS,
+  HISTORY_ENTRY_TITLE_CLASS,
+} from './history-entry-layout'
 
 export function HistoryEntryList({
   entries,
@@ -31,7 +36,8 @@ export function HistoryEntryList({
           <button
             aria-label={labels.ariaLabel}
             className={cn(
-              'grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-5 py-2.5 text-left text-sm transition-colors sm:px-6 lg:px-8',
+              HISTORY_ENTRY_ROW_CLASS,
+              'transition-colors',
               selected
                 ? 'bg-accent shadow-[inset_2px_0_0_0_var(--brand)]'
                 : 'hover:bg-accent/50',
@@ -41,10 +47,10 @@ export function HistoryEntryList({
             title={entry.source_id}
             type="button"
           >
-            <span className="flex min-w-0 items-center gap-2">
+            <span className={HISTORY_ENTRY_PRIMARY_CLASS}>
               <History className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0">
-                <span className="flex min-w-0 items-center gap-2">
+                <span className={HISTORY_ENTRY_TITLE_CLASS}>
                   <Badge className="shrink-0" variant="neutral">{labels.kind}</Badge>
                   <span className="truncate text-[13px] font-medium">{labels.title}</span>
                 </span>

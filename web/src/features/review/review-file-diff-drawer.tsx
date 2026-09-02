@@ -7,7 +7,11 @@ import { PanelState } from '@/components/empty-state'
 import { displayPath } from '@/components/file-system-tree-model'
 import { PendingSurface } from '@/components/pending-surface'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import {
+  LineSkeleton,
+  TextSkeleton,
+  type LineSkeletonLength,
+} from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import DOMPurify from 'dompurify'
 import { File, FileText, TriangleAlert, X } from 'lucide-react'
@@ -158,21 +162,35 @@ function PrerenderedDiff({ html }: { html: string }) {
   )
 }
 
-const DIFF_SKELETON_WIDTHS = [78, 46, 86, 62, 72, 38, 82, 56, 68]
+const PENDING_DIFF_LINES: {
+  highlighted?: boolean
+  id: string
+  length: LineSkeletonLength
+}[] = [
+  { id: 'first', length: 'long' },
+  { id: 'second', length: 'short' },
+  { id: 'third', length: 'long' },
+  { highlighted: true, id: 'fourth', length: 'medium' },
+  { highlighted: true, id: 'fifth', length: 'long' },
+  { id: 'sixth', length: 'short' },
+  { id: 'seventh', length: 'long' },
+  { id: 'eighth', length: 'medium' },
+  { id: 'ninth', length: 'long' },
+]
 
 function DiffSkeleton() {
   return (
     <div className="py-3 font-mono">
-      {DIFF_SKELETON_WIDTHS.map((width, index) => (
+      {PENDING_DIFF_LINES.map((line) => (
         <div
           className={cn(
             'grid min-h-7 grid-cols-[36px_minmax(0,1fr)] items-center gap-3 px-4',
-            index === 3 || index === 4 ? 'bg-success-soft/50' : undefined,
+            line.highlighted ? 'bg-success-soft/50' : undefined,
           )}
-          key={`${width}-${index}`}
+          key={line.id}
         >
-          <Skeleton className="h-3 w-5" />
-          <Skeleton className="h-3" style={{ width: `${width}%` }} />
+          <TextSkeleton length="tiny" size="meta" />
+          <LineSkeleton length={line.length} />
         </div>
       ))}
     </div>

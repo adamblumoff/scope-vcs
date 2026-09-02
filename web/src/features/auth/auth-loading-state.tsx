@@ -1,5 +1,5 @@
 import { PendingSurface } from '@/components/pending-surface'
-import { Skeleton } from '@/components/ui/skeleton'
+import { BlockSkeleton } from '@/components/ui/skeleton'
 import type { ReactNode } from 'react'
 
 export function AuthSurface({
@@ -30,9 +30,9 @@ export function AuthLoadingState({ label }: { label: string }) {
       label={label}
     >
       <div className="space-y-3">
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-9 w-28" />
+        <BlockSkeleton className="h-10 w-full" />
+        <BlockSkeleton className="h-10 w-full" />
+        <BlockSkeleton className="h-9 w-28" />
       </div>
     </PendingSurface>
   )

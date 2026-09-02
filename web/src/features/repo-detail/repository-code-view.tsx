@@ -12,7 +12,6 @@ import { RepositoryHtmlRenderer } from '@/components/repository-html-renderer'
 import { isRepositoryMarkdownPath } from '@/components/repository-markdown'
 import { RepositoryMarkdownRenderer } from '@/components/repository-markdown-renderer'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useWorkspaceTabs } from '@/components/use-workspace-tabs'
 import { VisibilityBadge } from '@/components/visibility-badge'
 import { WorkspaceTabStrip } from '@/components/workspace-tab-strip'
@@ -37,6 +36,10 @@ import {
   readRepositorySourceScroll,
   writeRepositorySourceScroll,
 } from './repository-source-scroll-cache'
+import {
+  FileNavigatorSkeleton,
+  SourceCodeSkeleton,
+} from './repository-code-skeletons'
 
 const CODE_TAB_SET_ID = 'repository-code-files'
 
@@ -379,39 +382,6 @@ function SourceContent({
   return (
     <div className="scope-content-enter min-h-full" key={file.oid}>
       <SourceFileContent file={file} params={params} />
-    </div>
-  )
-}
-
-const FILE_SKELETON_WIDTHS = [64, 48, 72, 58, 76, 42]
-const SOURCE_SKELETON_WIDTHS = [82, 54, 72, 38, 88, 62, 46, 78, 56]
-
-function FileNavigatorSkeleton() {
-  return (
-    <div className="divide-y divide-border">
-      {FILE_SKELETON_WIDTHS.map((width, index) => (
-        <div
-          className="grid min-h-9 grid-cols-[18px_minmax(0,1fr)_64px] items-center gap-2"
-          key={`${width}-${index}`}
-        >
-          <Skeleton className="size-3.5" />
-          <Skeleton className="h-3" style={{ width: `${width}%` }} />
-          <Skeleton className="h-3 w-full" />
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function SourceCodeSkeleton() {
-  return (
-    <div className="space-y-3 p-5 sm:p-7">
-      {SOURCE_SKELETON_WIDTHS.map((width, index) => (
-        <div className="flex items-center gap-4" key={`${width}-${index}`}>
-          <Skeleton className="h-3 w-5 shrink-0" />
-          <Skeleton className="h-3" style={{ width: `${width}%` }} />
-        </div>
-      ))}
     </div>
   )
 }

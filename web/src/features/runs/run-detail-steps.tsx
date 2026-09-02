@@ -5,6 +5,7 @@ import { RunAttemptEnvironment } from './run-attempt-environment'
 import { RunDuration } from './run-duration'
 import { RunLogView } from './run-log-view'
 import { RunStatusIcon } from './run-status-icon'
+import { RUN_STEP_ROW_CLASS } from './run-step-layout'
 import { runStatus } from './run-status'
 
 /** The steps of a single job attempt: an attempt switcher only when more than
@@ -160,7 +161,7 @@ function StepRow({
       <button
         aria-controls={panelId}
         aria-expanded={selected}
-        className="grid min-h-14 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-1 py-3 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className={`${RUN_STEP_ROW_CLASS} text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring`}
         onClick={onSelect}
         type="button"
       >

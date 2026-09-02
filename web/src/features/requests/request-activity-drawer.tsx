@@ -2,7 +2,12 @@ import type { RequestEvent } from '@/api/types'
 import { PendingSurface } from '@/components/pending-surface'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import {
+  BlockSkeleton,
+  LineSkeleton,
+  TextSkeleton,
+  type LineSkeletonLength,
+} from '@/components/ui/skeleton'
 import * as Dialog from '@radix-ui/react-dialog'
 import { History, TriangleAlert, X } from 'lucide-react'
 import { eventKindLabel, requestEventBody } from './request-labels'
@@ -13,6 +18,14 @@ import type {
 } from './request-discussion-types'
 
 type ActivityEvent = RequestEvent & { actor: RequestActorSummary }
+
+const PENDING_ACTIVITY: { id: string; length: LineSkeletonLength }[] = [
+  { id: 'first', length: 'medium' },
+  { id: 'second', length: 'short' },
+  { id: 'third', length: 'long' },
+  { id: 'fourth', length: 'medium' },
+  { id: 'fifth', length: 'long' },
+]
 
 export function RequestActivityDrawer({
   activity,
@@ -141,14 +154,14 @@ export function RequestActivityDrawer({
 function RequestActivitySkeleton() {
   return (
     <div className="divide-y divide-border">
-      {[68, 46, 78, 58, 72].map((width) => (
-        <div className="grid gap-3 px-5 py-4" key={width}>
+      {PENDING_ACTIVITY.map((event) => (
+        <div className="grid gap-3 px-5 py-4" key={event.id}>
           <div className="flex items-center gap-2">
-            <Skeleton className="h-5 w-20 rounded-full" />
-            <Skeleton className="h-3 w-20" />
-            <Skeleton className="h-3 w-16" />
+            <BlockSkeleton className="h-5 w-20 rounded-full" />
+            <TextSkeleton length="short" size="meta" />
+            <TextSkeleton length="tiny" size="meta" />
           </div>
-          <Skeleton className="h-3" style={{ width: `${width}%` }} />
+          <LineSkeleton length={event.length} />
         </div>
       ))}
     </div>

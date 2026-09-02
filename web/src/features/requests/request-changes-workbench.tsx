@@ -8,7 +8,7 @@ import type {
 } from '@/api/types'
 import type { LoadRequestRevisionCommitInput } from '@/api/requests'
 import { PendingSurface } from '@/components/pending-surface'
-import { Skeleton } from '@/components/ui/skeleton'
+import { BlockSkeleton, TextSkeleton } from '@/components/ui/skeleton'
 import {
   historyDiffCacheKey,
   peekHistoryDiffCache,
@@ -461,14 +461,14 @@ function RequestCommitContext({
         >
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <Skeleton className="size-3.5" />
-              <Skeleton className="h-3 w-3/5" />
-              <Skeleton className="ml-auto h-3 w-12" />
+              <BlockSkeleton className="size-3.5" />
+              <TextSkeleton length="long" size="meta" />
+              <TextSkeleton className="ml-auto" length="tiny" size="meta" />
             </div>
             <div className="flex items-center gap-2">
-              <Skeleton className="size-3.5" />
-              <Skeleton className="h-3 w-2/5" />
-              <Skeleton className="ml-auto h-3 w-12" />
+              <BlockSkeleton className="size-3.5" />
+              <TextSkeleton length="medium" size="meta" />
+              <TextSkeleton className="ml-auto" length="tiny" size="meta" />
             </div>
           </div>
         </PendingSurface>

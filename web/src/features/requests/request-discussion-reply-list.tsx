@@ -7,6 +7,7 @@ import {
   RequestDiscussionByline,
 } from './request-discussion-byline'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
+import { REQUEST_DISCUSSION_CONTENT_CLASS } from './request-content-layout'
 import {
   replyFragment,
   sameUtcDate,
@@ -42,40 +43,46 @@ export function RequestDiscussionReplyList({
   let previousReply: RequestDiscussionReplyView | null = null
   let unreadBoundaryRendered = false
 
-  return replies.map((reply) => {
-    const startsNewDate = !sameUtcDate(
-      previousCreatedAt,
-      reply.created_at_unix,
-    )
-    const startsUnread =
-      showUnreadBoundary &&
-      !unreadBoundaryRendered &&
-      reply.position > readThroughPosition
-    const grouped = shouldGroupReplies(previousReply, reply, {
-      date: startsNewDate,
-      unread: startsUnread,
-    })
+  return (
+    <>
+      {replies.map((reply) => {
+        const startsNewDate = !sameUtcDate(
+          previousCreatedAt,
+          reply.created_at_unix,
+        )
+        const startsUnread =
+          showUnreadBoundary &&
+          !unreadBoundaryRendered &&
+          reply.position > readThroughPosition
+        const grouped = shouldGroupReplies(previousReply, reply, {
+          date: startsNewDate,
+          unread: startsUnread,
+        })
 
-    if (startsUnread) unreadBoundaryRendered = true
-    previousCreatedAt = reply.created_at_unix
-    previousReply = reply
+        if (startsUnread) unreadBoundaryRendered = true
+        previousCreatedAt = reply.created_at_unix
+        previousReply = reply
 
-    return (
-      <div key={reply.id}>
-        {startsNewDate ? (
-          <DiscussionBoundary label={DATE_FORMATTER.format(reply.created_at_unix * 1_000)} />
-        ) : null}
-        {startsUnread ? <DiscussionBoundary label="New" unread /> : null}
-        <DiscussionReply
-          canReply={canReply}
-          grouped={grouped}
-          onQuote={onQuote}
-          onRetry={onRetry}
-          reply={reply}
-        />
-      </div>
-    )
-  })
+        return (
+          <div key={reply.id}>
+            {startsNewDate ? (
+              <DiscussionBoundary
+                label={DATE_FORMATTER.format(reply.created_at_unix * 1_000)}
+              />
+            ) : null}
+            {startsUnread ? <DiscussionBoundary label="New" unread /> : null}
+            <DiscussionReply
+              canReply={canReply}
+              grouped={grouped}
+              onQuote={onQuote}
+              onRetry={onRetry}
+              reply={reply}
+            />
+          </div>
+        )
+      })}
+    </>
+  )
 }
 
 export function RequestDiscussionUnreadBoundary() {
@@ -133,7 +140,10 @@ function DiscussionReply({
           </RequestDiscussionByline>
         ) : null}
         <RequestDiscussionMarkdown
-          className={cn('max-w-[68ch]', grouped ? '' : 'mt-1')}
+          className={cn(
+            REQUEST_DISCUSSION_CONTENT_CLASS,
+            grouped ? '' : 'mt-1',
+          )}
           source={reply.body_markdown}
         />
       </div>
