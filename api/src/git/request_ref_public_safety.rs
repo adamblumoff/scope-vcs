@@ -25,13 +25,14 @@ pub(crate) struct ValidatedPublicRequestRange {
     pub(crate) commits: Vec<NativePublicCommit>,
 }
 
-pub(super) fn ensure_public_request_ref_is_public_safe(
+pub(super) async fn ensure_public_request_ref_is_public_safe(
     repo: &Repository,
     state: &AppState,
     staging_repo: &FsPath,
     new_head_oid: &str,
 ) -> Result<(), ApiError> {
-    let (_, public_visible_paths) = fetch_current_public_projection(repo, state, staging_repo)?;
+    let (_, public_visible_paths) =
+        fetch_current_public_projection(repo, state, staging_repo).await?;
     public_request_branch_base_oid(staging_repo, new_head_oid)?;
     let commit_oids = commits_after(staging_repo, PUBLIC_REQUEST_BASE_REF, new_head_oid)?;
     validated_public_parent_oids(staging_repo, &commit_oids)?;
@@ -42,14 +43,14 @@ pub(super) fn ensure_public_request_ref_is_public_safe(
     Ok(())
 }
 
-pub(crate) fn validate_public_request_merge_range(
+pub(crate) async fn validate_public_request_merge_range(
     repo: &Repository,
     state: &AppState,
     staging_repo: &FsPath,
     request_head_oid: &str,
 ) -> Result<ValidatedPublicRequestRange, ApiError> {
     let (public_base_oid, public_visible_paths) =
-        fetch_current_public_projection(repo, state, staging_repo)?;
+        fetch_current_public_projection(repo, state, staging_repo).await?;
     ensure_public_head_is_request_ancestor(staging_repo, request_head_oid)?;
     let commit_oids = commits_after(staging_repo, PUBLIC_REQUEST_BASE_REF, request_head_oid)?;
     if commit_oids.is_empty() {
@@ -159,7 +160,7 @@ fn git_revision_is_ancestor(
     )))
 }
 
-fn fetch_current_public_projection(
+async fn fetch_current_public_projection(
     repo: &Repository,
     state: &AppState,
     staging_repo: &FsPath,
@@ -184,7 +185,8 @@ fn fetch_current_public_projection(
         &public_projection,
         repo.git_head.as_ref(),
         &repo.git_pack_spans,
-    )?;
+    )
+    .await?;
     let refspec = format!("+refs/heads/{DEFAULT_GIT_BRANCH}:{PUBLIC_REQUEST_BASE_REF}");
     run_git(
         Some(staging_repo),

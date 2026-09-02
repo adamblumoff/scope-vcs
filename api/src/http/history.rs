@@ -100,7 +100,9 @@ pub(crate) async fn get_history_entry_file_diff(
         .find(|file| file.path.as_str() == path.as_str())
         .ok_or_else(|| ApiError::not_found(format!("file {} not found", path.as_str())))?;
 
-    Ok(Json(history_entry_file_diff_response(&state, &repo, file)?))
+    Ok(Json(
+        history_entry_file_diff_response(&state, &repo, file).await?,
+    ))
 }
 
 async fn repo_and_audience(
@@ -224,7 +226,7 @@ fn history_entry_for_id<'a>(
         .ok_or_else(|| ApiError::not_found(format!("history entry {entry_source_id} not found")))
 }
 
-fn history_entry_file_diff_response(
+async fn history_entry_file_diff_response(
     state: &AppState,
     repo: &Repository,
     file: &HistoryEntryFile,
@@ -239,6 +241,7 @@ fn history_entry_file_diff_response(
         file.old_content.as_ref(),
         file.new_content.as_ref(),
     )
+    .await
 }
 
 #[cfg(test)]

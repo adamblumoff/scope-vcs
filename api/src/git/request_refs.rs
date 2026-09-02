@@ -367,7 +367,8 @@ pub(crate) async fn persist_request_ref_to_store(
         &update.new_head_oid,
     )?;
     if request.audience == RequestAudience::Public {
-        ensure_public_request_ref_is_public_safe(repo, state, staging_repo, &update.new_head_oid)?;
+        ensure_public_request_ref_is_public_safe(repo, state, staging_repo, &update.new_head_oid)
+            .await?;
     }
     let incarnation = repo.incarnation();
     let _store_lock = acquire_request_ref_store_lock(state, &incarnation)?;

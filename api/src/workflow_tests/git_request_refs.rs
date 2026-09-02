@@ -108,6 +108,7 @@ async fn start_request_for_author(
         repo.git_head.as_ref(),
         &repo.git_pack_spans,
     )
+    .await
     .unwrap();
     let base_main_oid = git_stdout_text(
         &projection_repo,

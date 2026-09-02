@@ -18,6 +18,7 @@ impl AppState {
                 )
             });
             let bytes = source_content_bytes(self, &candidate.blob, git_source)
+                .await
                 .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
             let landing_file = RepositoryLandingFile::from_source_blob(&candidate.blob, bytes)
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;

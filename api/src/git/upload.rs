@@ -100,12 +100,12 @@ pub(crate) async fn git_upload_pack_repo_for_request(
     let private_view = ProjectionViewKey::from_access(access) == ProjectionViewKey::Private;
     let base_repo = if private_view {
         match repo.git_head.as_ref() {
-            Some(head) => state.repository_engine.materialize_repository(
-                state,
-                &repo.incarnation(),
-                head,
-                &repo.git_pack_spans,
-            )?,
+            Some(head) => {
+                state
+                    .repository_engine
+                    .materialize_repository(state, &repo.incarnation(), head, &repo.git_pack_spans)
+                    .await?
+            }
             None => {
                 let projection = project_graph(
                     &repo.graph,
@@ -118,7 +118,8 @@ pub(crate) async fn git_upload_pack_repo_for_request(
                     &projection,
                     repo.git_head.as_ref(),
                     &repo.git_pack_spans,
-                )?
+                )
+                .await?
             }
         }
     } else {
@@ -133,7 +134,8 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             &projection,
             repo.git_head.as_ref(),
             &repo.git_pack_spans,
-        )?
+        )
+        .await?
     };
     let mut requests = Vec::new();
     let mut hidden_request_refs = Vec::new();
@@ -175,13 +177,16 @@ pub(crate) async fn git_upload_pack_repo_for_request(
             &repo.visibility_change_sets,
             ProjectionViewKey::Public,
         );
-        Some(projection_bare_repo_for_state(
-            state,
-            &repo.incarnation(),
-            &projection,
-            repo.git_head.as_ref(),
-            &repo.git_pack_spans,
-        )?)
+        Some(
+            projection_bare_repo_for_state(
+                state,
+                &repo.incarnation(),
+                &projection,
+                repo.git_head.as_ref(),
+                &repo.git_pack_spans,
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -189,18 +194,19 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         state,
         &repo.incarnation(),
         base_repo,
-        public_base_repo.as_deref(),
+        public_base_repo,
         viewer_user_id.as_deref(),
         &requests,
         &hidden_request_refs,
     )
+    .await
 }
 
-fn git_read_view_repo(
+async fn git_read_view_repo(
     state: &AppState,
     incarnation: &RepositoryIncarnation,
     base_repo: GitRepoHandle,
-    public_base_repo: Option<&FsPath>,
+    public_base_repo: Option<GitRepoHandle>,
     viewer_user_id: Option<&str>,
     requests: &[Request],
     hidden_request_refs: &[String],
@@ -208,14 +214,21 @@ fn git_read_view_repo(
     if requests.is_empty() {
         return Ok(base_repo);
     }
-    let main_oid = git_command_output(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(base_repo.as_ref())
-            .arg("rev-parse")
-            .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
-        None,
-    )?;
+    let base_repo_path = base_repo.as_ref().to_path_buf();
+    let main_oid = tokio::task::spawn_blocking(move || {
+        git_command_output(
+            Command::new("git")
+                .arg("--git-dir")
+                .arg(base_repo_path)
+                .arg("rev-parse")
+                .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
+            None,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal_message(format!("Git read-view identity task failed: {error}"))
+    })??;
     let mut hasher = Sha1::new();
     hash_field(
         &mut hasher,
@@ -263,67 +276,91 @@ fn git_read_view_repo(
     let cache_key = hex::encode(hasher.finalize());
     let cache_root = state.repository_engine.cache_root().to_path_buf();
     let repo_path = cache_root.join(format!("read-view-{cache_key}.git"));
-    let is_ready = || repo_path.join("objects").is_dir();
+    let repo_path_for_ready = repo_path.clone();
+    let is_ready = move || repo_path_for_ready.join("objects").is_dir();
+    let state_for_build = state.clone();
+    let base_repo_for_build = base_repo;
+    let public_base_repo_for_build = public_base_repo;
+    let requests_for_build = requests.to_vec();
+    let hidden_request_refs_for_build = hidden_request_refs.to_vec();
+    let cache_root_for_build = cache_root.clone();
+    let cache_key_for_build = cache_key.clone();
+    let repo_path_for_build = repo_path.clone();
     state.repository_engine.materialize_derived(
         incarnation,
         GitDerivedCacheNamespace::RequestReadView,
         cache_key.clone(),
         &repo_path,
         is_ready,
-        || {
-            let _permit = state.runtime_budgets.try_git_materialization()?;
-            let attempt = GIT_READ_VIEW_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
-            let temp_path = cache_root.join(format!(
-                "read-view-{cache_key}.{}.{}.tmp",
-                std::process::id(),
-                attempt
-            ));
-            if temp_path.exists() {
-                fs::remove_dir_all(&temp_path).map_err(ApiError::internal)?;
-            }
-            let result = (|| {
-                git_command_output(
-                    Command::new("git")
-                        .arg("clone")
-                        .arg("--bare")
-                        .arg("--no-hardlinks")
-                        .arg(base_repo.as_ref())
-                        .arg(&temp_path),
-                    None,
-                )?;
-                attach_visible_request_refs(state, requests, &temp_path, public_base_repo)?;
-                if !hidden_request_refs.is_empty() {
-                    run_git(
-                        Some(&temp_path),
-                        &["config", "uploadpack.allowTipSHA1InWant", "true"],
-                        "allowing exact request tip fetches",
+        move || async move {
+            let permit = state_for_build.runtime_budgets.try_git_materialization()?;
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                let attempt = GIT_READ_VIEW_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
+                let temp_path = cache_root_for_build.join(format!(
+                    "read-view-{cache_key_for_build}.{}.{}.tmp",
+                    std::process::id(),
+                    attempt
+                ));
+                if temp_path.exists() {
+                    fs::remove_dir_all(&temp_path).map_err(ApiError::internal)?;
+                }
+                let result = (|| {
+                    git_command_output(
+                        Command::new("git")
+                            .arg("clone")
+                            .arg("--bare")
+                            .arg("--no-hardlinks")
+                            .arg(base_repo_for_build.as_ref())
+                            .arg(&temp_path),
+                        None,
                     )?;
-                    for request_name in hidden_request_refs {
+                    attach_visible_request_refs(
+                        &state_for_build,
+                        &requests_for_build,
+                        &temp_path,
+                        public_base_repo_for_build.as_deref(),
+                    )?;
+                    if !hidden_request_refs_for_build.is_empty() {
                         run_git(
                             Some(&temp_path),
-                            &[
-                                "config",
-                                "--add",
-                                "transfer.hideRefs",
-                                &canonical_request_ref(request_name),
-                            ],
-                            "hiding exact-only request ref from advertisement",
+                            &["config", "uploadpack.allowTipSHA1InWant", "true"],
+                            "allowing exact request tip fetches",
                         )?;
+                        for request_name in &hidden_request_refs_for_build {
+                            run_git(
+                                Some(&temp_path),
+                                &[
+                                    "config",
+                                    "--add",
+                                    "transfer.hideRefs",
+                                    &canonical_request_ref(request_name),
+                                ],
+                                "hiding exact-only request ref from advertisement",
+                            )?;
+                        }
                     }
-                }
-                match fs::rename(&temp_path, &repo_path) {
-                    Ok(()) => Ok(()),
-                    Err(error) if is_ready() => {
-                        tracing::debug!(%error, path = %repo_path.display(), "using externally-created Git read view cache");
-                        Ok(())
+                    match fs::rename(&temp_path, &repo_path_for_build) {
+                        Ok(()) => Ok(()),
+                        Err(error) if repo_path_for_build.join("objects").is_dir() => {
+                            tracing::debug!(%error, path = %repo_path_for_build.display(), "using externally-created Git read view cache");
+                            Ok(())
+                        }
+                        Err(error) => Err(ApiError::internal(error)),
                     }
-                    Err(error) => Err(ApiError::internal(error)),
-                }
-            })();
-            let _ = fs::remove_dir_all(&temp_path);
-            result
+                })();
+                let _ = fs::remove_dir_all(&temp_path);
+                result
+            })
+            .await
+            .map_err(|error| {
+                ApiError::internal_message(format!(
+                    "Git read-view materialization task failed: {error}"
+                ))
+            })?
         },
     )
+    .await
 }
 
 pub(crate) fn git_upload_pack_auth_required() -> ApiError {

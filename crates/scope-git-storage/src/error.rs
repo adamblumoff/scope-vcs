@@ -1,4 +1,4 @@
-use std::io;
+use std::{error::Error, fmt, io};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitStorageError {
@@ -32,22 +32,88 @@ pub enum GitStorageError {
     Task(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("{message}")]
+#[derive(Debug)]
 pub struct MultipartError {
     message: String,
+    source: Option<Box<dyn Error + Send + Sync>>,
 }
 
 impl MultipartError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            source: None,
         }
+    }
+
+    pub(crate) fn with_source(
+        message: impl Into<String>,
+        source: impl Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+}
+
+impl fmt::Display for MultipartError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)?;
+        let mut source = self.source();
+        while let Some(error) = source {
+            write!(formatter, ": {error}")?;
+            source = error.source();
+        }
+        Ok(())
+    }
+}
+
+impl Error for MultipartError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn Error + 'static))
     }
 }
 
 impl From<io::Error> for MultipartError {
     fn from(error: io::Error) -> Self {
-        Self::new(error.to_string())
+        Self::with_source("multipart I/O failed", error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multipart_error_keeps_its_source() {
+        let error = MultipartError::with_source("S3 get object failed", io::Error::other("closed"));
+
+        assert_eq!(error.to_string(), "S3 get object failed: closed");
+        assert_eq!(error.source().unwrap().to_string(), "closed");
+    }
+
+    #[test]
+    fn multipart_error_diagnostic_includes_the_complete_source_chain() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("dispatch failure")]
+        struct DispatchError {
+            #[source]
+            source: io::Error,
+        }
+
+        let error = MultipartError::with_source(
+            "S3 get object failed",
+            DispatchError {
+                source: io::Error::other("runtime dropped the dispatch task"),
+            },
+        );
+
+        assert_eq!(
+            error.to_string(),
+            "S3 get object failed: dispatch failure: runtime dropped the dispatch task"
+        );
     }
 }

@@ -172,12 +172,10 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
         ensure_private_dir(parent)?;
     }
     if let Some(head) = repo.git_head.as_ref() {
-        let seed_repo = state.repository_engine.materialize_repository(
-            state,
-            incarnation,
-            head,
-            &repo.git_pack_spans,
-        )?;
+        let seed_repo = state
+            .repository_engine
+            .materialize_repository(state, incarnation, head, &repo.git_pack_spans)
+            .await?;
         let seed = seed_repo.to_string_lossy().to_string();
         let target = repo_root.to_string_lossy().to_string();
         run_git(
@@ -199,7 +197,8 @@ pub(crate) async fn ensure_ready_receive_pack_staging_repo(
             &projection,
             repo.git_head.as_ref(),
             &repo.git_pack_spans,
-        )?;
+        )
+        .await?;
         let seed = seed_repo.to_string_lossy().to_string();
         let target = repo_root.to_string_lossy().to_string();
         run_git(

@@ -87,6 +87,7 @@ impl AppState {
                             candidate.git_pack_spans.as_slice(),
                         )),
                     )
+                    .await
                     .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
                     files.push(RepositoryWorkflowFile::from_source_blob(path, blob, bytes)?);
                 }

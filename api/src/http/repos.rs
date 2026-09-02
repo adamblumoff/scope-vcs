@@ -41,6 +41,7 @@ use scope_domain::{
     reviewed_updates::config::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo},
 };
 use scope_postgres::db::{RepoSummaryRead, RepositoryMutation};
+use tracing::Instrument as _;
 
 const MAX_PUSH_INTENT_CONFIG_BYTES: usize = 4096;
 
@@ -457,15 +458,15 @@ pub(crate) async fn get_file_content(
         }
     } else {
         let repo = find_repo(&state, &owner, &repo_name).await?;
-        span.in_scope(|| {
-            crate::http::file_diffs::review_content_response_for_blob(
-                &state,
-                &projected.projected.blob,
-                repo.git_head
-                    .as_ref()
-                    .map(|head| (repo.incarnation(), head, repo.git_pack_spans.as_slice())),
-            )
-        })?
+        crate::http::file_diffs::review_content_response_for_blob(
+            &state,
+            &projected.projected.blob,
+            repo.git_head
+                .as_ref()
+                .map(|head| (repo.incarnation(), head, repo.git_pack_spans.as_slice())),
+        )
+        .instrument(span)
+        .await?
     };
 
     Ok(Json(RepoFileContentResponse {

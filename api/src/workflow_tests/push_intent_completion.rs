@@ -270,6 +270,7 @@ async fn incremental_git_pack_layout_restores_after_cache_loss() {
         &stored.git_pack_spans,
         &restored,
     )
+    .await
     .unwrap();
     assert_eq!(git_head_oid(&restored), expected_head);
 }

@@ -139,6 +139,7 @@ async fn cold_git_backed_projection_succeeds_with_one_build_permit() {
         stored.git_head.as_ref(),
         &stored.git_pack_spans,
     )
+    .await
     .expect("raw restore must release capacity before projection materialization");
 
     assert_eq!(

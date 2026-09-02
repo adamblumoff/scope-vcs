@@ -394,7 +394,7 @@ fn git_is_ancestor(
     )))
 }
 
-pub(crate) fn projection_bare_repo_for_state(
+pub(crate) async fn projection_bare_repo_for_state(
     state: &AppState,
     incarnation: &RepositoryIncarnation,
     projection: &Projection,
@@ -404,40 +404,67 @@ pub(crate) fn projection_bare_repo_for_state(
     let cache_root = state.repository_engine.cache_root().to_path_buf();
     let cache_key = projection_cache_key(Some(incarnation), projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
-    let is_ready = || projection_cache_is_ready(&repo_path);
-    state.repository_engine.materialize_derived(
-        incarnation,
-        GitDerivedCacheNamespace::Projection,
-        cache_key,
-        &repo_path,
-        is_ready,
-        || {
-            let raw_source_repo = if projection_requires_raw_source(projection) {
-                let head = git_head.ok_or_else(|| {
-                    ApiError::internal_message(
-                        "Git-backed projection requires a canonical Git head",
+    let repo_path_for_ready = repo_path.clone();
+    let is_ready = move || projection_cache_is_ready(&repo_path_for_ready);
+    let state_for_build = state.clone();
+    let incarnation_for_build = incarnation.clone();
+    let projection_for_build = projection.clone();
+    let git_head_for_build = git_head.cloned();
+    let git_pack_spans_for_build = git_pack_spans.to_vec();
+    let cache_root_for_build = cache_root.clone();
+    state
+        .repository_engine
+        .materialize_derived(
+            incarnation,
+            GitDerivedCacheNamespace::Projection,
+            cache_key,
+            &repo_path,
+            is_ready,
+            move || async move {
+                let raw_source_repo = if projection_requires_raw_source(&projection_for_build) {
+                    let head = git_head_for_build.as_ref().ok_or_else(|| {
+                        ApiError::internal_message(
+                            "Git-backed projection requires a canonical Git head",
+                        )
+                    })?;
+                    Some(
+                        state_for_build
+                            .repository_engine
+                            .materialize_repository(
+                                &state_for_build,
+                                &incarnation_for_build,
+                                head,
+                                &git_pack_spans_for_build,
+                            )
+                            .await?,
                     )
-                })?;
-                Some(state.repository_engine.materialize_repository(
-                    state,
-                    incarnation,
-                    head,
-                    git_pack_spans,
-                )?)
-            } else {
-                None
-            };
-            let _permit = state.runtime_budgets.try_git_materialization()?;
-            projection_bare_repo_with_loader(
-                &cache_root,
-                Some(incarnation),
-                projection,
-                raw_source_repo.as_deref(),
-                |blob| source_content_bytes_from_repo(state, blob, raw_source_repo.as_deref()),
-            )
-            .map(|_| ())
-        },
-    )
+                } else {
+                    None
+                };
+                let permit = state_for_build.runtime_budgets.try_git_materialization()?;
+                let state = state_for_build.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    projection_bare_repo_with_loader(
+                        &cache_root_for_build,
+                        Some(&incarnation_for_build),
+                        &projection_for_build,
+                        raw_source_repo.as_deref(),
+                        |blob| {
+                            source_content_bytes_from_repo(&state, blob, raw_source_repo.as_deref())
+                        },
+                    )
+                    .map(|_| ())
+                })
+                .await
+                .map_err(|error| {
+                    ApiError::internal_message(format!(
+                        "Git projection materialization task failed: {error}"
+                    ))
+                })?
+            },
+        )
+        .await
 }
 
 pub(crate) fn verify_projection_materialization(
