@@ -17,6 +17,7 @@ import {
 } from './request-discussion-byline'
 import { RequestReplyComposer } from './request-discussion-composer'
 import { RequestDiscussionMarkdown } from './request-discussion-markdown'
+import { REQUEST_DISCUSSION_CONTENT_CLASS } from './request-content-layout'
 import { discussionRepliesAreCollapsed } from './request-discussion-model'
 import { replyTargetFromFragment } from './request-discussion-reply-presentation'
 import {
@@ -232,7 +233,7 @@ export const RequestDiscussionThread = memo(function RequestDiscussionThread({
         ) : null}
 
         <RequestDiscussionMarkdown
-          className="mt-2 max-w-[68ch]"
+          className={`mt-2 ${REQUEST_DISCUSSION_CONTENT_CLASS}`}
           source={discussion.body_markdown}
         />
 

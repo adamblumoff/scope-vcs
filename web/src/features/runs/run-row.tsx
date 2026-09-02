@@ -6,6 +6,12 @@ import { runStatus } from './run-status'
 import { RunDuration } from './run-duration'
 import { RunStatusIcon } from './run-status-icon'
 import { RunTimestamp } from './run-timestamp'
+import {
+  RUN_ROW_CLASS,
+  RUN_ROW_DURATION_CLASS,
+  RUN_ROW_PRIMARY_CLASS,
+  RUN_ROW_TIMESTAMP_CLASS,
+} from './run-row-layout'
 
 export function RunRow({
   params,
@@ -20,14 +26,15 @@ export function RunRow({
   return (
     <Link
       className={cn(
-        'group flex min-w-0 items-center gap-3 px-3 py-3 outline-none transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        RUN_ROW_CLASS,
+        'group outline-none transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
         isRunning && 'bg-info-soft/40',
       )}
       params={{ ...params, runId: run.id }}
       to="/$owner/$repo/runs/$runId"
     >
       <RunStatusIcon state={state} />
-      <span className="min-w-0 flex-1 items-baseline gap-2 truncate sm:flex">
+      <span className={RUN_ROW_PRIMARY_CLASS}>
         <span className="truncate text-sm font-medium">
           {run.workflow_name}
         </span>
@@ -38,10 +45,10 @@ export function RunRow({
           </span>
         </span>
       </span>
-      <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+      <span className={`${RUN_ROW_DURATION_CLASS} text-right text-xs tabular-nums text-muted-foreground`}>
         <RunDuration end={run.completed_at_unix} start={run.created_at_unix} />
       </span>
-      <span className="w-24 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+      <span className={`${RUN_ROW_TIMESTAMP_CLASS} text-right text-xs tabular-nums text-muted-foreground`}>
         <RunTimestamp value={run.updated_at_unix} />
       </span>
     </Link>

@@ -4,7 +4,7 @@ import {
   parseRepoInviteTokenInput,
 } from '@/api/repos'
 import { ApplicationPendingShell } from '@/components/pending-surface'
-import { Skeleton } from '@/components/ui/skeleton'
+import { BlockSkeleton, TextSkeleton } from '@/components/ui/skeleton'
 import { InvitePage } from '@/features/invites/invite-page'
 import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
@@ -33,8 +33,8 @@ function InvitePending() {
         <h1 className="text-[26px] font-semibold leading-[1.15] tracking-[-0.02em] sm:text-[32px]">
           Repository invite
         </h1>
-        <Skeleton className="mt-3 h-5 w-48" />
-        <Skeleton className="mt-2 h-3 w-64 max-w-full" />
+        <TextSkeleton className="mt-3" length="medium" size="title" />
+        <TextSkeleton className="mt-2" length="long" size="meta" />
         <div className="mt-6 divide-y divide-border">
           {['Access', 'Continue'].map((title, index) => (
             <section
@@ -43,12 +43,27 @@ function InvitePending() {
             >
               <div>
                 <div className="text-sm font-semibold leading-5">{title}</div>
-                <Skeleton className="mt-2 h-3 w-44 max-w-full" />
-                <Skeleton className="mt-1.5 h-3 w-36 max-w-4/5" />
+                <TextSkeleton className="mt-2" length="medium" size="meta" />
+                <TextSkeleton className="mt-1.5" length="short" size="meta" />
               </div>
               <div className="space-y-3">
-                <Skeleton className="h-8 w-full" />
-                <Skeleton className="h-8" style={{ width: index ? '46%' : '100%' }} />
+                {index === 0 ? (
+                  <>
+                    <div className="flex items-center justify-between gap-4">
+                      <TextSkeleton length="short" />
+                      <BlockSkeleton className="h-5 w-9 rounded-full" />
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <TextSkeleton length="short" />
+                      <BlockSkeleton className="h-5 w-9 rounded-full" />
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    <BlockSkeleton className="h-9 w-32" />
+                    <BlockSkeleton className="h-9 w-20" />
+                  </div>
+                )}
               </div>
             </section>
           ))}

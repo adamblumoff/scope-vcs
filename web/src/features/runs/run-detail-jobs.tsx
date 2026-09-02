@@ -6,6 +6,7 @@ import type { StepLogState, StepSelection } from './repository-run-detail-contro
 import { attemptForJob } from './repository-run-detail-model'
 import { RunDetailSteps } from './run-detail-steps'
 import { RunDuration } from './run-duration'
+import { RUN_JOB_ITEM_CLASS, RUN_JOB_STRIP_CLASS } from './run-job-layout'
 import { runJobPanelId } from './run-job-ids'
 import { RunJobGraph } from './run-job-graph'
 import { orderJobsByDependency } from './run-job-graph-model'
@@ -113,7 +114,7 @@ function RunJobStrip({
     )
   }
   return (
-    <div className="flex gap-2 overflow-x-auto border-y border-border py-3">
+    <div className={RUN_JOB_STRIP_CLASS}>
       {jobs.map((jobDetail) => {
         const { job } = jobDetail
         const selected = job.key === selectedJobKey
@@ -122,7 +123,8 @@ function RunJobStrip({
             aria-controls={runJobPanelId(job.key)}
             aria-pressed={selected}
             className={cn(
-              'flex shrink-0 items-center gap-2 border bg-background px-3 py-2 text-left text-sm outline-none transition-colors hover:border-foreground/35 hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-ring',
+              RUN_JOB_ITEM_CLASS,
+              'outline-none transition-colors hover:border-foreground/35 hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-ring',
               selected && 'border-foreground/50 ring-1 ring-foreground/10',
             )}
             key={job.key}
