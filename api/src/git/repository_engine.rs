@@ -148,7 +148,11 @@ impl RepositoryEngine {
         let repository_id_for_build = repository_id.to_string();
         let built_for_build = built.clone();
         let materialization_path_for_build = materialization_path.clone();
+        // The detached build must retain its own lease if the requesting
+        // future drops the handle returned above while Git is still working.
+        let build_repo_lease = self.cache.lease(incarnation)?;
         let result = self.coordinate_repository(incarnation, is_ready, move || async move {
+            let _build_repo_lease = build_repo_lease;
             built_for_build.store(true, Ordering::Relaxed);
             let _permit = state_for_build.runtime_budgets.try_git_materialization()?;
             match engine_for_build

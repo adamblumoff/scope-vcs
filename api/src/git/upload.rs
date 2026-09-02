@@ -279,7 +279,7 @@ async fn git_read_view_repo(
     let repo_path_for_ready = repo_path.clone();
     let is_ready = move || repo_path_for_ready.join("objects").is_dir();
     let state_for_build = state.clone();
-    let base_repo_path_for_build = base_repo.as_ref().to_path_buf();
+    let base_repo_for_build = base_repo;
     let public_base_repo_for_build = public_base_repo.map(FsPath::to_path_buf);
     let requests_for_build = requests.to_vec();
     let hidden_request_refs_for_build = hidden_request_refs.to_vec();
@@ -311,7 +311,7 @@ async fn git_read_view_repo(
                             .arg("clone")
                             .arg("--bare")
                             .arg("--no-hardlinks")
-                            .arg(base_repo_path_for_build)
+                            .arg(base_repo_for_build.as_ref())
                             .arg(&temp_path),
                         None,
                     )?;
