@@ -1,9 +1,15 @@
 import { AuthLayout } from '@/features/auth/auth-layout'
+import { AuthFailureState } from '@/features/auth/auth-failure-state'
 import {
   AuthLoadingState,
   AuthSurface,
 } from '@/features/auth/auth-loading-state'
-import { SignIn, useAuth } from '@clerk/tanstack-react-start'
+import {
+  ClerkFailed,
+  ClerkLoaded,
+  ClerkLoading,
+  SignIn,
+} from '@clerk/tanstack-react-start'
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/sign-in/$')({
@@ -11,18 +17,23 @@ export const Route = createFileRoute('/sign-in/$')({
 })
 
 function Page() {
-  const { isLoaded } = useAuth()
   return (
     <AuthLayout>
       <AuthSurface
         description="Continue to repositories, requests, and your CLI sessions."
         title="Sign in to Scope"
       >
-        {isLoaded ? (
+        <ClerkLoading>
+          <AuthLoadingState label="Loading sign in…" />
+        </ClerkLoading>
+        <ClerkFailed>
+          <AuthFailureState title="Sign in unavailable" />
+        </ClerkFailed>
+        <ClerkLoaded>
           <div className="scope-content-enter">
             <SignIn />
           </div>
-        ) : <AuthLoadingState label="Loading sign in…" />}
+        </ClerkLoaded>
       </AuthSurface>
     </AuthLayout>
   )
