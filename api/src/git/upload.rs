@@ -194,7 +194,7 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         state,
         &repo.incarnation(),
         base_repo,
-        public_base_repo.as_deref(),
+        public_base_repo,
         viewer_user_id.as_deref(),
         &requests,
         &hidden_request_refs,
@@ -206,7 +206,7 @@ async fn git_read_view_repo(
     state: &AppState,
     incarnation: &RepositoryIncarnation,
     base_repo: GitRepoHandle,
-    public_base_repo: Option<&FsPath>,
+    public_base_repo: Option<GitRepoHandle>,
     viewer_user_id: Option<&str>,
     requests: &[Request],
     hidden_request_refs: &[String],
@@ -280,7 +280,7 @@ async fn git_read_view_repo(
     let is_ready = move || repo_path_for_ready.join("objects").is_dir();
     let state_for_build = state.clone();
     let base_repo_for_build = base_repo;
-    let public_base_repo_for_build = public_base_repo.map(FsPath::to_path_buf);
+    let public_base_repo_for_build = public_base_repo;
     let requests_for_build = requests.to_vec();
     let hidden_request_refs_for_build = hidden_request_refs.to_vec();
     let cache_root_for_build = cache_root.clone();
