@@ -276,28 +276,29 @@ async fn git_read_view_repo(
     let cache_key = hex::encode(hasher.finalize());
     let cache_root = state.repository_engine.cache_root().to_path_buf();
     let repo_path = cache_root.join(format!("read-view-{cache_key}.git"));
-    let is_ready = || repo_path.join("objects").is_dir();
+    let repo_path_for_ready = repo_path.clone();
+    let is_ready = move || repo_path_for_ready.join("objects").is_dir();
+    let state_for_build = state.clone();
+    let base_repo_path_for_build = base_repo.as_ref().to_path_buf();
+    let public_base_repo_for_build = public_base_repo.map(FsPath::to_path_buf);
+    let requests_for_build = requests.to_vec();
+    let hidden_request_refs_for_build = hidden_request_refs.to_vec();
+    let cache_root_for_build = cache_root.clone();
+    let cache_key_for_build = cache_key.clone();
+    let repo_path_for_build = repo_path.clone();
     state.repository_engine.materialize_derived(
         incarnation,
         GitDerivedCacheNamespace::RequestReadView,
         cache_key.clone(),
         &repo_path,
         is_ready,
-        || async {
-            let permit = state.runtime_budgets.try_git_materialization()?;
-            let state = state.clone();
-            let base_repo_path = base_repo.as_ref().to_path_buf();
-            let public_base_repo = public_base_repo.map(FsPath::to_path_buf);
-            let requests = requests.to_vec();
-            let hidden_request_refs = hidden_request_refs.to_vec();
-            let cache_root = cache_root.clone();
-            let cache_key = cache_key.clone();
-            let repo_path_for_build = repo_path.clone();
+        move || async move {
+            let permit = state_for_build.runtime_budgets.try_git_materialization()?;
             tokio::task::spawn_blocking(move || {
                 let _permit = permit;
                 let attempt = GIT_READ_VIEW_CACHE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
-                let temp_path = cache_root.join(format!(
-                    "read-view-{cache_key}.{}.{}.tmp",
+                let temp_path = cache_root_for_build.join(format!(
+                    "read-view-{cache_key_for_build}.{}.{}.tmp",
                     std::process::id(),
                     attempt
                 ));
@@ -310,23 +311,23 @@ async fn git_read_view_repo(
                             .arg("clone")
                             .arg("--bare")
                             .arg("--no-hardlinks")
-                            .arg(base_repo_path)
+                            .arg(base_repo_path_for_build)
                             .arg(&temp_path),
                         None,
                     )?;
                     attach_visible_request_refs(
-                        &state,
-                        &requests,
+                        &state_for_build,
+                        &requests_for_build,
                         &temp_path,
-                        public_base_repo.as_deref(),
+                        public_base_repo_for_build.as_deref(),
                     )?;
-                    if !hidden_request_refs.is_empty() {
+                    if !hidden_request_refs_for_build.is_empty() {
                         run_git(
                             Some(&temp_path),
                             &["config", "uploadpack.allowTipSHA1InWant", "true"],
                             "allowing exact request tip fetches",
                         )?;
-                        for request_name in &hidden_request_refs {
+                        for request_name in &hidden_request_refs_for_build {
                             run_git(
                                 Some(&temp_path),
                                 &[

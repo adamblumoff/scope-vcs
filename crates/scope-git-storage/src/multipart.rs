@@ -123,7 +123,7 @@ fn is_retryable_get_error(error: &GetObjectSdkError) -> bool {
             true
         }
         SdkError::ServiceError(error) => {
-            matches!(error.raw().status().as_u16(), 429 | 502 | 503 | 504)
+            matches!(error.raw().status().as_u16(), 429 | 500 | 502 | 503 | 504)
         }
         SdkError::ConstructionFailure(_) => false,
         _ => false,
@@ -376,6 +376,7 @@ mod tests {
             503,
         )));
         assert!(is_retryable_get_error(&service_error("SlowDown", 429)));
+        assert!(is_retryable_get_error(&service_error("InternalError", 500)));
         assert!(!is_retryable_get_error(
             &service_error("AccessDenied", 403,)
         ));

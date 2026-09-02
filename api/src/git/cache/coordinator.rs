@@ -37,26 +37,28 @@ pub(crate) struct GitDerivedCacheCoordinator {
     builds: Mutex<BTreeMap<GitDerivedCacheKey, Arc<CacheBuildState>>>,
 }
 
-struct AsyncBuildLeader<'a> {
-    coordinator: &'a GitDerivedCacheCoordinator,
+struct AsyncBuildLeader {
+    coordinator: Arc<GitDerivedCacheCoordinator>,
     key: GitDerivedCacheKey,
     state: Arc<CacheBuildState>,
     completed: bool,
 }
 
 impl GitDerivedCacheCoordinator {
-    pub(crate) async fn materialize_async<Build, BuildFuture>(
-        &self,
+    pub(crate) async fn materialize_async<IsReady, Build, BuildFuture>(
+        self: &Arc<Self>,
         namespace: GitDerivedCacheNamespace,
         value: String,
-        is_ready: impl Fn() -> bool,
+        is_ready: IsReady,
         build: Build,
     ) -> Result<(), ApiError>
     where
-        Build: FnOnce() -> BuildFuture,
-        BuildFuture: Future<Output = Result<(), ApiError>>,
+        IsReady: Fn() -> bool + Send + Sync + 'static,
+        Build: FnOnce() -> BuildFuture + Send + 'static,
+        BuildFuture: Future<Output = Result<(), ApiError>> + Send + 'static,
     {
         let key = GitDerivedCacheKey { namespace, value };
+        let is_ready = Arc::new(is_ready);
         let mut build = Some(build);
         loop {
             if is_ready() {
@@ -75,17 +77,28 @@ impl GitDerivedCacheCoordinator {
                 .take()
                 .expect("a cache request can become leader only once");
             let leader = AsyncBuildLeader {
-                coordinator: self,
+                coordinator: self.clone(),
                 key: key.clone(),
                 state: state.clone(),
                 completed: false,
             };
-            let built = if is_ready() {
-                Ok(Ok(()))
-            } else {
-                AssertUnwindSafe(build()).catch_unwind().await
-            };
-            leader.complete(cache_build_outcome(&built));
+            let is_ready = is_ready.clone();
+            // The build owns its leadership in a detached task. Dropping the
+            // requesting HTTP future therefore cannot release the cache key
+            // while spawn_blocking Git work is still mutating that cache.
+            let built = tokio::spawn(async move {
+                let built = if is_ready() {
+                    Ok(Ok(()))
+                } else {
+                    AssertUnwindSafe(build()).catch_unwind().await
+                };
+                leader.complete(cache_build_outcome(&built));
+                built
+            })
+            .await
+            .map_err(|error| {
+                ApiError::internal_message(format!("Git cache build task failed: {error}"))
+            })?;
             return match built {
                 Ok(result) => result,
                 Err(payload) => resume_unwind(payload),
@@ -188,7 +201,7 @@ impl GitDerivedCacheCoordinator {
     }
 }
 
-impl AsyncBuildLeader<'_> {
+impl AsyncBuildLeader {
     fn complete(mut self, outcome: CacheBuildOutcome) {
         self.coordinator
             .complete_build(&self.key, &self.state, outcome);
@@ -196,7 +209,7 @@ impl AsyncBuildLeader<'_> {
     }
 }
 
-impl Drop for AsyncBuildLeader<'_> {
+impl Drop for AsyncBuildLeader {
     fn drop(&mut self) {
         if !self.completed {
             self.coordinator.complete_build(
@@ -239,6 +252,8 @@ fn wait_for_cache_build(state: &CacheBuildState) -> Result<(), ApiError> {
 async fn wait_for_cache_build_async(state: &CacheBuildState) -> Result<(), ApiError> {
     loop {
         let completed = state.completed_async.notified();
+        tokio::pin!(completed);
+        completed.as_mut().enable();
         if let Some(outcome) = state
             .outcome
             .lock()
@@ -265,7 +280,8 @@ mod tests {
         let started_wait = started.notified();
         let leader = {
             let coordinator = coordinator.clone();
-            let ready = ready.clone();
+            let ready_for_check = ready.clone();
+            let ready_for_build = ready.clone();
             let started = started.clone();
             let release = release.clone();
             tokio::spawn(async move {
@@ -273,11 +289,11 @@ mod tests {
                     .materialize_async(
                         GitDerivedCacheNamespace::Repository,
                         "repo".to_string(),
-                        || ready.load(Ordering::SeqCst),
-                        || async {
+                        move || ready_for_check.load(Ordering::SeqCst),
+                        move || async move {
                             started.notify_one();
                             release.notified().await;
-                            ready.store(true, Ordering::SeqCst);
+                            ready_for_build.store(true, Ordering::SeqCst);
                             Ok(())
                         },
                     )
@@ -293,7 +309,7 @@ mod tests {
                     .materialize_async(
                         GitDerivedCacheNamespace::Repository,
                         "repo".to_string(),
-                        || ready.load(Ordering::SeqCst),
+                        move || ready.load(Ordering::SeqCst),
                         || async { panic!("follower must not build") },
                     )
                     .await
@@ -309,22 +325,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelling_async_leader_releases_followers() {
+    async fn cancelling_async_request_keeps_build_leadership_until_work_finishes() {
         let coordinator = Arc::new(GitDerivedCacheCoordinator::default());
+        let ready = Arc::new(AtomicBool::new(false));
         let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
         let started_wait = started.notified();
         let leader = {
             let coordinator = coordinator.clone();
+            let ready_for_check = ready.clone();
+            let ready_for_build = ready.clone();
             let started = started.clone();
+            let release = release.clone();
             tokio::spawn(async move {
                 coordinator
                     .materialize_async(
                         GitDerivedCacheNamespace::Repository,
                         "repo".to_string(),
-                        || false,
-                        || async {
+                        move || ready_for_check.load(Ordering::SeqCst),
+                        move || async move {
                             started.notify_one();
-                            std::future::pending().await
+                            release.notified().await;
+                            ready_for_build.store(true, Ordering::SeqCst);
+                            Ok(())
                         },
                     )
                     .await
@@ -333,12 +356,13 @@ mod tests {
         started_wait.await;
         let follower = {
             let coordinator = coordinator.clone();
+            let ready = ready.clone();
             tokio::spawn(async move {
                 coordinator
                     .materialize_async(
                         GitDerivedCacheNamespace::Repository,
                         "repo".to_string(),
-                        || false,
+                        move || ready.load(Ordering::SeqCst),
                         || async { panic!("follower must not build") },
                     )
                     .await
@@ -348,9 +372,9 @@ mod tests {
             tokio::task::yield_now().await;
         }
         leader.abort();
+        assert!(!follower.is_finished());
+        release.notify_one();
 
-        let error = follower.await.unwrap().unwrap_err();
-        assert_eq!(error.kind, crate::error::ErrorKind::ServiceUnavailable);
-        assert_eq!(error.operator_diagnostic(), "Git cache build was cancelled");
+        follower.await.unwrap().unwrap();
     }
 }
