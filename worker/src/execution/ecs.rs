@@ -24,7 +24,7 @@ use tokio::time::{Instant, sleep};
 const CONTAINER_NAME: &str = "scope-runner";
 const BOOTSTRAP_SECRET_ENV: &str = "SCOPE_BOOTSTRAP_TOKEN";
 const RUNTIME_ENTRYPOINT: &str = "/scope/bin/scope-runner-runtime";
-const TASK_CPU: &str = "4096";
+const TASK_CPU: &str = "8192";
 const TASK_MEMORY: &str = "16384";
 const TASK_FAMILY_PREFIX: &str = "scope-runner-";
 const AMBIGUOUS_START_CONSISTENCY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
