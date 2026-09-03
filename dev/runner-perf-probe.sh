@@ -64,9 +64,13 @@ export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
 export CARGO_TARGET_DIR="$probe_root/cargo-target"
 cargo fetch --locked
-/usr/bin/time \
-  -f 'RESULT cold_workspace_compile_seconds=%e\nRESULT cold_workspace_compile_cpu_pct=%P\nRESULT cold_workspace_compile_max_rss_kib=%M\nRESULT cold_workspace_compile_fs_inputs=%I\nRESULT cold_workspace_compile_fs_outputs=%O' \
-  cargo test --workspace --features api/test-support --locked --no-run
+compile_started_ns=$(date +%s%N)
+cargo test --workspace --features api/test-support --locked --no-run
+compile_finished_ns=$(date +%s%N)
+awk \
+  -v started="$compile_started_ns" \
+  -v finished="$compile_finished_ns" \
+  'BEGIN { printf "RESULT cold_workspace_compile_seconds=%.3f\n", (finished - started) / 1000000000 }'
 
 print_runtime_stats END
 echo "PROBE_FINISHED_UTC=$(date -u +%FT%TZ)"
