@@ -459,6 +459,8 @@ test("Railway deploy jobs consume release binaries instead of rebuilding Rust", 
   assert.match(backendCiWorkflow, /name: backend-release-\$\{\{ github\.sha \}\}/);
   assert.match(backendDeployWorkflow, /name: backend-release-\$\{\{ github\.sha \}\}/);
   assert.match(backendDeployWorkflow, /prebuilt-backend\.railpack\.json/);
+  assert.match(backendDeployWorkflow, /watch_root="\$root\/\$service"/);
+  assert.match(backendDeployWorkflow, /"\$watch_root\/\.scope-deployment-sha"/);
   assert.doesNotMatch(backendDeployWorkflow, /cargo build/);
   assert.match(
     JSON.stringify(repositoryJson("deploy/railway/prebuilt-backend.railpack.json")),

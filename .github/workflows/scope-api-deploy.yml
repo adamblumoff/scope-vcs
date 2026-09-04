@@ -66,20 +66,25 @@ jobs:
           rm -rf .railway-upload
           for service in api worker cache-service repo-router; do
             root=".railway-upload/$service"
-            mkdir -p "$root/bin"
+            watch_root="$root/$service"
+            mkdir -p "$root/bin" "$watch_root"
             cp deploy/railway/prebuilt-backend.railpack.json "$root/railpack.json"
             if [[ "$service" == "api" || "$service" == "worker" ]]; then
               cp deploy/railway/prebuilt-backend-git.railpack.json "$root/railpack.json"
             fi
             install -m 0755 deploy/railway/start-prebuilt.sh "$root/start.sh"
             cp "$service/railway.json" "$root/railway.json"
-            printf '%s\n' "$GITHUB_SHA" > "$root/.scope-deployment-sha"
+            printf '%s\n' "$GITHUB_SHA" | tee \
+              "$root/.scope-deployment-sha" \
+              "$watch_root/.scope-deployment-sha" >/dev/null
             component="$service"
             [[ "$component" == "cache-service" ]] && component=cache
             [[ "$component" == "repo-router" ]] && component=router
             successful_sha="$(jq -r --arg component "$component" '.[$component].sourceSha // ""' <<< "$SUCCESSFUL_DEPLOYMENTS")"
             if [[ "$successful_sha" != "$GITHUB_SHA" ]]; then
-              printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$root/.scope-deployment-attempt"
+              printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | tee \
+                "$root/.scope-deployment-attempt" \
+                "$watch_root/.scope-deployment-attempt" >/dev/null
             fi
           done
 
