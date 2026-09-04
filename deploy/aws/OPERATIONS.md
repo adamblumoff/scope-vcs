@@ -34,7 +34,7 @@ STACK_NAME=scope-cloud-runner-staging-mi-experiment \
 ENVIRONMENT_NAME=staging \
 RUNNER_CAPACITY=MANAGED_INSTANCES \
 MANAGED_INSTANCE_TYPE=m8a.xlarge \
-TASK_MEMORY_MIB=15360 \
+TASK_MEMORY_MIB=14336 \
 TASK_FAMILY_PREFIX=scope-staging-runner- \
 ADDITIONAL_CHECKS_IMAGE_REPOSITORY_ARN=arn:aws:ecr:us-east-1:<account-id>:repository/scope-vcs/production/checks \
 ENABLE_GITHUB_ADMINISTRATION=false \
@@ -44,7 +44,7 @@ deploy/aws/apply-cloud-runner.sh plan
 
 Review the complete change set, then repeat the same environment variables and apply its exact ARN. Create a new dispatcher access key for this stack. Do not reuse the production dispatcher credentials or secret-name key.
 
-Configure only the staging worker with the stack outputs. Keep `SCOPE_CLOUD_RUNS_MAX_CONCURRENCY=1` and set `SCOPE_CLOUD_RUNS_ENABLED=1` last. The worker also needs:
+Configure only the staging worker with the stack outputs. Keep `SCOPE_CLOUD_RUNS_MAX_CONCURRENCY=20` and set `SCOPE_CLOUD_RUNS_ENABLED=1` last. The worker also needs:
 
 ```text
 SCOPE_ECS_CAPACITY_PROVIDER   <- RunnerCapacityProvider

@@ -752,7 +752,10 @@ Resources:
           - Sid: DeregisterAttemptTaskDefinitions
             Effect: Allow
             Action: ecs:DeregisterTaskDefinition
-            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${TaskFamilyPrefix}*:*
+            # ECS task-definition lifecycle actions do not support resource-level
+            # permissions. The dedicated dispatcher can only register tagged
+            # definitions, but AWS requires this cleanup action against `*`.
+            Resource: "*"
           - Sid: RunScopeTaskDefinitions
             Effect: Allow
             Action: ecs:RunTask

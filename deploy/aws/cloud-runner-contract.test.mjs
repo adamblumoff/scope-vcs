@@ -91,7 +91,7 @@ test('managed instances stay opt-in and retire idle experiment hosts immediately
   assert.match(provider, /MemoryMiB:\n\s+Min: 16384\n\s+Max: 16384/)
 })
 
-test('task families and destructive task-definition permissions share one prefix', () => {
+test('task-family cleanup reflects the AWS authorization boundary', () => {
   const parameters = between(template, 'Parameters:', 'Conditions:')
   assert.match(
     parameters,
@@ -103,8 +103,11 @@ test('task families and destructive task-definition permissions share one prefix
     '          - Sid: DeregisterAttemptTaskDefinitions',
     '          - Sid: RunScopeTaskDefinitions',
   )
-  assert.match(deregister, /task-definition\/\$\{TaskFamilyPrefix\}\*:\*/)
-  assert.doesNotMatch(deregister, /Resource: "\*"/)
+  assert.match(deregister, /Resource: "\*"/)
+  assert.match(
+    deregister,
+    /ECS task-definition lifecycle actions do not support resource-level\n\s+# permissions/,
+  )
   assert.match(
     applyScript,
     /ParameterKey=TaskFamilyPrefix,ParameterValue=\$task_family_prefix/,

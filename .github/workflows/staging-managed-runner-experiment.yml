@@ -43,5 +43,5 @@ jobs:
           RUNNER_CAPACITY: MANAGED_INSTANCES
           STACK_NAME: scope-cloud-runner-staging-mi-experiment
           TASK_FAMILY_PREFIX: scope-staging-runner-
-          TASK_MEMORY_MIB: "15360"
+          TASK_MEMORY_MIB: "14336"
         run: deploy/aws/apply-cloud-runner.sh apply
