@@ -188,10 +188,7 @@ jobs:
     uses: ./.github/workflows/scope-api-ci.yml
     with:
       build_release_artifact: ${{ github.event_name != 'pull_request' }}
-      build_cache_release: ${{ github.event_name != 'pull_request' && needs.plan.outputs.cache == 'true' }}
-      build_worker_release: ${{ github.event_name != 'pull_request' && needs.plan.outputs.worker == 'true' }}
       build_router_release: ${{ github.event_name != 'pull_request' && needs.plan.outputs.router == 'true' }}
-      build_api_release: ${{ github.event_name != 'pull_request' && needs.plan.outputs.api == 'true' }}
     secrets: inherit
 
   web-validation:

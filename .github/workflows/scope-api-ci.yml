@@ -6,16 +6,7 @@ on:
       build_release_artifact:
         type: boolean
         default: false
-      build_cache_release:
-        type: boolean
-        default: false
-      build_worker_release:
-        type: boolean
-        default: false
       build_router_release:
-        type: boolean
-        default: false
-      build_api_release:
         type: boolean
         default: false
 
@@ -68,30 +59,24 @@ jobs:
 
       - name: Build deployment binaries
         env:
-          BUILD_API: ${{ inputs.build_api_release && '1' || '0' }}
-          BUILD_CACHE: ${{ inputs.build_cache_release && '1' || '0' }}
           BUILD_ROUTER: ${{ inputs.build_router_release && '1' || '0' }}
-          BUILD_WORKER: ${{ inputs.build_worker_release && '1' || '0' }}
         run: |
           mkdir -p artifacts/bin
           cargo build --release --locked -p api --bin scope-maintenance
           install -m 0755 target/release/scope-maintenance artifacts/bin/scope-maintenance
 
-          if [[ "$BUILD_CACHE" == "1" ]]; then
-            cargo build --release --locked -p scope-cache-service
-            install -m 0755 target/release/scope-cache-service artifacts/bin/scope-cache-service
-          fi
-          if [[ "$BUILD_WORKER" == "1" ]]; then
-            cargo build --release --locked -p worker
-            install -m 0755 target/release/worker artifacts/bin/scope-worker
-          fi
+          cargo build --release --locked -p scope-cache-service
+          install -m 0755 target/release/scope-cache-service artifacts/bin/scope-cache-service
+
+          cargo build --release --locked -p worker
+          install -m 0755 target/release/worker artifacts/bin/scope-worker
+
+          cargo build --release --locked -p api --bin api
+          install -m 0755 target/release/api artifacts/bin/scope-vcs
+
           if [[ "$BUILD_ROUTER" == "1" ]]; then
             cargo build --release --locked -p scope-repo-router
             install -m 0755 target/release/scope-repo-router artifacts/bin/scope-repo-router
-          fi
-          if [[ "$BUILD_API" == "1" ]]; then
-            cargo build --release --locked -p api --bin api
-            install -m 0755 target/release/api artifacts/bin/scope-vcs
           fi
 
       - name: Pack deployment binaries
