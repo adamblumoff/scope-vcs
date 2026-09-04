@@ -160,6 +160,11 @@ test("changes select the required deployment lanes", () => {
       { cli: true, cliDistribution: true },
     ],
     [
+      "distribution selector changes run CLI validation and rebuild distribution targets",
+      [".github/scripts/select-cli-distribution-targets.mjs"],
+      { cli: true, cliDistribution: true },
+    ],
+    [
       "unrelated shared crates retain broad CLI validation without rebuilding targets",
       ["crates/scope-cache-contract/src/lib.rs"],
       {
