@@ -1,0 +1,47 @@
+name: Staging managed runner infrastructure experiment
+
+on:
+  push:
+    branches:
+      - experiment/ecs-managed-instances
+    paths:
+      - .github/workflows/staging-managed-runner-experiment.yml
+      - deploy/aws/apply-cloud-runner.sh
+      - deploy/aws/cloud-runner.yaml
+
+concurrency:
+  group: staging-managed-runner-infrastructure-experiment
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy isolated staging stack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Configure temporary AWS role
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::957143340948:role/scope-staging-experiment-github-94d56973
+          role-session-name: scope-staging-managed-runner-${{ github.run_id }}
+
+      - name: Deploy staging Managed Instances stack
+        env:
+          ADDITIONAL_CHECKS_IMAGE_REPOSITORY_ARN: arn:aws:ecr:us-east-1:957143340948:repository/scope-vcs/production/checks
+          AWS_REGION: us-east-1
+          ENABLE_GITHUB_ADMINISTRATION: "false"
+          ENVIRONMENT_NAME: staging
+          MANAGED_INSTANCE_TYPE: m8a.xlarge
+          RUNNER_CAPACITY: MANAGED_INSTANCES
+          STACK_NAME: scope-cloud-runner-staging-mi-experiment
+          TASK_FAMILY_PREFIX: scope-staging-runner-
+          TASK_MEMORY_MIB: "15360"
+        run: deploy/aws/apply-cloud-runner.sh apply
