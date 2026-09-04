@@ -31,6 +31,12 @@ readonly github_repository_id="${GITHUB_REPOSITORY_ID:-1272896256}"
 readonly github_repository_owner_id="${GITHUB_REPOSITORY_OWNER_ID:-321219119}"
 readonly existing_github_oidc_provider_arn="${EXISTING_GITHUB_OIDC_PROVIDER_ARN:-}"
 readonly registry_credentials_secret_arn="${SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN:-}"
+readonly runner_capacity="${RUNNER_CAPACITY:-FARGATE}"
+readonly managed_instance_type="${MANAGED_INSTANCE_TYPE:-m8a.xlarge}"
+readonly task_memory_mib="${TASK_MEMORY_MIB:-16384}"
+readonly task_family_prefix="${TASK_FAMILY_PREFIX:-scope-runner-}"
+readonly additional_checks_image_repository_arn="${ADDITIONAL_CHECKS_IMAGE_REPOSITORY_ARN:-}"
+readonly enable_github_administration="${ENABLE_GITHUB_ADMINISTRATION:-true}"
 
 aws_command() {
   aws --region "$aws_region" "$@"
@@ -52,6 +58,9 @@ print_outputs() {
     RunnerSecurityGroupId \
     RunnerExecutionRoleArn \
     RunnerLogGroupName \
+    RunnerCapacityProvider \
+    RunnerTaskMemoryMiB \
+    RunnerTaskFamilyPrefix \
     RailwayDispatcherUserName \
     ChecksImageRepositoryName \
     ChecksImageRepositoryUri \
@@ -90,6 +99,12 @@ readonly parameters=(
   "ParameterKey=GitHubRepositoryOwnerId,ParameterValue=$github_repository_owner_id"
   "ParameterKey=ExistingGitHubOidcProviderArn,ParameterValue=$existing_github_oidc_provider_arn"
   "ParameterKey=RegistryCredentialsSecretArn,ParameterValue=$registry_credentials_secret_arn"
+  "ParameterKey=RunnerCapacity,ParameterValue=$runner_capacity"
+  "ParameterKey=ManagedInstanceType,ParameterValue=$managed_instance_type"
+  "ParameterKey=TaskMemoryMiB,ParameterValue=$task_memory_mib"
+  "ParameterKey=TaskFamilyPrefix,ParameterValue=$task_family_prefix"
+  "ParameterKey=AdditionalChecksImageRepositoryArn,ParameterValue=$additional_checks_image_repository_arn"
+  "ParameterKey=EnableGitHubAdministration,ParameterValue=$enable_github_administration"
 )
 readonly tags=(
   "Key=Project,Value=scope-vcs"
@@ -150,7 +165,7 @@ else
     --capabilities CAPABILITY_NAMED_IAM \
     --parameters "${parameters[@]}" \
     --tags "${tags[@]}" \
-    --description "CLI plan for Scope Fargate runner infrastructure" \
+    --description "CLI plan for Scope cloud runner infrastructure" \
     --query Id \
     --output text)"
 

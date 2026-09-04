@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Scope production Fargate runner infrastructure
+Description: Scope cloud runner infrastructure
 
 Parameters:
   Environment:
@@ -15,6 +15,41 @@ Parameters:
   PublicSubnetTwoCidr:
     Type: String
     Default: 10.42.16.0/20
+  PrivateSubnetOneCidr:
+    Type: String
+    Default: 10.42.32.0/20
+  PrivateSubnetTwoCidr:
+    Type: String
+    Default: 10.42.48.0/20
+  RunnerCapacity:
+    Type: String
+    Default: FARGATE
+    AllowedValues:
+      - FARGATE
+      - MANAGED_INSTANCES
+  ManagedInstanceType:
+    Type: String
+    Default: m8a.xlarge
+    AllowedPattern: "^[a-z0-9]+[a-z0-9.-]*$"
+  TaskMemoryMiB:
+    Type: Number
+    Default: 16384
+    MinValue: 1
+  TaskFamilyPrefix:
+    Type: String
+    Default: scope-runner-
+    AllowedPattern: "^[A-Za-z0-9_-]{1,128}$"
+  AdditionalChecksImageRepositoryArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:(aws|aws-us-gov|aws-cn):ecr:[a-z0-9-]+:[0-9]{12}:repository/[A-Za-z0-9/_+=.@-]+$"
+    Description: Optional second ECR repository that runner tasks may pull from.
+  EnableGitHubAdministration:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
   BudgetNotificationEmail:
     Type: String
     Default: ""
@@ -50,9 +85,14 @@ Parameters:
 
 Conditions:
   HasBudgetNotification: !Not [!Equals [!Ref BudgetNotificationEmail, ""]]
-  CreateGitHubOidcProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
+  ManageGitHubInfrastructure: !Equals [!Ref EnableGitHubAdministration, "true"]
+  CreateGitHubOidcProvider: !And
+    - !Condition ManageGitHubInfrastructure
+    - !Equals [!Ref ExistingGitHubOidcProviderArn, ""]
   UseExistingGitHubOidcProvider: !Not [!Equals [!Ref ExistingGitHubOidcProviderArn, ""]]
   HasRegistryCredentialsSecret: !Not [!Equals [!Ref RegistryCredentialsSecretArn, ""]]
+  UseManagedInstances: !Equals [!Ref RunnerCapacity, MANAGED_INSTANCES]
+  HasAdditionalChecksImageRepository: !Not [!Equals [!Ref AdditionalChecksImageRepositoryArn, ""]]
 
 Resources:
   RunnerVpc:
@@ -168,10 +208,126 @@ Resources:
       RouteTableId: !Ref RunnerPublicRouteTable
       SubnetId: !Ref RunnerPublicSubnetTwo
 
+  RunnerNatElasticIp:
+    Type: AWS::EC2::EIP
+    Condition: UseManagedInstances
+    DependsOn: RunnerInternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner-nat
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerNatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: UseManagedInstances
+    Properties:
+      AllocationId: !GetAtt RunnerNatElasticIp.AllocationId
+      ConnectivityType: public
+      SubnetId: !Ref RunnerPublicSubnetOne
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: UseManagedInstances
+    Properties:
+      VpcId: !Ref RunnerVpc
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner-private
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerPrivateRoute:
+    Type: AWS::EC2::Route
+    Condition: UseManagedInstances
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref RunnerNatGateway
+      RouteTableId: !Ref RunnerPrivateRouteTable
+
+  RunnerPrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Condition: UseManagedInstances
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnetOneCidr
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref RunnerVpc
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner-private-a
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerPrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Condition: UseManagedInstances
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnetTwoCidr
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref RunnerVpc
+      Tags:
+        - Key: Name
+          Value: !Sub scope-vcs-${Environment}-runner-private-b
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerPrivateSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: UseManagedInstances
+    Properties:
+      RouteTableId: !Ref RunnerPrivateRouteTable
+      SubnetId: !Ref RunnerPrivateSubnetOne
+
+  RunnerPrivateSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: UseManagedInstances
+    Properties:
+      RouteTableId: !Ref RunnerPrivateRouteTable
+      SubnetId: !Ref RunnerPrivateSubnetTwo
+
   RunnerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Outbound HTTPS for Scope Fargate runner tasks
+      GroupDescription: Outbound HTTPS for Scope ECS runner tasks
       SecurityGroupEgress:
         - Description: HTTPS to the Scope API, cache, source hosts, and image registry
           IpProtocol: tcp
@@ -195,11 +351,14 @@ Resources:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Sub scope-vcs-${Environment}-runner
-      CapacityProviders:
-        - FARGATE
-      DefaultCapacityProviderStrategy:
-        - CapacityProvider: FARGATE
-          Weight: 1
+      CapacityProviders: !If
+        - UseManagedInstances
+        - !Ref AWS::NoValue
+        - [FARGATE]
+      DefaultCapacityProviderStrategy: !If
+        - UseManagedInstances
+        - !Ref AWS::NoValue
+        - [{CapacityProvider: FARGATE, Weight: 1}]
       Tags:
         - Key: Project
           Value: scope-vcs
@@ -209,6 +368,117 @@ Resources:
           Value: cloud-runner
         - Key: ManagedBy
           Value: cloudformation
+
+  ManagedInstanceInfrastructureRole:
+    Type: AWS::IAM::Role
+    Condition: UseManagedInstances
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonECSInfrastructureRolePolicyForManagedInstances
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ManagedInstanceRole:
+    Type: AWS::IAM::Role
+    Condition: UseManagedInstances
+    Properties:
+      RoleName: !Sub ecsInstanceRole-scope-${Environment}-runner
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonECSInstanceRolePolicyForManagedInstances
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  ManagedInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: UseManagedInstances
+    Properties:
+      InstanceProfileName: !Sub ecsInstanceRole-scope-${Environment}-runner
+      Roles:
+        - !Ref ManagedInstanceRole
+
+  ManagedCapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Condition: UseManagedInstances
+    Properties:
+      Name: !Sub scope-vcs-${Environment}-managed
+      ClusterName: !Ref RunnerCluster
+      ManagedInstancesProvider:
+        InfrastructureOptimization:
+          ScaleInAfter: 0
+        InfrastructureRoleArn: !GetAtt ManagedInstanceInfrastructureRole.Arn
+        InstanceLaunchTemplate:
+          CapacityOptionType: ON_DEMAND
+          Ec2InstanceProfileArn: !GetAtt ManagedInstanceProfile.Arn
+          InstanceMetadataTagsPropagation: false
+          InstanceRequirements:
+            AllowedInstanceTypes:
+              - !Ref ManagedInstanceType
+            BurstablePerformance: excluded
+            MemoryMiB:
+              Min: 16384
+              Max: 16384
+            VCpuCount:
+              Min: 4
+              Max: 4
+          Monitoring: DETAILED
+          NetworkConfiguration:
+            SecurityGroups:
+              - !GetAtt RunnerSecurityGroup.GroupId
+            Subnets:
+              - !Ref RunnerPrivateSubnetOne
+              - !Ref RunnerPrivateSubnetTwo
+          StorageConfiguration:
+            StorageSizeGiB: 30
+        PropagateTags: CAPACITY_PROVIDER
+      Tags:
+        - Key: Project
+          Value: scope-vcs
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: cloud-runner
+        - Key: ManagedBy
+          Value: cloudformation
+
+  RunnerClusterCapacityProviders:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Condition: UseManagedInstances
+    Properties:
+      CapacityProviders:
+        - FARGATE
+        - !Ref ManagedCapacityProvider
+      Cluster: !Ref RunnerCluster
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
 
   RunnerLogGroup:
     Type: AWS::Logs::LogGroup
@@ -282,6 +552,7 @@ Resources:
 
   ChecksImagePublisherRole:
     Type: AWS::IAM::Role
+    Condition: ManageGitHubInfrastructure
     Properties:
       RoleName: !Sub ${AWS::StackName}-github-checks-publisher
       AssumeRolePolicyDocument:
@@ -335,6 +606,7 @@ Resources:
 
   GitHubInfrastructureRole:
     Type: AWS::IAM::Role
+    Condition: ManageGitHubInfrastructure
     Properties:
       RoleName: !Sub ${AWS::StackName}-github-infrastructure
       AssumeRolePolicyDocument:
@@ -413,7 +685,12 @@ Resources:
                   - ecr:BatchCheckLayerAvailability
                   - ecr:BatchGetImage
                   - ecr:GetDownloadUrlForLayer
-                Resource: !GetAtt ChecksImageRepository.Arn
+                Resource:
+                  - !GetAtt ChecksImageRepository.Arn
+                  - !If
+                    - HasAdditionalChecksImageRepository
+                    - !Ref AdditionalChecksImageRepositoryArn
+                    - !Ref AWS::NoValue
       Tags:
         - Key: Project
           Value: scope-vcs
@@ -475,11 +752,11 @@ Resources:
           - Sid: DeregisterAttemptTaskDefinitions
             Effect: Allow
             Action: ecs:DeregisterTaskDefinition
-            Resource: "*"
+            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${TaskFamilyPrefix}*:*
           - Sid: RunScopeTaskDefinitions
             Effect: Allow
             Action: ecs:RunTask
-            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/scope-runner-attempt_*:*
+            Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${TaskFamilyPrefix}*:*
             Condition:
               ArnEquals:
                 ecs:cluster: !GetAtt RunnerCluster.Arn
@@ -510,7 +787,7 @@ Resources:
             Effect: Allow
             Action: ecs:TagResource
             Resource:
-              - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/scope-runner-attempt_*:*
+              - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${TaskFamilyPrefix}*:*
               - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/scope-vcs-${Environment}-runner/*
             Condition:
               StringEquals:
@@ -590,7 +867,10 @@ Outputs:
     Value: !GetAtt RunnerCluster.Arn
   RunnerSubnetIds:
     Description: Worker SCOPE_ECS_SUBNET_IDS
-    Value: !Join [",", [!Ref RunnerPublicSubnetOne, !Ref RunnerPublicSubnetTwo]]
+    Value: !If
+      - UseManagedInstances
+      - !Join [",", [!Ref RunnerPrivateSubnetOne, !Ref RunnerPrivateSubnetTwo]]
+      - !Join [",", [!Ref RunnerPublicSubnetOne, !Ref RunnerPublicSubnetTwo]]
   RunnerSecurityGroupId:
     Description: Worker SCOPE_ECS_SECURITY_GROUP_ID
     Value: !GetAtt RunnerSecurityGroup.GroupId
@@ -600,6 +880,15 @@ Outputs:
   RunnerLogGroupName:
     Description: Worker SCOPE_ECS_LOG_GROUP
     Value: !Ref RunnerLogGroup
+  RunnerCapacityProvider:
+    Description: Worker SCOPE_ECS_CAPACITY_PROVIDER
+    Value: !If [UseManagedInstances, !Ref ManagedCapacityProvider, FARGATE]
+  RunnerTaskMemoryMiB:
+    Description: Worker SCOPE_ECS_TASK_MEMORY_MIB
+    Value: !Ref TaskMemoryMiB
+  RunnerTaskFamilyPrefix:
+    Description: Worker SCOPE_ECS_TASK_FAMILY_PREFIX
+    Value: !Ref TaskFamilyPrefix
   RailwayDispatcherUserName:
     Description: IAM user for the Railway worker; create its access key outside CloudFormation.
     Value: !Ref RailwayDispatcherUser
@@ -610,8 +899,10 @@ Outputs:
     Description: Private ECR repository URI for raw and SOCI v2 checks images.
     Value: !GetAtt ChecksImageRepository.RepositoryUri
   ChecksImagePublisherRoleArn:
+    Condition: ManageGitHubInfrastructure
     Description: GitHub Actions OIDC role for publishing checks images.
     Value: !GetAtt ChecksImagePublisherRole.Arn
   GitHubInfrastructureRoleArn:
+    Condition: ManageGitHubInfrastructure
     Description: GitHub Actions OIDC role for CLI-driven infrastructure plans and applies.
     Value: !GetAtt GitHubInfrastructureRole.Arn

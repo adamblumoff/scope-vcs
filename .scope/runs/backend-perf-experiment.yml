@@ -1,0 +1,71 @@
+name: Backend runner experiment
+on:
+  manual: true
+container:
+  image: 957143340948.dkr.ecr.us-east-1.amazonaws.com/scope-vcs/production/checks@sha256:e0c8b40fd4fcc7c7920fe00fee1d348b6cae3b31e4321d5b5a832cc28b99c4fc
+timeout: 60m
+caches: []
+env:
+  CARGO_HOME: /scope/cache/cargo
+  CARGO_TARGET_DIR: /workspace/target
+  RUSTUP_TOOLCHAIN: 1.98.0-x86_64-unknown-linux-gnu
+jobs:
+  backend:
+    timeout: 45m
+    caches:
+      - name: cargo
+        path: /scope/cache/cargo
+        format: v1
+        compatibility: &cargo-cache-compatibility
+          files:
+            - rust-toolchain.toml
+          environment:
+            - RUSTUP_TOOLCHAIN
+            - CARGO_INCREMENTAL
+            - CARGO_PROFILE_DEV_DEBUG
+            - CARGO_PROFILE_TEST_DEBUG
+          source: false
+        exact:
+          files: &cargo-cache-files
+            - Cargo.lock
+            - Cargo.toml
+            - api/Cargo.toml
+            - cache-service/Cargo.toml
+            - crates/scope-api-contract/Cargo.toml
+            - crates/scope-cache-contract/Cargo.toml
+            - crates/scope-cache-domain/Cargo.toml
+            - crates/scope-content-lifecycle/Cargo.toml
+            - crates/scope-domain/Cargo.toml
+            - crates/scope-git-process/Cargo.toml
+            - crates/scope-git/Cargo.toml
+            - crates/scope-object-store/Cargo.toml
+            - crates/scope-postgres/Cargo.toml
+            - crates/scope-run-config/Cargo.toml
+            - runner-runtime/Cargo.toml
+            - worker/Cargo.toml
+          environment: []
+          source: false
+      - name: cargo-target
+        path: /scope/cache/cargo-target
+        format: v1
+        compatibility: *cargo-cache-compatibility
+        exact:
+          files: *cargo-cache-files
+          environment: []
+          source: true
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: /scope/cache/cargo-target
+      SCOPE_TEST_DATABASE_URL: postgres://scope:scope@127.0.0.1:5432/scope_test
+    steps:
+      - name: Check Rust workspace
+        run: |
+          service postgresql start
+          su postgres -c "psql --set=ON_ERROR_STOP=1 --command=\"CREATE ROLE scope LOGIN PASSWORD 'scope'\""
+          su postgres -c "createdb --owner=scope scope_test"
+          cargo fmt --all --check
+          cargo test --workspace --features api/test-support --locked
+          cargo test -p api --features local-dev --locked dev::
+          cargo clippy --workspace --features api/test-support --all-targets --locked -- -D warnings

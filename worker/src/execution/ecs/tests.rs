@@ -15,6 +15,9 @@ fn settings(registry_credentials_secret_arn: Option<&str>) -> CloudExecutionSett
         ecs_security_group_id: "sg-a".to_string(),
         ecs_execution_role_arn: "arn:aws:iam::123456789012:role/scope-task-execution".to_string(),
         ecs_log_group: "/scope/production/runner".to_string(),
+        ecs_capacity: CloudCapacity::Fargate,
+        ecs_task_memory_mib: 16_384,
+        ecs_task_family_prefix: "scope-runner-".to_string(),
         ecs_secret_name_key: [7; 32],
         registry_credentials_secret_arn: registry_credentials_secret_arn.map(str::to_string),
         runtime_version: "test".to_string(),
@@ -24,11 +27,19 @@ fn settings(registry_credentials_secret_arn: Option<&str>) -> CloudExecutionSett
 
 fn task_definition(image: &str, registry_credentials_secret_arn: Option<&str>) -> TaskDefinition {
     let settings = settings(registry_credentials_secret_arn);
+    task_definition_for(&settings, image, registry_credentials_secret_arn)
+}
+
+fn task_definition_for(
+    settings: &CloudExecutionSettings,
+    image: &str,
+    registry_credentials_secret_arn: Option<&str>,
+) -> TaskDefinition {
     TaskDefinition::builder()
         .network_mode(NetworkMode::Awsvpc)
-        .requires_compatibilities(Compatibility::Fargate)
+        .requires_compatibilities(task_compatibility(&settings.ecs_capacity))
         .cpu(TASK_CPU)
-        .memory(TASK_MEMORY)
+        .memory(settings.ecs_task_memory_mib.to_string())
         .execution_role_arn(&settings.ecs_execution_role_arn)
         .runtime_platform(runtime_platform())
         .container_definitions(
@@ -45,17 +56,66 @@ fn task_definition(image: &str, registry_credentials_secret_arn: Option<&str>) -
 }
 
 #[test]
+fn managed_instances_task_definition_uses_its_capacity_contract() {
+    let mut settings = settings(None);
+    settings.ecs_capacity = CloudCapacity::ManagedInstances {
+        capacity_provider: "scope-staging-managed".to_string(),
+    };
+    settings.ecs_task_memory_mib = 15_360;
+    let definition = task_definition_for(&settings, IMAGE, None);
+
+    assert_eq!(
+        definition.requires_compatibilities(),
+        [Compatibility::ManagedInstances]
+    );
+    assert_eq!(definition.memory(), Some("15360"));
+    assert!(verify_task_definition_contract(&definition, IMAGE, SECRET_ARN, &settings).is_ok());
+}
+
+#[test]
+fn capacity_provider_controls_task_networking_and_placement() {
+    let fargate = settings(None);
+    assert_eq!(
+        task_network(&fargate).unwrap().assign_public_ip(),
+        Some(&AssignPublicIp::Enabled)
+    );
+    assert_eq!(
+        capacity_provider_strategy(&fargate.ecs_capacity)
+            .unwrap()
+            .capacity_provider(),
+        "FARGATE"
+    );
+
+    let mut managed = settings(None);
+    managed.ecs_capacity = CloudCapacity::ManagedInstances {
+        capacity_provider: "scope-staging-managed".to_string(),
+    };
+    assert_eq!(task_network(&managed).unwrap().assign_public_ip(), None);
+    assert_eq!(
+        capacity_provider_strategy(&managed.ecs_capacity)
+            .unwrap()
+            .capacity_provider(),
+        "scope-staging-managed"
+    );
+}
+
+#[test]
 fn task_family_is_unique_to_the_attempt() {
     assert_eq!(
-        task_family("attempt_123").unwrap(),
+        task_family("scope-runner-", "attempt_123").unwrap(),
         "scope-runner-attempt_123"
+    );
+    assert_eq!(
+        task_family("scope-staging-runner-", "attempt_123").unwrap(),
+        "scope-staging-runner-attempt_123"
     );
 }
 
 #[test]
 fn task_family_rejects_unsafe_attempt_ids() {
-    assert!(task_family("").is_err());
-    assert!(task_family("attempt/unsafe").is_err());
+    assert!(task_family("scope-runner-", "").is_err());
+    assert!(task_family("scope-runner-", "attempt/unsafe").is_err());
+    assert!(task_family(&"a".repeat(250), "attempt_123").is_err());
 }
 
 #[test]

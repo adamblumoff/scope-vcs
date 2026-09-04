@@ -1,8 +1,10 @@
-# Fargate cloud runner operations
+# Cloud runner operations
 
-CloudFormation owns the runner VPC, public subnets, route to the internet, security group, ECS cluster, log group, task execution role, private ECR checks-image repository, GitHub OIDC publisher role, dispatcher IAM user, exact private-registry secret grant, and optional budget. Do not create parallel resources in the AWS Console.
+CloudFormation owns the runner VPC, networking, security group, ECS cluster, log group, task execution role, private ECR checks-image repository, dispatcher IAM user, exact private-registry secret grant, and optional budget. Production also creates GitHub OIDC administration roles. Do not create parallel resources in the AWS Console.
 
-The cluster uses Fargate On-Demand. Each task gets a public IPv4 address because the runner must reach ECR, the Scope API, the cache, and source hosts. The security group has no inbound rules and permits outbound HTTPS only. There is no NAT gateway or idle compute cost. Checks images live in private ECR in the same region as Fargate and are published as SOCI v2 image indexes so Fargate can lazy-load their filesystems.
+Fargate On-Demand is the default. Each Fargate task gets a public IPv4 address because the runner must reach ECR, the Scope API, the cache, and source hosts. The security group has no inbound rules and permits outbound HTTPS only. There is no NAT gateway or idle compute cost. Checks images live in private ECR in the same region as Fargate and are published as SOCI v2 image indexes so Fargate can lazy-load their filesystems.
+
+The opt-in Managed Instances mode creates private subnets, one NAT gateway, and an ECS Managed Instances capacity provider. The provider launches the configured four-vCPU instance type on demand and starts idle scale-in immediately. Managed tasks do not receive public IP addresses. Set a distinct task-family prefix for every environment so a staging dispatcher cannot deregister production task definitions.
 
 The worker registers one `scope-runner-<attempt ID>` task definition per attempt because ECS cannot override either the container image or secret references in `RunTask`. The definition contains the digest-pinned image and a reference to a per-attempt Secrets Manager bootstrap credential. When `SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN` is set, it also contains that exact ARN as ECS repository credentials. Neither credential value is placed in the ECS task override or returned by `DescribeTasks`. After ECS reports the task stopped, the worker deregisters the task definition and force-deletes the one-use bootstrap secret.
 
@@ -22,6 +24,35 @@ aws sts get-caller-identity
 ```
 
 Never deploy this stack from the AWS root user. Use an administrative role with MFA for the initial stack and a CI deployment role for later changes.
+
+## Managed Instances staging experiment
+
+Use an isolated stack and leave staging cloud execution disabled until the stack, credentials, and candidate worker are healthy. The experiment uses the production checks image only as a read-only input.
+
+```bash
+STACK_NAME=scope-cloud-runner-staging-mi-experiment \
+ENVIRONMENT_NAME=staging \
+RUNNER_CAPACITY=MANAGED_INSTANCES \
+MANAGED_INSTANCE_TYPE=m8a.xlarge \
+TASK_MEMORY_MIB=15360 \
+TASK_FAMILY_PREFIX=scope-staging-runner- \
+ADDITIONAL_CHECKS_IMAGE_REPOSITORY_ARN=arn:aws:ecr:us-east-1:<account-id>:repository/scope-vcs/production/checks \
+ENABLE_GITHUB_ADMINISTRATION=false \
+EXISTING_GITHUB_OIDC_PROVIDER_ARN=arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com \
+deploy/aws/apply-cloud-runner.sh plan
+```
+
+Review the complete change set, then repeat the same environment variables and apply its exact ARN. Create a new dispatcher access key for this stack. Do not reuse the production dispatcher credentials or secret-name key.
+
+Configure only the staging worker with the stack outputs. Keep `SCOPE_CLOUD_RUNS_MAX_CONCURRENCY=1` and set `SCOPE_CLOUD_RUNS_ENABLED=1` last. The worker also needs:
+
+```text
+SCOPE_ECS_CAPACITY_PROVIDER   <- RunnerCapacityProvider
+SCOPE_ECS_TASK_MEMORY_MIB     <- RunnerTaskMemoryMiB
+SCOPE_ECS_TASK_FAMILY_PREFIX  <- RunnerTaskFamilyPrefix
+```
+
+After collecting the experiment, set `SCOPE_CLOUD_RUNS_ENABLED=0`, stop remaining experimental tasks, remove the staging dispatcher access keys, and delete the isolated stack. The checks-image repository has a retain policy, so inspect and delete the empty staging repository separately.
 
 The GitHub OIDC provider is account-global. Check for an existing provider before the first stack update:
 

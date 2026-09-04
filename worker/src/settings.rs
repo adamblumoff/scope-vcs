@@ -11,11 +11,35 @@ const SCOPE_GIT_SEGMENT_CHUNK_BYTES_ENV: &str = "SCOPE_GIT_SEGMENT_CHUNK_BYTES";
 const SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES_ENV: &str = "SCOPE_GIT_SEGMENT_MULTIPART_PART_BYTES";
 const SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY_ENV: &str = "SCOPE_GIT_SEGMENT_CHANNEL_CAPACITY";
 const SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN_ENV: &str = "SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN";
+const SCOPE_ECS_CAPACITY_PROVIDER_ENV: &str = "SCOPE_ECS_CAPACITY_PROVIDER";
+const SCOPE_ECS_TASK_MEMORY_MIB_ENV: &str = "SCOPE_ECS_TASK_MEMORY_MIB";
+const SCOPE_ECS_TASK_FAMILY_PREFIX_ENV: &str = "SCOPE_ECS_TASK_FAMILY_PREFIX";
 const DEFAULT_HEALTH_PORT: u16 = 8081;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_GIT_COMPACTION_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_ECS_TASK_MEMORY_MIB: usize = 16_384;
+const DEFAULT_ECS_TASK_FAMILY_PREFIX: &str = "scope-runner-";
 const MAX_CLOUD_RUN_CONCURRENCY: usize = 100;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CloudCapacity {
+    Fargate,
+    ManagedInstances { capacity_provider: String },
+}
+
+impl CloudCapacity {
+    pub(crate) fn capacity_provider(&self) -> &str {
+        match self {
+            Self::Fargate => "FARGATE",
+            Self::ManagedInstances { capacity_provider } => capacity_provider,
+        }
+    }
+
+    pub(crate) fn is_fargate(&self) -> bool {
+        matches!(self, Self::Fargate)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerRole {
@@ -73,6 +97,9 @@ pub(crate) struct CloudExecutionSettings {
     pub(crate) ecs_security_group_id: String,
     pub(crate) ecs_execution_role_arn: String,
     pub(crate) ecs_log_group: String,
+    pub(crate) ecs_capacity: CloudCapacity,
+    pub(crate) ecs_task_memory_mib: usize,
+    pub(crate) ecs_task_family_prefix: String,
     pub(crate) ecs_secret_name_key: [u8; 32],
     pub(crate) registry_credentials_secret_arn: Option<String>,
     pub(crate) runtime_version: String,
@@ -202,6 +229,18 @@ fn cloud_execution_from_env() -> anyhow::Result<Option<CloudExecutionSettings>> 
         non_empty_env(SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN_ENV).as_deref(),
         &aws_region,
     )?;
+    let ecs_capacity =
+        parse_ecs_capacity_provider(non_empty_env(SCOPE_ECS_CAPACITY_PROVIDER_ENV).as_deref())?;
+    let ecs_task_memory_mib =
+        parse_usize_env(SCOPE_ECS_TASK_MEMORY_MIB_ENV, DEFAULT_ECS_TASK_MEMORY_MIB)?;
+    if ecs_task_memory_mib == 0 {
+        anyhow::bail!("{SCOPE_ECS_TASK_MEMORY_MIB_ENV} must be greater than zero");
+    }
+    let ecs_task_family_prefix = parse_task_family_prefix(
+        non_empty_env(SCOPE_ECS_TASK_FAMILY_PREFIX_ENV)
+            .as_deref()
+            .unwrap_or(DEFAULT_ECS_TASK_FAMILY_PREFIX),
+    )?;
     Ok(Some(CloudExecutionSettings {
         api_url,
         aws_region,
@@ -210,12 +249,53 @@ fn cloud_execution_from_env() -> anyhow::Result<Option<CloudExecutionSettings>> 
         ecs_security_group_id: required_env("SCOPE_ECS_SECURITY_GROUP_ID")?,
         ecs_execution_role_arn: required_env("SCOPE_ECS_EXECUTION_ROLE_ARN")?,
         ecs_log_group: required_env("SCOPE_ECS_LOG_GROUP")?,
+        ecs_capacity,
+        ecs_task_memory_mib,
+        ecs_task_family_prefix,
         ecs_secret_name_key: secret_name_key_from_env()?,
         registry_credentials_secret_arn,
         runtime_version: non_empty_env("SCOPE_RUNTIME_VERSION")
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
         max_concurrency,
     }))
+}
+
+fn parse_task_family_prefix(value: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        anyhow::bail!(
+            "{SCOPE_ECS_TASK_FAMILY_PREFIX_ENV} must use 1-128 ASCII letters, numbers, hyphens, or underscores"
+        );
+    }
+    Ok(value.to_string())
+}
+
+fn parse_ecs_capacity_provider(value: Option<&str>) -> anyhow::Result<CloudCapacity> {
+    let value = value.map(str::trim).filter(|value| !value.is_empty());
+    match value {
+        None | Some("FARGATE") => Ok(CloudCapacity::Fargate),
+        Some("FARGATE_SPOT") => {
+            anyhow::bail!("{SCOPE_ECS_CAPACITY_PROVIDER_ENV} does not support FARGATE_SPOT")
+        }
+        Some(value)
+            if value.len() <= 255
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) =>
+        {
+            Ok(CloudCapacity::ManagedInstances {
+                capacity_provider: value.to_string(),
+            })
+        }
+        Some(_) => anyhow::bail!(
+            "{SCOPE_ECS_CAPACITY_PROVIDER_ENV} must be FARGATE or an ECS capacity provider name"
+        ),
+    }
 }
 
 fn parse_registry_credentials_secret_arn(
@@ -375,5 +455,36 @@ mod tests {
             parse_registry_credentials_secret_arn(Some("scope-registry-AbCdEf"), "us-east-1")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn ecs_capacity_provider_selects_fargate_or_managed_instances() {
+        assert_eq!(
+            parse_ecs_capacity_provider(None).unwrap(),
+            CloudCapacity::Fargate
+        );
+        assert_eq!(
+            parse_ecs_capacity_provider(Some("FARGATE")).unwrap(),
+            CloudCapacity::Fargate
+        );
+        assert_eq!(
+            parse_ecs_capacity_provider(Some("scope-staging-managed")).unwrap(),
+            CloudCapacity::ManagedInstances {
+                capacity_provider: "scope-staging-managed".to_string()
+            }
+        );
+        assert!(parse_ecs_capacity_provider(Some("managed instances")).is_err());
+        assert!(parse_ecs_capacity_provider(Some("FARGATE_SPOT")).is_err());
+    }
+
+    #[test]
+    fn task_family_prefix_is_bounded_and_safe() {
+        assert_eq!(
+            parse_task_family_prefix("scope-staging-runner-").unwrap(),
+            "scope-staging-runner-"
+        );
+        assert!(parse_task_family_prefix("").is_err());
+        assert!(parse_task_family_prefix("scope/staging").is_err());
+        assert!(parse_task_family_prefix(&"a".repeat(129)).is_err());
     }
 }

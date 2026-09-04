@@ -1,0 +1,68 @@
+name: Runner performance experiment
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - experiment/ecs-managed-instances
+    paths:
+      - .github/workflows/runner-perf-experiment.yml
+      - dev/runner-perf-probe.rs
+      - dev/runner-perf-probe.sh
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  probe:
+    name: Standard GitHub runner ${{ matrix.trial }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        trial:
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+          ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.98.0
+
+      - name: Run performance probe
+        run: bash dev/runner-perf-probe.sh | tee runner-perf-${{ matrix.trial }}.log
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runner-perf-${{ matrix.trial }}
+          path: runner-perf-${{ matrix.trial }}.log
