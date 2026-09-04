@@ -89,6 +89,10 @@ test('managed instances stay opt-in and retire idle experiment hosts immediately
   assert.match(provider, /AllowedInstanceTypes:\n\s+- !Ref ManagedInstanceType/)
   assert.match(provider, /VCpuCount:\n\s+Min: 4\n\s+Max: 4/)
   assert.match(provider, /MemoryMiB:\n\s+Min: 16384\n\s+Max: 16384/)
+  assert.match(
+    parameters,
+    /ManagedInstanceType:\n\s+Type: String\n\s+Default: m8a\.xlarge\n\s+AllowedValues:\n\s+- m8a\.xlarge/,
+  )
 })
 
 test('task-family cleanup reflects the AWS authorization boundary', () => {

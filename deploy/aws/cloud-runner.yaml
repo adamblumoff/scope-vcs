@@ -30,7 +30,8 @@ Parameters:
   ManagedInstanceType:
     Type: String
     Default: m8a.xlarge
-    AllowedPattern: "^[a-z0-9]+[a-z0-9.-]*$"
+    AllowedValues:
+      - m8a.xlarge
   TaskMemoryMiB:
     Type: Number
     Default: 16384
