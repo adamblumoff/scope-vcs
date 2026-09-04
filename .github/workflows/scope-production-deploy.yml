@@ -187,7 +187,11 @@ jobs:
       needs.plan.outputs.api == 'true')
     uses: ./.github/workflows/scope-api-ci.yml
     with:
-      build_maintenance_artifact: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      build_release_artifact: ${{ github.event_name != 'pull_request' }}
+      build_cache_release: ${{ github.event_name != 'pull_request' && needs.plan.outputs.cache == 'true' }}
+      build_worker_release: ${{ github.event_name != 'pull_request' && needs.plan.outputs.worker == 'true' }}
+      build_router_release: ${{ github.event_name != 'pull_request' && needs.plan.outputs.router == 'true' }}
+      build_api_release: ${{ github.event_name != 'pull_request' && needs.plan.outputs.api == 'true' }}
     secrets: inherit
 
   web-validation:
@@ -210,7 +214,7 @@ jobs:
         (github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.actor != 'dependabot[bot]'))) }}
-      validate_service_release: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      validate_service_release: ${{ github.event_name != 'pull_request' }}
     secrets: inherit
 
   integration-validation:

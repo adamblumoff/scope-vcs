@@ -15,6 +15,18 @@ const productionWorkflow = readFileSync(
   new URL("../workflows/scope-production-deploy.yml", import.meta.url),
   "utf8",
 );
+const backendCiWorkflow = readFileSync(
+  new URL("../workflows/scope-api-ci.yml", import.meta.url),
+  "utf8",
+);
+const backendDeployWorkflow = readFileSync(
+  new URL("../workflows/scope-api-deploy.yml", import.meta.url),
+  "utf8",
+);
+const cliBuildWorkflow = readFileSync(
+  new URL("../workflows/scope-cli-build.yml", import.meta.url),
+  "utf8",
+);
 const cliDeployWorkflow = readFileSync(
   new URL("../workflows/scope-cli-deploy.yml", import.meta.url),
   "utf8",
@@ -440,5 +452,25 @@ test("web and CLI healthcheck configs are staged at Railway upload roots", () =>
   assert.match(
     stagingWorkflow,
     /cp candidate\/web\/railway\.json \.railway-staging-upload\/web-root\/railway\.json/,
+  );
+});
+
+test("Railway deploy jobs consume release binaries instead of rebuilding Rust", () => {
+  assert.match(backendCiWorkflow, /name: backend-release-\$\{\{ github\.sha \}\}/);
+  assert.match(backendDeployWorkflow, /name: backend-release-\$\{\{ github\.sha \}\}/);
+  assert.match(backendDeployWorkflow, /prebuilt-backend\.railpack\.json/);
+  assert.doesNotMatch(backendDeployWorkflow, /cargo build/);
+  assert.match(
+    JSON.stringify(repositoryJson("deploy/railway/prebuilt-backend.railpack.json")),
+    /\.scope-deployment-\*/,
+  );
+
+  assert.match(cliBuildWorkflow, /name: cli-service-release-\$\{\{ github\.sha \}\}/);
+  assert.match(cliDeployWorkflow, /name: cli-service-release-\$\{\{ github\.sha \}\}/);
+  assert.match(cliDeployWorkflow, /prebuilt-cli\.railpack\.json/);
+  assert.doesNotMatch(cliDeployWorkflow, /cargo build/);
+  assert.match(
+    JSON.stringify(repositoryJson("deploy/railway/prebuilt-cli.railpack.json")),
+    /\.scope-deployment-\*/,
   );
 });
