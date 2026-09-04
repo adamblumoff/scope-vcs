@@ -31,8 +31,12 @@ jobs:
       - name: Read distribution targets
         id: targets
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          matrix="$(jq -c '{include: [.targets[] | {label, runner, target: .triple, artifact, binary, builder, smoke}]}' cli/distribution/targets.json)"
+          mode=release
+          [[ "$EVENT_NAME" == "pull_request" ]] && mode=pull-request
+          matrix="$(node .github/scripts/select-cli-distribution-targets.mjs --mode "$mode")"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   checks:
@@ -61,6 +65,9 @@ jobs:
 
       - name: Test
         run: cargo test --manifest-path cli/Cargo.toml --locked
+
+      - name: Test distribution target selection
+        run: node --test .github/scripts/select-cli-distribution-targets.test.mjs
 
       - name: Lint
         run: cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings

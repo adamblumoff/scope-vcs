@@ -27,6 +27,14 @@ const cliBuildWorkflow = readFileSync(
   new URL("../workflows/scope-cli-build.yml", import.meta.url),
   "utf8",
 );
+const integrationCiWorkflow = readFileSync(
+  new URL("../workflows/scope-integration-ci.yml", import.meta.url),
+  "utf8",
+);
+const rustChecksWorkflow = readFileSync(
+  new URL("../workflows/rust-workspace-checks.yml", import.meta.url),
+  "utf8",
+);
 const cliDeployWorkflow = readFileSync(
   new URL("../workflows/scope-cli-deploy.yml", import.meta.url),
   "utf8",
@@ -37,6 +45,10 @@ const stagingWorkflow = readFileSync(
 );
 const webDeployWorkflow = readFileSync(
   new URL("../workflows/scope-web-deploy.yml", import.meta.url),
+  "utf8",
+);
+const webCiWorkflow = readFileSync(
+  new URL("../workflows/scope-web-ci.yml", import.meta.url),
   "utf8",
 );
 
@@ -189,6 +201,11 @@ test("changes select the required deployment lanes", () => {
     [
       "distribution config changes rebuild distribution targets",
       ["cli/distribution/targets.json"],
+      { cli: true, cliDistribution: true },
+    ],
+    [
+      "distribution selector changes run CLI validation and rebuild distribution targets",
+      [".github/scripts/select-cli-distribution-targets.mjs"],
       { cli: true, cliDistribution: true },
     ],
     [
@@ -498,5 +515,22 @@ test("Railway deploy jobs consume release binaries instead of rebuilding Rust", 
   assert.match(
     JSON.stringify(repositoryJson("deploy/railway/prebuilt-cli.railpack.json")),
     /\.scope-deployment-\*/,
+  );
+});
+
+test("Node workflows cache pnpm and browser downloads by the web lockfile", () => {
+  for (const workflow of [integrationCiWorkflow, rustChecksWorkflow, webCiWorkflow]) {
+    assert.match(
+      workflow,
+      /uses: pnpm\/action-setup@[0-9a-f]{40} # v5/,
+    );
+    assert.match(workflow, /cache: pnpm/);
+    assert.match(workflow, /cache-dependency-path: web\/pnpm-lock\.yaml/);
+  }
+
+  assert.match(integrationCiWorkflow, /path: ~\/\.cache\/ms-playwright/);
+  assert.match(
+    integrationCiWorkflow,
+    /key: playwright-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\('web\/pnpm-lock\.yaml'\) \}\}/,
   );
 });

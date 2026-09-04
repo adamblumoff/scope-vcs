@@ -198,6 +198,8 @@
         ".github/workflows/scope-cli-build.yml",
         "deploy/railway/prebuilt-cli.railpack.json",
         "deploy/railway/start-prebuilt.sh",
+        ".github/scripts/select-cli-distribution-targets.mjs",
+        ".github/scripts/select-cli-distribution-targets.test.mjs",
         "Cargo.lock",
         "Cargo.toml",
         "rust-toolchain.toml",
@@ -214,6 +216,8 @@
     "cliDistribution": {
       "files": [
         ".github/workflows/scope-cli-build.yml",
+        ".github/scripts/select-cli-distribution-targets.mjs",
+        ".github/scripts/select-cli-distribution-targets.test.mjs",
         "cli/Cargo.lock",
         "cli/Cargo.toml",
         "rust-toolchain.toml"
