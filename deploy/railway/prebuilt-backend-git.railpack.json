@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "shell",
+  "deploy": {
+    "inputs": [
+      {
+        "local": true,
+        "include": ["bin", "start.sh", ".scope-deployment-*"]
+      }
+    ],
+    "aptPackages": ["git"]
+  }
+}

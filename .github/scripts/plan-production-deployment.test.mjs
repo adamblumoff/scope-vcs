@@ -15,6 +15,18 @@ const productionWorkflow = readFileSync(
   new URL("../workflows/scope-production-deploy.yml", import.meta.url),
   "utf8",
 );
+const backendCiWorkflow = readFileSync(
+  new URL("../workflows/scope-api-ci.yml", import.meta.url),
+  "utf8",
+);
+const backendDeployWorkflow = readFileSync(
+  new URL("../workflows/scope-api-deploy.yml", import.meta.url),
+  "utf8",
+);
+const cliBuildWorkflow = readFileSync(
+  new URL("../workflows/scope-cli-build.yml", import.meta.url),
+  "utf8",
+);
 const integrationCiWorkflow = readFileSync(
   new URL("../workflows/scope-integration-ci.yml", import.meta.url),
   "utf8",
@@ -156,6 +168,26 @@ test("changes select the required deployment lanes", () => {
       { api: true, web: true, cli: true },
     ],
     ["router changes deploy the Git router", ["repo-router/src/main.rs"], { router: true }],
+    [
+      "shared prebuilt launcher selects every binary service",
+      ["deploy/railway/start-prebuilt.sh"],
+      { cache: true, worker: true, router: true, api: true, cli: true },
+    ],
+    [
+      "backend prebuilt config selects cache and router",
+      ["deploy/railway/prebuilt-backend.railpack.json"],
+      { cache: true, router: true },
+    ],
+    [
+      "git-enabled backend prebuilt config selects API and worker",
+      ["deploy/railway/prebuilt-backend-git.railpack.json"],
+      { worker: true, api: true },
+    ],
+    [
+      "CLI prebuilt config selects CLI without rebuilding distributions",
+      ["deploy/railway/prebuilt-cli.railpack.json"],
+      { cli: true },
+    ],
     [
       "CLI tests validate CLI without rebuilding distribution targets",
       ["cli/tests/request.rs"],
@@ -457,6 +489,32 @@ test("web and CLI healthcheck configs are staged at Railway upload roots", () =>
   assert.match(
     stagingWorkflow,
     /cp candidate\/web\/railway\.json \.railway-staging-upload\/web-root\/railway\.json/,
+  );
+});
+
+test("Railway deploy jobs consume release binaries instead of rebuilding Rust", () => {
+  assert.match(backendCiWorkflow, /name: backend-release-\$\{\{ github\.sha \}\}/);
+  assert.match(backendDeployWorkflow, /name: backend-release-\$\{\{ github\.sha \}\}/);
+  for (const binary of ["scope-cache-service", "scope-worker", "scope-vcs"]) {
+    assert.match(backendCiWorkflow, new RegExp(`artifacts/bin/${binary}`));
+    assert.match(backendDeployWorkflow, new RegExp(`artifacts/backend-release/${binary}`));
+  }
+  assert.match(backendDeployWorkflow, /prebuilt-backend\.railpack\.json/);
+  assert.match(backendDeployWorkflow, /watch_root="\$root\/\$service"/);
+  assert.match(backendDeployWorkflow, /"\$watch_root\/\.scope-deployment-sha"/);
+  assert.doesNotMatch(backendDeployWorkflow, /cargo build/);
+  assert.match(
+    JSON.stringify(repositoryJson("deploy/railway/prebuilt-backend.railpack.json")),
+    /\.scope-deployment-\*/,
+  );
+
+  assert.match(cliBuildWorkflow, /name: cli-service-release-\$\{\{ github\.sha \}\}/);
+  assert.match(cliDeployWorkflow, /name: cli-service-release-\$\{\{ github\.sha \}\}/);
+  assert.match(cliDeployWorkflow, /prebuilt-cli\.railpack\.json/);
+  assert.doesNotMatch(cliDeployWorkflow, /cargo build/);
+  assert.match(
+    JSON.stringify(repositoryJson("deploy/railway/prebuilt-cli.railpack.json")),
+    /\.scope-deployment-\*/,
   );
 });
 

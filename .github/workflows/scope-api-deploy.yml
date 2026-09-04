@@ -39,47 +39,56 @@ jobs:
         with:
           node-version: 24
 
-      - name: Download maintenance command
+      - name: Download backend deployment binaries
         uses: actions/download-artifact@v8
         with:
-          name: backend-maintenance-${{ github.sha }}
+          name: backend-release-${{ github.sha }}
           path: artifacts
 
-      - name: Extract maintenance command
+      - name: Extract backend deployment binaries
         run: |
-          mkdir -p target/release
+          mkdir -p artifacts/backend-release target/release
           tar --extract --gzip \
-            --file artifacts/scope-maintenance.tar.gz \
-            --directory target/release
+            --file artifacts/backend-release.tar.gz \
+            --directory artifacts/backend-release
+          install -m 0755 artifacts/backend-release/scope-maintenance target/release/scope-maintenance
           test -x target/release/scope-maintenance
 
       - name: Stage Railway upload roots
         shell: bash
         env:
+          DEPLOY_ROUTER: ${{ inputs.deploy_router && '1' || '0' }}
           SUCCESSFUL_DEPLOYMENTS: ${{ inputs.successful_deployments }}
         run: |
           rm -rf .railway-upload
           for service in api worker cache-service repo-router; do
             root=".railway-upload/$service"
-            mkdir -p "$root"
-            cp Cargo.toml Cargo.lock rust-toolchain.toml "$root/"
-            cp "$service/railpack.json" "$root/railpack.json"
+            watch_root="$root/$service"
+            mkdir -p "$root/bin" "$watch_root"
+            cp deploy/railway/prebuilt-backend.railpack.json "$root/railpack.json"
+            if [[ "$service" == "api" || "$service" == "worker" ]]; then
+              cp deploy/railway/prebuilt-backend-git.railpack.json "$root/railpack.json"
+            fi
+            install -m 0755 deploy/railway/start-prebuilt.sh "$root/start.sh"
             cp "$service/railway.json" "$root/railway.json"
-            cp -a api "$root/api"
-            cp -a cache-service "$root/cache-service"
-            cp -a repo-router "$root/repo-router"
-            cp -a worker "$root/worker"
-            cp -a crates "$root/crates"
-            cp -a runner-runtime "$root/runner-runtime"
-            printf '%s\n' "$GITHUB_SHA" > "$root/$service/.scope-deployment-sha"
+            printf '%s\n' "$GITHUB_SHA" | tee \
+              "$root/.scope-deployment-sha" \
+              "$watch_root/.scope-deployment-sha" >/dev/null
             component="$service"
             [[ "$component" == "cache-service" ]] && component=cache
             [[ "$component" == "repo-router" ]] && component=router
             successful_sha="$(jq -r --arg component "$component" '.[$component].sourceSha // ""' <<< "$SUCCESSFUL_DEPLOYMENTS")"
             if [[ "$successful_sha" != "$GITHUB_SHA" ]]; then
-              printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$root/$service/.scope-deployment-attempt"
+              printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | tee \
+                "$root/.scope-deployment-attempt" \
+                "$watch_root/.scope-deployment-attempt" >/dev/null
             fi
           done
+
+          install -m 0755 artifacts/backend-release/scope-vcs .railway-upload/api/bin/scope-vcs
+          install -m 0755 artifacts/backend-release/scope-cache-service .railway-upload/cache-service/bin/scope-cache-service
+          install -m 0755 artifacts/backend-release/scope-worker .railway-upload/worker/bin/scope-worker
+          [[ "$DEPLOY_ROUTER" == "0" ]] || install -m 0755 artifacts/backend-release/scope-repo-router .railway-upload/repo-router/bin/scope-repo-router
 
       - name: Install Railway CLI
         run: |

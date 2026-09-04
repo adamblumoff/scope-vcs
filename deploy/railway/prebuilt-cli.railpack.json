@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "shell",
+  "deploy": {
+    "startCommand": "./bin/scope-cli-service",
+    "inputs": [
+      {
+        "local": true,
+        "include": ["bin", "dist", "start.sh", ".scope-deployment-*"]
+      }
+    ]
+  }
+}

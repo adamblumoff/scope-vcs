@@ -101,6 +101,21 @@ jobs:
           --locked
           --bin scope-cli-service
 
+      - name: Pack service
+        run: |
+          mkdir -p artifacts
+          tar --create --gzip \
+            --file artifacts/scope-cli-service.tar.gz \
+            --directory cli/target/release \
+            scope-cli-service
+
+      - name: Upload service
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-service-release-${{ github.sha }}
+          path: artifacts/scope-cli-service.tar.gz
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.label }}
     needs: [checks, prepare]
