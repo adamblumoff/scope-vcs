@@ -457,7 +457,10 @@ test("web and CLI healthcheck configs are staged at Railway upload roots", () =>
 
 test("Node workflows cache pnpm and browser downloads by the web lockfile", () => {
   for (const workflow of [integrationCiWorkflow, rustChecksWorkflow, webCiWorkflow]) {
-    assert.match(workflow, /uses: pnpm\/action-setup@v5/);
+    assert.match(
+      workflow,
+      /uses: pnpm\/action-setup@[0-9a-f]{40} # v5/,
+    );
     assert.match(workflow, /cache: pnpm/);
     assert.match(workflow, /cache-dependency-path: web\/pnpm-lock\.yaml/);
   }
