@@ -204,6 +204,8 @@
     "cliDistribution": {
       "files": [
         ".github/workflows/scope-cli-build.yml",
+        ".github/scripts/select-cli-distribution-targets.mjs",
+        ".github/scripts/select-cli-distribution-targets.test.mjs",
         "cli/Cargo.lock",
         "cli/Cargo.toml",
         "rust-toolchain.toml"
