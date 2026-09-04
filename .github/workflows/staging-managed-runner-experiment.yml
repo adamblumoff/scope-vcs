@@ -18,8 +18,8 @@ permissions:
   id-token: write
 
 jobs:
-  deploy:
-    name: Deploy isolated staging stack
+  cleanup:
+    name: Remove isolated staging stack
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -33,15 +33,52 @@ jobs:
           role-to-assume: arn:aws:iam::957143340948:role/scope-staging-experiment-github-94d56973
           role-session-name: scope-staging-managed-runner-${{ github.run_id }}
 
-      - name: Deploy staging Managed Instances stack
+      - name: Remove staging Managed Instances stack
         env:
-          ADDITIONAL_CHECKS_IMAGE_REPOSITORY_ARN: arn:aws:ecr:us-east-1:957143340948:repository/scope-vcs/production/checks
           AWS_REGION: us-east-1
-          ENABLE_GITHUB_ADMINISTRATION: "false"
-          ENVIRONMENT_NAME: staging
-          MANAGED_INSTANCE_TYPE: m8a.xlarge
-          RUNNER_CAPACITY: MANAGED_INSTANCES
           STACK_NAME: scope-cloud-runner-staging-mi-experiment
-          TASK_FAMILY_PREFIX: scope-staging-runner-
-          TASK_MEMORY_MIB: "14336"
-        run: deploy/aws/apply-cloud-runner.sh apply
+        run: |
+          set -euo pipefail
+          dispatcher_user="${STACK_NAME}-railway-dispatcher"
+          checks_repository="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='ChecksImageRepositoryName'].OutputValue | [0]" \
+            --output text)"
+
+          for access_key_id in $(aws iam list-access-keys \
+            --user-name "$dispatcher_user" \
+            --query 'AccessKeyMetadata[].AccessKeyId' \
+            --output text); do
+            aws iam delete-access-key \
+              --user-name "$dispatcher_user" \
+              --access-key-id "$access_key_id"
+          done
+
+          aws cloudformation delete-stack --stack-name "$STACK_NAME"
+          aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+
+          image_count="$(aws ecr describe-images \
+            --repository-name "$checks_repository" \
+            --query 'length(imageDetails)' \
+            --output text)"
+          test "$image_count" = "0"
+          aws ecr delete-repository --repository-name "$checks_repository"
+
+      - name: Remove temporary GitHub OIDC role
+        env:
+          ROLE_NAME: scope-staging-experiment-github-94d56973
+        run: |
+          set -euo pipefail
+          for policy_arn in $(aws iam list-attached-role-policies \
+            --role-name "$ROLE_NAME" \
+            --query 'AttachedPolicies[].PolicyArn' \
+            --output text); do
+            aws iam detach-role-policy --role-name "$ROLE_NAME" --policy-arn "$policy_arn"
+          done
+          for policy_name in $(aws iam list-role-policies \
+            --role-name "$ROLE_NAME" \
+            --query 'PolicyNames[]' \
+            --output text); do
+            aws iam delete-role-policy --role-name "$ROLE_NAME" --policy-name "$policy_name"
+          done
+          aws iam delete-role --role-name "$ROLE_NAME"
