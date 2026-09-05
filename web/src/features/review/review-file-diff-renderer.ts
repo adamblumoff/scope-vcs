@@ -8,7 +8,8 @@ import type {
   ReviewFileContentResponse,
   ReviewFileDiffResponse,
 } from '../../api/types.generated'
-import type { Worker } from 'node:worker_threads'
+import { createHash } from 'node:crypto'
+import { createBoundedCache } from '../../lib/bounded-cache'
 import {
   REVIEW_FILE_DIFF_RENDER_BUDGET,
   type ReviewFileDiffRenderBudget,
@@ -31,6 +32,7 @@ export class ReviewDiffTransientError extends Error {
 export type IsolatedReviewDiffRender = (
   input: ReviewFileDiffWorkerInput,
   deadlineMs: number,
+  signal?: AbortSignal,
 ) => Promise<ReviewFileDiffWorkerResult>
 
 export type ReviewDiffAdmissionState = { active: number }
@@ -44,9 +46,17 @@ export function createReviewFileDiffRenderer({
   isolatedRender: IsolatedReviewDiffRender
   state?: ReviewDiffAdmissionState
 }) {
+  const presentations = createBoundedCache<string, ReviewFileDiffWorkerResult>({
+    maxEntries: 64,
+    maxWeight: 8 * 1024 * 1024,
+    weightOf: (result) => result.kind === 'html' ? result.html.length * 2 : 64,
+  })
+  const rendererIdentity = JSON.stringify(['pierre-1.2.11-v1', budget])
   return async function renderReviewFileDiff(
     diff: ReviewFileDiffResponse,
+    signal?: AbortSignal,
   ): Promise<ReviewFileDiff> {
+    signal?.throwIfAborted()
     const base = reviewFileDiffBase(diff)
     const contentPresentation = nonTextPresentation(diff, budget)
     if (contentPresentation) {
@@ -67,6 +77,13 @@ export function createReviewFileDiffRenderer({
     if (oldMetrics.lines + newMetrics.lines > budget.maxInputLines) {
       return { ...base, presentation: { kind: 'omitted', reason: 'lines' } }
     }
+    // Callers fetch and authorize the source before entering this renderer.
+    // Cache only derived presentation; current transport metadata stays outside.
+    const key = createHash('sha256')
+      .update(JSON.stringify([rendererIdentity, diff.path, oldText, newText]))
+      .digest('hex')
+    const cached = presentations.get(key)
+    if (cached && cached.kind !== 'error') return { ...base, presentation: cached }
     if (state.active >= budget.maxConcurrentRenders) {
       throw new ReviewDiffTransientError('busy')
     }
@@ -83,57 +100,17 @@ export function createReviewFileDiffRenderer({
         newText,
         oldText,
         path: diff.path,
-      }, budget.deadlineMs)
+      }, budget.deadlineMs, signal)
+      signal?.throwIfAborted()
       if (presentation.kind === 'error') {
         throw new Error('This file diff could not be rendered.')
       }
+      presentations.set(key, presentation)
       return { ...base, presentation }
     } finally {
       state.active -= 1
     }
   }
-}
-
-type WorkerLike = Pick<Worker, 'once' | 'terminate'>
-
-export function runReviewFileDiffWorker(
-  worker: WorkerLike,
-  deadlineMs: number,
-): Promise<ReviewFileDiffWorkerResult> {
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const finish = async (
-      outcome: { result: ReviewFileDiffWorkerResult } | { error: Error },
-    ) => {
-      if (settled) return
-      settled = true
-      clearTimeout(deadline)
-      try {
-        await worker.terminate()
-      } catch {
-        // The task outcome still settles if Node reports a termination failure.
-      }
-      if ('result' in outcome) resolve(outcome.result)
-      else reject(outcome.error)
-    }
-    const deadline = setTimeout(() => {
-      void finish({ error: new ReviewDiffTransientError('deadline') })
-    }, deadlineMs)
-
-    worker.once('message', (message: ReviewFileDiffWorkerResult) => {
-      void finish({ result: message })
-    })
-    worker.once('error', () => {
-      void finish({ error: new Error('This file diff could not be rendered.') })
-    })
-    worker.once('exit', (code) => {
-      void finish({ error: new Error(
-        code === 0
-          ? 'The diff renderer exited before returning a result.'
-          : 'This file diff could not be rendered.',
-      ) })
-    })
-  })
 }
 
 function reviewFileDiffBase(diff: ReviewFileDiffResponse) {

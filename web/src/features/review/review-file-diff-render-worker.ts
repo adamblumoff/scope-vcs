@@ -1,6 +1,6 @@
 import { parseDiffFromFile, type FileDiffOptions, type SupportedLanguages } from '@pierre/diffs'
 import { preloadFileDiff } from '@pierre/diffs/ssr'
-import { parentPort, workerData } from 'node:worker_threads'
+import { parentPort } from 'node:worker_threads'
 import type {
   ReviewFileDiffWorkerInput,
   ReviewFileDiffWorkerResult,
@@ -84,7 +84,9 @@ if (!port) {
   throw new Error('Review diff renderer must run in a worker thread')
 }
 
-renderReviewFileDiff(workerData as ReviewFileDiffWorkerInput).then(
-  (result) => port.postMessage(result),
-  () => port.postMessage({ kind: 'error' } satisfies ReviewFileDiffWorkerResult),
-)
+port.on('message', (input: ReviewFileDiffWorkerInput) => {
+  renderReviewFileDiff(input).then(
+    (result) => port.postMessage(result),
+    () => port.postMessage({ kind: 'error' } satisfies ReviewFileDiffWorkerResult),
+  )
+})

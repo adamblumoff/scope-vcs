@@ -15,8 +15,8 @@ import {
   boundedText,
   createReviewFileDiffRenderer,
   ReviewDiffTransientError,
-  runReviewFileDiffWorker,
 } from './review-file-diff-renderer'
+import { createReviewFileDiffWorkerPool, runReviewFileDiffWorker } from './review-file-diff-worker-pool'
 
 function textDiff(oldText: string, newText: string): ReviewFileDiffResponse {
   return {
@@ -129,7 +129,7 @@ test('terminates a CPU-bound worker at the deadline', async () => {
   const exited = once(worker, 'exit')
   const started = performance.now()
   await assert.rejects(
-    runReviewFileDiffWorker(worker, 25),
+    createReviewFileDiffWorkerPool(() => worker, 1)(workerInput('a', 'b'), 25),
     (error: unknown) => error instanceof ReviewDiffTransientError &&
       error.failure === 'deadline',
   )
@@ -153,25 +153,6 @@ test('does not publish transient busy or deadline failures to a cache', async ()
     () => deadlineRender(textDiff('a', 'b')),
     'deadline',
   )
-})
-
-test('settles the task outcome even if worker termination rejects', async () => {
-  const listeners = new Map<string, (...args: never[]) => void>()
-  const worker = {
-    once(event: string, listener: (...args: never[]) => void) {
-      listeners.set(event, listener)
-      return this
-    },
-    terminate: async () => {
-      throw new Error('already stopped')
-    },
-  }
-  const result = runReviewFileDiffWorker(
-    worker as unknown as Parameters<typeof runReviewFileDiffWorker>[0],
-    100,
-  )
-  listeners.get('message')?.({ kind: 'empty' } as never)
-  assert.deepEqual(await result, { kind: 'empty' })
 })
 
 test('zero-hunk and adversarial fixtures return bounded worker results', async () => {
@@ -219,6 +200,43 @@ test('bounds text excerpts without splitting UTF-8 characters', () => {
   })
 })
 
+test('caches presentation by content and language, retaining current diff metadata', async () => {
+  let renders = 0
+  const render = createReviewFileDiffRenderer({
+    isolatedRender: async () => {
+      renders += 1
+      return { kind: 'html', html: 'rendered' }
+    },
+  })
+  const original = textDiff('a', 'b')
+  await render(original)
+  const changedMode = await render({ ...original, new_mode: '100755' })
+  assert.equal(renders, 1)
+  assert.equal(changedMode.new_mode, '100755')
+  await render({ ...original, path: '/fixture.rs' })
+  await render(textDiff('a', 'c'))
+  assert.equal(renders, 3)
+})
+
+test('bounds cached presentation bytes and excludes canceled work', async () => {
+  let renders = 0
+  const render = createReviewFileDiffRenderer({
+    isolatedRender: async () => {
+      renders += 1
+      return { kind: 'html', html: 'x'.repeat(256 * 1_024) }
+    },
+  })
+  for (let index = 0; index < 17; index += 1) {
+    await render(textDiff('a', `${index}`))
+  }
+  await render(textDiff('a', '0'))
+  assert.equal(renders, 18)
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(render(textDiff('a', '0'), controller.signal), { name: 'AbortError' })
+  assert.equal(renders, 18)
+})
+
 function workerInput(
   oldText: string,
   newText: string,
@@ -238,14 +256,17 @@ function workerInput(
   }
 }
 
-function runSourceWorker(input: ReviewFileDiffWorkerInput) {
+async function runSourceWorker(input: ReviewFileDiffWorkerInput) {
   const workerPath = resolve(
     process.cwd(),
     'src/features/review/review-file-diff-render-worker.ts',
   )
-  return runReviewFileDiffWorker(new Worker(pathToFileURL(workerPath), {
-    workerData: input,
-  }), REVIEW_FILE_DIFF_RENDER_BUDGET.deadlineMs)
+  const worker = new Worker(pathToFileURL(workerPath))
+  try {
+    return await runReviewFileDiffWorker(worker, input, REVIEW_FILE_DIFF_RENDER_BUDGET.deadlineMs)
+  } finally {
+    await worker.terminate()
+  }
 }
 
 function assertTransientNotPublished(

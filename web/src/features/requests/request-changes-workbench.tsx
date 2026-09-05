@@ -73,6 +73,7 @@ export function RequestChangesWorkbench({
   initialDiscussionReferences: RequestChangesDiscussionReferences
   loadDiff: (
     input: LoadRequestRevisionCommitInput & { path: string },
+    signal?: AbortSignal,
   ) => Promise<ReviewFileDiff>
   loadDiscussions: (input: LoadDiscussionsInput) => Promise<{
     discussions: RequestDiscussion[]
@@ -249,6 +250,7 @@ function useRequestChangesModel({
   audience: ProjectionPreviewAudience
   loadDiff: (
     input: LoadRequestRevisionCommitInput & { path: string },
+    signal?: AbortSignal,
   ) => Promise<ReviewFileDiff>
   onSearchChange: (search: RequestChangesSearch) => void
   params: { owner: string; repo: string; request_id: string }
@@ -310,15 +312,12 @@ function useRequestChangesModel({
       if (!selectedCommitOid || !selectedRevisionId || !selectedFilePath) {
         throw new Error('Select a changed file.')
       }
-      signal.throwIfAborted()
-      const result = await loadDiff({
+      return loadDiff({
         ...params,
         commit_oid: selectedCommitOid,
         path: selectedFilePath,
         revision_id: selectedRevisionId,
-      })
-      signal.throwIfAborted()
-      return result
+      }, signal)
     },
     [loadDiff, params, selectedCommitOid, selectedFilePath, selectedRevisionId],
   )

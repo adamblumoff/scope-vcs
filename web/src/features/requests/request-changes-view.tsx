@@ -20,6 +20,7 @@ type RequestChangesViewProps = {
   initialDiscussionReferences: RequestChangesDiscussionReferences
   loadDiff: (
     input: LoadRequestRevisionCommitInput & { path: string },
+    signal?: AbortSignal,
   ) => Promise<ReviewFileDiff>
   loadDiscussions: (input: LoadDiscussionsInput) => Promise<RequestDiscussionPage>
   onSearchChange: (search: RequestChangesSearch) => void
