@@ -65,7 +65,6 @@ export function RepoDetailPage({
       <RepositoryCodeView
         content={content}
         contentError={contentError}
-        contentLoading={contentLoading}
         contentRetry={contentRetry}
         onSelectFilePath={onSelectFilePath}
         params={params}

@@ -46,7 +46,6 @@ const CODE_TAB_SET_ID = 'repository-code-files'
 export function RepositoryCodeView({
   content,
   contentError,
-  contentLoading,
   contentRetry,
   onSelectFilePath,
   params,
@@ -59,7 +58,6 @@ export function RepositoryCodeView({
 }: {
   content: RepoContent | null
   contentError: string | null
-  contentLoading: boolean
   contentRetry: () => void
   onSelectFilePath: (path: string) => void
   params: RepoParams
