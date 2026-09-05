@@ -1,5 +1,5 @@
 use super::{
-    archive::{BoundedWriter, create_archive, file_identity},
+    archive::{BoundedWriter, create_archive},
     finalize::save_cache,
     identity::{MAX_CACHE_KEY_FILE_BYTES, digest_inputs_at, open_key_file},
     restore::CachePreparationPhases,
@@ -26,15 +26,20 @@ fn archives_are_identical_across_creation_order_and_metadata() {
     let first_archive = tempfile::NamedTempFile::new().unwrap();
     let second_archive = tempfile::NamedTempFile::new().unwrap();
 
-    create_archive(first.path(), first_archive.path()).unwrap();
-    create_archive(second.path(), second_archive.path()).unwrap();
+    let first_identity = create_archive(first.path(), first_archive.path()).unwrap();
+    let second_identity = create_archive(second.path(), second_archive.path()).unwrap();
 
     let first_bytes = fs::read(first_archive.path()).unwrap();
     let second_bytes = fs::read(second_archive.path()).unwrap();
     assert_eq!(first_bytes, second_bytes);
+    assert_eq!(first_identity, second_identity);
+    use sha2::{Digest as _, Sha256};
     assert_eq!(
-        file_identity(first_archive.path()).unwrap(),
-        file_identity(second_archive.path()).unwrap()
+        first_identity,
+        (
+            first_bytes.len() as u64,
+            hex::encode(Sha256::digest(&first_bytes))
+        )
     );
 }
 
