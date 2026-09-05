@@ -1,83 +1,63 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import type { RequestRevisions } from '@/api/types'
 import type { LoadDiscussionsInput } from './request-discussion-api'
-import {
-  loadCompleteDiscussionReferencePage,
-  loadCompleteDiscussionReferencePages,
-} from './request-changes-discussion-references'
+import { appendDiscussionReferencePage, loadDiscussionReferencePage, selectedDiscussionReferenceQuery } from './request-changes-discussion-references'
 import type { RequestDiscussion, RequestDiscussionPage } from './request-discussion-types'
 
-test('loads discussion references through the final cursor', async () => {
-  const cursors: Array<string | undefined> = []
-  const page = await loadCompleteDiscussionReferencePage(
-    requestInput(),
-    async (input) => {
-      cursors.push(input.cursor)
-      return input.cursor
-        ? discussionPage(['last'], null, 41)
-        : discussionPage(
-            Array.from({ length: 100 }, (_, index) => `first-${index}`),
-            'next-page',
-            41,
-          )
-    },
-  )
-
-  assert.deepEqual(cursors, [undefined, 'next-page'])
-  assert.equal(page.discussions.length, 101)
-  assert.equal(page.discussions.at(-1)?.id, 'last')
-  assert.equal(page.next_cursor, null)
+test('endless unique cursors return just the first page and preserve its cursor', async () => {
+  let calls = 0
+  const page = await loadDiscussionReferencePage(requestInput(), async (input, options) => {
+    calls++
+    assert.equal(input.limit, 100)
+    assert.equal(options.maxResponseBytes, 512 * 1024)
+    return discussionPage(['first'], `cursor-${calls}`, 41)
+  })
+  assert.equal(calls, 1)
+  assert.equal(page.next_cursor, 'cursor-1')
   assert.equal(page.snapshot_version, 41)
 })
 
-test('rejects a repeated discussion cursor instead of looping', async () => {
-  await assert.rejects(
-    loadCompleteDiscussionReferencePage(requestInput(), async () =>
-      discussionPage([], 'repeated', 1)),
-    /repeated a cursor/,
-  )
+test('slow pages abort transport at the whole-load deadline', async () => {
+  let signal: AbortSignal | undefined
+  const start = Date.now()
+  await assert.rejects(loadDiscussionReferencePage(requestInput(), async (_, options) => {
+    signal = options.signal
+    return new Promise(() => {})
+  }), /timed out/)
+  assert.equal(signal?.aborted, true)
+  assert.ok(Date.now() - start < 3_000)
 })
 
-test('rejects a changed snapshot version instead of mixing pages', async () => {
-  await assert.rejects(
-    loadCompleteDiscussionReferencePage(requestInput(), async (input) =>
-      input.cursor
-        ? discussionPage(['later'], null, 2)
-        : discussionPage(['first'], 'next', 1)),
-    /changed snapshot version/,
-  )
+test('oversized item and byte responses are rejected without another request', async () => {
+  await assert.rejects(loadDiscussionReferencePage(requestInput(), async () =>
+    discussionPage(Array.from({ length: 101 }, (_, i) => String(i)), 'more', 1)), /page limit/)
+  await assert.rejects(loadDiscussionReferencePage(requestInput(), async () =>
+    discussionPage(['x'.repeat(512 * 1024)], 'more', 1)), /page limit/)
 })
 
-test('loads commits sequentially and isolates a failed commit', async () => {
-  const calls: string[] = []
-  const errors: unknown[] = []
-  const byCommit = await loadCompleteDiscussionReferencePages(
-    [
-      { input: { ...requestInput(), commit_oid: 'first' }, key: 'first' },
-      { input: { ...requestInput(), commit_oid: 'failed' }, key: 'failed' },
-      { input: { ...requestInput(), commit_oid: 'last' }, key: 'last' },
-    ],
-    async (input) => {
-      calls.push(`${input.commit_oid}:${input.cursor ?? 'first'}`)
-      if (input.commit_oid === 'failed') throw new Error('unavailable')
-      return input.cursor
-        ? discussionPage([`${input.commit_oid}-2`], null, 1)
-        : discussionPage([`${input.commit_oid}-1`], 'next', 1)
-    },
-    (error) => errors.push(error),
-  )
+test('continuation preserves snapshot consistency and rejects a repeated cursor', () => {
+  const previous = discussionPage(['first'], 'next', 1)
+  assert.throws(() => appendDiscussionReferencePage(previous, discussionPage(['later'], null, 2)), /Discussions changed/)
+  assert.throws(() => appendDiscussionReferencePage(previous, discussionPage([], 'next', 1)), /repeated a cursor/)
+  assert.deepEqual(appendDiscussionReferencePage(previous, discussionPage(['last'], null, 1)).discussions.map(d => d.id), ['first', 'last'])
+})
 
-  assert.deepEqual(calls, [
-    'first:first',
-    'first:next',
-    'failed:first',
-    'last:first',
-    'last:next',
-  ])
-  assert.deepEqual(byCommit.first?.discussions.map(({ id }) => id), ['first-1', 'first-2'])
-  assert.equal(byCommit.failed, null)
-  assert.deepEqual(byCommit.last?.discussions.map(({ id }) => id), ['last-1', 'last-2'])
-  assert.equal(errors.length, 1)
+test('many revisions and commits produce only the selected reference query', () => {
+  const revisions = {
+    review_revision_id: 'revision-19',
+    revisions: Array.from({ length: 20 }, (_, i) => ({
+      id: `revision-${i}`, position: i, inspection: 'Complete',
+      commits: Array.from({ length: 100 }, (_, j) => ({ oid: `commit-${i}-${j}` })),
+    })),
+  } as RequestRevisions
+  const selected = selectedDiscussionReferenceQuery({ ...requestInput(), revision_id: 'revision-3', commit_oid: 'commit-3-7' }, revisions)
+  assert.equal(selected?.input.revision_id, 'revision-3')
+  assert.equal(selected?.input.commit_oid, 'commit-3-7')
+  assert.equal(selected?.input.include_revision_anchor, false)
+  const latest = selectedDiscussionReferenceQuery({ owner: 'owner', repo: 'repo', request_id: 'request' }, revisions)
+  assert.equal(latest?.input.commit_oid, 'commit-19-99')
+  assert.equal(latest?.input.include_revision_anchor, true)
 })
 
 function requestInput(): LoadDiscussionsInput {

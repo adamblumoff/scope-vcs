@@ -342,7 +342,6 @@ mod tests {
         repo_actions::RepoStorageCleanup,
         repository::credentials::{FirstPushToken, GitPushToken},
     };
-    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -420,13 +419,18 @@ mod tests {
                     move |cleanup| {
                         assert_eq!(cleanup.incarnation.incarnation_id(), "repoi_deleted");
                         cleanup_started_tx.send(()).unwrap();
-                        release_cleanup_rx.recv().unwrap();
+                        release_cleanup_rx
+                            .recv_timeout(std::time::Duration::from_secs(60))
+                            .unwrap();
                         Ok::<(), PostgresError>(())
                     },
                 )
                 .await
         });
-        cleanup_started_rx.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(60), cleanup_started_rx)
+            .await
+            .unwrap()
+            .unwrap();
 
         let competing_cleanup_called = Arc::new(AtomicBool::new(false));
         let second_cleanup_called = Arc::clone(&competing_cleanup_called);
@@ -451,14 +455,20 @@ mod tests {
                 )
                 .await
         });
-        wait_until_repository_lock_is_waited_on(&store).await;
+        super::super::locks::wait_for_advisory_waiter(&store, "repo-storage", "owner/repo").await;
         assert!(
             !second.is_finished(),
             "competing creator must wait for the storage path lock"
         );
         release_cleanup_tx.send(()).unwrap();
-        let first_result = first.await.unwrap();
-        let second_result = second.await.unwrap();
+        let first_result = tokio::time::timeout(std::time::Duration::from_secs(60), first)
+            .await
+            .unwrap()
+            .unwrap();
+        let second_result = tokio::time::timeout(std::time::Duration::from_secs(60), second)
+            .await
+            .unwrap()
+            .unwrap();
 
         first_result.unwrap();
         assert!(matches!(
@@ -582,29 +592,5 @@ mod tests {
                 .await
                 .unwrap_err();
         assert!(error.message.contains("changed during creation"));
-    }
-
-    async fn wait_until_repository_lock_is_waited_on(store: &MetadataStore) {
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                let waiting = store
-                    .db
-                    .query_one(Statement::from_string(
-                        DatabaseBackend::Postgres,
-                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'advisory') AS waiting".to_string(),
-                    ))
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .try_get::<bool>("", "waiting")
-                    .unwrap();
-                if waiting {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("competing creator should wait for repository lock");
     }
 }

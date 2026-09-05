@@ -209,7 +209,8 @@ export type RepoRunHistoryInput = RepoParams & {
 }
 
 export type RunStepLogsInput = RunActionInput & {
-  after: number
+  after?: number
+  before?: number
   attempt_id: string
   step_index: number
 }

@@ -1,16 +1,15 @@
 use crate::{
-    auth::scope::{optional_scope_user, principal_for_scope_user},
+    auth::scope::optional_scope_user,
     error::ApiError,
     http::{
         file_diffs::review_file_diff_response_for_blobs,
-        projection_preview::ensure_projection_preview_access,
         responses::{
             HistoryEntryFileDiffRequest, HistoryEntryRequest, HistoryPageRequest,
-            ProjectionPreviewAudience, ProjectionPreviewSource, ReviewFileDiffResponse,
-            history_entry_detail_response, history_page_response, repo_scope_path,
+            ProjectionPreviewAudience, ReviewFileDiffResponse, history_entry_detail_response,
+            history_page_response, repo_scope_path,
         },
     },
-    repo_access::find_repo,
+    repo_access::find_read_access,
     state::AppState,
 };
 use axum::{
@@ -20,9 +19,9 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use scope_domain::{
-    history::{HistoryEntry, HistoryEntryFile, HistoryView, history_view_from_projection},
-    projection::{ProjectionViewKey, project_graph},
-    repository::Repository,
+    history::{HistoryEntry, HistoryEntryFile},
+    projection::ProjectionViewKey,
+    repository::access::{RepositoryAccessContext, RepositoryActor},
 };
 use serde::{Deserialize, Serialize};
 
@@ -45,13 +44,27 @@ pub(crate) async fn get_history_page(
 ) -> Result<Json<crate::http::responses::HistoryPageResponse>, ApiError> {
     let (repo, audience) =
         repo_and_audience(&state, &headers, &owner, &repo_name, input.audience).await?;
-    let view = history_view_for_repo(&repo, audience)?;
     let boundary_source_id = input
         .before
         .as_deref()
         .map(|cursor| parse_history_cursor(cursor, &repo.record.id, audience))
         .transpose()?;
-    let (entries, has_more) = history_page(&view, boundary_source_id.as_deref())?;
+    let page = state
+        .metadata
+        .repositories()
+        .repository_history_page(scope_postgres::db::RepositoryHistoryQuery {
+            incarnation: &repo.incarnation(),
+            version: repo.record.change_version,
+            audience: history_view_key(audience),
+            before_source_id: boundary_source_id.as_deref(),
+            entry_source_id: None,
+            limit: HISTORY_PAGE_SIZE as u64,
+        })
+        .await?;
+    ensure_history_available(page.available)?;
+    let view = page.view;
+    let entries = view.entries.as_slice();
+    let has_more = page.has_more;
     let next_cursor = if has_more {
         entries
             .last()
@@ -77,7 +90,20 @@ pub(crate) async fn get_history_entry(
 ) -> Result<Json<crate::http::responses::HistoryEntryDetailResponse>, ApiError> {
     let (repo, audience) =
         repo_and_audience(&state, &headers, &owner, &repo_name, input.audience).await?;
-    let view = history_view_for_repo(&repo, audience)?;
+    let page = state
+        .metadata
+        .repositories()
+        .repository_history_page(scope_postgres::db::RepositoryHistoryQuery {
+            incarnation: &repo.incarnation(),
+            version: repo.record.change_version,
+            audience: history_view_key(audience),
+            before_source_id: None,
+            entry_source_id: Some(&entry_id),
+            limit: 1,
+        })
+        .await?;
+    ensure_history_available(page.available)?;
+    let view = page.view;
     let entry = history_entry_for_id(&view.entries, &entry_id)?;
 
     Ok(Json(history_entry_detail_response(audience, &view, entry)))
@@ -91,7 +117,20 @@ pub(crate) async fn get_history_entry_file_diff(
 ) -> Result<Json<ReviewFileDiffResponse>, ApiError> {
     let (repo, audience) =
         repo_and_audience(&state, &headers, &owner, &repo_name, input.audience).await?;
-    let view = history_view_for_repo(&repo, audience)?;
+    let page = state
+        .metadata
+        .repositories()
+        .repository_history_page(scope_postgres::db::RepositoryHistoryQuery {
+            incarnation: &repo.incarnation(),
+            version: repo.record.change_version,
+            audience: history_view_key(audience),
+            before_source_id: None,
+            entry_source_id: Some(&entry_id),
+            limit: 1,
+        })
+        .await?;
+    ensure_history_available(page.available)?;
+    let view = page.view;
     let entry = history_entry_for_id(&view.entries, &entry_id)?;
     let path = repo_scope_path(&input.path)?;
     let file = entry
@@ -111,25 +150,25 @@ async fn repo_and_audience(
     owner: &str,
     repo_name: &str,
     requested_audience: Option<ProjectionPreviewAudience>,
-) -> Result<(Repository, ProjectionPreviewAudience), ApiError> {
-    let repo = find_repo(state, owner, repo_name).await?;
+) -> Result<(RepositoryAccessContext, ProjectionPreviewAudience), ApiError> {
     let user = optional_scope_user(state, headers).await?;
-    let requester = principal_for_scope_user(&repo, user.as_ref());
-    let audience = requested_audience.unwrap_or_else(|| {
-        if repo.access_for_principal(&requester).can_read_private_files {
-            ProjectionPreviewAudience::Private
-        } else {
-            ProjectionPreviewAudience::Public
-        }
-    });
-    ensure_projection_preview_access(
+    let repo = find_read_access(
         state,
-        &repo,
-        &requester,
-        audience,
-        ProjectionPreviewSource::Live,
-    )?;
-
+        owner,
+        repo_name,
+        user.as_ref().map(|user| user.id.as_str()),
+    )
+    .await?;
+    let audience = requested_audience.unwrap_or(if repo.access.can_read_private_files {
+        ProjectionPreviewAudience::Private
+    } else {
+        ProjectionPreviewAudience::Public
+    });
+    if audience == ProjectionPreviewAudience::Private
+        && repo.access.actor == RepositoryActor::Public
+    {
+        return Err(ApiError::forbidden("repo membership required"));
+    }
     Ok((repo, audience))
 }
 
@@ -140,46 +179,14 @@ fn history_view_key(audience: ProjectionPreviewAudience) -> ProjectionViewKey {
     }
 }
 
-fn history_view_for_repo(
-    repo: &Repository,
-    audience: ProjectionPreviewAudience,
-) -> Result<HistoryView, ApiError> {
-    let projection = project_graph(
-        &repo.graph,
-        &repo.visibility_change_sets,
-        history_view_key(audience),
-    );
-    if projection.preserves_git_commits() {
-        return Err(ApiError::not_implemented(
+fn ensure_history_available(available: bool) -> Result<(), ApiError> {
+    if available {
+        Ok(())
+    } else {
+        Err(ApiError::not_implemented(
             "history is unavailable for preserved public request commits until native per-commit diffs are represented accurately",
-        ));
+        ))
     }
-    Ok(history_view_from_projection(
-        projection,
-        &repo.graph,
-        &repo.visibility_change_sets,
-    ))
-}
-
-fn history_page<'a>(
-    view: &'a HistoryView,
-    boundary_source_id: Option<&str>,
-) -> Result<(&'a [HistoryEntry], bool), ApiError> {
-    let start = match boundary_source_id {
-        Some(boundary_source_id) => view
-            .entries
-            .iter()
-            .position(|entry| entry.source_id == boundary_source_id)
-            .map(|index| index + 1)
-            .ok_or_else(|| {
-                ApiError::bad_request("history cursor boundary is no longer available")
-            })?,
-        None => 0,
-    };
-    let lookahead_end = (start + HISTORY_PAGE_SIZE + 1).min(view.entries.len());
-    let has_more = lookahead_end - start > HISTORY_PAGE_SIZE;
-    let page_end = (start + HISTORY_PAGE_SIZE).min(view.entries.len());
-    Ok((&view.entries[start..page_end], has_more))
 }
 
 fn encode_history_cursor(
@@ -228,14 +235,18 @@ fn history_entry_for_id<'a>(
 
 async fn history_entry_file_diff_response(
     state: &AppState,
-    repo: &Repository,
+    repo: &RepositoryAccessContext,
     file: &HistoryEntryFile,
 ) -> Result<ReviewFileDiffResponse, ApiError> {
+    let (head, spans) = state
+        .metadata
+        .repositories()
+        .repository_content_source(&repo.incarnation())
+        .await?;
     review_file_diff_response_for_blobs(
         state,
-        repo.git_head
-            .as_ref()
-            .map(|head| (repo.incarnation(), head, repo.git_pack_spans.as_slice())),
+        head.as_ref()
+            .map(|head| (repo.incarnation(), head, spans.as_slice())),
         file.path.as_str().to_string(),
         file.kind,
         file.old_content.as_ref(),

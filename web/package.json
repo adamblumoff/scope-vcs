@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && node scripts/build-review-diff-worker.mjs && pnpm check:diff-worker-bundle",
-    "check": "pnpm typecheck && pnpm check:api-contract && pnpm check:observer-boundary && pnpm check:react-doctor && pnpm check:konsistent",
+    "check": "pnpm typecheck && ../dev/checks/contract && pnpm check:observer-boundary && pnpm check:react-doctor && pnpm check:konsistent",
     "check:api-contract": "node scripts/check-api-contract.mjs",
     "check:diff-worker-bundle": "node scripts/check-review-diff-worker-bundle.mjs",
     "check:observer-boundary": "node scripts/check-observer-boundary.mjs",
@@ -22,8 +22,7 @@
     "start": "node .output/server/index.mjs",
     "test": "node -e \"const fs=require('node:fs'); fs.rmSync('.test-output',{recursive:true,force:true}); fs.mkdirSync('.test-output',{recursive:true}); fs.writeFileSync('.test-output/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && tsc -p tsconfig.test.json && TZ=UTC node --test \".test-output/**/*.test.js\"",
     "test:smoke": "node --test \"smoke/**/*.spec.mjs\"",
-    "typecheck": "tsc --noEmit",
-    "ui:audit": "node scripts/ui-audit.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@clerk/tanstack-react-start": "^1.4.5",

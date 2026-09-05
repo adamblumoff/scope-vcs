@@ -1,7 +1,7 @@
 use crate::{
-    auth::scope::{optional_scope_user, principal_for_scope_user},
+    auth::scope::optional_scope_user,
     error::ApiError,
-    repo_access::{ensure_repo_read, find_repo},
+    repo_access::find_read_access,
     repo_events::{RepoChangeEvent, RepoChangeKind, RepoChangeReason, repository_change_event},
     state::AppState,
 };
@@ -13,7 +13,7 @@ use axum::{
 use futures_util::stream;
 use scope_domain::{
     account::UserAccount,
-    repository::access::RepositoryActor,
+    repository::access::{RepositoryAccessContext, RepositoryActor},
     repository::{RepositoryIncarnation, repo_id},
     requests::{RequestViewer, request_policy},
 };
@@ -31,7 +31,14 @@ pub(crate) async fn repo_events(
     let repo_id = repo_id(&owner, &repo_name);
     let receiver = state.repo_events.subscribe(&repo_id);
 
-    let repo = match find_repo(&state, &owner, &repo_name).await {
+    let repo = match find_read_access(
+        &state,
+        &owner,
+        &repo_name,
+        user.as_ref().map(|user| user.id.as_str()),
+    )
+    .await
+    {
         Ok(repo) => repo,
         Err(error) => {
             drop(receiver);
@@ -39,17 +46,9 @@ pub(crate) async fn repo_events(
             return Err(error);
         }
     };
-    let principal = principal_for_scope_user(&repo, user.as_ref());
-    if let Err(error) = ensure_repo_events_allowed(&state, &repo, &principal) {
-        drop(receiver);
-        state.repo_events.remove_if_idle(&repo_id);
-        return Err(error);
-    }
-
     let incarnation = repo.incarnation();
-    let initial = event_for_principal(
+    let initial = event_for_access(
         &repo,
-        &principal,
         repository_change_event(
             &incarnation,
             repo.record.change_version,
@@ -130,7 +129,7 @@ async fn stream_event_for_user(
     user: Option<&UserAccount>,
     event: RepoChangeEvent,
 ) -> Result<Option<RepoChangeEvent>, ApiError> {
-    let repo = find_repo(state, owner, repo_name).await?;
+    let repo = find_read_access(state, owner, repo_name, user.map(|user| user.id.as_str())).await?;
     if repo.incarnation() != *expected_incarnation {
         return Err(ApiError::conflict(
             "repository was recreated; reconnect event stream",
@@ -141,8 +140,6 @@ async fn stream_event_for_user(
     {
         return Ok(None);
     }
-    let principal = principal_for_scope_user(&repo, user);
-    ensure_repo_events_allowed(state, &repo, &principal)?;
     if let RepoChangeKind::RequestTimelineChanged { request_id, .. } = &event.kind {
         let Some(request) = state.metadata.requests().request_by_id(request_id).await? else {
             return Ok(None);
@@ -160,34 +157,21 @@ async fn stream_event_for_user(
         };
         if !request_policy(
             &request,
-            RequestViewer::new(
-                repo.access_for_user_id(user_id.unwrap_or("")),
-                user_id,
-                is_invitee,
-            ),
+            RequestViewer::new(repo.access, user_id, is_invitee),
         )
         .activity_stream_visible
         {
             return Ok(None);
         }
     }
-    Ok(event_for_principal(&repo, &principal, event))
+    Ok(event_for_access(&repo, event))
 }
 
-fn ensure_repo_events_allowed(
-    state: &AppState,
-    repo: &scope_domain::repository::Repository,
-    principal: &scope_domain::policy::Principal,
-) -> Result<(), ApiError> {
-    ensure_repo_read(state, repo, principal)
-}
-
-fn event_for_principal(
-    repo: &scope_domain::repository::Repository,
-    principal: &scope_domain::policy::Principal,
+fn event_for_access(
+    repo: &RepositoryAccessContext,
     event: RepoChangeEvent,
 ) -> Option<RepoChangeEvent> {
-    if repo.access_for_principal(principal).actor != RepositoryActor::Public {
+    if repo.access.actor != RepositoryActor::Public {
         return Some(event);
     }
 

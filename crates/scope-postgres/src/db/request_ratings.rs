@@ -24,7 +24,8 @@ impl RequestStore {
         input: CreateRequestRatingInput,
     ) -> Result<RequestRating, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (_repo, request) = lock_request_repository(&tx, &input.request_id).await?;
+        let (_repo, request) =
+            lock_request_repository(&tx, &input.request_id, &input.actor_user_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         let ratings = ratings_for_request(&tx, &request.id).await?;
         let rating = create_request_rating(&request, &ratings, input)?;

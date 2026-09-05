@@ -34,6 +34,7 @@ const LABELS: Record<string, string> = {
 const TERMINAL_LABELS: Record<RepoRunTerminalReason['kind'], string | null> = {
   'canceled': null,
   'execution-lost': 'execution lost',
+  'dispatch-attempts-exhausted': 'dispatch attempts exhausted',
   'runtime-setup-failed': 'setup failed',
   'step-failed': null,
   'timed-out': 'timed out',

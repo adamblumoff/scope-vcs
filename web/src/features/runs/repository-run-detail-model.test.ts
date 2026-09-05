@@ -215,25 +215,35 @@ describe('repository run detail model', () => {
 
   it('merges incremental logs by stable position', () => {
     assert.deepEqual(mergeStepLogs(
-      [{ position: 1, text: 'one' }, { position: 2, text: 'two' }],
-      [{ position: 2, text: 'two' }, { position: 3, text: 'three' }],
+      [{ position: 1, text: 'one', byte_length: 3 }, { position: 2, text: 'two', byte_length: 3 }],
+      [{ position: 2, text: 'two', byte_length: 3 }, { position: 3, text: 'three', byte_length: 5 }],
     ), {
       logs: [
-        { position: 1, text: 'one' },
-        { position: 2, text: 'two' },
-        { position: 3, text: 'three' },
+        { position: 1, text: 'one', byte_length: 3 },
+        { position: 2, text: 'two', byte_length: 3 },
+        { position: 3, text: 'three', byte_length: 5 },
       ],
       truncated: false,
     })
   })
 
+  it('bounds retained Unicode output by UTF-8 bytes', () => {
+    const text = '🚀'.repeat(80 * 1_024)
+    const byte_length = Buffer.byteLength(text)
+    assert.deepEqual(mergeStepLogs(
+      [{ position: 1, text, byte_length }],
+      [{ position: 2, text, byte_length }],
+    ), { logs: [{ position: 2, text, byte_length }], truncated: true })
+  })
+
   it('retains only a bounded suffix of selected step logs', () => {
     const text = 'x'.repeat(300 * 1_024)
+    const byte_length = Buffer.byteLength(text)
     assert.deepEqual(mergeStepLogs(
-      [{ position: 1, text }],
-      [{ position: 2, text }],
+      [{ position: 1, text, byte_length }],
+      [{ position: 2, text, byte_length }],
     ), {
-      logs: [{ position: 2, text }],
+      logs: [{ position: 2, text, byte_length }],
       truncated: true,
     })
   })

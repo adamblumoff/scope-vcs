@@ -15,6 +15,24 @@ pub async fn acquire_aggregate_lock<C>(
 where
     C: ConnectionTrait,
 {
+    acquire_aggregate_lock_with_mode(conn, namespace, id, LockType::Update).await
+}
+
+/// Request-local writes share the repository guard. Repository policy, membership and
+/// lifecycle mutations take its exclusive form before changing authorization facts.
+pub(super) async fn acquire_shared_repository_lock<C: ConnectionTrait>(
+    conn: &C,
+    repo_id: &str,
+) -> Result<(), PostgresError> {
+    acquire_aggregate_lock_with_mode(conn, "repository", repo_id, LockType::Share).await
+}
+
+async fn acquire_aggregate_lock_with_mode<C: ConnectionTrait>(
+    conn: &C,
+    namespace: &str,
+    id: &str,
+    mode: LockType,
+) -> Result<(), PostgresError> {
     #[cfg(test)]
     conn.execute(Statement::from_sql_and_values(
         DatabaseBackend::Postgres,
@@ -38,7 +56,7 @@ where
     .await
     .map_err(PostgresError::internal)?;
     let row = entities::metadata_lock::Entity::find_by_id(key)
-        .lock(LockType::Update)
+        .lock(mode)
         .one(conn)
         .await
         .map_err(PostgresError::internal)?;
@@ -48,6 +66,44 @@ where
         ));
     }
     Ok(())
+}
+
+/// Observe the exact schema-scoped advisory lock, so unrelated database work cannot
+/// satisfy a test's waiting barrier. The deadline detects hangs, not ordering.
+#[cfg(test)]
+pub(super) async fn wait_for_advisory_waiter(
+    store: &super::MetadataStore,
+    namespace: &str,
+    repo_id: &str,
+) {
+    let schema = super::content_fences::current_schema(store.db.as_ref())
+        .await
+        .unwrap();
+    let key = sea_orm::sqlx::postgres::PgAdvisoryLock::new(format!(
+        "scope:{namespace}:{schema}:{repo_id}"
+    ))
+    .key()
+    .as_bigint()
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        loop {
+            let waiting = store.db.query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT EXISTS (
+                    SELECT 1 FROM pg_locks waiter JOIN pg_locks holder
+                      USING (locktype, database, classid, objid, objsubid)
+                    WHERE waiter.locktype = 'advisory'
+                      AND waiter.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                      AND waiter.classid::bigint = $1 AND waiter.objid::bigint = $2
+                      AND waiter.objsubid = 1 AND NOT waiter.granted AND holder.granted
+                      AND holder.pid = ANY(pg_blocking_pids(waiter.pid))
+                ) AS waiting",
+                [((key as u64 >> 32) as i64).into(), ((key as u64 & 0xffffffff) as i64).into()],
+            )).await.unwrap().unwrap().try_get::<bool>("", "waiting").unwrap();
+            if waiting { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("expected a waiter blocked by the held advisory lock");
 }
 
 #[cfg(test)]

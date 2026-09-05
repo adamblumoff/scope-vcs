@@ -105,7 +105,10 @@ impl RequestStore {
         acquire_aggregate_lock(&tx, "repository", &input.repo_id).await?;
         acquire_aggregate_lock(&tx, "request", &input.id).await?;
         ensure_user_exists(&tx, &input.author_user_id).await?;
-        let input = authorize_start_request(&repo_by_id(&tx, &input.repo_id).await?, input)?;
+        let input = authorize_start_request(
+            &repo_by_id(&tx, &input.repo_id, &input.author_user_id).await?,
+            input,
+        )?;
 
         let mut requests = requests_by_repo_author(&tx, &input.repo_id, &input.author_user_id)
             .await?
@@ -133,7 +136,8 @@ impl RequestStore {
     ) -> Result<WorkingRequestUploadMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &input.request_id, &input.actor_user_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         let mut input = input;
         let now_unix = input.now_unix;
@@ -163,7 +167,8 @@ impl RequestStore {
     ) -> Result<RequestRevisionMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &input.request_id, &input.actor_user_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         let mut input = input;
         let now_unix = input.now_unix;
@@ -198,7 +203,8 @@ impl RequestStore {
     ) -> Result<RequestTimelineMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &input.request_id, &input.actor_user_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         input.actor_can_edit_identity =
             request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
@@ -225,10 +231,11 @@ impl RequestStore {
         let db = Arc::clone(&self.db);
         let now_unix = input.now_unix;
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &input.request_id, &input.actor_user_id).await?;
         ensure_user_exists(&tx, &input.actor_user_id).await?;
         input.actor_is_author = request.author_user_id == input.actor_user_id;
-        input.actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
+        input.actor_is_maintainer = repo.access.is_maintainer();
         let mut requests = BTreeMap::from([(request.id.clone(), request.clone())]);
         let mut events = request_events_by_request_id(&tx, &request.id)
             .await?

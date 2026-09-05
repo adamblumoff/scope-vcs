@@ -19,6 +19,7 @@ const REQUEST_REF: &str = "refs/heads/request-branch";
 const PRIVATE_REQUEST_ID: &str = "req_private";
 const PRIVATE_REQUEST_REF: &str = "refs/heads/private-request";
 
+mod cache;
 mod http;
 mod merge;
 mod policy;

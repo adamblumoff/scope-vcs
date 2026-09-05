@@ -39,6 +39,21 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
         "create cloud run bundle",
     )
     .unwrap();
+    let resolved = app.clone().oneshot(Request::builder().method("POST").uri(format!(
+        "{}?workflow=test&git_oid={git_oid}&request_id=11111111111111111111111111111111",
+        scope_api_contract::routes::repo_run_resolve(TEST_REPO_OWNER, TEST_REPO_NAME)
+    )).header(AUTHORIZATION, bearer_header()).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resolved.status(), StatusCode::OK);
+    assert_eq!(response_json(resolved).await["status"], "upload-required");
+    assert!(
+        state
+            .metadata
+            .runs()
+            .run("run_11111111111111111111111111111111")
+            .await
+            .unwrap()
+            .is_none()
+    );
     let created = app
         .clone()
         .oneshot(
@@ -50,7 +65,7 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
                 ))
                 .header(AUTHORIZATION, bearer_header())
                 .header(CONTENT_TYPE, "application/octet-stream")
-                .body(Body::from(fs::read(bundle_path).unwrap()))
+                .body(Body::from(fs::read(&bundle_path).unwrap()))
                 .unwrap(),
         )
         .await
@@ -119,6 +134,34 @@ async fn cloud_runtime_claim_is_one_use_and_completes_the_job() {
     assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
 
     let attempt_auth = format!("Bearer {}", claim.attempt_token);
+    let source_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(scope_api_contract::routes::attempt_source(attempt_id))
+                .header(AUTHORIZATION, &attempt_auth)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(source_response.status(), StatusCode::OK);
+    assert_eq!(
+        source_response.headers()["x-scope-source-identity"],
+        offer.run.source.source_identity()
+    );
+    assert_eq!(
+        source_response.headers()["x-scope-source-sha256"],
+        offer.run.source.source_identity()
+    );
+    assert_eq!(
+        to_bytes(source_response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap()
+            .as_ref(),
+        fs::read(&bundle_path).unwrap()
+    );
+
     let heartbeat = app
         .clone()
         .oneshot(

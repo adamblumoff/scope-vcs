@@ -1,4 +1,7 @@
-use super::{AppendLogError, AppendLogOutcome, ExecutionSink};
+use super::{
+    AppendLogError, AppendLogOutcome, ExecutionSink,
+    spool::{LOG_SPOOL_BYTES, LogSpool},
+};
 use anyhow::{Context as _, anyhow};
 use std::{
     io::{ErrorKind, Read},
@@ -7,14 +10,13 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, SyncSender, TrySendError},
+        mpsc::{self, Receiver, RecvTimeoutError},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(crate) const LOG_READ_BYTES: usize = 16 * 1024;
-const LOG_QUEUE_CAPACITY: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UploadPolicy {
@@ -32,7 +34,7 @@ impl Default for UploadPolicy {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum OutputStream {
+pub(super) enum OutputStream {
     Stdout,
     Stderr,
 }
@@ -54,7 +56,7 @@ impl OutputStream {
 }
 
 #[derive(Debug)]
-enum ReaderEvent {
+pub(super) enum ReaderEvent {
     Chunk {
         stream: OutputStream,
         bytes: Vec<u8>,
@@ -97,31 +99,30 @@ impl OutputCapture {
     ) -> anyhow::Result<Self> {
         set_nonblocking(&stdout).context("make step stdout nonblocking")?;
         set_nonblocking(&stderr).context("make step stderr nonblocking")?;
-        let (sender, receiver) = mpsc::sync_channel(LOG_QUEUE_CAPACITY);
+        let spool = Arc::new(LogSpool::new(LOG_SPOOL_BYTES, 2).context("create log spool")?);
         let stop_reading = Arc::new(AtomicBool::new(false));
         let locally_discarded = Arc::new(AtomicBool::new(false));
         let stdout_thread = spawn_reader(
             OutputStream::Stdout,
             stdout,
-            sender.clone(),
+            Arc::clone(&spool),
             Arc::clone(&stop_reading),
             Arc::clone(&locally_discarded),
         );
         let stderr_thread = spawn_reader(
             OutputStream::Stderr,
             stderr,
-            sender.clone(),
+            Arc::clone(&spool),
             Arc::clone(&stop_reading),
             Arc::clone(&locally_discarded),
         );
-        drop(sender);
 
         let stop_uploading = Arc::new(AtomicBool::new(false));
         let stop_in_worker = Arc::clone(&stop_uploading);
         let (notice_sender, notices) = mpsc::channel();
         let upload_thread = thread::spawn(move || {
             let result = upload_output(
-                receiver,
+                spool,
                 sink.as_ref(),
                 step,
                 next_sequence,
@@ -148,6 +149,10 @@ impl OutputCapture {
 
     pub(crate) fn try_notice(&self) -> Option<OutputNotice> {
         self.notices.try_recv().ok()
+    }
+
+    pub(crate) fn finish_reading(&self) {
+        self.stop_reading.store(true, Ordering::Release);
     }
 
     pub(crate) fn stop(&self) {
@@ -191,17 +196,26 @@ impl OutputCapture {
 fn spawn_reader(
     stream: OutputStream,
     reader: impl Read + Send + 'static,
-    sender: SyncSender<ReaderEvent>,
+    spool: Arc<LogSpool>,
     stop_reading: Arc<AtomicBool>,
     locally_discarded: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
-    thread::spawn(move || read_output(stream, reader, sender, stop_reading, locally_discarded))
+    thread::spawn(move || {
+        read_output(
+            stream,
+            reader,
+            Arc::clone(&spool),
+            stop_reading,
+            locally_discarded,
+        );
+        spool.close_reader();
+    })
 }
 
 fn read_output(
     stream: OutputStream,
     mut reader: impl Read,
-    sender: SyncSender<ReaderEvent>,
+    spool: Arc<LogSpool>,
     stop_reading: Arc<AtomicBool>,
     locally_discarded: Arc<AtomicBool>,
 ) {
@@ -216,8 +230,7 @@ fn read_output(
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
-                if !send_reader_event(
-                    &sender,
+                if !spool.send(
                     ReaderEvent::Chunk {
                         stream,
                         bytes: buffer[..read].to_vec(),
@@ -233,33 +246,9 @@ fn read_output(
             }
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) => {
-                let _ = send_reader_event(
-                    &sender,
-                    ReaderEvent::Failed { stream, error },
-                    &stop_reading,
-                );
+                let _ = spool.send(ReaderEvent::Failed { stream, error }, &stop_reading);
                 break;
             }
-        }
-    }
-}
-
-fn send_reader_event(
-    sender: &SyncSender<ReaderEvent>,
-    mut event: ReaderEvent,
-    stop_reading: &AtomicBool,
-) -> bool {
-    loop {
-        if stop_reading.load(Ordering::Acquire) {
-            return false;
-        }
-        match sender.try_send(event) {
-            Ok(()) => return true,
-            Err(TrySendError::Full(returned)) => {
-                event = returned;
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(TrySendError::Disconnected(_)) => return false,
         }
     }
 }
@@ -276,78 +265,123 @@ fn set_nonblocking(stream: &impl AsRawFd) -> anyhow::Result<()> {
     Ok(())
 }
 
+const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
+const LOG_UPLOAD_BYTES: usize = scope_domain::runs::log::MAX_RUN_LOG_CHUNK_BYTES;
+
 #[allow(clippy::too_many_arguments)]
 fn upload_output<S: ExecutionSink>(
-    receiver: Receiver<ReaderEvent>,
+    spool: Arc<LogSpool>,
     sink: &S,
     step: u32,
-    mut next_sequence: u64,
-    mut logs_truncated: bool,
+    next_sequence: u64,
+    logs_truncated: bool,
     policy: UploadPolicy,
     stop_uploading: Arc<AtomicBool>,
     locally_discarded: Arc<AtomicBool>,
     notices: &mpsc::Sender<OutputNotice>,
 ) -> anyhow::Result<OutputSummary> {
+    let mut upload = LogUpload {
+        sink,
+        step,
+        next_sequence,
+        logs_truncated,
+        policy,
+        stop_uploading: &stop_uploading,
+        notices,
+        pending: String::new(),
+    };
     let mut pending_utf8 = [Vec::new(), Vec::new()];
-    for event in receiver {
-        match event {
-            ReaderEvent::Chunk { .. }
-                if logs_truncated || stop_uploading.load(Ordering::Acquire) =>
-            {
-                logs_truncated = true;
-            }
-            ReaderEvent::Chunk { stream, bytes } => {
+    let mut flush_at = Instant::now() + LOG_FLUSH_INTERVAL;
+    let mut discarding = logs_truncated;
+    if discarding {
+        spool.discard_output();
+    }
+    loop {
+        match spool.recv_timeout(flush_at.saturating_duration_since(Instant::now())) {
+            Ok(ReaderEvent::Chunk { stream, bytes }) => {
                 let (text, pending) = decode_utf8_chunk(
                     std::mem::take(&mut pending_utf8[stream.pending_index()]),
                     bytes,
                 );
                 pending_utf8[stream.pending_index()] = pending;
-                if text.is_empty() {
-                    continue;
-                }
-                let outcome =
-                    append_with_retry(sink, step, next_sequence, &text, policy, &stop_uploading)?;
-                match outcome {
-                    Some(AppendLogOutcome::Accepted) => {
-                        next_sequence = next_sequence
-                            .checked_add(1)
-                            .context("run log sequence overflow")?;
-                    }
-                    Some(AppendLogOutcome::Truncated) => {
-                        logs_truncated = true;
-                        let _ = notices.send(OutputNotice::Truncated);
-                    }
-                    None => logs_truncated = true,
-                }
+                upload.pending.push_str(&text);
+                upload.flush(false)?;
             }
-            ReaderEvent::Failed { stream, error } => {
+            Ok(ReaderEvent::Failed { stream, error }) => {
                 return Err(error).with_context(|| format!("read step {}", stream.name()));
             }
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        if Instant::now() >= flush_at {
+            upload.flush(true)?;
+            flush_at = Instant::now() + LOG_FLUSH_INTERVAL;
+        }
+        if upload.logs_truncated && !discarding {
+            discarding = true;
+            spool.discard_output();
         }
     }
     for pending in pending_utf8 {
-        if pending.is_empty() {
-            continue;
-        }
-        if logs_truncated || stop_uploading.load(Ordering::Acquire) {
-            logs_truncated = true;
-            continue;
-        }
-        let text = String::from_utf8_lossy(&pending);
-        match append_with_retry(sink, step, next_sequence, &text, policy, &stop_uploading)? {
-            Some(AppendLogOutcome::Accepted) => {
-                next_sequence = next_sequence
-                    .checked_add(1)
-                    .context("run log sequence overflow")?;
-            }
-            Some(AppendLogOutcome::Truncated) | None => logs_truncated = true,
-        }
+        upload.pending.push_str(&String::from_utf8_lossy(&pending));
     }
-    logs_truncated |= locally_discarded.load(Ordering::Acquire);
+    upload.flush(true)?;
     Ok(OutputSummary {
-        next_sequence,
-        logs_truncated,
+        next_sequence: upload.next_sequence,
+        logs_truncated: upload.logs_truncated || locally_discarded.load(Ordering::Acquire),
     })
+}
+
+struct LogUpload<'a, S> {
+    sink: &'a S,
+    step: u32,
+    next_sequence: u64,
+    logs_truncated: bool,
+    policy: UploadPolicy,
+    stop_uploading: &'a AtomicBool,
+    notices: &'a mpsc::Sender<OutputNotice>,
+    pending: String,
+}
+
+impl<S: ExecutionSink> LogUpload<'_, S> {
+    fn flush(&mut self, partial: bool) -> anyhow::Result<()> {
+        while !self.pending.is_empty() {
+            if self.logs_truncated || self.stop_uploading.load(Ordering::Acquire) {
+                self.logs_truncated = true;
+                self.pending.clear();
+                break;
+            }
+            if !partial && self.pending.len() < LOG_UPLOAD_BYTES {
+                break;
+            }
+            let mut end = self.pending.len().min(LOG_UPLOAD_BYTES);
+            while !self.pending.is_char_boundary(end) {
+                end -= 1;
+            }
+            match append_with_retry(
+                self.sink,
+                self.step,
+                self.next_sequence,
+                &self.pending[..end],
+                self.policy,
+                self.stop_uploading,
+            )? {
+                Some(AppendLogOutcome::Accepted) => {
+                    self.next_sequence = self
+                        .next_sequence
+                        .checked_add(1)
+                        .context("run log sequence overflow")?;
+                }
+                Some(AppendLogOutcome::Truncated) => {
+                    self.logs_truncated = true;
+                    let _ = self.notices.send(OutputNotice::Truncated);
+                }
+                None => self.logs_truncated = true,
+            }
+            self.pending.drain(..end);
+        }
+        Ok(())
+    }
 }
 
 fn append_with_retry<S: ExecutionSink>(
@@ -427,51 +461,45 @@ mod tests {
     #[test]
     fn fixed_reader_splits_newline_free_output() {
         let bytes = vec![b'x'; LOG_READ_BYTES * 3 + 7];
-        let (sender, receiver) = mpsc::sync_channel(8);
-        read_output_for_test(OutputStream::Stdout, Cursor::new(bytes), sender);
-        let chunks = receiver
-            .into_iter()
-            .map(|event| match event {
-                ReaderEvent::Chunk { bytes, .. } => bytes,
+        let spool = Arc::new(LogSpool::new(LOG_SPOOL_BYTES, 1).unwrap());
+        read_output_for_test(OutputStream::Stdout, Cursor::new(bytes), Arc::clone(&spool));
+        let mut lengths = Vec::new();
+        while let Ok(event) = spool.recv_timeout(Duration::ZERO) {
+            match event {
+                ReaderEvent::Chunk { bytes, .. } => lengths.push(bytes.len()),
                 ReaderEvent::Failed { error, .. } => panic!("unexpected read error: {error}"),
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            chunks.iter().map(Vec::len).collect::<Vec<_>>(),
-            [LOG_READ_BYTES, LOG_READ_BYTES, LOG_READ_BYTES, 7,]
-        );
+            }
+        }
+        assert_eq!(lengths, [LOG_READ_BYTES, LOG_READ_BYTES, LOG_READ_BYTES, 7]);
     }
 
     #[test]
     fn fixed_reader_reports_io_errors() {
-        let (sender, receiver) = mpsc::sync_channel(4);
+        let spool = Arc::new(LogSpool::new(LOG_SPOOL_BYTES, 1).unwrap());
         read_output_for_test(
             OutputStream::Stderr,
             FailingReader {
                 returned_bytes: false,
             },
-            sender,
+            Arc::clone(&spool),
         );
-        assert!(matches!(
-            receiver.recv().unwrap(),
-            ReaderEvent::Chunk { bytes, .. } if bytes == b"log"
-        ));
-        assert!(matches!(
-            receiver.recv().unwrap(),
+        assert!(matches!(spool.recv_timeout(Duration::ZERO).unwrap(),
+            ReaderEvent::Chunk { bytes, .. } if bytes == b"log"));
+        assert!(matches!(spool.recv_timeout(Duration::ZERO).unwrap(),
             ReaderEvent::Failed { stream: OutputStream::Stderr, error }
-                if error.to_string() == "reader failed"
-        ));
+                if error.to_string() == "reader failed"));
     }
 
     #[test]
-    fn bounded_reader_waits_when_the_queue_is_full() {
-        let (sender, receiver) = mpsc::sync_channel(1);
+    fn bounded_reader_waits_for_spool_space_without_dropping_output() {
+        let spool = Arc::new(LogSpool::new((LOG_READ_BYTES + 5) as u64, 1).unwrap());
         let (done_sender, done_receiver) = mpsc::channel();
+        let reader_spool = Arc::clone(&spool);
         let reader = thread::spawn(move || {
             read_output_for_test(
                 OutputStream::Stdout,
                 Cursor::new(vec![b'x'; LOG_READ_BYTES * 3]),
-                sender,
+                reader_spool,
             );
             done_sender.send(()).unwrap();
         });
@@ -479,9 +507,18 @@ mod tests {
             done_receiver.recv_timeout(Duration::from_millis(50)),
             Err(RecvTimeoutError::Timeout)
         );
-        drop(receiver);
+        let mut output = Vec::new();
+        for _ in 0..3 {
+            let ReaderEvent::Chunk { bytes, .. } =
+                spool.recv_timeout(Duration::from_secs(1)).unwrap()
+            else {
+                panic!("expected log bytes")
+            };
+            output.extend(bytes);
+        }
         done_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
         reader.join().unwrap();
+        assert_eq!(output, vec![b'x'; LOG_READ_BYTES * 3]);
     }
 
     #[test]
@@ -501,17 +538,14 @@ mod tests {
         assert!(pending.is_empty());
     }
 
-    fn read_output_for_test(
-        stream: OutputStream,
-        reader: impl Read,
-        sender: SyncSender<ReaderEvent>,
-    ) {
+    fn read_output_for_test(stream: OutputStream, reader: impl Read, spool: Arc<LogSpool>) {
         read_output(
             stream,
             reader,
-            sender,
+            Arc::clone(&spool),
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
         );
+        spool.close_reader();
     }
 }

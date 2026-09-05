@@ -1,11 +1,17 @@
+pub(super) mod operation;
+
 use crate::{
     error::ApiError,
-    git::{restore::restore_git_pack_spans, upload::git_process_output_with_limits},
-    persistence::ensure_private_dir,
+    git::{
+        cache::GitDerivedCacheNamespace, restore::restore_git_pack_spans,
+        upload::git_process_output_with_limits,
+    },
     state::AppState,
 };
-use scope_domain::runs::source::RunSource;
-use scope_domain::runs::workflow::identity::WorkflowPath;
+use scope_domain::{
+    repository::RepositoryIncarnation,
+    runs::{run::Run, source::RunSource, workflow::identity::WorkflowPath},
+};
 use scope_git::DEFAULT_GIT_BRANCH;
 use scope_object_store::source_blob_bytes_bounded;
 use sha2::{Digest as _, Sha256};
@@ -15,12 +21,10 @@ use std::{
     os::unix::{fs::DirBuilderExt as _, fs::OpenOptionsExt as _, process::CommandExt as _},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant},
 };
 
-static RUN_SOURCE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 const GIT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) struct MaterializedRunSource {
@@ -30,43 +34,138 @@ pub(crate) struct MaterializedRunSource {
 
 pub(crate) async fn materialize_run_source_bundle(
     state: &AppState,
-    source: &RunSource,
+    run: &Run,
     max_bytes: usize,
 ) -> Result<MaterializedRunSource, ApiError> {
-    let bytes = if let Some(bundle) = source.ephemeral_bundle() {
+    let source = &run.source;
+    if let Some(bundle) = source.ephemeral_bundle() {
         let object_store = state.object_store.clone();
         let bundle = bundle.clone();
-        tokio::task::spawn_blocking(move || {
-            source_blob_bytes_bounded(object_store.as_ref(), &bundle, max_bytes)
-                .map_err(ApiError::from)
+        return tokio::task::spawn_blocking(move || {
+            let bytes = source_blob_bytes_bounded(object_store.as_ref(), &bundle, max_bytes)
+                .map_err(ApiError::from)?;
+            Ok(MaterializedRunSource {
+                sha256: hex::encode(Sha256::digest(&bytes)),
+                bytes,
+            })
         })
         .await
         .map_err(|error| {
             ApiError::internal_message(format!("run source object read task failed: {error}"))
-        })??
-    } else {
-        materialize_accepted_git_head_bundle(state, source, max_bytes).await?
-    };
-    Ok(MaterializedRunSource {
-        sha256: hex::encode(Sha256::digest(&bytes)),
-        bytes,
-    })
+        })?;
+    }
+    let incarnation = state
+        .metadata
+        .repositories()
+        .run_repository_incarnation(&run.id, run.workflow.repository_id())
+        .await?
+        .ok_or_else(|| ApiError::not_found("run repository not found"))?;
+    materialize_accepted_git_head_bundle(state, &incarnation, source, max_bytes).await
+}
+
+fn run_source_cache_key(
+    incarnation: &RepositoryIncarnation,
+    source: &RunSource,
+) -> Result<String, ApiError> {
+    let identity = serde_json::to_vec(&(
+        "run-source-bundle-v1",
+        incarnation.repository_id(),
+        incarnation.incarnation_id(),
+        source,
+    ))
+    .map_err(ApiError::internal)?;
+    Ok(format!(
+        "run-source-{}",
+        hex::encode(Sha256::digest(identity))
+    ))
 }
 
 async fn materialize_accepted_git_head_bundle(
     state: &AppState,
+    incarnation: &RepositoryIncarnation,
     source: &RunSource,
     max_bytes: usize,
+) -> Result<MaterializedRunSource, ApiError> {
+    let key = run_source_cache_key(incarnation, source)?;
+    let path = state
+        .repository_engine
+        .cache_root()
+        .join(format!("{key}.git"));
+    let ready_path = path.clone();
+    let build_path = path.clone();
+    let build_state = state.clone();
+    let build_source = source.clone();
+    let handle = state
+        .repository_engine
+        .materialize_derived(
+            incarnation,
+            GitDerivedCacheNamespace::RunSource,
+            key,
+            &path,
+            move || {
+                ready_path.join("source.bundle").is_file() && ready_path.join("sha256").is_file()
+            },
+            move || build_accepted_source_bundle(build_state, build_source, build_path, max_bytes),
+        )
+        .await?;
+    let read_permit = state
+        .runtime_budgets
+        .try_object_store("run source cache read")?;
+    tokio::task::spawn_blocking(move || {
+        let _read_permit = read_permit;
+        let bytes = read_bounded_file(&handle.join("source.bundle"), max_bytes)?;
+        let sha256 = String::from_utf8(read_bounded_file(&handle.join("sha256"), 64)?)
+            .map_err(ApiError::internal)?;
+        Ok(MaterializedRunSource { bytes, sha256 })
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal_message(format!("run source cache read task failed: {error}"))
+    })?
+}
+
+async fn build_accepted_source_bundle(
+    state: AppState,
+    source: RunSource,
+    path: PathBuf,
+    max_bytes: usize,
+) -> Result<(), ApiError> {
+    operation::supervise(async move {
+        let owner = operation::RunSourceOperation::new(&state)?;
+        let bytes =
+            materialize_owned_git_head_bundle(&state, &source, max_bytes, owner.clone()).await?;
+        let temporary = TemporarySourceDirectory::new(state.repository_engine.cache_root())?;
+        operation::spawn_blocking(Some(&owner), move || {
+            write_private_file(&temporary.path.join("source.bundle"), &bytes)?;
+            write_private_file(
+                &temporary.path.join("sha256"),
+                hex::encode(Sha256::digest(&bytes)).as_bytes(),
+            )?;
+            fs::rename(&temporary.path, path).map_err(ApiError::internal)
+        })
+        .await
+        .map_err(|error| {
+            ApiError::internal_message(format!("run source cache publication task failed: {error}"))
+        })?
+    })
+    .await
+}
+
+async fn materialize_owned_git_head_bundle(
+    state: &AppState,
+    source: &RunSource,
+    max_bytes: usize,
+    owner: std::sync::Arc<operation::RunSourceOperation>,
 ) -> Result<Vec<u8>, ApiError> {
     let (repository_id, head, pack_spans) = source.logical_git_head().ok_or_else(|| {
         ApiError::internal_message("run source does not contain a materializable Git head")
     })?;
-    let repo = TemporaryRunSourceRepository::new(state)?;
-    restore_git_pack_spans(state, repository_id, head, pack_spans, repo.path()).await?;
+    let repo = operation::repository(&owner);
+    restore_git_pack_spans(state, repository_id, head, pack_spans, &repo, Some(&owner)).await?;
     let main_ref = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
-    let repo_path = repo.path().to_path_buf();
+    let repo_path = repo;
     let timeout = state.runtime_budgets.git_command_timeout();
-    let output = tokio::task::spawn_blocking(move || {
+    let output = operation::spawn_blocking(Some(&owner), move || {
         git_process_output_with_limits(
             Command::new("git")
                 .arg("--git-dir")
@@ -90,35 +189,6 @@ async fn materialize_accepted_git_head_bundle(
     Ok(output.stdout)
 }
 
-struct TemporaryRunSourceRepository {
-    path: PathBuf,
-}
-
-impl TemporaryRunSourceRepository {
-    fn new(state: &AppState) -> Result<Self, ApiError> {
-        let root = state.data_dir.join("run-source");
-        ensure_private_dir(&root)?;
-        let attempt = RUN_SOURCE_ATTEMPT.fetch_add(1, Ordering::Relaxed);
-        let path = root.join(format!("{}.{}.git", std::process::id(), attempt));
-        if path.exists() {
-            return Err(ApiError::internal_message(
-                "run source temporary repository path already exists",
-            ));
-        }
-        Ok(Self { path })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TemporaryRunSourceRepository {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
 pub(crate) fn inspect_manual_run_bundle(
     root: &Path,
     bytes: &[u8],
@@ -129,7 +199,7 @@ pub(crate) fn inspect_manual_run_bundle(
         .map_err(ApiError::bad_request)?;
     let yaml = WorkflowPath::parse(format!("/.scope/runs/{workflow_name}.yaml"))
         .map_err(ApiError::bad_request)?;
-    let temp = ManualRunInspection::new(root)?;
+    let temp = TemporarySourceDirectory::new(root)?;
     let bundle = temp.path.join("source.bundle");
     let bare = temp.path.join("source.git");
     write_private_file(&bundle, bytes)?;
@@ -294,15 +364,22 @@ fn read_bounded_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ApiError>
     Ok(bytes)
 }
 
-struct ManualRunInspection {
+struct TemporarySourceDirectory {
     path: PathBuf,
 }
 
-impl ManualRunInspection {
+impl TemporarySourceDirectory {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
     fn new(root: &Path) -> Result<Self, ApiError> {
         fs::create_dir_all(root).map_err(ApiError::internal)?;
         for _ in 0..8 {
-            let path = root.join(crate::persistence_ids::generate_prefixed_id("inspect_")?);
+            let path = root.join(format!(
+                "{}.tmp",
+                crate::persistence_ids::generate_prefixed_id("inspect_")?
+            ));
             match fs::DirBuilder::new().mode(0o700).create(&path) {
                 Ok(()) => return Ok(Self { path }),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -315,194 +392,11 @@ impl ManualRunInspection {
     }
 }
 
-impl Drop for ManualRunInspection {
+impl Drop for TemporarySourceDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::git::import::{git_push_from_repo, run_git, run_git_output};
-    use scope_domain::{
-        account::UserAccount, policy::Visibility, projection::ProjectionViewKey,
-        repository::git::GitHead, runs::source::RunSource,
-    };
-
-    #[tokio::test]
-    async fn concurrent_git_head_materializations_restore_remote_segments_on_the_api_runtime() {
-        let state = AppState::test_state();
-        let owner = UserAccount {
-            id: "user-owner".to_string(),
-            handle: "owner".to_string(),
-            email: "owner@example.test".to_string(),
-            email_verified: true,
-        };
-        let mut catalog = scope_postgres::db::CatalogFixture::default();
-        catalog
-            .create_repository(&owner, "repo", Visibility::Private)
-            .unwrap();
-        catalog.users.insert(owner.id.clone(), owner);
-        state
-            .metadata
-            .admin()
-            .seed_catalog_for_tests(catalog)
-            .unwrap();
-        let repository = TemporaryRunSourceRepository::new(&state).unwrap();
-        fs::create_dir_all(repository.path()).unwrap();
-        run_git(
-            None,
-            &["init", "-b", "main", repository.path().to_str().unwrap()],
-            "initialize source repo",
-        )
-        .unwrap();
-        run_git(
-            Some(repository.path()),
-            &["config", "user.email", "scope@test.invalid"],
-            "configure source repository email",
-        )
-        .unwrap();
-        run_git(
-            Some(repository.path()),
-            &["config", "user.name", "Scope test"],
-            "configure source repository name",
-        )
-        .unwrap();
-        fs::write(repository.path().join("README.md"), "pinned run source").unwrap();
-        run_git(
-            Some(repository.path()),
-            &["add", "README.md"],
-            "stage source file",
-        )
-        .unwrap();
-        run_git(
-            Some(repository.path()),
-            &["commit", "-m", "pin source"],
-            "commit source file",
-        )
-        .unwrap();
-
-        let pushed = git_push_from_repo(&state, "owner/repo", repository.path(), None)
-            .await
-            .unwrap();
-        let source = RunSource::accepted_git_head(
-            "owner/repo",
-            GitHead {
-                head_oid: pushed.stored.head.head_oid.clone(),
-                push_sequence: pushed.stored.head.push_sequence,
-                change_version: 1,
-                manifest: pushed.stored.head.manifest.clone(),
-            },
-            vec![pushed.stored.pack_span.clone()],
-            ProjectionViewKey::Private,
-        )
-        .unwrap();
-
-        state
-            .git_segment_store
-            .cleanup_local("owner/repo", &pushed.stored.pack_span.segment.segment_id)
-            .await
-            .unwrap();
-        let (first, second) = tokio::join!(
-            materialize_run_source_bundle(&state, &source, 4 * 1024 * 1024),
-            materialize_run_source_bundle(&state, &source, 4 * 1024 * 1024),
-        );
-        let materialized = first.unwrap();
-        let concurrent = second.unwrap();
-        assert!(!materialized.bytes.is_empty());
-        assert_eq!(concurrent.bytes, materialized.bytes);
-        assert_eq!(concurrent.sha256, materialized.sha256);
-        assert_eq!(
-            materialized.sha256,
-            hex::encode(Sha256::digest(&materialized.bytes))
-        );
-
-        let bundle = repository.path().join("source.bundle");
-        fs::write(&bundle, materialized.bytes).unwrap();
-        let output = std::process::Command::new("git")
-            .args(["bundle", "list-heads", bundle.to_str().unwrap()])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert!(String::from_utf8_lossy(&output.stdout).contains(&pushed.stored.head.head_oid));
-    }
-
-    #[test]
-    fn manual_bundle_inspection_reads_the_requested_workflow_at_the_pinned_commit() {
-        let state = AppState::test_state();
-        let source = tempfile::tempdir().unwrap();
-        run_git(
-            None,
-            &["init", "-b", "main", source.path().to_str().unwrap()],
-            "initialize manual run source",
-        )
-        .unwrap();
-        run_git(
-            Some(source.path()),
-            &["config", "user.email", "scope@test.invalid"],
-            "configure source repository email",
-        )
-        .unwrap();
-        run_git(
-            Some(source.path()),
-            &["config", "user.name", "Scope test"],
-            "configure source repository name",
-        )
-        .unwrap();
-        fs::create_dir_all(source.path().join(".scope/runs")).unwrap();
-        fs::write(
-            source.path().join(".scope/runs/checks.yml"),
-            format!(
-                "name: Checks\non:\n  manual: true\ncaches: []\ncontainer:\n  image: alpine@sha256:{}\ntimeout: 5m\njobs:\n  checks:\n    steps:\n      - name: Test\n        run: 'true'\n",
-                "a".repeat(64)
-            ),
-        )
-        .unwrap();
-        run_git(
-            Some(source.path()),
-            &["add", "."],
-            "stage manual run source",
-        )
-        .unwrap();
-        run_git(
-            Some(source.path()),
-            &["commit", "-m", "manual run source"],
-            "commit manual run source",
-        )
-        .unwrap();
-        let git_oid = String::from_utf8(
-            run_git_output(
-                Some(source.path()),
-                &["rev-parse", "HEAD"],
-                "read manual run commit",
-            )
-            .unwrap()
-            .stdout,
-        )
-        .unwrap();
-        let git_oid = git_oid.trim();
-        let bundle_path = source.path().join("source.bundle");
-        run_git(
-            Some(source.path()),
-            &["bundle", "create", bundle_path.to_str().unwrap(), "HEAD"],
-            "create manual run bundle",
-        )
-        .unwrap();
-
-        let parsed = inspect_manual_run_bundle(
-            &state.data_dir.join("manual-run-inspection-test"),
-            &fs::read(bundle_path).unwrap(),
-            git_oid,
-            "checks",
-        )
-        .unwrap();
-        let revision = parsed.into_revision("owner/repo").unwrap();
-
-        assert!(revision.definition().triggers().manual());
-        assert_eq!(
-            revision.workflow().path().as_str(),
-            "/.scope/runs/checks.yml"
-        );
-    }
-}
+mod tests;

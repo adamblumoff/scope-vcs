@@ -24,6 +24,7 @@ type ApiRequestOptions = {
   auth?: ApiAuthMode
   body?: unknown
   signal?: AbortSignal
+  maxResponseBytes?: number
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>
@@ -59,7 +60,7 @@ export function createApiClient() {
       headers,
       method,
       signal: options.signal,
-    })
+    }, options.maxResponseBytes)
   }
 
   async function requestAuthToken() {

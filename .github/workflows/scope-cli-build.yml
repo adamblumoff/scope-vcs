@@ -60,17 +60,8 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
           workspaces: cli -> target
 
-      - name: Check formatting
-        run: cargo fmt --manifest-path cli/Cargo.toml -- --check
-
-      - name: Test
-        run: cargo test --manifest-path cli/Cargo.toml --locked
-
-      - name: Test distribution target selection
-        run: node --test .github/scripts/select-cli-distribution-targets.test.mjs
-
-      - name: Lint
-        run: cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Check CLI
+        run: ./dev/checks/cli
 
   service-release:
     name: Build scope-cli service

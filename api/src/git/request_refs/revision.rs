@@ -236,7 +236,11 @@ mod tests {
         loads: Arc<AtomicUsize>,
     }
     impl scope_object_store::ObjectStore for CountingStore {
-        fn put(&self, key: &str, bytes: &[u8]) -> Result<(), scope_object_store::ObjectStoreError> {
+        fn put(
+            &self,
+            key: &str,
+            bytes: Vec<u8>,
+        ) -> Result<(), scope_object_store::ObjectStoreError> {
             self.inner.put(key, bytes)
         }
         fn get(&self, key: &str) -> Result<Vec<u8>, scope_object_store::ObjectStoreError> {
@@ -257,7 +261,7 @@ mod tests {
             .object_store
             .put(
                 &scope_object_store::object_key(&revision.git_snapshot),
-                &bytes,
+                bytes,
             )
             .unwrap();
         let incarnation = RepositoryIncarnation::new("owner/repo", "repoi_first").unwrap();

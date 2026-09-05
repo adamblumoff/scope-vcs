@@ -211,14 +211,8 @@ pub(crate) async fn source(
 ) -> Result<impl IntoResponse, ApiError> {
     let claim = require_attempt(&state, &headers, &attempt_id).await?;
     let source_identity = claim.run.source.source_identity().to_string();
-    let source = claim.run.source.clone();
-    let _materialization_permit = source
-        .logical_git_head()
-        .is_some()
-        .then(|| state.runtime_budgets.try_git_materialization())
-        .transpose()?;
     let materialized =
-        materialize_run_source_bundle(&state, &source, MAX_SOURCE_BUNDLE_BYTES).await?;
+        materialize_run_source_bundle(&state, &claim.run, MAX_SOURCE_BUNDLE_BYTES).await?;
     let mut response_headers = HeaderMap::new();
     response_headers.insert(
         CONTENT_TYPE,

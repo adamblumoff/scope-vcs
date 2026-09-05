@@ -1,10 +1,13 @@
-use super::{acquire_aggregate_lock, entities, repository_from_model, request_rows::request_by_id};
+use super::{
+    acquire_aggregate_lock, entities, locks::acquire_shared_repository_lock,
+    repository_access::repository_access, request_rows::request_by_id,
+};
 use sea_orm::EntityTrait;
 use {
     crate::error::PostgresError,
     scope_domain::{
         repository::access::RepositoryActor,
-        repository::{RepoLifecycleState, Repository},
+        repository::{RepoLifecycleState, access::RepositoryAccessContext},
         requests::{
             Request, RequestActorRole, RequestAudience, RequestPolicyDecision, RequestViewer,
             StartRequestInput, request_policy,
@@ -13,10 +16,10 @@ use {
 };
 
 pub(super) fn authorize_start_request(
-    repo: &Repository,
+    repo: &RepositoryAccessContext,
     mut input: StartRequestInput,
 ) -> Result<StartRequestInput, PostgresError> {
-    let author_role = match repo.access_for_user_id(&input.author_user_id).actor {
+    let author_role = match repo.access.actor {
         RepositoryActor::Owner => RequestActorRole::Owner,
         RepositoryActor::Member => RequestActorRole::Member,
         RepositoryActor::Public => {
@@ -35,7 +38,7 @@ pub(super) fn authorize_start_request(
 
 pub(super) async fn request_policy_for_user<C>(
     conn: &C,
-    repo: &Repository,
+    repo: &RepositoryAccessContext,
     request: &Request,
     user_id: &str,
 ) -> Result<RequestPolicyDecision, PostgresError>
@@ -46,7 +49,7 @@ where
         super::request_invitees::request_is_invitee(conn, &request.id, user_id).await?;
     Ok(request_policy(
         request,
-        RequestViewer::new(repo.access_for_user_id(user_id), Some(user_id), is_invitee),
+        RequestViewer::new(repo.access, Some(user_id), is_invitee),
     ))
 }
 
@@ -66,34 +69,36 @@ where
     }
 }
 
-pub(super) async fn repo_by_id<C>(conn: &C, repo_id: &str) -> Result<Repository, PostgresError>
+pub(super) async fn repo_by_id<C>(
+    conn: &C,
+    repo_id: &str,
+    user_id: &str,
+) -> Result<RepositoryAccessContext, PostgresError>
 where
     C: sea_orm::ConnectionTrait,
 {
-    let repo = entities::repository::Entity::find_by_id(repo_id.to_string())
-        .one(conn)
-        .await
-        .map_err(PostgresError::internal)?
-        .ok_or_else(|| PostgresError::not_found("repo not found"))?;
-    repository_from_model(conn, repo).await
+    repository_access(conn, repo_id, Some(user_id))
+        .await?
+        .ok_or_else(|| PostgresError::not_found("repo not found"))
 }
 
 pub(super) async fn lock_request_repository<C>(
     conn: &C,
     request_id: &str,
-) -> Result<(Repository, Request), PostgresError>
+    user_id: &str,
+) -> Result<(RepositoryAccessContext, Request), PostgresError>
 where
     C: sea_orm::ConnectionTrait,
 {
     let observed = request_by_id(conn, request_id)
         .await?
         .ok_or_else(|| PostgresError::not_found("request not found"))?;
-    acquire_aggregate_lock(conn, "repository", &observed.repo_id).await?;
+    acquire_shared_repository_lock(conn, &observed.repo_id).await?;
     acquire_aggregate_lock(conn, "request", request_id).await?;
     let request = request_by_id(conn, request_id)
         .await?
         .filter(|request| request.repo_id == observed.repo_id)
         .ok_or_else(|| PostgresError::not_found("request not found"))?;
-    let repo = repo_by_id(conn, &request.repo_id).await?;
+    let repo = repo_by_id(conn, &request.repo_id, user_id).await?;
     Ok((repo, request))
 }

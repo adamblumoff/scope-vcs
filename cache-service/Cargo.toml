@@ -9,6 +9,7 @@ repository.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 getrandom.workspace = true
+futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
 hex.workspace = true
 jsonwebtoken.workspace = true
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }

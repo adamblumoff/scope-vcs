@@ -3,7 +3,7 @@ use anyhow::Context;
 use reqwest::blocking::Client;
 use scope_api_contract::{
     CreateManualRunQuery, PushTriggerEvaluationResponse, RepositoryRunDetailResponse,
-    RunEventsQuery, RunLogResponse, RunResponse,
+    ResolveManualRunResponse, RunEventsQuery, RunLogResponse, RunResponse,
 };
 use std::io::BufRead;
 
@@ -25,6 +25,28 @@ pub fn get_push_trigger_evaluation(
             .send()
             .context("load Scope push trigger evaluation")?,
         "load Scope push trigger evaluation",
+    )
+}
+
+pub fn resolve_manual_run(
+    client: &Client,
+    api_url: &str,
+    session_token: &str,
+    owner: &str,
+    repo: &str,
+    query: &CreateManualRunQuery,
+) -> anyhow::Result<ResolveManualRunResponse> {
+    parse_json(
+        client
+            .post(format!(
+                "{api_url}{}",
+                routes::repo_run_resolve(owner, repo)
+            ))
+            .bearer_auth(session_token)
+            .query(query)
+            .send()
+            .context("resolve Scope run source")?,
+        "resolve Scope run source",
     )
 }
 

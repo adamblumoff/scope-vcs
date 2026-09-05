@@ -1,10 +1,11 @@
+import { parseRepoFileInput } from '@/api/request-inputs'
 import { HttpError } from '@/api/client'
 import {
   loadRepoContentForRequest,
   loadRepoFileForRequest,
   parseRepoParams,
 } from '@/api/repos'
-import type { RepoContent, RepoFileContent, RepoParams, RepoLiveState, RepoSummary } from '@/api/types'
+import type { RepoContent, RepoFileContent, RepoLiveState, RepoSummary } from '@/api/types'
 import { RepoContentError } from '@/components/repo-content-error'
 import {
   peekRepoContentCache,
@@ -49,7 +50,7 @@ const loadRepoContent = createServerFn({ method: 'GET' })
   .handler(({ data }) => loadRepoContentForRequest(data, getRequest().signal))
 
 const loadRepoFile = createServerFn({ method: 'GET' })
-  .validator((data: RepoFileInput) => data)
+  .validator(parseRepoFileInput)
   .handler(async ({ data }): Promise<RepoFileLoadResult> => {
     try {
       return { file: await loadRepoFileForRequest(data, getRequest().signal), status: 'ready' }
@@ -166,13 +167,15 @@ function RepoIndexRoute() {
 }
 
 type RepoCodeSearch = { file?: string }
-type RepoFileInput = RepoParams & { path: string }
 
 function parseRepoCodeSearch(search: Record<string, unknown>): RepoCodeSearch {
   return { file: parseRouteFileSearch(search.file) }
 }
 
-async function loadAddressedFile(data: RepoFileInput, signal: AbortSignal): Promise<RepoFileContent> {
+async function loadAddressedFile(
+  data: ReturnType<typeof parseRepoFileInput>,
+  signal: AbortSignal,
+): Promise<RepoFileContent> {
   const file = await loadRepoFileWhenReady({
     load: () => loadRepoFile({ data, signal }),
     signal,

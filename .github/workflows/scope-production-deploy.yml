@@ -79,36 +79,17 @@ jobs:
           --scope "$REQUESTED_SCOPE"
           --deployed-revisions "$DEPLOYED_REVISIONS"
 
-      - name: Test production deployment progress
-        run: node --test .github/scripts/production-deployment-progress.test.mjs
-
-      - name: Test Railway service health policy
-        run: node --test .github/scripts/railway-service-health.test.mjs
-
-      - name: Test deployment planner
-        run: node --test .github/scripts/plan-production-deployment.test.mjs
-
-      - name: Check Rust toolchain replicas
-        run: node .github/scripts/check-rust-toolchain-sync.mjs
-
-      - name: Test Rust toolchain replica checker
-        run: node --test .github/scripts/check-rust-toolchain-sync.test.mjs
-
-      - name: Check source-size ownership
-        run: |
-          node --test .github/scripts/check-source-size.test.mjs
-          node .github/scripts/check-source-size.mjs
-
       - name: Install Rust for dependency metadata
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.98.0
           components: rustfmt, clippy
 
-      - name: Check Rust dependency boundaries
-        run: |
-          node --test .github/scripts/check-rust-boundaries.test.mjs
-          node .github/scripts/check-rust-boundaries.mjs
+      - name: Check repository policy
+        run: ./dev/checks/policy
+
+      - name: Check operations
+        run: ./dev/checks/ops
 
   checks-image:
     name: Checks image

@@ -7,6 +7,13 @@ pub struct CreateManualRunQuery {
     pub request_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum ResolveManualRunResponse {
+    Queued { run: RunResponse },
+    UploadRequired,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "ts", derive(schemars::JsonSchema, ts_rs::TS))]
@@ -127,6 +134,7 @@ pub enum RepositoryRunTerminalReason {
     TimedOut { step_index: Option<u32> },
     Canceled { step_index: Option<u32> },
     ExecutionLost { step_index: Option<u32> },
+    DispatchAttemptsExhausted,
     RuntimeSetupFailed { exit_code: i32, message: String },
 }
 

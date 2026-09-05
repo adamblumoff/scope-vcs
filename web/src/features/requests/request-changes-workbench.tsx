@@ -1,3 +1,4 @@
+import { appendDiscussionReferencePage } from './request-changes-discussion-references'
 import type {
   CommitDetail,
   CommitFile,
@@ -46,13 +47,14 @@ export type RequestChangesSearch = {
 }
 
 export type RequestChangesDiscussionReferences = {
-  all: RequestDiscussionPage | null
-  byCommit: Record<string, RequestDiscussionPage | null>
+  commitKey: string | null
+  page: RequestDiscussionPage | null
 }
 
 type DiscussionReferenceState = {
   discussions: RequestDiscussion[]
   error: string | null
+  incomplete: boolean
   loadMore?: () => void
   retry?: () => void
   status: 'failed' | 'loaded' | 'loading'
@@ -75,10 +77,7 @@ export function RequestChangesWorkbench({
     input: LoadRequestRevisionCommitInput & { path: string },
     signal?: AbortSignal,
   ) => Promise<ReviewFileDiff>
-  loadDiscussions: (input: LoadDiscussionsInput) => Promise<{
-    discussions: RequestDiscussion[]
-    next_cursor: string | null
-  }>
+  loadDiscussions: (input: LoadDiscussionsInput) => Promise<RequestDiscussionPage>
   onSearchChange: (search: RequestChangesSearch) => void
   params: { owner: string; repo: string; request_id: string }
   repoId: string
@@ -158,33 +157,31 @@ function useRequestDiscussionReferences({
 }: {
   commitOid: string | null
   initialReferences: RequestChangesDiscussionReferences
-  loadDiscussions: (input: LoadDiscussionsInput) => Promise<{
-    discussions: RequestDiscussion[]
-    next_cursor: string | null
-  }>
+  loadDiscussions: (input: LoadDiscussionsInput) => Promise<RequestDiscussionPage>
   params: { owner: string; repo: string; request_id: string }
   revision: RequestRevisions['revisions'][number] | null
 }): DiscussionReferenceState {
   const key = revision && commitOid
     ? requestRevisionCommitId(revision.id, commitOid)
     : null
-  const initialPage = initialReferences.all
-    ?? (key ? initialReferences.byCommit[key] ?? null : null)
+  const initialPage = key === initialReferences.commitKey ? initialReferences.page : null
   const [resource, setResource] = useState<{
     discussions: RequestDiscussion[]
     error: string | null
     initialPage: RequestDiscussionPage | null
+    key: string | null
+    snapshotVersion: number | null
     nextCursor: string | null
     status: 'failed' | 'loaded' | 'loading'
-  }>(() => discussionReferenceResource(initialPage))
-  const active = resource.initialPage === initialPage
+  }>(() => discussionReferenceResource(initialPage, key))
+  const active = resource.initialPage === initialPage && resource.key === key
     ? resource
-    : discussionReferenceResource(initialPage)
+    : discussionReferenceResource(initialPage, key)
   if (active !== resource) setResource(active)
   const loadPage = useCallback(async () => {
     if (!revision || !commitOid) return
     const cursor = active.nextCursor ?? undefined
-    setResource((current) => current.initialPage === initialPage ? {
+    setResource((current) => current.initialPage === initialPage && current.key === key ? {
       ...current,
       error: null,
       status: 'loading',
@@ -198,26 +195,34 @@ function useRequestDiscussionReferences({
         limit: 100,
         revision_id: revision.id,
       })
-      setResource((current) => current.initialPage === initialPage ? {
-        discussions: cursor
-          ? [...current.discussions, ...page.discussions]
-          : page.discussions,
+      const nextPage = cursor && active.snapshotVersion !== null
+        ? appendDiscussionReferencePage({
+            discussions: active.discussions,
+            next_cursor: cursor,
+            snapshot_version: active.snapshotVersion,
+          }, page)
+        : page
+      setResource((current) => current.initialPage === initialPage && current.key === key ? {
+        discussions: nextPage.discussions,
+        key,
+        snapshotVersion: nextPage.snapshot_version,
         error: null,
         initialPage,
         nextCursor: page.next_cursor,
         status: 'loaded',
       } : current)
     } catch (error) {
-      setResource((current) => current.initialPage === initialPage ? {
+      setResource((current) => current.initialPage === initialPage && current.key === key ? {
         ...current,
         error: error instanceof Error ? error.message : 'Discussion references are unavailable.',
         status: 'failed',
       } : current)
     }
-  }, [active.nextCursor, commitOid, initialPage, loadDiscussions, params, revision])
+  }, [active.discussions, active.nextCursor, active.snapshotVersion, commitOid, initialPage, key, loadDiscussions, params, revision])
   return {
     discussions: active.discussions,
     error: active.error,
+    incomplete: active.nextCursor !== null,
     loadMore: active.nextCursor && active.status === 'loaded'
       ? () => void loadPage()
       : undefined,
@@ -228,11 +233,13 @@ function useRequestDiscussionReferences({
   }
 }
 
-function discussionReferenceResource(initialPage: RequestDiscussionPage | null) {
+function discussionReferenceResource(initialPage: RequestDiscussionPage | null, key: string | null) {
   return {
     discussions: initialPage?.discussions ?? [],
     error: initialPage ? null : 'Discussion references are unavailable.',
     initialPage,
+    key,
+    snapshotVersion: initialPage?.snapshot_version ?? null,
     nextCursor: initialPage?.next_cursor ?? null,
     status: initialPage ? 'loaded' as const : 'failed' as const,
   }
@@ -484,14 +491,19 @@ function RequestCommitContext({
           </button>
         </div>
       ) : null}
-      {discussionReferences.loadMore ? (
-        <button
-          className="mt-3 font-medium text-foreground hover:text-brand"
-          onClick={discussionReferences.loadMore}
-          type="button"
-        >
-          Load more discussion references
-        </button>
+      {discussionReferences.incomplete ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span>More discussions available</span>
+          {discussionReferences.loadMore ? (
+            <button
+              className="font-medium text-foreground hover:text-brand"
+              onClick={discussionReferences.loadMore}
+              type="button"
+            >
+              Load more
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   )

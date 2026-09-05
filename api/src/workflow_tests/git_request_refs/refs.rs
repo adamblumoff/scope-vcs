@@ -314,7 +314,7 @@ struct PutFailsObjectStore {
 }
 
 impl scope_object_store::ObjectStore for PutFailsObjectStore {
-    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), scope_object_store::ObjectStoreError> {
+    fn put(&self, _key: &str, _bytes: Vec<u8>) -> Result<(), scope_object_store::ObjectStoreError> {
         Err(scope_object_store::ObjectStoreError::service_unavailable(
             "object PUT failed for test",
         ))

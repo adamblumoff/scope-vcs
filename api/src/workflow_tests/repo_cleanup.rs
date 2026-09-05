@@ -216,7 +216,7 @@ async fn delete_repo_route_records_pending_filesystem_cleanup_when_storage_delet
 struct DeleteFailsObjectStore;
 
 impl scope_object_store::ObjectStore for DeleteFailsObjectStore {
-    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), scope_object_store::ObjectStoreError> {
+    fn put(&self, _key: &str, _bytes: Vec<u8>) -> Result<(), scope_object_store::ObjectStoreError> {
         Ok(())
     }
 

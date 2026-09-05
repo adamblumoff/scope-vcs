@@ -36,6 +36,11 @@ export type StepLogState = {
   logs: RepoRunLog[]
   logsTruncated: boolean
   nextAfter: number
+  initialized: boolean
+  hasEarlier: boolean
+  hasMore: boolean
+  viewingEarlier: boolean
+  failedPage: { after?: number; before?: number } | null
 }
 
 type DetailViewState = {
@@ -60,6 +65,11 @@ const EMPTY_LOG_STATE: StepLogState = {
   logs: [],
   logsTruncated: false,
   nextAfter: 0,
+  initialized: false,
+  hasEarlier: false,
+  hasMore: false,
+  viewingEarlier: false,
+  failedPage: null,
 }
 
 function createDetailViewState(detail: RepoRunDetail): DetailViewState {
@@ -193,6 +203,7 @@ export function useRepositoryRunDetailController({
   const refreshLogs = useCallback((
     target: StepSelection,
     signal?: AbortSignal,
+    mode: 'refresh' | 'earlier' | 'latest' | 'retry' = 'refresh',
   ) => {
     const key = stepKey(target)
     const inFlight = logInFlightRef.current
@@ -200,6 +211,11 @@ export function useRepositoryRunDetailController({
     const existing = inFlight.get(key)
     if (existing) return existing
     const current = logStatesRef.current[key] ?? EMPTY_LOG_STATE
+    if (mode === 'refresh' && current.viewingEarlier) return Promise.resolve(true)
+    const before = mode === 'retry' ? current.failedPage?.before
+      : mode === 'earlier' ? current.logs[0]?.position : undefined
+    const after = mode === 'retry' ? current.failedPage?.after
+      : mode === 'refresh' && current.initialized ? current.nextAfter : undefined
     const loadingState = {
       ...current,
       error: null,
@@ -221,7 +237,8 @@ export function useRepositoryRunDetailController({
     const request = loadLogs(
       {
         ...params,
-        after: current.nextAfter,
+        after,
+        before,
         attempt_id: target.attemptId,
         step_index: target.stepIndex,
       },
@@ -230,14 +247,17 @@ export function useRepositoryRunDetailController({
       .then((page) => {
         if (!mountedRef.current) return false
         const previous = logStatesRef.current[key] ?? current
-        const merged = mergeStepLogs(previous.logs, page.logs)
+        const merged = mergeStepLogs(after === undefined ? [] : previous.logs, page.logs)
         const nextState = {
           error: null,
           loading: false,
           logs: merged.logs,
-          logsTruncated: previous.logsTruncated ||
-            page.logs_truncated ||
-            merged.truncated,
+          logsTruncated: page.logs_truncated,
+          initialized: true,
+          hasEarlier: page.has_earlier || merged.truncated || (after !== undefined && previous.hasEarlier),
+          hasMore: page.has_more,
+          viewingEarlier: before !== undefined,
+          failedPage: null,
           nextAfter: page.next_after,
         }
         logStatesRef.current = withBoundedLogStates(
@@ -261,6 +281,7 @@ export function useRepositoryRunDetailController({
           ...(logStatesRef.current[key] ?? EMPTY_LOG_STATE),
           error: errorMessage(error),
           loading: false,
+          failedPage: { after, before },
         }
         logStatesRef.current = withBoundedLogStates(
           logStatesRef.current,
@@ -291,13 +312,12 @@ export function useRepositoryRunDetailController({
     const key = stepKey(target)
     const existing = logInFlightRef.current?.get(key)
     if (existing) await existing
-    let previousAfter: number
     do {
-      previousAfter = logStatesRef.current[key]?.nextAfter ?? 0
       if (!await refreshLogs(target, signal)) return false
     } while (
       mountedRef.current &&
-      (logStatesRef.current[key]?.nextAfter ?? 0) > previousAfter
+      !logStatesRef.current[key]?.viewingEarlier &&
+      logStatesRef.current[key]?.hasMore
     )
     return mountedRef.current
   }, [refreshLogs])

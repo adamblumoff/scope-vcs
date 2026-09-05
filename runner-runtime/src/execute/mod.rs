@@ -1,6 +1,7 @@
 mod output;
 mod process;
 mod sink;
+mod spool;
 mod supervisor;
 
 pub(crate) use sink::{AppendLogError, AppendLogOutcome, ExecutionSink};

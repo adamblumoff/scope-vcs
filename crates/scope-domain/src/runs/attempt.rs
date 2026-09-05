@@ -522,9 +522,40 @@ impl RunAttempt {
         } else if run.cancellation_requested {
             job.state = RunJobState::Canceled;
             job.completed_at_unix = Some(now_unix);
+        } else if self.number == MAX_RUN_ATTEMPTS {
+            self.terminal_reason = Some(AttemptTerminalReason::DispatchAttemptsExhausted);
+            job.state = RunJobState::Lost;
+            job.completed_at_unix = Some(now_unix);
         } else {
             job.state = RunJobState::Queued;
         }
+        Ok(())
+    }
+
+    /// Repair a queued job left behind by an exhausted pre-start attempt.
+    pub fn repair_dispatch_exhaustion(
+        &mut self,
+        job: &mut RunJob,
+        now_unix: u64,
+    ) -> Result<(), DomainError> {
+        if self.run_id != job.run_id
+            || self.job_key != job.key
+            || self.number != MAX_RUN_ATTEMPTS
+            || job.last_attempt_number != self.number
+            || self.state != AttemptState::Lost
+            || self.started_at_unix.is_some()
+            || job.state != RunJobState::Queued
+            || job.current_attempt_id.is_some()
+        {
+            return Err(DomainError::invariant_violation(
+                "job has no exhausted dispatch to repair",
+            ));
+        }
+        job.ensure_time_not_before_update(now_unix)?;
+        self.terminal_reason = Some(AttemptTerminalReason::DispatchAttemptsExhausted);
+        job.state = RunJobState::Lost;
+        job.completed_at_unix = Some(now_unix);
+        job.updated_at_unix = now_unix;
         Ok(())
     }
 

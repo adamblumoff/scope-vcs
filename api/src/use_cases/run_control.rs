@@ -7,19 +7,27 @@ use crate::{
     state::AppState,
 };
 use scope_api_contract::RunChangeKind;
-use scope_domain::runs::{
-    run::Run,
-    source::{RunSource, RunTrigger},
-};
+use scope_domain::runs::{manual::ManualRunRequest, run::Run, source::RunSource};
 use scope_object_store::{ContentObjectKind, content_object_for_bytes, object_key};
 
 pub(crate) struct ManualRunCommand {
-    pub(crate) repository_id: String,
-    pub(crate) user_id: String,
-    pub(crate) request_id: String,
-    pub(crate) git_oid: String,
-    pub(crate) workflow_name: String,
+    pub(crate) request: ManualRunRequest,
     pub(crate) bundle: Vec<u8>,
+}
+
+pub(crate) async fn resolve_manual_run(
+    state: &AppState,
+    request: &ManualRunRequest,
+) -> Result<Option<InspectedRun>, ApiError> {
+    match state
+        .metadata
+        .runs()
+        .enqueue_known_manual_run(request, unix_now()?)
+        .await?
+    {
+        Some(enqueued) => finish_enqueued_run(state, enqueued).await.map(Some),
+        None => Ok(None),
+    }
 }
 
 pub(crate) async fn create_manual_run(
@@ -28,8 +36,8 @@ pub(crate) async fn create_manual_run(
 ) -> Result<InspectedRun, ApiError> {
     let inspect_root = state.data_dir.join("run-bundle-inspection");
     let bundle = command.bundle;
-    let git_oid = command.git_oid;
-    let workflow_name = command.workflow_name;
+    let git_oid = command.request.git_oid().to_string();
+    let workflow_name = command.request.workflow_name().to_string();
     let inspected = tokio::task::spawn_blocking(move || {
         inspect_manual_run_bundle(&inspect_root, &bundle, &git_oid, &workflow_name)
             .map(|workflow| (bundle, git_oid, workflow))
@@ -40,23 +48,13 @@ pub(crate) async fn create_manual_run(
     })??;
     let (bundle, git_oid, parsed_workflow) = inspected;
     let revision = parsed_workflow
-        .into_revision(command.repository_id)
+        .into_revision(command.request.repository_id())
         .map_err(ApiError::bad_request)?;
-    if !revision.definition().triggers().manual() {
-        return Err(ApiError::bad_request(
-            "workflow does not enable the manual trigger",
-        ));
-    }
     let mut stored = content_object_for_bytes(ContentObjectKind::GitBundle, &bundle);
     stored.git_oid = git_oid;
     let source_cleanup = stored.clone();
-    let run = Run::new(
-        format!("run_{}", command.request_id),
-        format!("manual:{}", command.request_id),
-        revision.workflow().clone(),
-        revision.digest(),
-        RunTrigger::Manual,
-        Some(command.user_id),
+    let run = command.request.create_run(
+        &revision,
         RunSource::ephemeral_git_bundle(stored)?,
         unix_now()?,
     )?;
@@ -76,6 +74,13 @@ pub(crate) async fn create_manual_run(
         }
     };
     fence.release().await;
+    finish_enqueued_run(state, enqueued).await
+}
+
+async fn finish_enqueued_run(
+    state: &AppState,
+    enqueued: scope_postgres::db::EnqueueRunResult,
+) -> Result<InspectedRun, ApiError> {
     let run = enqueued.run;
     if enqueued.inserted {
         state
@@ -86,11 +91,17 @@ pub(crate) async fn create_manual_run(
             )
             .await;
     }
+    let logs_truncated = !enqueued.inserted
+        && state
+            .metadata
+            .runs()
+            .run_has_truncated_logs(&run.id)
+            .await?;
     let jobs = state.metadata.runs().run_jobs(&run.id).await?;
     Ok(InspectedRun {
         run,
         jobs,
-        logs_truncated: false,
+        logs_truncated,
     })
 }
 

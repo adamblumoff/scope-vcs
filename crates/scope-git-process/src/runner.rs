@@ -1,11 +1,11 @@
 use crate::{
     STDERR_DIAGNOSTIC_BYTES, configure_process_group,
-    lifecycle::terminate_and_reap,
+    lifecycle::ChildGuard,
     stdio::{diagnostic_suffix, join_reader, join_writer, read_stderr_diagnostic, read_stdout},
 };
 use std::{
     io::{Read, Write},
-    process::{Child, Command, ExitStatus, Output, Stdio},
+    process::{Command, ExitStatus, Output, Stdio},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -139,6 +139,7 @@ pub fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .map_err(|source| ProcessError::Spawn {
             action: action.to_string(),
             source,
@@ -180,6 +181,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .map_err(|source| ProcessError::Spawn {
             action: action.to_string(),
             source,
@@ -230,6 +232,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .map_err(|source| ProcessError::Spawn {
             action: action.to_string(),
             source,
@@ -287,14 +290,14 @@ where
                 Ok(Ok(consumed)) => value = Some(consumed),
                 Ok(Err(error)) => {
                     cancellation.cancel();
-                    terminate_and_reap(&mut child);
+                    child.terminate_and_reap();
                     let _ = join_writer(stdin_writer, action);
                     let _ = join_reader(stderr_reader, action);
                     return Err(StreamingProcessError::Consumer(error));
                 }
                 Err(_) => {
                     cancellation.cancel();
-                    terminate_and_reap(&mut child);
+                    child.terminate_and_reap();
                     let _ = join_writer(stdin_writer, action);
                     let _ = join_reader(stderr_reader, action);
                     return Err(ProcessError::ThreadPanicked {
@@ -309,7 +312,7 @@ where
                 Ok(status) => status,
                 Err(source) => {
                     cancellation.cancel();
-                    terminate_and_reap(&mut child);
+                    child.terminate_and_reap();
                     let _ = join_writer(stdin_writer, action);
                     if let Some(stdout_consumer) = stdout_consumer {
                         let _ = stdout_consumer.join();
@@ -331,7 +334,7 @@ where
         }
         if started_at.elapsed() >= limits.timeout {
             cancellation.cancel();
-            terminate_and_reap(&mut child);
+            child.terminate_and_reap();
             let _ = join_writer(stdin_writer, action);
             if let Some(stdout_consumer) = stdout_consumer {
                 let _ = stdout_consumer.join();
@@ -348,6 +351,7 @@ where
         thread::sleep(remaining.min(Duration::from_millis(1)));
     }
 
+    child.disarm();
     join_writer(stdin_writer, action)?;
     let stderr = join_reader(stderr_reader, action)?;
     Ok(StreamedOutput {
@@ -358,7 +362,7 @@ where
 }
 
 fn wait_for_output(
-    mut child: Child,
+    mut child: ChildGuard,
     stdin_writer: Option<thread::JoinHandle<std::io::Result<()>>>,
     limits: ProcessLimits,
     action: &str,
@@ -387,7 +391,7 @@ fn wait_for_output(
     let mut status = None;
     let status = loop {
         if stdout_limit_receiver.try_recv().is_ok() {
-            terminate_and_reap(&mut child);
+            child.terminate_and_reap();
             let _ = join_writer(stdin_writer, action);
             let _ = join_reader(stdout_reader, action);
             let stderr = join_reader(stderr_reader, action).unwrap_or_default();
@@ -416,7 +420,7 @@ fn wait_for_output(
             break status;
         }
         if started_at.elapsed() >= limits.timeout {
-            terminate_and_reap(&mut child);
+            child.terminate_and_reap();
             let _ = join_writer(stdin_writer, action);
             let _ = join_reader(stdout_reader, action);
             let stderr = join_reader(stderr_reader, action).unwrap_or_default();
@@ -430,6 +434,7 @@ fn wait_for_output(
         thread::sleep(remaining.min(Duration::from_millis(1)));
     };
 
+    child.disarm();
     join_writer(stdin_writer, action)?;
     let stdout = join_reader(stdout_reader, action)?;
     let stderr = join_reader(stderr_reader, action)?;

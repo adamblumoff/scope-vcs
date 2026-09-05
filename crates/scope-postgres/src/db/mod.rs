@@ -56,10 +56,13 @@ pub use cache_service::{
 };
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
+mod history_reads;
 mod history_rows;
+pub use history_reads::{RepositoryHistoryPage, RepositoryHistoryQuery};
 mod landing_files;
 pub use landing_files::RepositoryLandingFileBackfillCandidate;
 mod locks;
+mod manual_runs;
 mod object_references;
 mod outbox;
 mod projection_encoding;
@@ -71,11 +74,17 @@ mod repo_effects;
 mod repo_lifecycle;
 mod repo_mutation;
 mod repo_reads;
+mod repository_access;
 mod repository_rows;
 mod request_access;
 mod request_discussion_rows;
 mod request_revision_rows;
 pub use request_discussion_rows::RequestDiscussionReplyReadModel;
+mod request_discussion_commands;
+pub use request_discussion_commands::{
+    CreateRequestDiscussionCommand, CreateRequestDiscussionReplyCommand, DiscussionTransition,
+    ReopenAndReplyToRequestDiscussionCommand, TransitionRequestDiscussionCommand,
+};
 mod request_discussions;
 pub use request_discussions::{
     RequestDiscussionReadBatch, RequestDiscussionReadModel, RequestDiscussionsPageQuery,
@@ -92,6 +101,7 @@ pub use request_rows::{RequestListPageQuery, RequestListRow};
 mod request_merge;
 mod request_submission_transactions;
 mod requests;
+mod run_admission;
 mod run_attempt_mutations;
 mod run_attempt_persistence;
 mod run_cache_authorization;
@@ -105,11 +115,12 @@ mod run_operations;
 mod run_retention;
 mod run_step_operations;
 mod runs;
+pub use run_admission::DispatchAdmission;
 pub use run_cache_observations::{AttemptCacheFinalizationCommand, AttemptCachePreparationCommand};
 pub use run_details::{RunAttemptDetail, RunDetail};
 pub use run_dispatch::CloudTaskStop;
 pub use run_history::{RepositoryRun, RunHistoryCursor, RunHistoryPageQuery};
-pub use run_log_reads::{RecentRunLogs, StoredAttemptStepLogs, StoredRunLog};
+pub use run_log_reads::{RecentRunLogs, StepLogCursor, StoredAttemptStepLogs, StoredRunLog};
 pub use run_log_writes::AppendRunLogResult;
 pub use runs::{DispatchClaim, EnqueueRunResult};
 #[cfg(any(
@@ -424,12 +435,12 @@ pub async fn apply_maintenance_migrations(database_url: String) -> anyhow::Resul
     Ok(())
 }
 
-struct ExclusiveWriterFence {
+pub struct ExclusiveWriterFence {
     connection: PgConnection,
 }
 
 impl ExclusiveWriterFence {
-    async fn acquire(database_url: &str) -> anyhow::Result<Self> {
+    pub async fn acquire(database_url: &str) -> anyhow::Result<Self> {
         let mut connection = PgConnection::connect(database_url).await?;
         let acquired: bool = sqlx::query_scalar(&writer_fence_statement("pg_try_advisory_lock"))
             .fetch_one(&mut connection)
@@ -442,7 +453,7 @@ impl ExclusiveWriterFence {
         Ok(Self { connection })
     }
 
-    async fn release(mut self) -> anyhow::Result<()> {
+    pub async fn release(mut self) -> anyhow::Result<()> {
         sqlx::query(&writer_fence_statement("pg_advisory_unlock"))
             .execute(&mut self.connection)
             .await?;

@@ -18,11 +18,15 @@ export function RunLogView({
   id,
   logState,
   onRetry,
+  onEarlier,
+  onLatest,
   step,
 }: {
   id: string
   logState: StepLogState
   onRetry: () => void
+  onEarlier: () => void
+  onLatest: () => void
   step: RepoRunStep
 }) {
   const [wrap, setWrap] = useState(true)
@@ -32,11 +36,11 @@ export function RunLogView({
   const isRunning = step.state === 'running'
 
   useEffect(() => {
-    if (!isRunning || !following) return
     const node = scrollRef.current
-    if (!node) return
-    node.scrollTop = node.scrollHeight
-  }, [following, isRunning, logState.logs])
+    if (!node || (!logState.viewingEarlier && !following)) return
+    // Position the rendered page after fetched or streamed output updates the DOM.
+    node.scrollTop = logState.viewingEarlier ? 0 : node.scrollHeight
+  }, [following, logState.logs, logState.viewingEarlier])
 
   useEffect(() => {
     if (!copied) return
@@ -97,6 +101,31 @@ export function RunLogView({
           </Button>
         </span>
       </div>
+      {logState.hasEarlier || logState.viewingEarlier ? (
+        <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          {logState.hasEarlier ? (
+            <Button disabled={logState.loading} onClick={onEarlier} size="sm" variant="ghost">
+              Load earlier
+            </Button>
+          ) : null}
+          {logState.viewingEarlier ? (
+            <>
+              <span>Earlier output · live updates paused</span>
+              <Button
+                disabled={logState.loading}
+                onClick={() => {
+                  setFollowing(true)
+                  onLatest()
+                }}
+                size="sm"
+                variant="ghost"
+              >
+                Back to latest
+              </Button>
+            </>
+          ) : <span>Showing recent output</span>}
+        </div>
+      ) : null}
       {logState.error ? (
         <div
           className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 text-sm text-danger-strong"
@@ -129,7 +158,8 @@ function logStatusLabel(
   isRunning: boolean,
   following: boolean,
 ) {
-  if (logState.loading) return 'Fetching new output…'
+  if (logState.loading) return 'Loading output…'
+  if (logState.viewingEarlier) return 'Earlier output'
   if (isRunning) {
     return following ? 'Following live output' : 'Paused, scroll down to follow'
   }

@@ -275,3 +275,74 @@ fn maximum_attempt_age_expires_even_a_renewed_lease() {
     assert_eq!(attempt.state, AttemptState::Lost);
     assert_eq!(job.state, RunJobState::Queued);
 }
+
+#[test]
+fn final_pre_start_loss_is_terminal_but_penultimate_loss_requeues() {
+    for number in [MAX_RUN_ATTEMPTS - 1, MAX_RUN_ATTEMPTS] {
+        let revision = workflow();
+        let mut run = run(&revision);
+        let mut job = create_run_jobs(&run, &revision).unwrap().remove(0);
+        job.last_attempt_number = number - 1;
+        let (mut attempt, mut steps) = job
+            .dispatch(
+                &run,
+                revision.definition().only_job().unwrap(),
+                "last-attempt",
+                "b".repeat(64),
+                "runtime",
+                11,
+                12,
+            )
+            .unwrap();
+        attempt.expire(&run, &mut job, &mut steps, 12).unwrap();
+        reconcile_run(&mut run, std::slice::from_mut(&mut job), &revision, 12).unwrap();
+        attempt.validate_execution(&steps).unwrap();
+        if number == MAX_RUN_ATTEMPTS {
+            assert_eq!(job.state, RunJobState::Lost);
+            assert_eq!(run.state, RunState::Lost);
+            assert!(!crate::runs::job::can_retry_run(
+                &run,
+                std::slice::from_ref(&job)
+            ));
+            assert_eq!(job.completed_at_unix, Some(12));
+            assert_eq!(
+                attempt.terminal_reason,
+                Some(AttemptTerminalReason::DispatchAttemptsExhausted)
+            );
+        } else {
+            assert_eq!(job.state, RunJobState::Queued);
+            assert_eq!(run.state, RunState::Queued);
+            assert_eq!(job.completed_at_unix, None);
+            assert_eq!(
+                attempt.terminal_reason,
+                Some(AttemptTerminalReason::ExecutionLost { step_index: None })
+            );
+        }
+        assert_eq!(job.current_attempt_id, None);
+    }
+}
+
+#[test]
+fn cancellation_wins_over_pre_start_attempt_exhaustion() {
+    let revision = workflow();
+    let mut run = run(&revision);
+    let mut job = create_run_jobs(&run, &revision).unwrap().remove(0);
+    job.last_attempt_number = MAX_RUN_ATTEMPTS - 1;
+    let (mut attempt, mut steps) = job
+        .dispatch(
+            &run,
+            revision.definition().only_job().unwrap(),
+            "last-attempt",
+            "b".repeat(64),
+            "runtime",
+            11,
+            12,
+        )
+        .unwrap();
+    request_run_cancellation(&mut run, std::slice::from_mut(&mut job), 11).unwrap();
+    attempt.expire(&run, &mut job, &mut steps, 12).unwrap();
+    reconcile_run(&mut run, std::slice::from_mut(&mut job), &revision, 12).unwrap();
+    assert_eq!(job.state, RunJobState::Canceled);
+    assert_eq!(run.state, RunState::Canceled);
+    assert!(!crate::runs::job::can_retry_run(&run, &[job]));
+}

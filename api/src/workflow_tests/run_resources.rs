@@ -1,7 +1,7 @@
 use super::*;
 use scope_object_store::ObjectStore;
 
-const WORKFLOW: &str = r#"
+pub(super) const WORKFLOW: &str = r#"
 name: Test
 on:
   manual: true
@@ -24,7 +24,14 @@ async fn state_with_pushed_workflow(label: &str) -> AppState {
     state_with_pushed_workflow_source(label, WORKFLOW).await
 }
 
-async fn state_with_pushed_workflow_source(label: &str, workflow: &str) -> AppState {
+pub(super) async fn state_with_pushed_workflow_source(label: &str, workflow: &str) -> AppState {
+    state_with_pushed_workflow_checkout(label, workflow).await.0
+}
+
+pub(super) async fn state_with_pushed_workflow_checkout(
+    label: &str,
+    workflow: &str,
+) -> (AppState, TempGitRepo) {
     let state = test_state_with_repo();
     cache_test_jwks(&state);
     let source = temp_git_repo(label);
@@ -34,7 +41,7 @@ async fn state_with_pushed_workflow_source(label: &str, workflow: &str) -> AppSt
     commit_all(&source, "add workflow");
     let bare = clone_test_repo(&source, &format!("{label}-bare"), true);
     apply_first_push_from_staging_repo(&state, &bare, repo_config(Visibility::Public)).await;
-    state
+    (state, source)
 }
 
 async fn workflow_list_response(state: AppState) -> Response {

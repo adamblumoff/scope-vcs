@@ -69,6 +69,7 @@ pub(crate) struct RepositoryRunHistoryPageResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "type-export", derive(schemars::JsonSchema, ts_rs::TS))]
 pub(crate) struct RepositoryRunLogResponse {
+    pub(crate) byte_length: usize,
     pub(crate) position: u64,
     pub(crate) sequence: u64,
     pub(crate) text: String,
@@ -81,6 +82,8 @@ pub(crate) struct RepositoryRunStepLogPageResponse {
     pub(crate) logs: Vec<RepositoryRunLogResponse>,
     pub(crate) next_after: u64,
     pub(crate) logs_truncated: bool,
+    pub(crate) has_earlier: bool,
+    pub(crate) has_more: bool,
 }
 
 #[derive(Debug, Serialize)]

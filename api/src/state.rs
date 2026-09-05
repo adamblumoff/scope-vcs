@@ -26,6 +26,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 pub struct AppState {
     pub(crate) metadata: MetadataStore,
     pub(crate) data_dir: Arc<PathBuf>,
+    pub(crate) _git_storage_writer: Arc<crate::retired_git_storage::StorageLock>,
     pub(crate) clerk: ClerkVerifier,
     pub(crate) object_store: Arc<dyn ObjectStore>,
     pub(crate) git_segment_store: Arc<GitSegmentStore>,
@@ -48,6 +49,7 @@ impl AppState {
         let data_dir = data_dir(&repo_root);
         ensure_private_dir(&data_dir)
             .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
+        let git_storage_writer = Arc::new(crate::retired_git_storage::open_writer(&data_dir)?);
         let object_encryption_key = encryption_key_from_env()?;
         let git_segment_store = Arc::new(git_segment_store_from_env(
             data_dir.join("git-segments"),
@@ -83,6 +85,7 @@ impl AppState {
         let state = Self {
             metadata,
             data_dir: Arc::new(data_dir),
+            _git_storage_writer: git_storage_writer,
             clerk: ClerkVerifier::from_env(),
             object_store,
             git_segment_store,
@@ -223,6 +226,10 @@ impl AppState {
         Self {
             metadata,
             data_dir: Arc::new(data_dir.clone()),
+            _git_storage_writer: {
+                ensure_private_dir(&data_dir).unwrap();
+                Arc::new(crate::retired_git_storage::open_writer(&data_dir).unwrap())
+            },
             clerk: ClerkVerifier::new_with_policy(
                 Some("https://clerk.test".to_string()),
                 Some("http://127.0.0.1/.well-known/jwks.json".to_string()),

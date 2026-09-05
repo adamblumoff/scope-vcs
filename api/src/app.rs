@@ -126,6 +126,10 @@ pub fn router(state: AppState) -> Router {
             get(http::run_resources::get_repository_run_history)
                 .post(http::runs::create_manual_run),
         )
+        .route(
+            routes::REPO_RUN_RESOLVE,
+            post(http::runs::resolve_manual_run),
+        )
         .route(routes::REPO_RUN, get(http::runs::get_run))
         .route(
             routes::REPO_RUN_DETAIL,

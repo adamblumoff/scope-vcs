@@ -292,3 +292,47 @@ pub(crate) fn terminate_and_reap(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+/// Owns a spawned process until it has exited or has been killed and reaped.
+/// This also covers unwinding while setting up or joining its I/O threads.
+pub(crate) struct ChildGuard {
+    child: Child,
+    armed: bool,
+}
+
+impl ChildGuard {
+    pub(crate) fn new(child: Child) -> Self {
+        Self { child, armed: true }
+    }
+
+    pub(crate) fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    pub(crate) fn terminate_and_reap(&mut self) {
+        terminate_and_reap(&mut self.child);
+        self.disarm();
+    }
+}
+
+impl std::ops::Deref for ChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.terminate_and_reap();
+        }
+    }
+}

@@ -445,7 +445,7 @@ fn heartbeat_can_cancel_while_an_append_is_blocked() {
     }])
     .observe_cancellation_heartbeat(heartbeat_sender);
     let workspace = tempfile::tempdir().unwrap();
-    let job = job(&[("slow", "head -c 50000 /dev/zero | tr '\\0' x; sleep 30")]);
+    let job = job(&[("slow", "head -c 100000 /dev/zero | tr '\\0' x; sleep 30")]);
     let run_sink = sink.clone();
     let run = thread::spawn(move || {
         run_steps_with_options(
@@ -478,7 +478,7 @@ fn retry_reuses_the_exact_request_before_advancing_the_sequence() {
         AppendAction::Accepted,
     ]);
     let workspace = tempfile::tempdir().unwrap();
-    let job = job(&[("retry", "head -c 20000 /dev/zero | tr '\\0' x")]);
+    let job = job(&[("retry", "head -c 100000 /dev/zero | tr '\\0' x")]);
 
     run_steps_with_options(
         sink.clone(),
@@ -528,6 +528,83 @@ fn fatal_upload_failure_reaps_the_process_group_then_abandons() {
             .iter()
             .any(|call| matches!(call, Call::CompleteStep { .. }))
     );
+}
+
+#[test]
+fn producer_finishes_while_upload_is_blocked_and_spooled_logs_survive_exit_grace() {
+    let (entered_sender, entered_receiver) = mpsc::channel();
+    let (release_sender, release_receiver) = mpsc::channel();
+    let sink = FakeSink::new([AppendAction::Gated {
+        entered: entered_sender,
+        release: release_receiver,
+        outcome: AppendLogOutcome::Accepted,
+    }]);
+    let workspace = tempfile::tempdir().unwrap();
+    let workspace_path = workspace.path().to_owned();
+    let job = job(&[(
+        "burst",
+        "head -c 1048576 /dev/zero | tr '\\0' x; touch producer-finished",
+    )]);
+    let run_sink = sink.clone();
+    let run = thread::spawn(move || {
+        run_steps_with_options(
+            run_sink,
+            &job,
+            &workspace_path,
+            SupervisorOptions::for_test(Duration::from_secs(5)),
+        )
+    });
+    entered_receiver.recv_timeout(TEST_SYNC_TIMEOUT).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !workspace.path().join("producer-finished").exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let producer_finished = workspace.path().join("producer-finished").exists();
+    // Test supervisor grace is 25ms. A finished command must not lose buffered logs
+    // simply because its uploader remains slower than that grace period.
+    thread::sleep(Duration::from_millis(100));
+    release_sender.send(()).unwrap();
+    let outcome = run.join().unwrap().unwrap();
+    assert!(producer_finished, "producer waited for log upload");
+    assert_eq!(
+        outcome,
+        ExecutionOutcome::Succeeded {
+            logs_truncated: false
+        }
+    );
+    let output = sink
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::Append { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(output, "x".repeat(1048576));
+}
+
+#[test]
+fn batched_invalid_utf8_preserves_replacement_text_within_the_chunk_limit() {
+    let sink = FakeSink::new([]);
+    let workspace = tempfile::tempdir().unwrap();
+    let job = job(&[("bytes", "head -c 70000 /dev/zero | tr '\\0' '\\377'")]);
+    run_steps_with_options(
+        sink.clone(),
+        &job,
+        workspace.path(),
+        SupervisorOptions::for_test(Duration::from_secs(2)),
+    )
+    .unwrap();
+    let chunks = sink
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::Append { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(chunks.iter().all(|text| text.len() <= 64 * 1024));
+    assert_eq!(chunks.concat(), "�".repeat(70000));
 }
 
 fn job(steps: &[(&str, &str)]) -> WorkflowJob {

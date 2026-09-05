@@ -376,6 +376,7 @@ mod tests {
             discovery.backends().await.unwrap().freshness,
             DiscoveryFreshness::Stale
         );
+        wait_for_refresh(&discovery).await;
         assert_eq!(
             discovery.backends().await.unwrap().freshness,
             DiscoveryFreshness::Stale

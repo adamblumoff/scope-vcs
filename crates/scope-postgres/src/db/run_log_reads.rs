@@ -3,7 +3,7 @@ use crate::error::PostgresError;
 use scope_domain::runs::{log::RunLogChunk, workflow::definition::WorkflowJobId};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, QuerySelect, Statement,
+    QueryOrder, Statement,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +24,18 @@ pub struct RecentRunLogs {
 pub struct StoredAttemptStepLogs {
     pub logs: Vec<StoredRunLog>,
     pub logs_truncated: bool,
+    pub has_earlier: bool,
+    pub has_more: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepLogCursor {
+    Tail,
+    Before(u64),
+    After(u64),
+}
+
+pub const STEP_LOG_PAGE_BYTES: u64 = 512 * 1024;
 
 #[derive(Clone, Debug, FromQueryResult)]
 struct RunLogReadRow {
@@ -58,12 +69,12 @@ impl RunLogReadRow {
 }
 
 impl RunStore {
-    pub async fn attempt_step_logs_after(
+    pub async fn attempt_step_logs(
         &self,
         run_id: &str,
         attempt_id: &str,
         step_index: u32,
-        after: u64,
+        cursor: StepLogCursor,
         limit: u64,
     ) -> Result<StoredAttemptStepLogs, PostgresError> {
         let tx = super::begin_metadata_read_snapshot(self.db.as_ref()).await?;
@@ -88,30 +99,69 @@ impl RunStore {
         if !step_exists {
             return Err(PostgresError::not_found("run attempt step not found"));
         }
-        let after = i64::try_from(after)
+        let (position, comparison, order) = match cursor {
+            StepLogCursor::Tail => (0, ">", "DESC"),
+            StepLogCursor::Before(position) => (position, "<", "DESC"),
+            StepLogCursor::After(position) => (position, ">", "ASC"),
+        };
+        let position = i64::try_from(position)
             .map_err(|_| PostgresError::invalid_input("run log cursor is too large"))?;
-        let logs = entities::run_log::Entity::find()
-            .filter(entities::run_log::Column::RunId.eq(run_id))
-            .filter(entities::run_log::Column::AttemptId.eq(attempt_id))
-            .filter(entities::run_log::Column::StepIndex.eq(step_index))
-            .filter(entities::run_log::Column::Position.gt(after))
-            .order_by_asc(entities::run_log::Column::Position)
-            .limit(limit)
-            .all(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .into_iter()
-            .map(|model| -> Result<StoredRunLog, PostgresError> {
-                let position = entities::i64_to_u64(model.position, "run log position")?;
-                let run_id = model.run_id.clone();
-                Ok(StoredRunLog {
-                    position,
-                    run_id,
-                    job_key: job_key.clone(),
-                    chunk: model.try_into_domain()?,
-                })
+        let limit = i64::try_from(limit.clamp(1, 128))
+            .map_err(|_| PostgresError::invalid_input("run log limit is too large"))?;
+        // Bound row work before computing the byte window. Only the retained chunks cross
+        // the database connection, including for a tail read of a long completed step.
+        let logs = entities::run_log::Model::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            format!(
+                "WITH candidates AS (
+                SELECT position, SUM(octet_length(text)) OVER (ORDER BY position {order}) AS bytes
+                FROM (SELECT position, text FROM scope_run_logs
+                    WHERE run_id = $1 AND attempt_id = $2 AND step_index = $3
+                      AND position {comparison} $4
+                    ORDER BY position {order} LIMIT $5) bounded
+            ) SELECT log.* FROM scope_run_logs log
+                JOIN candidates page ON page.position = log.position
+                WHERE page.bytes <= $6 ORDER BY log.position ASC"
+            ),
+            [
+                run_id.into(),
+                attempt_id.into(),
+                step_index.into(),
+                position.into(),
+                limit.into(),
+                (STEP_LOG_PAGE_BYTES as i64).into(),
+            ],
+        ))
+        .all(&tx)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(|model| -> Result<StoredRunLog, PostgresError> {
+            let position = entities::i64_to_u64(model.position, "run log position")?;
+            let run_id = model.run_id.clone();
+            Ok(StoredRunLog {
+                position,
+                run_id,
+                job_key: job_key.clone(),
+                chunk: model.try_into_domain()?,
             })
-            .collect::<Result<Vec<_>, _>>()?;
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        let first = logs.first().map_or(position, |log| log.position as i64);
+        let last = logs.last().map_or(position, |log| log.position as i64);
+        let bounds = tx.query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "SELECT EXISTS(SELECT 1 FROM scope_run_logs WHERE attempt_id = $1 AND step_index = $2 AND position < $3) AS has_earlier,
+                    EXISTS(SELECT 1 FROM scope_run_logs WHERE attempt_id = $1 AND step_index = $2 AND position > $4) AS has_more",
+            [attempt_id.into(), step_index.into(), first.into(), last.into()],
+        )).await.map_err(PostgresError::internal)?
+            .ok_or_else(|| PostgresError::internal_message("run log page bounds missing"))?;
+        let has_earlier = bounds
+            .try_get("", "has_earlier")
+            .map_err(PostgresError::internal)?;
+        let has_more = bounds
+            .try_get("", "has_more")
+            .map_err(PostgresError::internal)?;
         let logs_truncated = attempt
             .first_truncated_step_index
             .is_some_and(|first| step_index >= first);
@@ -119,6 +169,8 @@ impl RunStore {
         Ok(StoredAttemptStepLogs {
             logs,
             logs_truncated,
+            has_earlier,
+            has_more,
         })
     }
 

@@ -9,7 +9,7 @@ use super::{
     repository_from_model,
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, prelude::Json,
 };
 use std::{collections::BTreeMap, sync::Arc};
@@ -31,6 +31,7 @@ use {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepoSummaryRead {
+    pub open_request_count: usize,
     pub id: String,
     pub owner_handle: String,
     pub name: String,
@@ -175,6 +176,7 @@ where
             repositories.push(summary);
         }
     }
+    load_open_request_counts(conn, &mut repositories).await?;
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
 
     Ok(Some(OwnerProfileRead {
@@ -197,7 +199,12 @@ where
     };
     let permissions = member_permissions_for_viewer(conn, &row, viewer_user_id).await?;
     let access = access_for_row(&row, viewer_user_id, permissions)?;
-    summary_for_viewer_row(conn, row, access).await
+    let mut summaries = summary_for_viewer_row(conn, row, access)
+        .await?
+        .into_iter()
+        .collect::<Vec<_>>();
+    load_open_request_counts(conn, &mut summaries).await?;
+    Ok(summaries.pop())
 }
 
 async fn repo_live_files_tx<C>(
@@ -437,6 +444,7 @@ fn summary_from_row(
     let lifecycle_state = row.publication_state()?;
     let change_version = repo_change_version_for_access(row.change_version()?, access);
     Ok(RepoSummaryRead {
+        open_request_count: 0,
         id: row.id,
         owner_handle: row.owner_handle,
         name: row.name,
@@ -492,10 +500,28 @@ where
     if row.publication_state()? != RepoLifecycleState::Ready {
         return Ok(false);
     }
+    public_repository_visible(conn, &row.id, row.change_version()?).await
+}
+
+pub(super) async fn public_repository_visible<C: ConnectionTrait>(
+    conn: &C,
+    repo_id: &str,
+    change_version: u64,
+) -> Result<bool, PostgresError> {
+    if let Some(view) = super::history_reads::history_view_metadata(
+        conn,
+        repo_id,
+        change_version,
+        scope_domain::projection::ProjectionViewKey::Public,
+    )
+    .await?
+    {
+        return Ok(view.visible_files);
+    }
     if let Some(visible) = live_projection_has_non_control_file_for_audience(
         conn,
-        &row.id,
-        row.change_version()?,
+        repo_id,
+        change_version,
         ProjectionAudience::Public,
     )
     .await?
@@ -503,7 +529,7 @@ where
         return Ok(visible);
     }
 
-    let repo = hydrate_repo_from_row_id(conn, &row.id).await?;
+    let repo = hydrate_repo_from_row_id(conn, repo_id).await?;
     Ok(has_visible_projected_non_control_files(
         &repo,
         &Principal::public(),
@@ -562,4 +588,52 @@ impl RepoReadRow {
             PostgresError::internal_message("repository change version cannot be negative")
         })
     }
+}
+
+#[derive(FromQueryResult)]
+struct OpenRequestCount {
+    repo_id: String,
+    count: i64,
+}
+
+async fn load_open_request_counts<C: ConnectionTrait>(
+    conn: &C,
+    summaries: &mut [RepoSummaryRead],
+) -> Result<(), PostgresError> {
+    if summaries.is_empty() {
+        return Ok(());
+    }
+    use entities::request::{Column, Entity};
+    let visibility = summaries
+        .iter()
+        .try_fold(Condition::any(), |condition, summary| {
+            Ok::<_, PostgresError>(condition.add(
+                Condition::all().add(Column::RepoId.eq(&summary.id)).add(
+                    super::request_rows::request_list_condition(
+                        &scope_domain::requests::request_list_predicate(summary.access, None),
+                    )?,
+                ),
+            ))
+        })?;
+    let counts = Entity::find()
+        .select_only()
+        .column(Column::RepoId)
+        .column_as(Column::Id.count(), "count")
+        .filter(Column::SubmittedAtUnix.is_not_null())
+        .filter(Column::ClosedAtUnix.is_null())
+        .filter(Column::MergedAtUnix.is_null())
+        .filter(visibility)
+        .group_by(Column::RepoId)
+        .into_model::<OpenRequestCount>()
+        .all(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .into_iter()
+        .map(|row| (row.repo_id, row.count))
+        .collect::<BTreeMap<_, _>>();
+    for summary in summaries {
+        summary.open_request_count = usize::try_from(*counts.get(&summary.id).unwrap_or(&0))
+            .map_err(PostgresError::internal)?;
+    }
+    Ok(())
 }

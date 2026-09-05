@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+
+node --test .github/scripts/check-source-size.test.mjs
+node .github/scripts/check-source-size.mjs
+node --test .github/scripts/check-rust-boundaries.test.mjs
+node .github/scripts/check-rust-boundaries.mjs
+node .github/scripts/check-rust-toolchain-sync.mjs
+node --test .github/scripts/check-rust-toolchain-sync.test.mjs
+node --test .github/scripts/check-gates.test.mjs

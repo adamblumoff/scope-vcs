@@ -29,6 +29,12 @@ pub struct DispatchClaim {
     pub workflow_revision: WorkflowRevision,
 }
 
+#[cfg(any(
+    test,
+    feature = "test-support",
+    feature = "local-dev",
+    feature = "smoke-seed"
+))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DispatchOffer {
     pub run: Run,

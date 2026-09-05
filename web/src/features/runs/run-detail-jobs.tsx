@@ -18,6 +18,8 @@ export function RunDetailJobs({
   attemptOverrides,
   jobs,
   onLogRetry,
+  onLogEarlier,
+  onLogLatest,
   onSelectAttempt,
   onSelectJob,
   onSelectStep,
@@ -30,6 +32,8 @@ export function RunDetailJobs({
   attemptOverrides: Readonly<Record<string, string>>
   jobs: readonly RepoRunJobDetail[]
   onLogRetry: () => void
+  onLogEarlier: () => void
+  onLogLatest: () => void
   onSelectAttempt: (jobKey: string, attemptId: string) => void
   onSelectJob: (job: RepoRunJobDetail) => void
   onSelectStep: (jobKey: string, attemptId: string, stepIndex: number) => void
@@ -84,6 +88,8 @@ export function RunDetailJobs({
             attempt={attemptForJob(selectedJob, attemptOverrides, selection)}
             jobDetail={selectedJob}
             onLogRetry={onLogRetry}
+            onLogEarlier={onLogEarlier}
+            onLogLatest={onLogLatest}
             onSelectAttempt={(attemptId) =>
               onSelectAttempt(selectedJob.job.key, attemptId)}
             onSelectStep={(attemptId, stepIndex) =>

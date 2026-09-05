@@ -1,11 +1,11 @@
 use crate::{
-    auth::scope::{optional_scope_user, principal_for_scope_user},
+    auth::scope::optional_scope_user,
     error::ApiError,
     http::responses::{
         HealthResponse, ReadinessCheckResponse, ReadinessResponse, SessionRepo, SessionResponse,
         repository_access_response, session_capabilities_response, user_response,
     },
-    repo_access::{access_for_principal, can_read_path, ensure_repo_read, find_repo},
+    repo_access::find_read_access,
     state::AppState,
 };
 use axum::{
@@ -14,7 +14,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use scope_api_contract::{AccountSessionResponse, SessionIdentity};
-use scope_domain::policy::ScopePath;
+use scope_domain::{policy::Principal, repository::access::RepositoryActor};
 
 pub(crate) async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse {
@@ -71,13 +71,24 @@ pub(crate) async fn get_session(
     headers: HeaderMap,
     Path((owner, repo_name)): Path<(String, String)>,
 ) -> Result<Json<SessionResponse>, ApiError> {
-    let repo = find_repo(&state, &owner, &repo_name).await?;
     let user = optional_scope_user(&state, &headers).await?;
-    let principal = principal_for_scope_user(&repo, user.as_ref());
-    ensure_repo_read(&state, &repo, &principal)?;
-    let root = ScopePath::root();
-    let access = access_for_principal(&state, &repo, &principal)?;
-    let can_read = can_read_path(&state, &repo, &principal, &root)?;
+    let repo = find_read_access(
+        &state,
+        &owner,
+        &repo_name,
+        user.as_ref().map(|user| user.id.as_str()),
+    )
+    .await?;
+    let access = repo.access;
+    let can_read_root = repo.can_read_root();
+    let principal_id = if access.actor == RepositoryActor::Public {
+        Principal::public().id
+    } else {
+        user.as_ref()
+            .expect("repository member is authenticated")
+            .id
+            .clone()
+    };
 
     Ok(Json(SessionResponse {
         identity: user.as_ref().map(SessionIdentity::from),
@@ -86,7 +97,7 @@ pub(crate) async fn get_session(
             lifecycle_state: repo.record.lifecycle_state.into(),
             access: repository_access_response(access),
         },
-        capabilities: session_capabilities_response(can_read, access),
-        principal_id: principal.id,
+        capabilities: session_capabilities_response(can_read_root, access),
+        principal_id,
     }))
 }

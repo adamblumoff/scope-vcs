@@ -46,6 +46,7 @@ export type RequestDiscussionRepliesPage = {
 
 export async function loadRequestDiscussionsForRequest(
   data: LoadDiscussionsInput,
+  options?: { signal?: AbortSignal; maxResponseBytes?: number },
 ) {
   return createApiClient().get(
     `${requestDiscussionsPath(data)}${query({
@@ -57,7 +58,7 @@ export async function loadRequestDiscussionsForRequest(
       revision: data.revision_id,
     })}`,
     apiValidators.RequestDiscussionPageResponse,
-    { auth: 'optional' },
+    { auth: 'optional', ...options },
   )
 }
 

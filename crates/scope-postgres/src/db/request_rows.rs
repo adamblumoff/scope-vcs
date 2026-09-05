@@ -135,7 +135,7 @@ fn request_list_select(
     Ok(query)
 }
 
-fn request_list_condition(
+pub(super) fn request_list_condition(
     predicate: &RequestListPredicate<'_>,
 ) -> Result<Condition, PostgresError> {
     match predicate {

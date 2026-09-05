@@ -67,6 +67,7 @@ mod git_receive_config;
 mod git_request_refs;
 mod history;
 mod landing_file;
+mod manual_runs;
 mod push_intent_completion;
 mod repo_cleanup;
 mod repo_events;

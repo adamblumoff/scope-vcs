@@ -104,6 +104,26 @@ fn bounded_writer_accepts_the_limit_and_rejects_the_next_byte() {
 }
 
 #[test]
+fn archive_hash_counts_only_bytes_accepted_by_partial_writes() {
+    struct PartialWriter;
+    impl std::io::Write for PartialWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            Ok(bytes.len().min(2))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = BoundedWriter::new(PartialWriter, 8);
+    writer.write_all(b"complete").unwrap();
+    use sha2::{Digest as _, Sha256};
+    assert_eq!(
+        writer.identity(),
+        (8, hex::encode(Sha256::digest(b"complete")))
+    );
+}
+
+#[test]
 fn cache_preparation_total_is_derived_from_timed_phases() {
     let phases = CachePreparationPhases {
         key_ms: 1,

@@ -66,7 +66,7 @@ pub(crate) async fn list_request_revisions(
     let repo = Arc::new(repo);
     let request = visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,
@@ -233,7 +233,7 @@ pub(crate) async fn get_request_revision_commit_file_diff(
     let repo = Arc::new(repo);
     let request = visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,

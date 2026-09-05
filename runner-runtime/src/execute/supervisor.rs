@@ -197,7 +197,10 @@ pub(crate) fn run_steps_with_options<S: ExecutionSink>(
                 }
                 group_killed = true;
                 if output.is_none() {
-                    capture.as_ref().expect("output capture exists").stop();
+                    capture
+                        .as_ref()
+                        .expect("output capture exists")
+                        .finish_reading();
                 }
             }
 

@@ -1,4 +1,4 @@
-use super::{RepoLifecycleState, Repository};
+use super::{RepoLifecycleState, RepoRecord, Repository, RepositoryIncarnation};
 use crate::{
     policy::{Principal, PrincipalKind, ScopePath},
     repository::collaboration::RepositoryMemberPermissions,
@@ -23,6 +23,44 @@ pub struct RepositoryAccess {
     pub can_delete_repo: bool,
 }
 
+/// The repository identity and permissions required for one viewer's metadata operations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryAccessContext {
+    pub record: RepoRecord,
+    pub access: RepositoryAccess,
+    pub root_visibility: crate::policy::Visibility,
+}
+
+impl RepositoryAccessContext {
+    pub fn can_read_root(&self) -> bool {
+        self.access.can_read_private_files
+            || self.root_visibility == crate::policy::Visibility::Public
+    }
+    pub fn incarnation(&self) -> RepositoryIncarnation {
+        self.record.incarnation()
+    }
+
+    pub fn ensure_member(&self) -> Result<(), crate::error::DomainError> {
+        if self.access.is_maintainer() {
+            Ok(())
+        } else {
+            Err(crate::error::DomainError::forbidden(
+                "repo membership required",
+            ))
+        }
+    }
+
+    pub fn can_read(&self, public_files_visible: bool) -> bool {
+        match self.access.actor {
+            RepositoryActor::Owner => true,
+            RepositoryActor::Member => self.record.lifecycle_state == RepoLifecycleState::Ready,
+            RepositoryActor::Public => {
+                self.record.lifecycle_state == RepoLifecycleState::Ready && public_files_visible
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MainPushMode {
     Denied,
@@ -37,6 +75,10 @@ pub struct RepositoryPushPolicy {
 }
 
 impl RepositoryAccess {
+    pub fn is_maintainer(self) -> bool {
+        matches!(self.actor, RepositoryActor::Owner | RepositoryActor::Member)
+    }
+
     pub fn public() -> Self {
         Self {
             actor: RepositoryActor::Public,
@@ -153,9 +195,6 @@ impl Repository {
     }
 
     pub fn is_maintainer_user_id(&self, user_id: &str) -> bool {
-        matches!(
-            self.access_for_user_id(user_id).actor,
-            RepositoryActor::Owner | RepositoryActor::Member
-        )
+        self.access_for_user_id(user_id).is_maintainer()
     }
 }
