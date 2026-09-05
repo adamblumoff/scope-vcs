@@ -120,7 +120,7 @@ impl<'a> RequestRevisionCommitVisibility<'a> {
             move |raw_repo, revision| {
                 let mut visible = BTreeSet::new();
                 for commit_oid in &commit_oids {
-                    if commit_belongs_to_revision(raw_repo, &revision, commit_oid)?
+                    if commit_belongs_to_revision(raw_repo, revision, commit_oid)?
                         && request_commit_is_visible_to(raw_repo, &policy, access, commit_oid)?
                     {
                         visible.insert(commit_oid.clone());
