@@ -843,7 +843,7 @@ fn receive_pack_update(state: &AppState, changes: Vec<(&str, Option<&str>)>) -> 
     let mut manifest = put_content_object(
         state.object_store.as_ref(),
         ContentObjectKind::GitManifest,
-        b"test staged Git manifest",
+        b"test staged Git manifest".to_vec(),
     )
     .unwrap();
     let head_oid = "1111111111111111111111111111111111111111";

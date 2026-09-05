@@ -66,7 +66,7 @@ pub(crate) async fn create_manual_run(
         .await?;
     state
         .object_store
-        .put(&object_key(&source_cleanup), &bundle)?;
+        .put(&object_key(&source_cleanup), bundle)?;
     let enqueued = match state.metadata.runs().enqueue_run(run, revision).await {
         Ok(enqueued) => enqueued,
         Err(error) => {

@@ -28,10 +28,7 @@ impl PreparedGitPush {
     }
 
     pub fn store_manifest(self, store: &dyn ObjectStore) -> Result<StoredGitPush, GitStorageError> {
-        store.put(
-            &object_key(&self.stored.head.manifest),
-            &self.manifest_bytes,
-        )?;
+        store.put(&object_key(&self.stored.head.manifest), self.manifest_bytes)?;
         Ok(self.stored)
     }
 }

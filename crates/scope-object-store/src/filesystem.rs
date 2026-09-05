@@ -41,7 +41,7 @@ impl FileObjectStore {
 }
 
 impl ObjectStore for FileObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ObjectStoreError> {
+    fn put(&self, key: &str, bytes: Vec<u8>) -> Result<(), ObjectStoreError> {
         let path = self.path_for_key(key);
         let parent = path.parent().ok_or_else(|| {
             ObjectStoreError::internal_message("local object path is missing a parent directory")
@@ -104,7 +104,7 @@ mod tests {
         ));
         let store = FileObjectStore::new(FileObjectStoreSettings::new(root.clone()));
 
-        store.put("../not-a-path", b"payload").unwrap();
+        store.put("../not-a-path", b"payload".to_vec()).unwrap();
         assert_eq!(store.get("../not-a-path").unwrap(), b"payload");
         store.delete("../not-a-path").unwrap();
         assert!(store.get("../not-a-path").is_err());

@@ -369,7 +369,7 @@ pub(crate) async fn persist_request_ref_to_store(
     };
     if let Err(error) = state.object_store.put(
         &scope_object_store::object_key(&git_snapshot),
-        &snapshot_bytes,
+        snapshot_bytes,
     ) {
         rollback_request_ref(state, &incarnation, &update.request_ref, previous_head);
         fence.release().await;

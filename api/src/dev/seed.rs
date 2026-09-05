@@ -881,7 +881,7 @@ fn store_seed_bundle(
     seed_git(Some(repo_path), &args, "creating seeded Git bundle")?;
     let bytes = fs::read(&bundle_path).map_err(ApiError::internal)?;
     fs::remove_file(&bundle_path).map_err(ApiError::internal)?;
-    let mut snapshot = put_content_object(object_store, ContentObjectKind::GitBundle, &bytes)?;
+    let mut snapshot = put_content_object(object_store, ContentObjectKind::GitBundle, bytes)?;
     snapshot.git_oid = head_oid.to_string();
     Ok(snapshot)
 }

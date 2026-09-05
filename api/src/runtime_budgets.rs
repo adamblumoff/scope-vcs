@@ -195,7 +195,7 @@ impl BudgetedObjectStore {
 }
 
 impl ObjectStore for BudgetedObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ObjectStoreError> {
+    fn put(&self, key: &str, bytes: Vec<u8>) -> Result<(), ObjectStoreError> {
         self.budgets.check_object_size("write", key, bytes.len())?;
         let _permit = self
             .budgets
@@ -204,10 +204,11 @@ impl ObjectStore for BudgetedObjectStore {
                 ObjectStoreError::capacity_exhausted(error.into_operator_diagnostic())
             })?;
         let started = Instant::now();
+        let byte_count = bytes.len();
         let result = self.inner.put(key, bytes);
         tracing::info!(
             operation = "put",
-            bytes = bytes.len(),
+            bytes = byte_count,
             elapsed_us = started.elapsed().as_micros(),
             success = result.is_ok(),
             "object store operation timing"

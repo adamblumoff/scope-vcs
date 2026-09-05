@@ -49,11 +49,11 @@ impl Default for MemoryObjectStore {
 }
 
 impl ObjectStore for MemoryObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ObjectStoreError> {
+    fn put(&self, key: &str, bytes: Vec<u8>) -> Result<(), ObjectStoreError> {
         self.objects
             .lock()
             .map_err(|_| ObjectStoreError::internal_message("object store lock poisoned"))?
-            .insert(key.to_string(), bytes.to_vec());
+            .insert(key.to_string(), bytes);
         Ok(())
     }
 
