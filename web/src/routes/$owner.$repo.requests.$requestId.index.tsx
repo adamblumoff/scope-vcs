@@ -1,12 +1,15 @@
 import {
+  parseLoadDiscussionsInput,
+  parseLoadRepliesInput,
+  parseLoadDiscussionChangesInput,
+  parseCreateDiscussionInput,
+  parseCreateReplyInput,
+  parseDiscussionActionInput,
+  parseMarkDiscussionReadInput,
+} from '@/api/request-inputs'
+import {
   createRequestDiscussionForRequest,
   createRequestDiscussionReplyForRequest,
-  type CreateDiscussionInput,
-  type CreateReplyInput,
-  type LoadDiscussionsInput,
-  type LoadRepliesInput,
-  type MarkDiscussionReadInput,
-  type RequestDiscussionActionInput,
   loadRequestDiscussionChangesForRequest,
   loadRequestDiscussionRepliesForRequest,
   loadRequestDiscussionsForRequest,
@@ -29,7 +32,7 @@ import { MessageSquare } from 'lucide-react'
 const requestRoute = getRouteApi('/$owner/$repo/requests/$requestId')
 
 const loadDiscussionPage = createServerFn({ method: 'GET' })
-  .validator((data: ReturnType<typeof requestParamsForRoute> & { discussion_id?: string }) => data)
+  .validator(parseLoadDiscussionsInput)
   .handler(async ({ data }) => {
     const requestParams = {
       owner: data.owner,
@@ -46,35 +49,35 @@ const loadDiscussionPage = createServerFn({ method: 'GET' })
   })
 
 const loadDiscussions = createServerFn({ method: 'GET' })
-  .validator((data: LoadDiscussionsInput) => data)
+  .validator(parseLoadDiscussionsInput)
   .handler(({ data }) => loadRequestDiscussionsForRequest(data))
 
 const loadReplies = createServerFn({ method: 'GET' })
-  .validator((data: LoadRepliesInput) => data)
+  .validator(parseLoadRepliesInput)
   .handler(({ data }) => loadRequestDiscussionRepliesForRequest(data))
 
 const loadDiscussionChanges = createServerFn({ method: 'GET' })
-  .validator((data: ReturnType<typeof requestParamsForRoute> & { after: number }) => data)
+  .validator(parseLoadDiscussionChangesInput)
   .handler(({ data }) => loadRequestDiscussionChangesForRequest(data))
 
 const createDiscussion = createServerFn({ method: 'POST' })
-  .validator((data: CreateDiscussionInput) => data)
+  .validator(parseCreateDiscussionInput)
   .handler(({ data }) => createRequestDiscussionForRequest(data))
 
 const createReply = createServerFn({ method: 'POST' })
-  .validator((data: CreateReplyInput) => data)
+  .validator(parseCreateReplyInput)
   .handler(({ data }) => createRequestDiscussionReplyForRequest(data))
 
 const resolveDiscussion = createServerFn({ method: 'POST' })
-  .validator((data: RequestDiscussionActionInput) => data)
+  .validator(parseDiscussionActionInput)
   .handler(({ data }) => resolveRequestDiscussionForRequest(data))
 
 const reopenAndReply = createServerFn({ method: 'POST' })
-  .validator((data: CreateReplyInput) => data)
+  .validator(parseCreateReplyInput)
   .handler(({ data }) => reopenAndReplyToRequestDiscussionForRequest(data))
 
 const markDiscussionRead = createServerFn({ method: 'POST' })
-  .validator((data: MarkDiscussionReadInput) => data)
+  .validator(parseMarkDiscussionReadInput)
   .handler(({ data }) => markRequestDiscussionReadForRequest(data))
 
 export const Route = createFileRoute('/$owner/$repo/requests/$requestId/')({

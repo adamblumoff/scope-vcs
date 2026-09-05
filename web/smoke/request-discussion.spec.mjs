@@ -14,7 +14,7 @@ const baseUrl = (
   process.env.PLAYWRIGHT_BASE_URL ??
   'http://localhost:3000'
 ).replace(/\/$/, '')
-const repoId = process.env.SCOPE_SMOKE_REPO ?? process.env.UI_AUDIT_REPO ?? 'dev/public-demo'
+const repoId = process.env.SCOPE_SMOKE_REPO ?? 'dev/public-demo'
 const [owner, repo, extra] = repoId.split('/')
 
 if (!owner || !repo || extra) {

@@ -1,3 +1,7 @@
+use super::request_discussion_commands::{
+    CreateRequestDiscussionCommand, CreateRequestDiscussionReplyCommand, DiscussionTransition,
+    ReopenAndReplyToRequestDiscussionCommand, TransitionRequestDiscussionCommand,
+};
 use super::{
     RequestStore,
     request_access::{ensure_user_exists, lock_request_repository, request_policy_for_user},
@@ -338,17 +342,23 @@ impl RequestStore {
 
     pub async fn create_request_discussion(
         &self,
-        mut input: CreateRequestDiscussionInput,
+        command: CreateRequestDiscussionCommand,
     ) -> Result<CreateRequestDiscussionMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-        input.actor_can_participate =
-            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
-                .await?
-                .permissions
-                .can_open_discussion;
+        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        ensure_user_exists(&tx, &command.actor_user_id).await?;
+        let policy = request_policy_for_user(&tx, &repo, &request, &command.actor_user_id).await?;
+        let input = CreateRequestDiscussionInput {
+            request_id: command.request_id,
+            id: command.id,
+            actor_user_id: command.actor_user_id,
+            actor_can_participate: policy.permissions.can_open_discussion,
+            client_discussion_id: command.client_discussion_id,
+            body_markdown: command.body_markdown,
+            anchor: command.anchor,
+            now_unix: command.now_unix,
+        };
 
         if let Some(discussion) = discussion_by_client_id(
             &tx,
@@ -395,17 +405,24 @@ impl RequestStore {
 
     pub async fn create_request_discussion_reply(
         &self,
-        mut input: CreateRequestDiscussionReplyInput,
+        command: CreateRequestDiscussionReplyCommand,
     ) -> Result<CreateRequestDiscussionReplyMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-        input.actor_can_participate =
-            request_policy_for_user(&tx, &repo, &request, &input.actor_user_id)
-                .await?
-                .permissions
-                .can_reply_to_discussion;
+        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        ensure_user_exists(&tx, &command.actor_user_id).await?;
+        let policy = request_policy_for_user(&tx, &repo, &request, &command.actor_user_id).await?;
+        let input = CreateRequestDiscussionReplyInput {
+            request_id: command.request_id,
+            discussion_id: command.discussion_id,
+            id: command.id,
+            actor_user_id: command.actor_user_id,
+            actor_can_participate: policy.permissions.can_reply_to_discussion,
+            client_reply_id: command.client_reply_id,
+            body_markdown: command.body_markdown,
+            reply_to_reply_id: command.reply_to_reply_id,
+            now_unix: command.now_unix,
+        };
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?
             .filter(|discussion| discussion.request_id == input.request_id)
@@ -458,53 +475,18 @@ impl RequestStore {
         Ok(mutation)
     }
 
-    pub async fn resolve_request_discussion(
+    pub async fn transition_request_discussion(
         &self,
-        request_id: String,
-        discussion_id: String,
-        actor_user_id: String,
-        event_id: String,
-        now_unix: u64,
+        command: TransitionRequestDiscussionCommand,
     ) -> Result<RequestDiscussion, PostgresError> {
-        self.transition_request_discussion(
+        let TransitionRequestDiscussionCommand {
             request_id,
             discussion_id,
             actor_user_id,
             event_id,
             now_unix,
-            true,
-        )
-        .await
-    }
-
-    pub async fn reopen_request_discussion(
-        &self,
-        request_id: String,
-        discussion_id: String,
-        actor_user_id: String,
-        event_id: String,
-        now_unix: u64,
-    ) -> Result<RequestDiscussion, PostgresError> {
-        self.transition_request_discussion(
-            request_id,
-            discussion_id,
-            actor_user_id,
-            event_id,
-            now_unix,
-            false,
-        )
-        .await
-    }
-
-    async fn transition_request_discussion(
-        &self,
-        request_id: String,
-        discussion_id: String,
-        actor_user_id: String,
-        event_id: String,
-        now_unix: u64,
-        resolve: bool,
-    ) -> Result<RequestDiscussion, PostgresError> {
+            transition,
+        } = command;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
         let (repo, request) = lock_request_repository(&tx, &request_id).await?;
@@ -520,8 +502,8 @@ impl RequestStore {
         let actor_is_maintainer = repo.is_maintainer_user_id(&actor_user_id);
         let mut requests = BTreeMap::from([(request.id.clone(), request)]);
         let mut discussions = BTreeMap::from([(discussion.id.clone(), discussion)]);
-        let mutation = if resolve {
-            resolve_request_discussion(
+        let mutation = match transition {
+            DiscussionTransition::Resolve => resolve_request_discussion(
                 &mut requests,
                 &mut discussions,
                 ResolveRequestDiscussionInput {
@@ -533,9 +515,8 @@ impl RequestStore {
                     event_id,
                     now_unix,
                 },
-            )?
-        } else {
-            reopen_request_discussion(
+            )?,
+            DiscussionTransition::Reopen => reopen_request_discussion(
                 &mut requests,
                 &mut discussions,
                 ReopenRequestDiscussionInput {
@@ -547,7 +528,7 @@ impl RequestStore {
                     event_id,
                     now_unix,
                 },
-            )?
+            )?,
         };
         save_request_row(&tx, &mutation.request).await?;
         save_discussion(&tx, &mutation.discussion).await?;
@@ -566,16 +547,28 @@ impl RequestStore {
 
     pub async fn reopen_and_reply_to_request_discussion(
         &self,
-        mut input: ReopenAndReplyToRequestDiscussionInput,
+        command: ReopenAndReplyToRequestDiscussionCommand,
     ) -> Result<CreateRequestDiscussionReplyMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &input.request_id).await?;
-        ensure_user_exists(&tx, &input.actor_user_id).await?;
-        let policy = request_policy_for_user(&tx, &repo, &request, &input.actor_user_id).await?;
-        input.actor_can_participate = policy.permissions.can_reply_to_discussion;
-        input.actor_can_transition = policy.permissions.can_transition_discussion;
-        input.actor_is_maintainer = repo.is_maintainer_user_id(&input.actor_user_id);
+        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        ensure_user_exists(&tx, &command.actor_user_id).await?;
+        let policy = request_policy_for_user(&tx, &repo, &request, &command.actor_user_id).await?;
+        let actor_is_maintainer = repo.is_maintainer_user_id(&command.actor_user_id);
+        let input = ReopenAndReplyToRequestDiscussionInput {
+            request_id: command.request_id,
+            discussion_id: command.discussion_id,
+            reply_id: command.reply_id,
+            actor_user_id: command.actor_user_id,
+            actor_is_maintainer,
+            actor_can_transition: policy.permissions.can_transition_discussion,
+            actor_can_participate: policy.permissions.can_reply_to_discussion,
+            event_id: command.event_id,
+            client_reply_id: command.client_reply_id,
+            body_markdown: command.body_markdown,
+            reply_to_reply_id: command.reply_to_reply_id,
+            now_unix: command.now_unix,
+        };
         ensure_request_discussion_transition_allowed(&request, input.actor_can_transition)?;
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?

@@ -269,6 +269,7 @@ async fn incremental_git_pack_layout_restores_after_cache_loss() {
         stored.git_head.as_ref().unwrap(),
         &stored.git_pack_spans,
         &restored,
+        None,
     )
     .await
     .unwrap();

@@ -50,6 +50,7 @@ pub enum AttemptTerminalReason {
     TimedOut { step_index: Option<u32> },
     Canceled { step_index: Option<u32> },
     ExecutionLost { step_index: Option<u32> },
+    DispatchAttemptsExhausted,
     RuntimeSetupFailed { exit_code: i32, message: String },
 }
 
@@ -390,6 +391,11 @@ impl RunAttempt {
             }
             (AttemptState::Lost, Some(AttemptTerminalReason::ExecutionLost { step_index })) => {
                 interrupted_step_matches(steps, *step_index, StepState::Lost)
+            }
+            (AttemptState::Lost, Some(AttemptTerminalReason::DispatchAttemptsExhausted)) => {
+                self.started_at_unix.is_none()
+                    && self.number == super::attempt::MAX_RUN_ATTEMPTS
+                    && steps.iter().all(|step| step.state == StepState::Skipped)
             }
             _ => false,
         };

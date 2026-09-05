@@ -83,9 +83,10 @@ export async function loadJson<T>(
   url: RequestInfo | URL,
   validator: ApiValidator<T>,
   init?: RequestInit,
+  maxResponseBytes?: number,
 ): Promise<T> {
   const response = await fetch(url, init)
-  if (!response.ok) await throwApiResponseError(response, url, init)
+  if (!response.ok) await throwApiResponseError(response, url, init, maxResponseBytes)
   const context = responseContext(response, url, init)
 
   if (response.status === 204 || response.status === 205) {
@@ -102,7 +103,9 @@ export async function loadJson<T>(
 
   let payload: unknown
   try {
-    payload = await response.json()
+    payload = maxResponseBytes === undefined
+      ? await response.json()
+      : JSON.parse(await readBoundedResponse(response, maxResponseBytes))
   } catch {
     throw invalidResponse(context, 'json-syntax')
   }
@@ -121,6 +124,7 @@ export async function throwApiResponseError(
   response: Response,
   url: RequestInfo | URL,
   init?: RequestInit,
+  maxResponseBytes?: number,
 ): Promise<never> {
   const context = responseContext(response, url, init)
   if (!isJsonContentType(context.contentType)) {
@@ -129,7 +133,9 @@ export async function throwApiResponseError(
 
   let payload: unknown
   try {
-    payload = await response.json()
+    payload = maxResponseBytes === undefined
+      ? await response.json()
+      : JSON.parse(await readBoundedResponse(response, maxResponseBytes))
   } catch {
     throw invalidResponse(context, 'json-syntax')
   }
@@ -272,4 +278,24 @@ function isRouteParameter(segment: string) {
 
 export function stripTrailingSlash(value: string) {
   return value.replace(/\/+$/, '')
+}
+
+async function readBoundedResponse(response: Response, limit: number): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) return ''
+  const decoder = new TextDecoder()
+  let bytes = 0
+  let text = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) return text + decoder.decode()
+      bytes += value.byteLength
+      if (bytes > limit) throw new Error('API response exceeds the byte limit.')
+      text += decoder.decode(value, { stream: true })
+    }
+  } finally {
+    await reader.cancel()
+    reader.releaseLock()
+  }
 }

@@ -253,3 +253,32 @@ fn process_state(pid: u32) -> Option<String> {
         .next()
         .map(str::to_string)
 }
+
+#[cfg(unix)]
+#[test]
+fn unwinding_after_spawn_kills_and_reaps_the_owned_process() {
+    let mut command = Command::new("sh");
+    command.args(["-c", "exec sleep 60"]);
+    configure_process_group(&mut command);
+    let child = command.spawn().unwrap();
+    let pid = child.id() as libc::pid_t;
+    let result = std::panic::catch_unwind(move || {
+        let _child = crate::lifecycle::ChildGuard::new(child);
+        panic!("injected runner setup panic");
+    });
+    assert!(result.is_err());
+    // A killed but unreaped child still has a PID and is waitable.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    assert_eq!(
+        unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ECHILD)
+    );
+}

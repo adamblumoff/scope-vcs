@@ -1,3 +1,9 @@
+import {
+  parseRequestParams,
+  parseUpdateDescriptionInput,
+  parseRequestActionInput,
+  parseRateRequestInput,
+} from '@/api/request-inputs'
 import { createApiClient, HttpError } from '@/api/client'
 import { ApiRouteTemplates, buildApiPath } from '@/api/types.generated'
 import { apiValidators } from '@/api/validators.generated'
@@ -9,14 +15,11 @@ import {
 } from '@/api/requests'
 import {
   type RequestActionCommand,
-  type RequestActionInput,
   performRequestActionForRequest,
 } from '@/features/requests/request-actions-api'
 import {
-  type LoadActivityInput,
   loadRequestActivityForRequest,
   updateRequestDescriptionForRequest,
-  type UpdateDescriptionInput,
 } from '@/features/requests/request-discussion-api'
 import {
   RequestDetailPage,
@@ -35,7 +38,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { useCallback, useMemo } from 'react'
 
 const loadRequestPage = createServerFn({ method: 'GET' })
-  .validator((data: ReturnType<typeof requestParamsForRoute>) => data)
+  .validator(parseRequestParams)
   .handler(async ({ data }) => {
     const requestParams = {
       owner: data.owner,
@@ -55,19 +58,19 @@ const loadRequestPage = createServerFn({ method: 'GET' })
   })
 
 const loadActivity = createServerFn({ method: 'GET' })
-  .validator((data: LoadActivityInput) => data)
+  .validator(parseRequestParams)
   .handler(({ data }) => loadRequestActivityForRequest(data))
 
 const updateDescription = createServerFn({ method: 'POST' })
-  .validator((data: UpdateDescriptionInput) => data)
+  .validator(parseUpdateDescriptionInput)
   .handler(({ data }) => updateRequestDescriptionForRequest(data))
 
 const runRequestAction = createServerFn({ method: 'POST' })
-  .validator((data: RequestActionInput) => data)
+  .validator(parseRequestActionInput)
   .handler(({ data }) => performRequestActionForRequest(data))
 
 const rateRequest = createServerFn({ method: 'POST' })
-  .validator((data: RateRequestInput) => data)
+  .validator(parseRateRequestInput)
   .handler(({ data }) => rateRequestForRequest(data))
 
 export const Route = createFileRoute('/$owner/$repo/requests/$requestId')({

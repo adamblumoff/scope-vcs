@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+
+cargo fmt --manifest-path cli/Cargo.toml -- --check
+cargo test --manifest-path cli/Cargo.toml --locked
+node --test .github/scripts/select-cli-distribution-targets.test.mjs
+cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
+cargo build --manifest-path cli/Cargo.toml --release --locked --bin scope --bin scope-cli-service

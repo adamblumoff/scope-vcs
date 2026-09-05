@@ -1,3 +1,4 @@
+use super::run_source::operation::{RunSourceOperation, spawn_blocking};
 use crate::{
     config::DEFAULT_GIT_BRANCH,
     error::ApiError,
@@ -7,6 +8,7 @@ use crate::{
 use scope_domain::repository::git::{GitHead, GitPackSpan, validate_git_pack_layout};
 use scope_git_process::{ProcessLimits, run_with_stdin_reader};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -20,6 +22,7 @@ pub(crate) async fn restore_git_pack_spans(
     head: &GitHead,
     pack_spans: &[GitPackSpan],
     repo_root: &Path,
+    owner: Option<&Arc<RunSourceOperation>>,
 ) -> Result<(), ApiError> {
     let started_at = Instant::now();
     let total_pack_bytes = pack_spans
@@ -27,7 +30,8 @@ pub(crate) async fn restore_git_pack_spans(
         .map(|span| span.segment.plaintext_bytes)
         .sum::<u64>();
     let result =
-        restore_git_pack_spans_inner(state, repository_id, head, pack_spans, repo_root).await;
+        restore_git_pack_spans_inner(state, repository_id, head, pack_spans, repo_root, owner)
+            .await;
     tracing::info!(
         repository_id,
         operation = "restore_pack_layout",
@@ -47,6 +51,7 @@ async fn restore_git_pack_spans_inner(
     head: &GitHead,
     pack_spans: &[GitPackSpan],
     repo_root: &Path,
+    owner: Option<&Arc<RunSourceOperation>>,
 ) -> Result<(), ApiError> {
     validate_git_pack_layout(pack_spans)
         .map_err(|error| ApiError::internal_message(error.to_string()))?;
@@ -59,7 +64,7 @@ async fn restore_git_pack_spans_inner(
         ));
     }
     let repo_root_for_cleanup = repo_root.to_path_buf();
-    tokio::task::spawn_blocking(move || {
+    spawn_blocking(owner, move || {
         if repo_root_for_cleanup.exists() {
             fs::remove_dir_all(repo_root_for_cleanup).map_err(ApiError::internal)?;
         }
@@ -79,6 +84,7 @@ async fn restore_git_pack_spans_inner(
             repo_root.to_string_lossy().into_owned(),
         ],
         "initializing Git snapshot repo",
+        owner,
     )
     .await?;
     for (index, span) in pack_spans.iter().enumerate() {
@@ -87,8 +93,8 @@ async fn restore_git_pack_spans_inner(
             repo_root,
             repository_id,
             span,
-            index + 1,
-            pack_spans.len(),
+            (index + 1, pack_spans.len()),
+            owner,
         )
         .await?;
     }
@@ -102,6 +108,7 @@ async fn restore_git_pack_spans_inner(
             head.head_oid.clone(),
         ],
         "restoring Git pack-layout head",
+        owner,
     )
     .await?;
     run_timed_git_restore_phase_async(
@@ -114,6 +121,7 @@ async fn restore_git_pack_spans_inner(
             head.head_oid.clone(),
         ],
         "verifying restored Git pack layout",
+        owner,
     )
     .await?;
     run_timed_git_restore_phase_async(
@@ -126,6 +134,7 @@ async fn restore_git_pack_spans_inner(
             format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
         ],
         "setting restored Git snapshot head",
+        owner,
     )
     .await?;
     Ok(())
@@ -136,9 +145,10 @@ pub(crate) async fn index_git_pack(
     repo_root: &Path,
     repository_id: &str,
     span: &GitPackSpan,
-    span_index: usize,
-    span_count: usize,
+    span_position: (usize, usize),
+    owner: Option<&Arc<RunSourceOperation>>,
 ) -> Result<(), ApiError> {
+    let (span_index, span_count) = span_position;
     let temp_name = format!(
         "scope-segment-{}.pack.tmp",
         hex::encode(Sha256::digest(span.segment.segment_id.as_bytes()))
@@ -180,7 +190,7 @@ pub(crate) async fn index_git_pack(
     let repository_id = repository_id.to_string();
     let span = span.clone();
     let temp_pack_for_index = temp_pack.clone();
-    let indexed = tokio::task::spawn_blocking(move || {
+    let indexed = spawn_blocking(owner, move || {
         index_restored_git_pack(
             &repo_root,
             &repository_id,
@@ -253,9 +263,10 @@ pub(crate) async fn run_timed_git_restore_phase_async(
     repo_root: Option<PathBuf>,
     args: Vec<String>,
     context: &'static str,
+    owner: Option<&Arc<RunSourceOperation>>,
 ) -> Result<(), ApiError> {
     let repository_id = repository_id.to_string();
-    tokio::task::spawn_blocking(move || {
+    spawn_blocking(owner, move || {
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
         run_timed_git_restore_phase(
             &repository_id,

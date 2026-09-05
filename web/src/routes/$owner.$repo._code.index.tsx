@@ -1,3 +1,4 @@
+import { parseRepoFileInput } from '@/api/request-inputs'
 import { HttpError } from '@/api/client'
 import {
   loadRepoContentForRequest,
@@ -46,7 +47,7 @@ const loadRepoContent = createServerFn({ method: 'GET' })
   .handler(({ data }) => loadRepoContentForRequest(data))
 
 const loadRepoFile = createServerFn({ method: 'GET' })
-  .validator((data: RepoFileInput) => data)
+  .validator(parseRepoFileInput)
   .handler(async ({ data }): Promise<RepoFileLoadResult> => {
     try {
       return { file: await loadRepoFileForRequest(data), status: 'ready' }
@@ -180,7 +181,6 @@ function RepoIndexRoute() {
 }
 
 type RepoCodeSearch = { file?: string }
-type RepoFileInput = RepoParams & { path: string }
 
 function parseRepoCodeSearch(search: Record<string, unknown>): RepoCodeSearch {
   return { file: parseRouteFileSearch(search.file) }

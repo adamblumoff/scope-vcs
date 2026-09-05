@@ -296,7 +296,7 @@ export type RepositoryRunAttemptState = "dispatching" | "running" | "succeeded" 
 
 export type RepositoryRunStepState = "pending" | "running" | "succeeded" | "failed" | "canceled" | "lost" | "skipped";
 
-export type RepositoryRunTerminalReason = { "kind": "step-failed", step_index: number, exit_code: number, } | { "kind": "timed-out", step_index: number | null, } | { "kind": "canceled", step_index: number | null, } | { "kind": "execution-lost", step_index: number | null, } | { "kind": "runtime-setup-failed", exit_code: number, message: string, };
+export type RepositoryRunTerminalReason = { "kind": "step-failed", step_index: number, exit_code: number, } | { "kind": "timed-out", step_index: number | null, } | { "kind": "canceled", step_index: number | null, } | { "kind": "execution-lost", step_index: number | null, } | { "kind": "dispatch-attempts-exhausted" } | { "kind": "runtime-setup-failed", exit_code: number, message: string, };
 
 export type RepositoryRunCacheColdReason = "metadata-missing" | "metadata-invalid" | "metadata-not-ready" | "volume-missing" | "volume-invalid" | "backing-directory-missing";
 

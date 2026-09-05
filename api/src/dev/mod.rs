@@ -41,6 +41,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let data_dir = data_dir(&repo_root);
     ensure_private_dir(&data_dir)
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
+    let git_storage_writer = Arc::new(crate::retired_git_storage::open_writer(&data_dir)?);
     let object_encryption_key = encryption_key_from_env()?;
     let push_intent_signing_key = push_intent_signing_key(&data_dir, Some(&object_encryption_key))
         .map_err(|error| anyhow::anyhow!(error.into_operator_diagnostic()))?;
@@ -117,6 +118,7 @@ pub async fn app_state_from_env() -> anyhow::Result<AppState> {
     let state = AppState {
         metadata,
         data_dir: Arc::new(data_dir),
+        _git_storage_writer: git_storage_writer,
         clerk: ClerkVerifier::from_env(),
         object_store,
         git_segment_store,

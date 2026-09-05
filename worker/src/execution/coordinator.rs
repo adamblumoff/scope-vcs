@@ -31,33 +31,17 @@ impl CloudExecutionCoordinator {
     }
 
     pub(crate) async fn dispatch_available(&self, now_unix: u64) -> anyhow::Result<usize> {
-        let active = self
-            .metadata
-            .runs()
-            .active_cloud_attempt_count()
-            .await
-            .map_err(db_error)? as usize;
-        let available = self.settings.max_concurrency.saturating_sub(active);
         let mut dispatched = 0;
-        while dispatched < available {
-            let Some(offer) = self
-                .metadata
-                .runs()
-                .next_dispatchable_job()
-                .await
-                .map_err(db_error)?
-            else {
-                break;
-            };
+        // Bound each coordinator tick, including forward repairs.
+        for _ in 0..self.settings.max_concurrency.max(1) {
             let attempt_id = random_id("attempt")?;
             let bootstrap_token = random_token("scope_bootstrap_")?;
             let bootstrap_hash = hex::encode(Sha256::digest(bootstrap_token.as_bytes()));
             let claim = match self
                 .metadata
                 .runs()
-                .dispatch_job(
-                    &offer.run.id,
-                    offer.job.key.as_str(),
+                .admit_next_job(
+                    self.settings.max_concurrency as u64,
                     &attempt_id,
                     &bootstrap_hash,
                     &self.settings.runtime_version,
@@ -65,12 +49,16 @@ impl CloudExecutionCoordinator {
                     now_unix + DISPATCH_LEASE.as_secs(),
                 )
                 .await
+                .map_err(db_error)?
             {
-                Ok(claim) => claim,
-                Err(error) if error.kind == scope_postgres::error::PostgresErrorKind::Conflict => {
+                scope_postgres::db::DispatchAdmission::Admitted(claim) => claim,
+                scope_postgres::db::DispatchAdmission::Exhausted(claim) => {
+                    self.publish_status_change(&claim).await;
                     continue;
                 }
-                Err(error) => return Err(db_error(error)),
+                scope_postgres::db::DispatchAdmission::Contended => continue,
+                scope_postgres::db::DispatchAdmission::AtCapacity
+                | scope_postgres::db::DispatchAdmission::Empty => break,
             };
             self.publish_status_change(&claim).await;
             let definition = claim
