@@ -14,7 +14,7 @@ use crate::{
 use scope_domain::{
     content::SourceBlob,
     repository::{Repository, RepositoryIncarnation},
-    requests::{Request, RequestAudience, RequestRevision, canonical_request_ref},
+    requests::{Request, RequestAudience, canonical_request_ref},
 };
 use scope_object_store::source_blob_bytes;
 use sha2::{Digest, Sha256};
@@ -25,12 +25,14 @@ use std::{
 };
 
 mod locks;
+mod revision;
 #[cfg(test)]
 use crate::persistence::unix_now;
 use locks::acquire_request_ref_store_lock;
 pub(crate) use locks::acquire_request_ref_update_lock;
 #[cfg(test)]
 use locks::git_lock_is_stale;
+pub(crate) use revision::with_request_revision_store_repo;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RequestRefUpdate {
@@ -159,54 +161,6 @@ pub(crate) fn create_request_receive_pack_staging_repo(
 
 pub(crate) fn install_request_receive_pack_hook(repo_root: &FsPath) -> Result<(), ApiError> {
     install_request_pre_receive_hook(repo_root)
-}
-
-pub(crate) fn with_request_revision_store_repo<T>(
-    state: &AppState,
-    incarnation: &RepositoryIncarnation,
-    request: &Request,
-    revision: &RequestRevision,
-    action: impl FnOnce(&FsPath) -> Result<T, ApiError>,
-) -> Result<T, ApiError> {
-    let request_ref = canonical_request_ref(&request.name);
-    let _update_lock = acquire_request_ref_update_lock(state, incarnation, &request_ref)?;
-    let _store_lock = acquire_request_ref_store_lock(state, incarnation)?;
-    let store_repo = ensure_request_ref_store_repo_locked(state, incarnation)?;
-    let bundle_path =
-        store_repo.with_extension(format!("request-revision-{}.bundle.tmp", revision.id));
-    let temporary_ref = format!("refs/scope/internal/request-revision/{}", revision.id);
-    let bytes = source_blob_bytes(state.object_store.as_ref(), &revision.git_snapshot)?;
-    fs::write(&bundle_path, bytes).map_err(ApiError::internal)?;
-    let bundle = bundle_path.to_string_lossy().to_string();
-    let refspec = format!("+{request_ref}:{temporary_ref}");
-    let imported = run_git(
-        Some(&store_repo),
-        &["fetch", &bundle, &refspec],
-        "attaching request revision",
-    );
-    let _ = fs::remove_file(&bundle_path);
-    imported?;
-    if !request_ref_oid_is_commit(&store_repo, &revision.new_head_oid)? {
-        let _ = run_git(
-            Some(&store_repo),
-            &["update-ref", "-d", &temporary_ref],
-            "removing request revision ref",
-        );
-        return Err(ApiError::infrastructure_unavailable(
-            "request revision snapshot does not contain its head",
-        ));
-    }
-    let result = action(&store_repo);
-    let cleanup = run_git(
-        Some(&store_repo),
-        &["update-ref", "-d", &temporary_ref],
-        "removing request revision ref",
-    );
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
-    }
 }
 
 /// Adds every already-authorized request snapshot to a disposable upload-pack repository.

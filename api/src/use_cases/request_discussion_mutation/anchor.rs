@@ -35,21 +35,19 @@ pub(super) async fn validate(
         .transpose()?;
     let commit_oid = anchor.commit_oid.map(canonical_git_oid).transpose()?;
     if let Some(commit_oid) = commit_oid.as_deref() {
+        let repo = context.repo.clone();
+        let access = context.access;
+        let commit_oid = commit_oid.to_string();
         let visible_paths = with_request_revision_store_repo(
             state,
             &context.repo.incarnation(),
             &context.request,
             &revision,
-            |raw_repo| {
-                visible_commit_paths(
-                    raw_repo,
-                    &context.repo,
-                    context.access,
-                    &revision,
-                    commit_oid,
-                )
+            move |raw_repo, revision| {
+                visible_commit_paths(raw_repo, &repo, access, revision, &commit_oid)
             },
-        )?;
+        )
+        .await?;
         if let Some(path) = path.as_ref()
             && !visible_paths.contains(path)
         {
@@ -88,21 +86,19 @@ pub(super) async fn visible_commits(
             .request_revision(&context.request.id, &anchor.revision_id)
             .await?
             .ok_or_else(|| ApiError::not_found("request revision not found"))?;
+        let repo = context.repo.clone();
+        let access = context.access;
+        let commit_oid = commit_oid.to_string();
         let visible = with_request_revision_store_repo(
             state,
             &context.repo.incarnation(),
             &context.request,
             &revision,
-            |raw_repo| {
-                commit_is_fully_visible(
-                    raw_repo,
-                    &context.repo,
-                    context.access,
-                    &revision,
-                    commit_oid,
-                )
+            move |raw_repo, revision| {
+                commit_is_fully_visible(raw_repo, &repo, access, revision, &commit_oid)
             },
-        )?;
+        )
+        .await?;
         Ok::<_, ApiError>(visible)
     }
     .await;

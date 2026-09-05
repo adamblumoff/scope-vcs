@@ -619,7 +619,8 @@ async fn discussion_anchor_visibility<'a>(
     }
     RequestRevisionCommitVisibility::new(
         projection.state,
-        projection.repo,
+        &projection.repo.incarnation(),
+        &projection.repo.policy,
         projection.access,
         projection.request,
     )

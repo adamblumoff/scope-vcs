@@ -13,6 +13,7 @@ pub(crate) enum GitDerivedCacheNamespace {
     Projection,
     Repository,
     RequestReadView,
+    RequestRevision,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
