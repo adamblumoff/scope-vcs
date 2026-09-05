@@ -14,6 +14,8 @@ export function RunDetailSteps({
   attempt,
   jobDetail,
   onLogRetry,
+  onLogEarlier,
+  onLogLatest,
   onSelectAttempt,
   onSelectStep,
   selectedLogState,
@@ -22,6 +24,8 @@ export function RunDetailSteps({
   attempt: RepoRunAttempt | null
   jobDetail: RepoRunJobDetail
   onLogRetry: () => void
+  onLogEarlier: () => void
+  onLogLatest: () => void
   onSelectAttempt: (attemptId: string) => void
   onSelectStep: (attemptId: string, stepIndex: number) => void
   selectedLogState: StepLogState
@@ -63,6 +67,8 @@ export function RunDetailSteps({
                 attemptId={attempt.id}
                 key={step.index}
                 onLogRetry={onLogRetry}
+                onLogEarlier={onLogEarlier}
+                onLogLatest={onLogLatest}
                 onSelect={() => onSelectStep(attempt.id, step.index)}
                 selected={selection?.jobKey === job.key &&
                   selection.attemptId === attempt.id &&
@@ -143,6 +149,8 @@ function AttemptSwitcher({
 function StepRow({
   attemptId,
   onLogRetry,
+  onLogEarlier,
+  onLogLatest,
   onSelect,
   selected,
   selectedLogState,
@@ -150,6 +158,8 @@ function StepRow({
 }: {
   attemptId: string
   onLogRetry: () => void
+  onLogEarlier: () => void
+  onLogLatest: () => void
   onSelect: () => void
   selected: boolean
   selectedLogState: StepLogState
@@ -184,6 +194,8 @@ function StepRow({
           key={panelId}
           logState={selectedLogState}
           onRetry={onLogRetry}
+          onEarlier={onLogEarlier}
+          onLatest={onLogLatest}
           step={step}
         />
       ) : null}

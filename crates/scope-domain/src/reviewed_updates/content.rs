@@ -383,20 +383,21 @@ fn accept_content_update(
     validate_commit_origin(&origin, &file_changes, &update.config)?;
     let mut policy = state.policy;
     for change in &file_changes {
-        match (&change.old_content, &change.new_content) {
-            (None, Some(_)) => {
-                let rule = match update.config.visibility_for_path(&change.path) {
-                    Visibility::Public => VisibilityRule::public(change.path.clone()),
-                    Visibility::Private => VisibilityRule::private(change.path.clone()),
-                };
-                policy
-                    .add_rule(rule)
-                    .map_err(ReviewedUpdateError::InvalidPolicy)?;
-            }
-            (Some(_), None) => policy.remove_rule(&change.path),
-            _ => {}
+        if change.old_content.is_some() && change.new_content.is_none() {
+            policy.remove_rule(&change.path);
         }
     }
+    policy
+        .add_rules(
+            file_changes
+                .iter()
+                .filter(|change| change.old_content.is_none() && change.new_content.is_some())
+                .map(|change| VisibilityRule {
+                    path: change.path.clone(),
+                    visibility: update.config.visibility_for_path(&change.path),
+                }),
+        )
+        .map_err(ReviewedUpdateError::InvalidPolicy)?;
     let change_version = state.change_version.saturating_add(1);
     update.git_head.change_version = change_version;
     let logical_prefix = if allow_unchanged_tree {

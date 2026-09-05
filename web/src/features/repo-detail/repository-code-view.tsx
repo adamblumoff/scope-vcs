@@ -46,7 +46,6 @@ const CODE_TAB_SET_ID = 'repository-code-files'
 export function RepositoryCodeView({
   content,
   contentError,
-  contentLoading,
   contentRetry,
   onSelectFilePath,
   params,
@@ -59,7 +58,6 @@ export function RepositoryCodeView({
 }: {
   content: RepoContent | null
   contentError: string | null
-  contentLoading: boolean
   contentRetry: () => void
   onSelectFilePath: (path: string) => void
   params: RepoParams
@@ -85,11 +83,6 @@ export function RepositoryCodeView({
     onSelectFilePath(path)
   }
 
-  const sourceFile = content ? selectedFile : null
-  const sourceError = content ? selectedFileError : contentError
-  const sourceLoading = content
-    ? selectedFileLoading
-    : Boolean(openPath && contentLoading)
 
   return (
     <section>
@@ -127,14 +120,14 @@ export function RepositoryCodeView({
           availablePaths={content
             ? content.files.map((file) => displayRouteFilePath(file.path))
             : workspaceTabs.state.openIds}
-          error={sourceError}
-          file={sourceFile}
-          loading={sourceLoading}
+          error={selectedFileError}
+          file={selectedFile}
+          loading={selectedFileLoading}
           onActivateTab={onSelectFilePath}
           onEmptyTabFocus={() => fileNavigatorRef.current?.focus()}
           onPinTab={(path) => workspaceTabs.open(path, true)}
           params={params}
-          retry={content ? selectedFileRetry : contentRetry}
+          retry={selectedFileRetry}
           scrollKey={selectedFileIdentity}
           selectedPath={openPath}
           workspaceTabs={workspaceTabs}

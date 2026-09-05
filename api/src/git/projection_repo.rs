@@ -10,20 +10,21 @@ use crate::{
     state::AppState,
 };
 use scope_domain::{
-    content::is_supported_git_file_mode,
     content_ref::ContentRef,
     projection::{Projection, ProjectionMaterialization},
     repository::RepositoryIncarnation,
 };
-use scope_git::GitTreePath;
 use sha1::{Digest, Sha1};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     path::{Path as FsPath, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
+
+mod index;
+use index::ProjectionIndex;
 
 const PROJECTION_CACHE_SEMANTICS_VERSION: &str = "shared-projection-view-v2-native-commits";
 static PROJECTION_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
@@ -45,8 +46,10 @@ fn projection_bare_repo_with_loader(
     incarnation: Option<&RepositoryIncarnation>,
     projection: &Projection,
     native_source_repo: Option<&FsPath>,
+    prefix: Option<ProjectionPrefix>,
     load_content: impl Fn(&scope_domain::content::SourceBlob) -> Result<Vec<u8>, ApiError>,
 ) -> Result<PathBuf, ApiError> {
+    let expected_head = scope_git::projection_head_oid(projection).map_err(ApiError::internal)?;
     let cache_key = projection_cache_key(incarnation, projection);
     let repo_path = cache_root.join(format!("{cache_key}.git"));
     if repo_path
@@ -80,27 +83,41 @@ fn projection_bare_repo_with_loader(
         index: index_path.clone(),
     };
 
+    let (reused_commits, mut parent_commit) = if let Some(prefix) = prefix {
+        git_command_output(
+            Command::new("git")
+                .args(["clone", "--bare", "--local"])
+                .arg(prefix.repo.as_ref())
+                .arg(&temp_path),
+            None,
+        )?;
+        let head = git_object_field(&temp_path, "HEAD", "%H")?;
+        (prefix.commits, Some(head))
+    } else {
+        git_command_output(
+            Command::new("git").args(["init", "--bare"]).arg(&temp_path),
+            None,
+        )?;
+        (0, None)
+    };
     git_command_output(
-        Command::new("git")
-            .arg("init")
-            .arg("--bare")
-            .arg(&temp_path),
+        Command::new("git").arg("--git-dir").arg(&temp_path).args([
+            "symbolic-ref",
+            "HEAD",
+            &format!("refs/heads/{DEFAULT_GIT_BRANCH}"),
+        ]),
         None,
     )?;
-    git_command_output(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(&temp_path)
-            .arg("symbolic-ref")
-            .arg("HEAD")
-            .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
-        None,
-    )?;
-    let mut visible_tree = BTreeMap::new();
-    let mut parent_commit: Option<String> = None;
+    let mut index = ProjectionIndex::new(&temp_path, &index_path, parent_commit.as_deref())?;
+    index.remember_verified_blobs(
+        projection.commits[..reused_commits]
+            .iter()
+            .flat_map(|commit| &commit.changes)
+            .filter_map(|change| change.new_content.as_ref()),
+    );
     let mut native_range: Option<NativeRangeState> = None;
     if projection.commits.is_empty() {
-        let tree = write_projection_tree(&temp_path, &index_path, &visible_tree)?;
+        let tree = index.tree()?;
         parent_commit = Some(git_commit_tree(
             &temp_path,
             &tree,
@@ -109,43 +126,26 @@ fn projection_bare_repo_with_loader(
         )?);
     }
 
-    for projected in &projection.commits {
+    for projected in projection.commits.iter().skip(reused_commits) {
         if native_range
             .as_ref()
             .is_some_and(|range| range.logical_commit_id != projected.logical_commit_id)
         {
             finish_native_range(
                 &temp_path,
-                &index_path,
-                &visible_tree,
+                &index,
                 native_range.take().expect("native range checked"),
             )?;
         }
 
-        for change in &projected.changes {
-            let path = GitTreePath::from_scope_path(&change.path).map_err(ApiError::internal)?;
-            match &change.new_content {
-                Some(blob) => {
-                    visible_tree.insert(
-                        path,
-                        ProjectionTreeFile {
-                            bytes: load_content(blob)?,
-                            git_file_mode: blob.git_file_mode.clone(),
-                        },
-                    );
-                }
-                None => {
-                    visible_tree.remove(&path);
-                }
-            }
-        }
+        index.apply(&projected.changes, &load_content)?;
 
         match &projected.materialization {
             ProjectionMaterialization::Generate => {
                 if let Some(range) = native_range.take() {
-                    finish_native_range(&temp_path, &index_path, &visible_tree, range)?;
+                    finish_native_range(&temp_path, &index, range)?;
                 }
-                let tree = write_projection_tree(&temp_path, &index_path, &visible_tree)?;
+                let tree = index.tree()?;
                 let message = format!("{}\n", projected.message);
                 parent_commit = Some(git_commit_tree(
                     &temp_path,
@@ -204,12 +204,11 @@ fn projection_bare_repo_with_loader(
     }
 
     if let Some(range) = native_range.take() {
-        finish_native_range(&temp_path, &index_path, &visible_tree, range)?;
+        finish_native_range(&temp_path, &index, range)?;
     }
 
     let commit = parent_commit.ok_or_else(|| ApiError::internal_message("missing Git commit"))?;
-    if let Some(expected_head) =
-        scope_git::projection_head_oid(projection).map_err(ApiError::internal)?
+    if let Some(expected_head) = expected_head
         && commit.trim() != expected_head
     {
         return Err(ApiError::internal_message(format!(
@@ -227,6 +226,13 @@ fn projection_bare_repo_with_loader(
         None,
     )?;
 
+    tracing::info!(
+        reused_commits,
+        materialized_commits = projection.commits.len() - reused_commits,
+        blob_bytes_loaded = index.loaded_bytes,
+        blobs_written = index.written_blobs_count,
+        "Git projection build completed"
+    );
     match fs::rename(&temp_path, &repo_path) {
         Ok(()) => Ok(repo_path),
         Err(error) if repo_path.exists() => {
@@ -330,8 +336,7 @@ fn copy_and_verify_native_commit(
 
 fn finish_native_range(
     repo_path: &FsPath,
-    index_path: &FsPath,
-    visible_tree: &BTreeMap<GitTreePath, ProjectionTreeFile>,
+    index: &ProjectionIndex,
     range: NativeRangeState,
 ) -> Result<(), ApiError> {
     if !git_is_ancestor(repo_path, &range.base_oid, &range.head_oid)? {
@@ -340,7 +345,7 @@ fn finish_native_range(
             range.logical_commit_id
         )));
     }
-    let expected_tree_oid = write_projection_tree(repo_path, index_path, visible_tree)?;
+    let expected_tree_oid = index.tree()?;
     let actual_tree_oid = git_object_field(repo_path, &range.head_oid, "%T")?;
     if actual_tree_oid != expected_tree_oid {
         return Err(ApiError::internal_message(format!(
@@ -445,11 +450,17 @@ pub(crate) async fn projection_bare_repo_for_state(
                 let state = state_for_build.clone();
                 tokio::task::spawn_blocking(move || {
                     let _permit = permit;
+                    let prefix = cached_projection_prefix(
+                        &state.repository_engine,
+                        &incarnation_for_build,
+                        &projection_for_build,
+                    )?;
                     projection_bare_repo_with_loader(
                         &cache_root_for_build,
                         Some(&incarnation_for_build),
                         &projection_for_build,
                         raw_source_repo.as_deref(),
+                        prefix,
                         |blob| {
                             source_content_bytes_from_repo(&state, blob, raw_source_repo.as_deref())
                         },
@@ -486,6 +497,7 @@ pub(crate) fn verify_projection_materialization(
         None,
         projection,
         Some(native_source_repo),
+        None,
         |blob| source_content_bytes_from_repo(state, blob, Some(native_source_repo)),
     )
     .map(|_| ());
@@ -523,6 +535,15 @@ fn projection_cache_key(
     incarnation: Option<&RepositoryIncarnation>,
     projection: &Projection,
 ) -> String {
+    projection_cache_keys(incarnation, projection)
+        .pop()
+        .expect("empty projection has a cache key")
+}
+
+fn projection_cache_keys(
+    incarnation: Option<&RepositoryIncarnation>,
+    projection: &Projection,
+) -> Vec<String> {
     let mut hasher = Sha1::new();
     hash_field(
         &mut hasher,
@@ -542,6 +563,7 @@ fn projection_cache_key(
         b"view",
         projection.view_key.as_str().as_bytes(),
     );
+    let mut keys = vec![hex::encode(hasher.clone().finalize())];
     for commit in &projection.commits {
         hash_field(&mut hasher, b"commit", commit.projected_id.as_bytes());
         hash_field(&mut hasher, b"logical", commit.logical_commit_id.as_bytes());
@@ -578,8 +600,45 @@ fn projection_cache_key(
                 None => hash_field(&mut hasher, b"delete", b""),
             }
         }
+        keys.push(hex::encode(hasher.clone().finalize()));
     }
-    hex::encode(hasher.finalize())
+    keys
+}
+
+struct ProjectionPrefix {
+    repo: GitRepoHandle,
+    commits: usize,
+}
+
+fn cached_projection_prefix(
+    engine: &std::sync::Arc<crate::git::repository_engine::RepositoryEngine>,
+    incarnation: &RepositoryIncarnation,
+    projection: &Projection,
+) -> Result<Option<ProjectionPrefix>, ApiError> {
+    let keys = projection_cache_keys(Some(incarnation), projection);
+    for count in (1..projection.commits.len()).rev() {
+        // A preserved native range must be revalidated as a whole.
+        if matches!(
+            projection.commits[count - 1].materialization,
+            ProjectionMaterialization::PreserveGitCommit { .. }
+        ) && projection.commits[count - 1].logical_commit_id
+            == projection.commits[count].logical_commit_id
+        {
+            continue;
+        }
+        let path = engine.cache_root().join(format!("{}.git", keys[count]));
+        if !projection_cache_is_ready(&path) {
+            continue;
+        }
+        let repo = engine.lease_derived(path)?;
+        if projection_cache_is_ready(&repo) {
+            return Ok(Some(ProjectionPrefix {
+                repo,
+                commits: count,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) fn hash_field(hasher: &mut Sha1, label: &[u8], value: &[u8]) {
@@ -587,77 +646,6 @@ pub(crate) fn hash_field(hasher: &mut Sha1, label: &[u8], value: &[u8]) {
     hasher.update(label);
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value);
-}
-
-fn write_projection_tree(
-    repo_path: &FsPath,
-    index_path: &FsPath,
-    visible_tree: &BTreeMap<GitTreePath, ProjectionTreeFile>,
-) -> Result<String, ApiError> {
-    if index_path.exists() {
-        fs::remove_file(index_path).map_err(ApiError::internal)?;
-    }
-    git_index_command(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(repo_path)
-            .arg("read-tree")
-            .arg("--empty"),
-        index_path,
-        None,
-    )?;
-
-    let mut index_info = Vec::new();
-    for (path, file) in visible_tree {
-        if !is_supported_git_file_mode(&file.git_file_mode) {
-            return Err(ApiError::internal_message(format!(
-                "projected Git path {path} has unsupported mode {}",
-                file.git_file_mode
-            )));
-        }
-        let oid = git_command_output(
-            Command::new("git")
-                .arg("--git-dir")
-                .arg(repo_path)
-                .arg("hash-object")
-                .arg("-w")
-                .arg("--stdin"),
-            Some(&file.bytes),
-        )?;
-        let oid = String::from_utf8(oid).map_err(ApiError::bad_request)?;
-        index_info.extend_from_slice(
-            format!("{} blob {}\t{path}\0", file.git_file_mode, oid.trim()).as_bytes(),
-        );
-    }
-
-    if !index_info.is_empty() {
-        git_index_command(
-            Command::new("git")
-                .arg("--git-dir")
-                .arg(repo_path)
-                .arg("update-index")
-                .arg("-z")
-                .arg("--index-info"),
-            index_path,
-            Some(&index_info),
-        )?;
-    }
-    let tree = git_index_command(
-        Command::new("git")
-            .arg("--git-dir")
-            .arg(repo_path)
-            .arg("write-tree"),
-        index_path,
-        None,
-    )?;
-    let tree = String::from_utf8(tree).map_err(ApiError::bad_request)?;
-    Ok(tree.trim().to_string())
-}
-
-#[derive(Clone)]
-struct ProjectionTreeFile {
-    bytes: Vec<u8>,
-    git_file_mode: String,
 }
 
 fn git_commit_tree(

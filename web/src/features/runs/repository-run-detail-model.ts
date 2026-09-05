@@ -31,7 +31,7 @@ type InitialRunView = {
   selection: StepSelection | null
 }
 
-const MAX_CACHED_STEP_LOG_CHARACTERS = 512 * 1_024
+const MAX_CACHED_STEP_LOG_BYTES = 512 * 1_024
 const GRAPH_DEFAULT_JOB_COUNT = 3
 
 export function runCanChange(state: RepoRunState): boolean {
@@ -149,24 +149,38 @@ export function defaultShowGraph(jobs: readonly JobLike[]) {
     jobs.some(({ job }) => job.needs.length > 0)
 }
 
-export function mergeStepLogs<T extends { position: number; text: string }>(
+type StepLogLike = { position: number; text: string; byte_length: number }
+
+export function mergeStepLogPage<T extends StepLogLike>(
+  previous: { logs: readonly T[]; hasEarlier: boolean },
+  page: { logs: readonly T[]; has_earlier: boolean },
+  after: number | undefined,
+) {
+  const merged = mergeStepLogs(after === undefined ? [] : previous.logs, page.logs)
+  return {
+    logs: merged.logs,
+    // Forward pages can have earlier rows already present in the retained window.
+    hasEarlier: merged.truncated || (after === undefined ? page.has_earlier : previous.hasEarlier),
+  }
+}
+
+export function mergeStepLogs<T extends StepLogLike>(
   previous: readonly T[],
   incoming: readonly T[],
 ) {
-  const byPosition = new Map(previous.map((log) => [log.position, log]))
-  for (const log of incoming) byPosition.set(log.position, log)
-  const ordered = [...byPosition.values()].sort((left, right) =>
-    left.position - right.position
-  )
-  let retainedCharacters = 0
+  const lastPosition = previous.at(-1)?.position ?? 0
+  // Pages and retained output are already ordered; reconnect overlap only needs
+  // filtering against the last retained position, not a full map and sort.
+  const ordered = [...previous, ...incoming.filter((log) => log.position > lastPosition)]
+  let retainedBytes = 0
   let firstRetained = ordered.length
   while (firstRetained > 0) {
-    const nextSize = ordered[firstRetained - 1]?.text.length ?? 0
+    const nextSize = ordered[firstRetained - 1]?.byte_length ?? 0
     if (
       firstRetained < ordered.length &&
-      retainedCharacters + nextSize > MAX_CACHED_STEP_LOG_CHARACTERS
+      retainedBytes + nextSize > MAX_CACHED_STEP_LOG_BYTES
     ) break
-    retainedCharacters += nextSize
+    retainedBytes += nextSize
     firstRetained -= 1
   }
   return {

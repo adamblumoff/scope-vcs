@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime_budgets::RuntimeBudgets;
+use scope_domain::{policy::Policy, repository::RepositoryIncarnation};
 use scope_git_process::{ProcessLimits, StreamingProcessError, run_with_stdout, truncated_stderr};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -13,7 +14,7 @@ const MAX_REQUEST_DIFF_FIELD_BYTES: usize = 64 * 1024;
 
 pub(super) fn request_revision_commit_files(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     revision: &RequestRevision,
     commit_oid: &str,
@@ -21,7 +22,7 @@ pub(super) fn request_revision_commit_files(
     if !commit_belongs_to_revision(raw_repo, revision, commit_oid)? {
         return Err(ApiError::not_found("request revision commit not found"));
     }
-    let inspected = inspect_request_commit(raw_repo, repo, access, commit_oid)?;
+    let inspected = inspect_request_commit(raw_repo, policy, access, commit_oid)?;
     let commit = inspected
         .commit
         .ok_or_else(|| ApiError::not_found("request revision commit not found"))?;
@@ -34,18 +35,19 @@ pub(super) struct InspectedRequestCommitFiles {
 
 fn request_commit_is_visible_to(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     commit_oid: &str,
 ) -> Result<bool, ApiError> {
     let identity = request_commit_identity(raw_repo, commit_oid)?;
-    request_commit_changes(raw_repo, repo, access, &identity.parent_oids, commit_oid)
+    request_commit_changes(raw_repo, policy, access, &identity.parent_oids, commit_oid)
         .map(|changes| !changes.hidden)
 }
 
 pub(crate) struct RequestRevisionCommitVisibility<'a> {
     state: &'a AppState,
-    repo: &'a Repository,
+    incarnation: &'a RepositoryIncarnation,
+    policy: &'a Policy,
     access: RepositoryAccess,
     request: &'a Request,
 }
@@ -53,13 +55,15 @@ pub(crate) struct RequestRevisionCommitVisibility<'a> {
 impl<'a> RequestRevisionCommitVisibility<'a> {
     pub(crate) fn new(
         state: &'a AppState,
-        repo: &'a Repository,
+        incarnation: &'a RepositoryIncarnation,
+        policy: &'a Policy,
         access: RepositoryAccess,
         request: &'a Request,
     ) -> Self {
         Self {
             state,
-            repo,
+            incarnation,
+            policy,
             access,
             request,
         }
@@ -105,21 +109,19 @@ impl<'a> RequestRevisionCommitVisibility<'a> {
         else {
             return Ok(BTreeSet::new());
         };
+        let policy = self.policy.clone();
+        let access = self.access;
+        let commit_oids = commit_oids.clone();
         with_request_revision_store_repo(
             self.state,
-            &self.repo.incarnation(),
+            self.incarnation,
             self.request,
             &revision,
-            |raw_repo| {
+            move |raw_repo, revision| {
                 let mut visible = BTreeSet::new();
-                for commit_oid in commit_oids {
-                    if commit_belongs_to_revision(raw_repo, &revision, commit_oid)?
-                        && request_commit_is_visible_to(
-                            raw_repo,
-                            self.repo,
-                            self.access,
-                            commit_oid,
-                        )?
+                for commit_oid in &commit_oids {
+                    if commit_belongs_to_revision(raw_repo, revision, commit_oid)?
+                        && request_commit_is_visible_to(raw_repo, &policy, access, commit_oid)?
                     {
                         visible.insert(commit_oid.clone());
                     }
@@ -127,18 +129,19 @@ impl<'a> RequestRevisionCommitVisibility<'a> {
                 Ok(visible)
             },
         )
+        .await
     }
 }
 
 pub(super) fn inspect_request_commit(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     commit_oid: &str,
 ) -> Result<InspectedRequestCommit, ApiError> {
     let identity = request_commit_identity(raw_repo, commit_oid)?;
     let changes =
-        request_commit_changes(raw_repo, repo, access, &identity.parent_oids, commit_oid)?;
+        request_commit_changes(raw_repo, policy, access, &identity.parent_oids, commit_oid)?;
     if changes.hidden {
         return Ok(InspectedRequestCommit {
             commit: None,
@@ -171,11 +174,11 @@ pub(super) fn inspect_request_commit(
 
 pub(super) fn inspect_request_commits_identity_only(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     commit_oids: &[String],
 ) -> Result<Vec<InspectedRequestCommit>, ApiError> {
-    let mut changes = request_commit_change_summaries(raw_repo, repo, access, commit_oids)?;
+    let mut changes = request_commit_change_summaries(raw_repo, policy, access, commit_oids)?;
     commit_oids
         .iter()
         .map(|commit_oid| {
@@ -228,7 +231,7 @@ struct RequestCommitChangeSummary {
 
 fn request_commit_change_summaries(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     commit_oids: &[String],
 ) -> Result<BTreeMap<String, RequestCommitChangeSummary>, ApiError> {
@@ -236,7 +239,7 @@ fn request_commit_change_summaries(
         return Ok(BTreeMap::new());
     }
     let expected = commit_oids.iter().cloned().collect::<BTreeSet<_>>();
-    let policy = repo.policy.clone();
+    let policy = policy.clone();
     let mut input = commit_oids.join("\n").into_bytes();
     input.push(b'\n');
     let mut command = Command::new("git");
@@ -423,7 +426,7 @@ fn request_commit_identity(
 
 fn request_commit_changes(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     parent_oids: &[String],
     commit_oid: &str,
@@ -433,7 +436,7 @@ fn request_commit_changes(
     let parent = parent_oids
         .first()
         .ok_or_else(|| ApiError::conflict("request revision commit must have a parent"))?;
-    request_changes_from_repo_with_visibility(raw_repo, repo, access, parent, commit_oid, None)
+    request_changes_from_repo_with_visibility(raw_repo, policy, access, parent, commit_oid, None)
 }
 
 fn request_commit_display_metadata(

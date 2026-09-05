@@ -17,7 +17,8 @@ pub use source_blobs::{
 };
 
 pub trait ObjectStore: Send + Sync {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ObjectStoreError>;
+    /// Transfers the payload so encryption and the HTTP body can reuse its allocation.
+    fn put(&self, key: &str, bytes: Vec<u8>) -> Result<(), ObjectStoreError>;
 
     fn get(&self, key: &str) -> Result<Vec<u8>, ObjectStoreError>;
 

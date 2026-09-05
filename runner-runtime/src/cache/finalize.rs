@@ -1,5 +1,5 @@
 use super::{
-    archive::{create_archive, file_identity},
+    archive::create_archive,
     types::{
         CacheFinalization, CacheFinalizationOutcome, CacheSkipReason, PreparedCache, elapsed_ms,
     },
@@ -59,10 +59,7 @@ pub(super) fn save_cache(
         Ok(temp) => temp,
         Err(error) => return skipped(CacheSkipReason::ArchiveFailed, error),
     };
-    if let Err(error) = create_archive(&cache.path, temp.path()) {
-        return skipped(CacheSkipReason::ArchiveFailed, error);
-    }
-    let (size_bytes, checksum_sha256) = match file_identity(temp.path()) {
+    let (size_bytes, checksum_sha256) = match create_archive(&cache.path, temp.path()) {
         Ok(identity) => identity,
         Err(error) => return skipped(CacheSkipReason::ArchiveFailed, error),
     };

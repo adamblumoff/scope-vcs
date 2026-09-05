@@ -12,6 +12,12 @@ pub enum ReviewVisibility {
     Mixed,
 }
 
+impl ReviewVisibility {
+    pub fn combine(self, other: Self) -> Self {
+        if self == other { self } else { Self::Mixed }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VisibilityNodeKind {
     Root,
@@ -186,7 +192,7 @@ pub fn canonicalize_visibility_rules(config: &mut RepoConfig) {
     while let Some(index) = redundant_rule_index(config) {
         config.visibility.rules.remove(index);
     }
-    restore_rule_base_visibilities(config, base_visibilities.clone());
+    restore_rule_base_visibilities(config, &base_visibilities);
     sort_visibility_rules(config, &base_visibilities);
 }
 
@@ -196,16 +202,19 @@ fn redundant_rule_index(config: &RepoConfig) -> Option<usize> {
         .rules
         .iter()
         .enumerate()
-        .find_map(|(index, rule)| {
-            let mut without_rule = config.clone();
-            without_rule.visibility.rules.remove(index);
-            rule_is_redundant(&without_rule, rule).then_some(index)
-        })
+        .find_map(|(index, rule)| rule_is_redundant(config, index, rule).then_some(index))
 }
 
-fn rule_is_redundant(config_without_rule: &RepoConfig, rule: &RepoConfigVisibilityRule) -> bool {
+fn rule_is_redundant(config: &RepoConfig, index: usize, rule: &RepoConfigVisibilityRule) -> bool {
+    let without_rule = |path: &str| {
+        ScopePath::parse(path)
+            .map(|path| {
+                ConfigVisibility::from(config.visibility_for_path_skipping_rule(&path, Some(index)))
+            })
+            .unwrap_or(config.visibility.default)
+    };
     let base = rule_base_path(&rule.path);
-    if effective_config_visibility_for_path(config_without_rule, base) != rule.visibility {
+    if without_rule(base) != rule.visibility {
         return false;
     }
 
@@ -214,7 +223,7 @@ fn rule_is_redundant(config_without_rule: &RepoConfig, rule: &RepoConfigVisibili
     }
 
     let descendant_probe = format!("{base}/__scope_probe__");
-    effective_config_visibility_for_path(config_without_rule, &descendant_probe) == rule.visibility
+    without_rule(&descendant_probe) == rule.visibility
 }
 
 fn upsert_visibility_rule(config: &mut RepoConfig, path: String, visibility: ConfigVisibility) {
@@ -240,11 +249,11 @@ fn effective_visibilities_by_rule_base(config: &RepoConfig) -> BTreeMap<String, 
 
 fn restore_rule_base_visibilities(
     config: &mut RepoConfig,
-    base_visibilities: BTreeMap<String, ConfigVisibility>,
+    base_visibilities: &BTreeMap<String, ConfigVisibility>,
 ) {
     for (base, visibility) in base_visibilities {
-        if effective_config_visibility_for_path(config, &base) != visibility {
-            upsert_visibility_rule(config, base, visibility);
+        if effective_config_visibility_for_path(config, base) != *visibility {
+            upsert_visibility_rule(config, base.clone(), *visibility);
         }
     }
 }
@@ -309,13 +318,16 @@ fn aggregate_visibility(
 ) -> ReviewVisibility {
     let mut selected = None;
     for visibility in visibilities {
-        match selected {
-            None => selected = Some(visibility),
-            Some(previous) if previous == visibility => {}
-            Some(_) => return ReviewVisibility::Mixed,
+        let visibility = config_visibility_to_review(visibility);
+        let combined = selected.map_or(visibility, |previous: ReviewVisibility| {
+            previous.combine(visibility)
+        });
+        if combined == ReviewVisibility::Mixed {
+            return combined;
         }
+        selected = Some(combined);
     }
-    config_visibility_to_review(selected.unwrap_or(fallback))
+    selected.unwrap_or_else(|| config_visibility_to_review(fallback))
 }
 
 fn effective_config_visibility_for_path(config: &RepoConfig, path: &str) -> ConfigVisibility {

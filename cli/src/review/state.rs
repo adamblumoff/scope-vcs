@@ -1,5 +1,5 @@
 use super::{
-    policy::{node_visibility, rule_label, toggle_node_visibility},
+    policy::{rule_label, toggle_node_visibility, tree_visibilities},
     tree::{ReviewNodeKind, ReviewTree},
 };
 use crate::git_repo::GitChangedPath;
@@ -30,8 +30,9 @@ enum ReviewItem {
 
 #[derive(Clone, Debug)]
 pub struct ReviewState {
-    pub tree: ReviewTree,
-    pub config: RepoConfig,
+    tree: ReviewTree,
+    config: RepoConfig,
+    visibilities: Vec<ReviewVisibility>,
     original_config: RepoConfig,
     expanded_tree_nodes: BTreeSet<usize>,
     expanded_change_lists: BTreeSet<ChangeListKind>,
@@ -118,8 +119,10 @@ impl ReviewState {
             )
         };
         let (added_paths, deleted_paths) = split_change_paths(changed_paths);
+        let visibilities = tree_visibilities(&config, &tree);
         let mut state = Self {
             tree,
+            visibilities,
             original_config: config.clone(),
             config,
             expanded_tree_nodes,
@@ -137,6 +140,10 @@ impl ReviewState {
         state.rebuild_visible_items();
         state.move_cursor_to_item(ReviewItem::TreeNode(state.tree.root_id()));
         state
+    }
+
+    pub fn config(&self) -> &RepoConfig {
+        &self.config
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -191,9 +198,15 @@ impl ReviewState {
         self.scroll
     }
 
-    pub fn visible_rows(&self) -> Vec<ReviewRow> {
+    pub fn visible_row_count(&self) -> usize {
+        self.visible_items.len()
+    }
+
+    pub fn visible_rows(&self, offset: usize, limit: usize) -> Vec<ReviewRow> {
         self.visible_items
             .iter()
+            .skip(offset)
+            .take(limit)
             .copied()
             .map(|item| self.row_for_item(item))
             .collect()
@@ -374,6 +387,9 @@ impl ReviewState {
             }
             ReviewItem::TreeNode(id) => {
                 let result = toggle_node_visibility(&mut self.config, &self.tree, id);
+                if result.changed {
+                    self.visibilities = tree_visibilities(&self.config, &self.tree);
+                }
                 self.message = result.message;
             }
         }
@@ -468,7 +484,7 @@ impl ReviewState {
                     path: node.path.clone(),
                     kind: node.kind,
                     expanded: self.expanded_tree_nodes.contains(&id),
-                    visibility: node_visibility(&self.config, &self.tree, id),
+                    visibility: self.visibilities[id],
                     rule: rule_label(&self.config, node),
                     reserved: node.reserved,
                     change_status: node.change_status.clone(),

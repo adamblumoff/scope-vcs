@@ -1,4 +1,4 @@
-use super::requests::{random_id, repo_and_access, visible_request};
+use super::requests::{random_id, repo_metadata_and_access, visible_request};
 use crate::{
     auth::scope::require_scope_user, error::ApiError, persistence::unix_now,
     product_analytics::ProductEvent, repo_events::RepoChangeReason, state::AppState,
@@ -24,10 +24,10 @@ pub(crate) async fn list_request_ratings(
     Path((owner, repo_name, request_id)): Path<(String, String, String)>,
 ) -> Result<Json<RequestRatingsResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+        repo_metadata_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,
@@ -43,8 +43,9 @@ pub(crate) async fn create_request_rating(
     Json(payload): Json<CreateRequestRatingRequest>,
 ) -> Result<Json<RequestRatingResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
-    let (repo, access, _) = repo_and_access(&state, &headers, &owner, &repo_name).await?;
-    let request = visible_request(&state, &repo, access, Some(&user.id), &request_id).await?;
+    let (repo, access, _) = repo_metadata_and_access(&state, &headers, &owner, &repo_name).await?;
+    let request =
+        visible_request(&state, &repo.record.id, access, Some(&user.id), &request_id).await?;
     let rating = state
         .metadata
         .requests()

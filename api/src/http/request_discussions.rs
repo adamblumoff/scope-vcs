@@ -69,10 +69,10 @@ pub(crate) async fn list_discussions(
     Query(query): Query<DiscussionListQuery>,
 ) -> Result<Json<RequestDiscussionPageResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+        repo_metadata_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,
@@ -182,10 +182,10 @@ pub(crate) async fn list_replies(
     Query(query): Query<DiscussionRepliesQuery>,
 ) -> Result<Json<RequestDiscussionRepliesPageResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+        repo_metadata_and_access(&state, &headers, &owner, &repo_name).await?;
     visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,
@@ -353,10 +353,10 @@ pub(crate) async fn changed_discussions(
     Query(query): Query<DiscussionChangesQuery>,
 ) -> Result<Json<RequestDiscussionChangesResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+        repo_metadata_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,
@@ -401,10 +401,10 @@ pub(crate) async fn activity(
     Query(query): Query<ActivityQuery>,
 ) -> Result<Json<RequestActivityPageResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+        repo_metadata_and_access(&state, &headers, &owner, &repo_name).await?;
     let request = visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,
@@ -568,7 +568,7 @@ fn discussion_summary(
 struct DiscussionProjection<'a> {
     state: &'a AppState,
     request: &'a scope_domain::requests::Request,
-    repo: &'a scope_domain::repository::Repository,
+    repo: &'a scope_domain::repository::access::RepositoryAccessContext,
     access: scope_domain::repository::access::RepositoryAccess,
 }
 
@@ -617,9 +617,26 @@ async fn discussion_anchor_visibility<'a>(
             })
             .collect();
     }
+    if commits_by_revision.is_empty() {
+        return BTreeSet::new();
+    }
+    let policy = match projection
+        .state
+        .metadata
+        .repositories()
+        .repository_policy(projection.repo)
+        .await
+    {
+        Ok(policy) => policy,
+        Err(error) => {
+            tracing::warn!(error = ?error, "redacting discussion anchors because repository policy changed");
+            return BTreeSet::new();
+        }
+    };
     RequestRevisionCommitVisibility::new(
         projection.state,
-        projection.repo,
+        &projection.repo.incarnation(),
+        &policy,
         projection.access,
         projection.request,
     )

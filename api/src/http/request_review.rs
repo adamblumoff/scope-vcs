@@ -27,13 +27,13 @@ use scope_api_contract::{
 };
 use scope_domain::{
     history::FileChangeKind,
-    policy::ScopePath,
+    policy::{Policy, ScopePath},
     repository::Repository,
     repository::access::RepositoryAccess,
     requests::{Request, RequestRevision, select_request_review_revision},
 };
 use serde::Deserialize;
-use std::path::Path as FsPath;
+use std::{path::Path as FsPath, sync::Arc};
 
 mod inspection;
 
@@ -63,9 +63,10 @@ pub(crate) async fn list_request_revisions(
 ) -> Result<Json<RequestRevisionListResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
         repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let repo = Arc::new(repo);
     let request = visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,
@@ -115,25 +116,29 @@ pub(crate) async fn list_request_revisions(
         let revision = &revisions[index];
         let commit_limit = work_budget.claim_revision(revision.git_snapshot.size_bytes);
         let (commits, inspection) = if let Some(commit_limit) = commit_limit {
+            let repo_for_inspection = repo.clone();
+            let selected_commit = (input.revision.as_deref() == Some(revision.id.as_str()))
+                .then(|| selected_commit.clone())
+                .flatten();
+            let file_limit = work_budget.remaining_files;
             let inspected = with_request_revision_store_repo(
                 &state,
                 &repo.incarnation(),
                 &request,
                 revision,
-                |raw_repo| {
+                move |raw_repo, revision| {
                     request_revision_commits(
                         raw_repo,
-                        &repo,
+                        &repo_for_inspection,
                         access,
                         revision,
-                        (input.revision.as_deref() == Some(revision.id.as_str()))
-                            .then_some(selected_commit.as_deref())
-                            .flatten(),
+                        selected_commit.as_deref(),
                         commit_limit,
-                        work_budget.remaining_files,
+                        file_limit,
                     )
                 },
-            )?;
+            )
+            .await?;
             work_budget.record_inspected(inspected.inspected, inspected.files_listed);
             (inspected.visible, inspected.inspection)
         } else {
@@ -225,9 +230,10 @@ pub(crate) async fn get_request_revision_commit_file_diff(
 ) -> Result<Json<ReviewFileDiffResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
         repo_and_access(&state, &headers, &owner, &repo_name).await?;
+    let repo = Arc::new(repo);
     let request = visible_request(
         &state,
-        &repo,
+        &repo.record.id,
         access,
         viewer_user_id.as_deref(),
         &request_id,
@@ -241,19 +247,26 @@ pub(crate) async fn get_request_revision_commit_file_diff(
         .ok_or_else(|| ApiError::not_found("request revision not found"))?;
     let commit_oid = canonical_commit_oid(commit_oid)?;
     let path = normalized_path(&input.path)?;
+    let repo_for_inspection = repo.clone();
+    let path_for_inspection = path.clone();
     let (file, old_content, new_content) = with_request_revision_store_repo(
         &state,
         &repo.incarnation(),
         &request,
         &revision,
-        |raw_repo| {
-            let inspected =
-                request_revision_commit_files(raw_repo, &repo, access, &revision, &commit_oid)?;
+        move |raw_repo, revision| {
+            let inspected = request_revision_commit_files(
+                raw_repo,
+                &repo_for_inspection.policy,
+                access,
+                revision,
+                &commit_oid,
+            )?;
             let file = inspected
                 .commit
                 .files
                 .into_iter()
-                .find(|file| file.path == path)
+                .find(|file| file.path == path_for_inspection)
                 .ok_or_else(|| ApiError::not_found("request revision file not found"))?;
             let old_content = file
                 .old_oid
@@ -267,7 +280,8 @@ pub(crate) async fn get_request_revision_commit_file_diff(
                 .transpose()?;
             Ok((file, old_content, new_content))
         },
-    )?;
+    )
+    .await?;
     Ok(Json(ReviewFileDiffResponse {
         path,
         kind: file.kind,
@@ -320,7 +334,7 @@ fn request_revision_commits(
             identity_only_indexes.push(index);
             continue;
         }
-        let commit = inspect_request_commit(raw_repo, repo, access, &commit_oids[index])?;
+        let commit = inspect_request_commit(raw_repo, &repo.policy, access, &commit_oids[index])?;
         metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
         if let Some(mut summary) = commit.commit {
             file_budget_incomplete |= truncate_commit_files(&mut summary, &mut remaining_files);
@@ -332,8 +346,12 @@ fn request_revision_commits(
             .iter()
             .map(|index| commit_oids[*index].clone())
             .collect::<Vec<_>>();
-        let identity_only =
-            inspect_request_commits_identity_only(raw_repo, repo, access, &identity_only_oids)?;
+        let identity_only = inspect_request_commits_identity_only(
+            raw_repo,
+            &repo.policy,
+            access,
+            &identity_only_oids,
+        )?;
         for (index, commit) in identity_only_indexes.into_iter().zip(identity_only) {
             metadata_incomplete |= commit.inspection == RequestRevisionInspectionState::Incomplete;
             if let Some(summary) = commit.commit {
@@ -466,7 +484,7 @@ struct VisibleRequestChanges {
 
 fn request_changes_from_repo_with_visibility(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     old_head_oid: &str,
     new_head_oid: &str,
@@ -514,10 +532,7 @@ fn request_changes_from_repo_with_visibility(
             .ok_or_else(|| ApiError::internal_message("request diff is missing a path"))?;
         let path = String::from_utf8(path.to_vec()).map_err(ApiError::bad_request)?;
         let scope_path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
-        if !repo
-            .policy
-            .can_read(&scope_path, access.can_read_private_files)
-        {
+        if !policy.can_read(&scope_path, access.can_read_private_files) {
             hidden = true;
             continue;
         }
@@ -541,7 +556,7 @@ fn request_changes_from_repo_with_visibility(
             new_mode: git_mode(columns[1]),
             old_oid,
             new_oid,
-            visibility: repo.policy.effective_visibility(&scope_path).into(),
+            visibility: policy.effective_visibility(&scope_path).into(),
         });
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));

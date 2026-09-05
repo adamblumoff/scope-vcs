@@ -120,6 +120,20 @@ impl RuntimeBudgets {
         self.try_acquire(&self.git_materialization, "Git materialization")
     }
 
+    pub(crate) async fn wait_git_materialization(&self) -> Result<RuntimePermit, ApiError> {
+        tokio::time::timeout(
+            self.git_command_timeout,
+            self.git_materialization.clone().acquire_owned(),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|permit| RuntimePermit { _permit: permit })
+        .ok_or_else(|| {
+            ApiError::too_many_requests("Git materialization capacity is exhausted; retry later")
+        })
+    }
+
     pub(crate) fn try_git_segment_ingest(&self) -> Result<RuntimePermit, ApiError> {
         self.try_acquire(&self.git_segment_ingest, "Git segment ingest")
     }
@@ -195,7 +209,7 @@ impl BudgetedObjectStore {
 }
 
 impl ObjectStore for BudgetedObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ObjectStoreError> {
+    fn put(&self, key: &str, bytes: Vec<u8>) -> Result<(), ObjectStoreError> {
         self.budgets.check_object_size("write", key, bytes.len())?;
         let _permit = self
             .budgets
@@ -204,10 +218,11 @@ impl ObjectStore for BudgetedObjectStore {
                 ObjectStoreError::capacity_exhausted(error.into_operator_diagnostic())
             })?;
         let started = Instant::now();
+        let byte_count = bytes.len();
         let result = self.inner.put(key, bytes);
         tracing::info!(
             operation = "put",
-            bytes = bytes.len(),
+            bytes = byte_count,
             elapsed_us = started.elapsed().as_micros(),
             success = result.is_ok(),
             "object store operation timing"
@@ -288,5 +303,95 @@ fn parse_u64_env(name: &str, default: u64) -> anyhow::Result<u64> {
             .parse::<u64>()
             .map_err(|error| anyhow::anyhow!("{name} must be an integer: {error}")),
         _ => Ok(default),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queued_inspections_respect_the_shared_git_capacity() {
+        let budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
+            git_materialization_concurrency: 2,
+            ..Default::default()
+        }));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut inspections = Vec::new();
+        for _ in 0..10 {
+            let budgets = budgets.clone();
+            let active = active.clone();
+            let peak = peak.clone();
+            inspections.push(tokio::spawn(async move {
+                let permit = budgets.wait_git_materialization().await.unwrap();
+                tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(current, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(10));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                })
+                .await
+                .unwrap();
+            }));
+        }
+        for inspection in inspections {
+            inspection.await.unwrap();
+        }
+        assert!(peak.load(Ordering::SeqCst) <= 2);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_inspection_keeps_capacity_until_blocking_work_finishes() {
+        let budgets = Arc::new(RuntimeBudgets::from_config(RuntimeBudgetConfig {
+            git_materialization_concurrency: 1,
+            ..Default::default()
+        }));
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let (completed, completed_rx) = tokio::sync::oneshot::channel();
+        let inspection = {
+            let budgets = budgets.clone();
+            tokio::spawn(async move {
+                let permit = budgets.wait_git_materialization().await.unwrap();
+                tokio::task::spawn_blocking(move || {
+                    started.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    drop(permit);
+                    completed.send(()).unwrap();
+                })
+                .await
+                .unwrap();
+            })
+        };
+        started_rx.await.unwrap();
+        inspection.abort();
+        let _ = inspection.await;
+        assert!(budgets.try_git_materialization().is_err());
+        release.send(()).unwrap();
+        completed_rx.await.unwrap();
+        assert!(budgets.try_git_materialization().is_ok());
+    }
+
+    #[tokio::test]
+    async fn waiting_for_git_capacity_has_the_existing_command_deadline() {
+        let budgets = RuntimeBudgets::from_config(RuntimeBudgetConfig {
+            git_materialization_concurrency: 1,
+            git_command_timeout: Duration::from_millis(10),
+            ..Default::default()
+        });
+        let _busy = budgets.try_git_materialization().unwrap();
+        assert_eq!(
+            budgets
+                .wait_git_materialization()
+                .await
+                .err()
+                .unwrap()
+                .status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS
+        );
     }
 }

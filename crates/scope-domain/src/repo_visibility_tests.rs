@@ -194,3 +194,40 @@ fn canonical_rules_are_reserved_and_forced_public() {
     );
     assert_eq!(rule_label(&config, &target), "forced public");
 }
+
+#[test]
+fn skipped_rule_preserves_ties_duplicates_and_managed_paths() {
+    let public = ConfigVisibility::Public;
+    let private = ConfigVisibility::Private;
+    for default in [public, private] {
+        let config = config(
+            default,
+            vec![
+                ("/docs/**", public),
+                ("/docs", private),
+                ("/docs/**", private),
+                ("/docs/guide.md", public),
+                ("/docs/private/**", private),
+            ],
+        );
+        for index in 0..config.visibility.rules.len() {
+            let mut removed = config.clone();
+            removed.visibility.rules.remove(index);
+            for value in [
+                "/",
+                "/docs",
+                "/docs/guide.md",
+                "/docs/private/key",
+                "/docs-other",
+                "/.scope/RULES.md",
+                "/.scope/runs/check.yml",
+            ] {
+                let path = ScopePath::parse(value).unwrap();
+                assert_eq!(
+                    config.visibility_for_path_skipping_rule(&path, Some(index)),
+                    removed.visibility_for_path(&path)
+                );
+            }
+        }
+    }
+}

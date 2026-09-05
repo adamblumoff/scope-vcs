@@ -236,7 +236,7 @@ mod tests {
         let legacy_store: Arc<dyn ObjectStore> =
             Arc::new(EncryptedObjectStore::new(raw_legacy.clone(), [7_u8; 32]));
         legacy_store
-            .put(&format!("objects/git-segments/{sha256}"), &bytes)
+            .put(&format!("objects/git-segments/{sha256}"), bytes.clone())
             .unwrap();
 
         let backend = Arc::new(MemoryMultipartStore::default());

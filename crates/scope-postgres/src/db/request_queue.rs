@@ -194,17 +194,18 @@ fn apply_cursor(
         RequestQueueCursor::Closed {
             closed_at_unix,
             request_id,
-        } => Condition::any()
-            .add(descending_time_cursor(
-                entities::request::Column::ClosedAtUnix,
-                *closed_at_unix,
-                request_id,
-            )?)
-            .add(descending_time_cursor(
-                entities::request::Column::MergedAtUnix,
-                *closed_at_unix,
-                request_id,
-            )?),
+        } => {
+            let value = i64::try_from(*closed_at_unix).map_err(PostgresError::internal)?;
+            let terminal_time = Expr::cust("COALESCE(closed_at_unix, merged_at_unix)");
+            // Bound the index scan before applying the ascending ID tie-break.
+            Condition::all()
+                .add(Expr::expr(terminal_time.clone()).lte(value))
+                .add(
+                    Condition::any()
+                        .add(Expr::expr(terminal_time).lt(value))
+                        .add(entities::request::Column::Id.gt(request_id)),
+                )
+        }
     };
     query = query.filter(condition);
     Ok(query)
@@ -216,9 +217,9 @@ fn descending_time_cursor(
     request_id: &str,
 ) -> Result<Condition, PostgresError> {
     let value = i64::try_from(value).map_err(PostgresError::internal)?;
-    Ok(Condition::any().add(column.lt(value)).add(
-        Condition::all()
-            .add(column.eq(value))
+    Ok(Condition::all().add(column.lte(value)).add(
+        Condition::any()
+            .add(column.lt(value))
             .add(entities::request::Column::Id.gt(request_id)),
     ))
 }
@@ -229,10 +230,12 @@ fn ascending_time_cursor(
     request_id: &str,
 ) -> Result<Condition, PostgresError> {
     let value = i64::try_from(value).map_err(PostgresError::internal)?;
-    Ok(Condition::any().add(column.gt(value)).add(
-        Condition::all()
-            .add(column.eq(value))
-            .add(entities::request::Column::Id.gt(request_id)),
+    Ok(Condition::all().add(
+        Expr::tuple([
+            Expr::col(column).into(),
+            Expr::col(entities::request::Column::Id).into(),
+        ])
+        .gt(Expr::tuple([Expr::value(value), Expr::value(request_id)])),
     ))
 }
 

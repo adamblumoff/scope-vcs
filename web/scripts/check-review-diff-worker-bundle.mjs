@@ -40,7 +40,7 @@ const ssrSources = await Promise.all(
     .map((path) => readFile(path, 'utf8')),
 )
 const prerenderSource = ssrSources.find((source) =>
-  source.includes('scope.review-file-diff-renderer-state')
+  source.includes('scope.review-file-diff-renderer-v1')
 )
 assert.ok(prerenderSource, 'review diff server renderer was not emitted')
 assert.match(
@@ -91,7 +91,7 @@ async function filesBelow(directory) {
 }
 
 function runWorker(workerData) {
-  const worker = new Worker(pathToFileURL(workerEntry), { workerData })
+  const worker = new Worker(pathToFileURL(workerEntry))
   return new Promise((resolve, reject) => {
     let settled = false
     const deadline = setTimeout(() => {
@@ -99,6 +99,7 @@ function runWorker(workerData) {
     }, 10_000)
     worker.once('message', (message) => void finish(null, message))
     worker.once('error', (error) => void finish(error))
+    worker.postMessage(workerData)
     worker.once('exit', (code) => {
       if (code !== 0) void finish(new Error(`built review diff worker exited ${code}`))
     })

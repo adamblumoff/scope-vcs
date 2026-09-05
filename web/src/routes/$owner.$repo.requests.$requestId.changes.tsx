@@ -27,6 +27,7 @@ import { requestParamsForRoute } from '@/features/requests/request-route-data'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
 import { createFileRoute, getRouteApi } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
+import { getRequest } from '@tanstack/react-start/server'
 import { useEffect, useMemo } from 'react'
 
 type LoadRequestRevisionsInput = ReturnType<typeof parseLoadRequestRevisionsInput>
@@ -69,14 +70,16 @@ const loadChangesPage = createServerFn({ method: 'GET' })
 
 const loadRevisionDiff = createServerFn({ method: 'GET' })
   .validator(parseLoadRequestRevisionDiffInput)
-  .handler(({ data }) => loadRequestRevisionCommitFileDiffForRequest(data))
+  .handler(({ data }) => loadRequestRevisionCommitFileDiffForRequest(data, getRequest().signal))
 
 const loadDiscussions = createServerFn({ method: 'GET' })
   .validator(parseLoadDiscussionsInput)
   .handler(({ data }) => loadDiscussionReferencePage(data, loadRequestDiscussionsForRequest))
 
-const loadDiffForView = (data: LoadRequestRevisionCommitInput & { path: string }) =>
-  loadRevisionDiff({ data })
+const loadDiffForView = (
+  data: LoadRequestRevisionCommitInput & { path: string },
+  signal?: AbortSignal,
+) => loadRevisionDiff({ data, signal })
 const loadDiscussionsForView = (data: LoadDiscussionsInput) =>
   loadDiscussions({ data })
 

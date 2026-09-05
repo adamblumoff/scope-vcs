@@ -19,11 +19,10 @@ function textFile(path: string, oid: string, text: string): RepoFileContent {
   }
 }
 
-test('keys file entries by repository version, audience, path, and oid', () => {
+test('keys file entries by repository version, audience and normalized path', () => {
   const base = {
     audience: 'public' as const,
     changeVersion: 3,
-    oid: 'abc',
     path: 'README.html',
     repoId: 'repo-1',
   }
@@ -32,13 +31,14 @@ test('keys file entries by repository version, audience, path, and oid', () => {
     repoFileCacheKey(base),
     repoFileCacheKey({ ...base, audience: 'private' }),
   )
+  assert.equal(repoFileCacheKey(base), repoFileCacheKey({ ...base, path: '/README.html' }))
   assert.notEqual(
     repoFileCacheKey(base),
     repoFileCacheKey({ ...base, changeVersion: 4 }),
   )
   assert.notEqual(
     repoFileCacheKey(base),
-    repoFileCacheKey({ ...base, oid: 'def' }),
+    repoFileCacheKey({ ...base, path: 'another.ts' }),
   )
 })
 

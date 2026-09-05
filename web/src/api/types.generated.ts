@@ -320,11 +320,11 @@ export type RepositoryRunWorkflowListResponse = { workflows: Array<RepositoryRun
 
 export type RepositoryRunHistoryPageResponse = { runs: Array<RepositoryRunSummaryResponse>, next_cursor: string | null, };
 
-export type RepositoryRunLogResponse = { position: number, sequence: number, text: string, created_at_unix: number, };
+export type RepositoryRunLogResponse = { byte_length: number, position: number, sequence: number, text: string, created_at_unix: number, };
 
 export type RepositoryRunDetailResponse = { run: RepositoryRunSummaryResponse, jobs: Array<RepositoryRunJobDetailResponse>, };
 
-export type RepositoryRunStepLogPageResponse = { logs: Array<RepositoryRunLogResponse>, next_after: number, logs_truncated: boolean, };
+export type RepositoryRunStepLogPageResponse = { logs: Array<RepositoryRunLogResponse>, next_after: number, logs_truncated: boolean, has_earlier: boolean, has_more: boolean, };
 
 export const ApiRouteTemplates = {
   accountSession: "/v1/session",

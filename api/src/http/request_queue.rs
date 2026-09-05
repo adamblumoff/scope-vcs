@@ -1,5 +1,5 @@
 use super::{
-    requests::{current_main_oid_for_access, repo_and_access},
+    requests::{current_main_oid_for_context, repo_metadata_and_access},
     responses::request_list_item_response,
 };
 use crate::{error::ApiError, state::AppState};
@@ -42,7 +42,7 @@ pub(crate) async fn request_queue(
     Query(query): Query<RequestQueueQuery>,
 ) -> Result<Json<RequestListResponse>, ApiError> {
     let (repo, access, viewer_user_id) =
-        repo_and_access(&state, &headers, &owner, &repo_name).await?;
+        repo_metadata_and_access(&state, &headers, &owner, &repo_name).await?;
     let after = query
         .cursor
         .as_deref()
@@ -111,7 +111,7 @@ pub(crate) async fn request_queue(
     let current_main_oid = if rows.is_empty() {
         None
     } else {
-        current_main_oid_for_access(&state, &repo, access).await?
+        current_main_oid_for_context(&state, &repo).await?
     };
     let requests = rows
         .into_iter()

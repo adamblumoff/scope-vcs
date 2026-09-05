@@ -10,12 +10,12 @@ import { ApiRouteTemplates, buildApiPath } from './types.generated'
 import { apiValidators } from './validators.generated'
 export { parseRepoParams } from './repo-params'
 
-export async function loadRepoContentForRequest(data: RepoParams) {
+export async function loadRepoContentForRequest(data: RepoParams, signal?: AbortSignal) {
   const api = createApiClient()
   const files = await api.get(
     repoPath(ApiRouteTemplates.repoFiles, data),
     arrayOf(apiValidators.RepoFileResponse),
-    { auth: 'optional' },
+    { auth: 'optional', signal },
   )
 
   return {
@@ -43,12 +43,13 @@ export async function loadRepoLiveStateForRequest(data: RepoParams) {
 
 export async function loadRepoFileForRequest(
   data: RepoParams & { path: string },
+  signal?: AbortSignal,
 ) {
   const api = createApiClient()
   return api.get(
     `${repoPath(ApiRouteTemplates.repoFileContent, data)}?path=${encodeURIComponent(data.path)}`,
     apiValidators.RepoFileContentResponse,
-    { auth: 'optional' },
+    { auth: 'optional', signal },
   )
 }
 

@@ -82,7 +82,7 @@ where
             &repo.record.id,
             repo.record.change_version,
             audience,
-            head_oid,
+            head_oid.clone(),
             rebuilt_at_unix,
             file_count,
         )?
@@ -90,8 +90,9 @@ where
         .insert(conn)
         .await
         .map_err(PostgresError::internal)?;
+        super::history_reads::save_repository_history_view(conn, repo, projection, head_oid)
+            .await?;
     }
-
     Ok(())
 }
 
@@ -330,32 +331,13 @@ impl RepositoryStore {
         repo: &Repository,
         view_key: ProjectionViewKey,
     ) -> Result<Option<String>, PostgresError> {
-        let audience = match view_key {
-            ProjectionViewKey::Private => ProjectionAudience::Private,
-            ProjectionViewKey::Public => ProjectionAudience::Public,
-        };
-        let expected_version = projection_repo_version(repo.record.change_version)?;
-        let row = entities::projection_read_model::Entity::find()
-            .filter(entities::projection_read_model::Column::RepoId.eq(repo.record.id.clone()))
-            .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
-            .filter(
-                entities::projection_read_model::Column::Source
-                    .eq(LIVE_PROJECTION_SOURCE.to_string()),
-            )
-            .filter(
-                entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()),
-            )
-            .filter(
-                entities::projection_read_model::Column::IdentityVersion
-                    .eq(scope_git::PROJECTION_IDENTITY_VERSION),
-            )
-            .one(self.db.as_ref())
-            .await
-            .map_err(PostgresError::internal)?
-            .ok_or_else(|| {
-                PostgresError::unavailable("repository projection is rebuilding; retry shortly")
-            })?;
-        Ok(row.head_oid)
+        live_projection_head_oid_for_frontier(
+            self.db.as_ref(),
+            &repo.record.id,
+            repo.record.change_version,
+            view_key,
+        )
+        .await
     }
 
     pub async fn live_projection_files(
@@ -371,4 +353,35 @@ impl RepositoryStore {
         }
         Ok(domain_projected_files(&repo, &principal))
     }
+}
+
+pub(super) async fn live_projection_head_oid_for_frontier<C: ConnectionTrait>(
+    conn: &C,
+    repo_id: &str,
+    repo_version: u64,
+    view_key: ProjectionViewKey,
+) -> Result<Option<String>, PostgresError> {
+    let audience = match view_key {
+        ProjectionViewKey::Private => ProjectionAudience::Private,
+        ProjectionViewKey::Public => ProjectionAudience::Public,
+    };
+    let expected_version = projection_repo_version(repo_version)?;
+    let row = entities::projection_read_model::Entity::find()
+        .filter(entities::projection_read_model::Column::RepoId.eq(repo_id.to_string()))
+        .filter(entities::projection_read_model::Column::RepoVersion.eq(expected_version))
+        .filter(
+            entities::projection_read_model::Column::Source.eq(LIVE_PROJECTION_SOURCE.to_string()),
+        )
+        .filter(entities::projection_read_model::Column::Audience.eq(audience.as_str().to_string()))
+        .filter(
+            entities::projection_read_model::Column::IdentityVersion
+                .eq(scope_git::PROJECTION_IDENTITY_VERSION),
+        )
+        .one(conn)
+        .await
+        .map_err(PostgresError::internal)?
+        .ok_or_else(|| {
+            PostgresError::unavailable("repository projection is rebuilding; retry shortly")
+        })?;
+    Ok(row.head_oid)
 }

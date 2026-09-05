@@ -189,12 +189,14 @@ fn object_store_size_limits_cover_writes_and_reads() {
         git_storage_limits: GitStorageLimits::new(4).unwrap(),
         ..Default::default()
     });
-    store.put("tests/budget/write-at-limit", b"1234").unwrap();
+    store
+        .put("tests/budget/write-at-limit", b"1234".to_vec())
+        .unwrap();
     assert_eq!(store.get("tests/budget/write-at-limit").unwrap(), b"1234");
-    raw.put(key, b"12345").unwrap();
+    raw.put(key, b"12345".to_vec()).unwrap();
     for error in [
         store
-            .put("tests/budget/write-too-large", b"12345")
+            .put("tests/budget/write-too-large", b"12345".to_vec())
             .unwrap_err(),
         store.get(key).unwrap_err(),
     ] {

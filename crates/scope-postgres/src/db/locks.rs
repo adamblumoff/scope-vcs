@@ -15,6 +15,24 @@ pub async fn acquire_aggregate_lock<C>(
 where
     C: ConnectionTrait,
 {
+    acquire_aggregate_lock_with_mode(conn, namespace, id, LockType::Update).await
+}
+
+/// Request-local writes share the repository guard. Repository policy, membership and
+/// lifecycle mutations take its exclusive form before changing authorization facts.
+pub(super) async fn acquire_shared_repository_lock<C: ConnectionTrait>(
+    conn: &C,
+    repo_id: &str,
+) -> Result<(), PostgresError> {
+    acquire_aggregate_lock_with_mode(conn, "repository", repo_id, LockType::Share).await
+}
+
+async fn acquire_aggregate_lock_with_mode<C: ConnectionTrait>(
+    conn: &C,
+    namespace: &str,
+    id: &str,
+    mode: LockType,
+) -> Result<(), PostgresError> {
     #[cfg(test)]
     conn.execute(Statement::from_sql_and_values(
         DatabaseBackend::Postgres,
@@ -38,7 +56,7 @@ where
     .await
     .map_err(PostgresError::internal)?;
     let row = entities::metadata_lock::Entity::find_by_id(key)
-        .lock(LockType::Update)
+        .lock(mode)
         .one(conn)
         .await
         .map_err(PostgresError::internal)?;

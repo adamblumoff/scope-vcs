@@ -82,6 +82,7 @@ export type LoadRequestRevisionCommitInput = RequestParams & {
 
 export async function loadRequestRevisionCommitFileDiffForRequest(
   data: LoadRequestRevisionCommitInput & { path: string },
+  signal?: AbortSignal,
 ): Promise<ReviewFileDiff> {
   const path = requestRevisionCommitRoute(
     ApiRouteTemplates.repoRequestRevisionCommitFileDiff,
@@ -90,10 +91,10 @@ export async function loadRequestRevisionCommitFileDiffForRequest(
   const diff = await createApiClient().get(
     `${path}?path=${encodeURIComponent(data.path)}`,
     apiValidators.ReviewFileDiffResponse,
-    { auth: 'optional' },
+    { auth: 'optional', signal },
   )
 
-  return renderReviewFileDiff(diff)
+  return renderReviewFileDiff(diff, signal)
 }
 
 function requestQueuePath(data: LoadRequestQueueInput) {

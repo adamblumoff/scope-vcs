@@ -56,10 +56,13 @@ pub use cache_service::{
 };
 pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
+mod history_reads;
 mod history_rows;
+pub use history_reads::{RepositoryHistoryPage, RepositoryHistoryQuery};
 mod landing_files;
 pub use landing_files::RepositoryLandingFileBackfillCandidate;
 mod locks;
+mod manual_runs;
 mod object_references;
 mod outbox;
 mod projection_encoding;
@@ -71,6 +74,7 @@ mod repo_effects;
 mod repo_lifecycle;
 mod repo_mutation;
 mod repo_reads;
+mod repository_access;
 mod repository_rows;
 mod request_access;
 mod request_discussion_rows;
@@ -116,7 +120,7 @@ pub use run_cache_observations::{AttemptCacheFinalizationCommand, AttemptCachePr
 pub use run_details::{RunAttemptDetail, RunDetail};
 pub use run_dispatch::CloudTaskStop;
 pub use run_history::{RepositoryRun, RunHistoryCursor, RunHistoryPageQuery};
-pub use run_log_reads::{RecentRunLogs, StoredAttemptStepLogs, StoredRunLog};
+pub use run_log_reads::{RecentRunLogs, StepLogCursor, StoredAttemptStepLogs, StoredRunLog};
 pub use run_log_writes::AppendRunLogResult;
 pub use runs::{DispatchClaim, EnqueueRunResult};
 #[cfg(any(

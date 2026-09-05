@@ -113,6 +113,14 @@ impl RepoConfig {
     }
 
     pub fn visibility_for_path(&self, path: &ScopePath) -> Visibility {
+        self.visibility_for_path_skipping_rule(path, None)
+    }
+
+    pub(crate) fn visibility_for_path_skipping_rule(
+        &self,
+        path: &ScopePath,
+        skipped_rule: Option<usize>,
+    ) -> Visibility {
         if is_repo_rules_path(path) {
             return Visibility::Public;
         }
@@ -124,7 +132,10 @@ impl RepoConfig {
             0usize,
             Visibility::from(self.visibility.default_visibility()),
         );
-        for rule in &self.visibility.rules {
+        for (index, rule) in self.visibility.rules.iter().enumerate() {
+            if skipped_rule == Some(index) {
+                continue;
+            }
             if pattern_matches_path(&rule.path, path.as_str()) {
                 let weight = pattern_weight(&rule.path);
                 if weight >= selected.0 {

@@ -53,6 +53,7 @@ export async function loadHistoryEntryForRequest(
 
 export async function loadHistoryEntryFileDiffForRequest(
   data: HistoryEntryFileDiffInput,
+  signal?: AbortSignal,
 ): Promise<ReviewFileDiff> {
   const query = new URLSearchParams({
     audience: parseHistoryAudience(data.audience),
@@ -66,8 +67,8 @@ export async function loadHistoryEntryFileDiffForRequest(
       entry_id: data.entry,
     })}?${query}`,
     apiValidators.ReviewFileDiffResponse,
-    { auth: 'optional' },
+    { auth: 'optional', signal },
   )
 
-  return renderReviewFileDiff(diff)
+  return renderReviewFileDiff(diff, signal)
 }

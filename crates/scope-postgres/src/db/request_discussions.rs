@@ -346,7 +346,8 @@ impl RequestStore {
     ) -> Result<CreateRequestDiscussionMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &command.request_id, &command.actor_user_id).await?;
         ensure_user_exists(&tx, &command.actor_user_id).await?;
         let policy = request_policy_for_user(&tx, &repo, &request, &command.actor_user_id).await?;
         let input = CreateRequestDiscussionInput {
@@ -409,7 +410,8 @@ impl RequestStore {
     ) -> Result<CreateRequestDiscussionReplyMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &command.request_id, &command.actor_user_id).await?;
         ensure_user_exists(&tx, &command.actor_user_id).await?;
         let policy = request_policy_for_user(&tx, &repo, &request, &command.actor_user_id).await?;
         let input = CreateRequestDiscussionReplyInput {
@@ -489,7 +491,7 @@ impl RequestStore {
         } = command;
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &request_id).await?;
+        let (repo, request) = lock_request_repository(&tx, &request_id, &actor_user_id).await?;
         ensure_user_exists(&tx, &actor_user_id).await?;
         let policy = request_policy_for_user(&tx, &repo, &request, &actor_user_id).await?;
         if !policy.discussion_visible {
@@ -499,7 +501,7 @@ impl RequestStore {
             .await?
             .filter(|discussion| discussion.request_id == request_id)
             .ok_or_else(|| PostgresError::not_found("request discussion not found"))?;
-        let actor_is_maintainer = repo.is_maintainer_user_id(&actor_user_id);
+        let actor_is_maintainer = repo.access.is_maintainer();
         let mut requests = BTreeMap::from([(request.id.clone(), request)]);
         let mut discussions = BTreeMap::from([(discussion.id.clone(), discussion)]);
         let mutation = match transition {
@@ -551,10 +553,11 @@ impl RequestStore {
     ) -> Result<CreateRequestDiscussionReplyMutation, PostgresError> {
         let db = Arc::clone(&self.db);
         let tx = db.as_ref().begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &command.request_id, &command.actor_user_id).await?;
         ensure_user_exists(&tx, &command.actor_user_id).await?;
         let policy = request_policy_for_user(&tx, &repo, &request, &command.actor_user_id).await?;
-        let actor_is_maintainer = repo.is_maintainer_user_id(&command.actor_user_id);
+        let actor_is_maintainer = repo.access.is_maintainer();
         let input = ReopenAndReplyToRequestDiscussionInput {
             request_id: command.request_id,
             discussion_id: command.discussion_id,
@@ -634,7 +637,8 @@ impl RequestStore {
         let discussion = discussion_by_id(&tx, &input.discussion_id)
             .await?
             .ok_or_else(|| PostgresError::not_found("request discussion not found"))?;
-        let (repo, request) = lock_request_repository(&tx, &discussion.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &discussion.request_id, &input.user_id).await?;
         if !request_policy_for_user(&tx, &repo, &request, &input.user_id)
             .await?
             .discussion_visible

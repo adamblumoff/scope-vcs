@@ -3,7 +3,7 @@ use crate::error::PostgresError;
 use scope_domain::runs::log::RunLogChunk;
 use sea_orm::{
     ActiveValue::NotSet, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-    TransactionTrait,
+    QuerySelect, TransactionTrait,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,15 +32,27 @@ impl RunStore {
             ));
         }
 
-        if let Some(existing) = entities::run_log::Entity::find()
+        let last_sequence = entities::run_log::Entity::find()
+            .select_only()
+            .column(entities::run_log::Column::Sequence)
             .filter(entities::run_log::Column::AttemptId.eq(&chunk.attempt_id))
-            .filter(
-                entities::run_log::Column::Sequence.eq(i64::try_from(chunk.sequence)
-                    .map_err(|_| PostgresError::invalid_input("run log sequence is too large"))?),
-            )
+            .order_by_desc(entities::run_log::Column::Sequence)
+            .into_tuple::<i64>()
             .one(&tx)
             .await
             .map_err(PostgresError::internal)?
+            .unwrap_or(0);
+        let sequence = i64::try_from(chunk.sequence)
+            .map_err(|_| PostgresError::invalid_input("run log sequence is too large"))?;
+        // The attempt lock serializes appends. Normal appends only need the indexed last
+        // sequence; load existing content solely when validating an idempotent retry.
+        if sequence <= last_sequence
+            && let Some(existing) = entities::run_log::Entity::find()
+                .filter(entities::run_log::Column::AttemptId.eq(&chunk.attempt_id))
+                .filter(entities::run_log::Column::Sequence.eq(sequence))
+                .one(&tx)
+                .await
+                .map_err(PostgresError::internal)?
         {
             let position = entities::i64_to_u64(existing.position, "run log position")?;
             let existing_run_id = existing.run_id.clone();
@@ -68,14 +80,7 @@ impl RunStore {
             });
         }
 
-        let expected_sequence = entities::run_log::Entity::find()
-            .filter(entities::run_log::Column::AttemptId.eq(&chunk.attempt_id))
-            .order_by_desc(entities::run_log::Column::Sequence)
-            .one(&tx)
-            .await
-            .map_err(PostgresError::internal)?
-            .map_or(1, |last| last.sequence.saturating_add(1));
-        if i64::try_from(chunk.sequence).ok() != Some(expected_sequence) {
+        if last_sequence.checked_add(1) != Some(sequence) {
             return Err(PostgresError::conflict(
                 "run log sequence must append without gaps",
             ));

@@ -94,7 +94,6 @@ impl ReviewTree {
         &self.nodes[id]
     }
 
-    #[cfg(test)]
     pub fn nodes(&self) -> &[ReviewNode] {
         &self.nodes
     }

@@ -799,3 +799,5 @@ fn source_blob(git_oid: &str) -> SourceBlob {
         size_bytes: 1,
     }
 }
+
+mod authorization_locks;

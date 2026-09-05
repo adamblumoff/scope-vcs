@@ -1,7 +1,7 @@
 use crate::{
     api::{
-        RunStreamEvent, api_url, cancel_run, create_manual_run, http_client_builder, retry_run,
-        run_detail, stream_run_events,
+        RunStreamEvent, api_url, cancel_run, create_manual_run, http_client_builder,
+        resolve_manual_run, retry_run, run_detail, stream_run_events,
     },
     auth::cached_cli_session,
     git_repo::{GitRepo, ensure_git_repo_ready, head_oid, warn_if_dirty_working_tree},
@@ -11,7 +11,8 @@ use crate::{
 use anyhow::{Context, bail};
 use reqwest::blocking::Client;
 use scope_api_contract::{
-    CliSuccessEnvelope, CreateManualRunQuery, RepositoryRunDetailResponse, RunResponse, RunState,
+    CliSuccessEnvelope, CreateManualRunQuery, RepositoryRunDetailResponse,
+    ResolveManualRunResponse, RunResponse, RunState,
 };
 use std::{env, fs, path::PathBuf, process::Command, thread, time::Duration};
 
@@ -60,23 +61,32 @@ pub(crate) fn queue_from_checkout(
 ) -> anyhow::Result<QueuedRun> {
     let api_url = api_url();
     let git_oid = head_oid(checkout)?;
-    let bundle = create_bundle(checkout, request_id)?;
     let client = run_client()?;
     let session = session_from_cache_or_browser(&client, &api_url)?;
-    println!("Uploading first-push snapshot for {}", short_oid(&git_oid));
-    let run = create_manual_run(
-        &client,
-        &api_url,
-        &session.token,
-        owner,
-        repo,
-        &CreateManualRunQuery {
-            workflow: workflow.to_string(),
-            git_oid,
-            request_id: request_id.to_string(),
-        },
-        bundle,
-    )?;
+    let query = CreateManualRunQuery {
+        workflow: workflow.to_string(),
+        git_oid,
+        request_id: request_id.to_string(),
+    };
+    let run = match resolve_manual_run(&client, &api_url, &session.token, owner, repo, &query)? {
+        ResolveManualRunResponse::Queued { run } => {
+            println!("Using stored source for {}", short_oid(&query.git_oid));
+            run
+        }
+        ResolveManualRunResponse::UploadRequired => {
+            println!("Uploading source for {}", short_oid(&query.git_oid));
+            let bundle = create_bundle(checkout, request_id)?;
+            create_manual_run(
+                &client,
+                &api_url,
+                &session.token,
+                owner,
+                repo,
+                &query,
+                bundle,
+            )?
+        }
+    };
     Ok(QueuedRun {
         client,
         api_url,

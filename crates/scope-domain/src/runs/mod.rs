@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod image;
 pub mod job;
 pub mod log;
+pub mod manual;
 pub mod run;
 pub mod source;
 pub mod step;

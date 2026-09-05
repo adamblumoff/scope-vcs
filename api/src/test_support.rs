@@ -33,7 +33,7 @@ impl Default for TestApp {
 struct UnavailableObjectStore;
 
 impl ObjectStore for UnavailableObjectStore {
-    fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), ObjectStoreError> {
+    fn put(&self, _key: &str, _bytes: Vec<u8>) -> Result<(), ObjectStoreError> {
         Ok(())
     }
 

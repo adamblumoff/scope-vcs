@@ -36,8 +36,7 @@ use scope_domain::{
     repo_actions::reviewed_update_domain_error,
 };
 use scope_domain::{
-    repository::access::{RepositoryAccess, RepositoryActor},
-    requests::{Request, RequestViewer, request_policy},
+    repository::access::RepositoryActor,
     reviewed_updates::config::{ReviewedConfigUpdateInput, apply_reviewed_config_to_repo},
 };
 use scope_postgres::db::{RepoSummaryRead, RepositoryMutation};
@@ -59,7 +58,7 @@ pub(crate) async fn get_owner_repositories(
         .ok_or_else(|| ApiError::not_found(format!("user {handle} not found")))?;
     let mut repositories = Vec::new();
     for summary in profile.repositories {
-        repositories.push(repo_summary_response(&state, summary).await?);
+        repositories.push(repo_summary_response(&state, summary)?);
     }
     repositories.sort_by(|left, right| left.id.cmp(&right.id));
 
@@ -138,7 +137,7 @@ pub(crate) async fn get_repo(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("repo {owner}/{repo_name} not found")))?;
 
-    Ok(Json(repo_summary_response(&state, summary).await?))
+    Ok(Json(repo_summary_response(&state, summary)?))
 }
 
 pub(crate) async fn delete_repo(
@@ -478,18 +477,10 @@ pub(crate) async fn get_file_content(
     }))
 }
 
-async fn repo_summary_response(
+fn repo_summary_response(
     state: &AppState,
     summary: RepoSummaryRead,
 ) -> Result<RepoSummaryResponse, ApiError> {
-    let open_request_count = state
-        .metadata
-        .requests()
-        .requests_by_repo_id(&summary.id)
-        .await?
-        .into_iter()
-        .filter(|request| request_visible_in_summary(request, summary.access))
-        .count();
     let request_permissions = repo_request_permissions_response(summary.access);
     let git_origin = public_git_origin(state);
     Ok(RepoSummaryResponse {
@@ -505,11 +496,7 @@ async fn repo_summary_response(
         lifecycle_state: summary.lifecycle_state.into(),
         change_version: summary.change_version,
         access: repository_access_response(summary.access),
-        open_request_count,
+        open_request_count: summary.open_request_count,
         request_permissions,
     })
-}
-
-fn request_visible_in_summary(request: &Request, access: RepositoryAccess) -> bool {
-    request_policy(request, RequestViewer::new(access, None, false)).counts_as_open
 }

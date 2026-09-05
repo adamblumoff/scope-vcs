@@ -76,7 +76,13 @@ export function RepositoryRunDetailPage({
           attemptOverrides={attemptOverrides}
           jobs={detail.jobs}
           onLogRetry={() => {
-            if (selection) void refreshLogs(selection)
+            if (selection) void refreshLogs(selection, undefined, 'retry')
+          }}
+          onLogEarlier={() => {
+            if (selection) void refreshLogs(selection, undefined, 'earlier')
+          }}
+          onLogLatest={() => {
+            if (selection) void refreshLogs(selection, undefined, 'latest')
           }}
           onSelectAttempt={selectAttempt}
           onSelectJob={toggleJob}

@@ -67,7 +67,8 @@ impl RequestStore {
         command: AddRequestInviteeCommand,
     ) -> Result<RequestInviteeRead, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &command.request_id, &command.actor_user_id).await?;
         ensure_user_exists(&tx, &command.actor_user_id).await?;
         let decision =
             request_policy_for_user(&tx, &repo, &request, &command.actor_user_id).await?;
@@ -83,7 +84,14 @@ impl RequestStore {
                 actor_user_id: command.actor_user_id,
                 target_user_id: target.id.clone(),
                 actor_can_manage_invitees: decision.permissions.can_manage_invitees,
-                target_is_maintainer: repo.is_maintainer_user_id(&target.id),
+                target_is_maintainer: super::request_access::repo_by_id(
+                    &tx,
+                    &repo.record.id,
+                    &target.id,
+                )
+                .await?
+                .access
+                .is_maintainer(),
                 now_unix: command.now_unix,
             },
         )?;
@@ -100,7 +108,8 @@ impl RequestStore {
         command: RemoveRequestInviteeCommand,
     ) -> Result<RequestInviteeRead, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &command.request_id, &command.actor_user_id).await?;
         ensure_user_exists(&tx, &command.actor_user_id).await?;
         let decision =
             request_policy_for_user(&tx, &repo, &request, &command.actor_user_id).await?;
@@ -131,7 +140,8 @@ impl RequestStore {
         command: LeaveRequestCommand,
     ) -> Result<RequestInviteeRead, PostgresError> {
         let tx = self.db.begin().await.map_err(PostgresError::internal)?;
-        let (repo, request) = lock_request_repository(&tx, &command.request_id).await?;
+        let (repo, request) =
+            lock_request_repository(&tx, &command.request_id, &command.actor_user_id).await?;
         let actor = user_by_id(&tx, &command.actor_user_id)
             .await?
             .ok_or_else(|| PostgresError::not_found("user not found"))?;

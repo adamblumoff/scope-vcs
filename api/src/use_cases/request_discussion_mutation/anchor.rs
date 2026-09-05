@@ -5,8 +5,8 @@ use crate::{
     state::AppState,
 };
 use scope_domain::{
-    policy::ScopePath,
-    repository::{Repository, access::RepositoryAccess},
+    policy::{Policy, ScopePath},
+    repository::access::RepositoryAccess,
     requests::{RequestDiscussionAnchor, RequestRevision},
 };
 use std::{collections::BTreeSet, path::Path as FsPath};
@@ -35,21 +35,23 @@ pub(super) async fn validate(
         .transpose()?;
     let commit_oid = anchor.commit_oid.map(canonical_git_oid).transpose()?;
     if let Some(commit_oid) = commit_oid.as_deref() {
+        let policy = state
+            .metadata
+            .repositories()
+            .repository_policy(&context.repo)
+            .await?;
+        let access = context.access;
+        let commit_oid = commit_oid.to_string();
         let visible_paths = with_request_revision_store_repo(
             state,
             &context.repo.incarnation(),
             &context.request,
             &revision,
-            |raw_repo| {
-                visible_commit_paths(
-                    raw_repo,
-                    &context.repo,
-                    context.access,
-                    &revision,
-                    commit_oid,
-                )
+            move |raw_repo, revision| {
+                visible_commit_paths(raw_repo, &policy, access, revision, &commit_oid)
             },
-        )?;
+        )
+        .await?;
         if let Some(path) = path.as_ref()
             && !visible_paths.contains(path)
         {
@@ -88,21 +90,23 @@ pub(super) async fn visible_commits(
             .request_revision(&context.request.id, &anchor.revision_id)
             .await?
             .ok_or_else(|| ApiError::not_found("request revision not found"))?;
+        let policy = state
+            .metadata
+            .repositories()
+            .repository_policy(&context.repo)
+            .await?;
+        let access = context.access;
+        let commit_oid = commit_oid.to_string();
         let visible = with_request_revision_store_repo(
             state,
             &context.repo.incarnation(),
             &context.request,
             &revision,
-            |raw_repo| {
-                commit_is_fully_visible(
-                    raw_repo,
-                    &context.repo,
-                    context.access,
-                    &revision,
-                    commit_oid,
-                )
+            move |raw_repo, revision| {
+                commit_is_fully_visible(raw_repo, &policy, access, revision, &commit_oid)
             },
-        )?;
+        )
+        .await?;
         Ok::<_, ApiError>(visible)
     }
     .await;
@@ -123,7 +127,7 @@ pub(super) async fn visible_commits(
 
 fn visible_commit_paths(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     revision: &RequestRevision,
     commit_oid: &str,
@@ -131,7 +135,7 @@ fn visible_commit_paths(
     if !commit_belongs_to_revision(raw_repo, revision, commit_oid)? {
         return Err(ApiError::not_found("request revision commit not found"));
     }
-    let (paths, has_hidden) = commit_paths(raw_repo, repo, access, commit_oid)?;
+    let (paths, has_hidden) = commit_paths(raw_repo, policy, access, commit_oid)?;
     if has_hidden {
         return Err(ApiError::not_found("request revision commit not found"));
     }
@@ -140,7 +144,7 @@ fn visible_commit_paths(
 
 fn commit_is_fully_visible(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     revision: &RequestRevision,
     commit_oid: &str,
@@ -148,12 +152,12 @@ fn commit_is_fully_visible(
     if !commit_belongs_to_revision(raw_repo, revision, commit_oid)? {
         return Ok(false);
     }
-    commit_paths(raw_repo, repo, access, commit_oid).map(|(_, has_hidden)| !has_hidden)
+    commit_paths(raw_repo, policy, access, commit_oid).map(|(_, has_hidden)| !has_hidden)
 }
 
 fn commit_paths(
     raw_repo: &FsPath,
-    repo: &Repository,
+    policy: &Policy,
     access: RepositoryAccess,
     commit_oid: &str,
 ) -> Result<(BTreeSet<ScopePath>, bool), ApiError> {
@@ -221,7 +225,7 @@ fn commit_paths(
             .ok_or_else(|| ApiError::internal_message("request diff is missing a path"))?;
         let path = String::from_utf8(path.to_vec()).map_err(ApiError::bad_request)?;
         let path = ScopePath::parse(format!("/{path}")).map_err(ApiError::bad_request)?;
-        if repo.policy.can_read(&path, access.can_read_private_files) {
+        if policy.can_read(&path, access.can_read_private_files) {
             visible.insert(path);
         } else {
             has_hidden = true;

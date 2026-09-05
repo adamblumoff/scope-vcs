@@ -1,14 +1,10 @@
 use crate::{
-    auth::scope::principal_for_user_id,
-    error::ApiError,
-    persistence::unix_now,
-    product_analytics::ProductEvent,
-    repo_access::{ensure_repo_read, find_repo},
-    state::AppState,
+    error::ApiError, persistence::unix_now, product_analytics::ProductEvent,
+    repo_access::find_read_access, state::AppState,
 };
 use scope_domain::{
     account::UserAccount,
-    repository::{Repository, access::RepositoryAccess},
+    repository::access::{RepositoryAccess, RepositoryAccessContext},
     requests::{
         MarkRequestDiscussionReadInput, Request, RequestDiscussionReply, RequestViewer,
         request_actor_role, request_policy,
@@ -97,7 +93,7 @@ pub(crate) struct MarkDiscussionReadResult {
 }
 
 pub(super) struct MutationContext {
-    pub(super) repo: Repository,
+    pub(super) repo: RepositoryAccessContext,
     pub(super) access: RepositoryAccess,
     pub(super) request: Request,
 }
@@ -321,10 +317,8 @@ async fn mutation_context(
     request_id: &str,
     actor_user_id: &str,
 ) -> Result<MutationContext, ApiError> {
-    let repo = find_repo(state, owner, repo_name).await?;
-    let principal = principal_for_user_id(&repo, actor_user_id);
-    ensure_repo_read(state, &repo, &principal)?;
-    let access = repo.access_for_principal(&principal);
+    let repo = find_read_access(state, owner, repo_name, Some(actor_user_id)).await?;
+    let access = repo.access;
     let request = state
         .metadata
         .requests()

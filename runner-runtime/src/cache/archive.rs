@@ -22,7 +22,7 @@ pub(super) fn extract_archive(archive: &Path, destination: &Path) -> anyhow::Res
         .context("extract cache archive")
 }
 
-pub(super) fn create_archive(source: &Path, destination: &Path) -> anyhow::Result<()> {
+pub(super) fn create_archive(source: &Path, destination: &Path) -> anyhow::Result<(u64, String)> {
     let file = fs::OpenOptions::new()
         .write(true)
         .truncate(true)
@@ -32,8 +32,8 @@ pub(super) fn create_archive(source: &Path, destination: &Path) -> anyhow::Resul
     let mut archive = tar::Builder::new(encoder);
     append_directory_contents(&mut archive, source, Path::new(""))?;
     let encoder = archive.into_inner()?;
-    encoder.finish()?;
-    Ok(())
+    let writer = encoder.finish()?;
+    Ok(writer.identity())
 }
 
 fn append_directory_contents<W: Write>(
@@ -112,26 +112,11 @@ fn append_entry<W: Write, R: Read>(
         .with_context(|| format!("archive cache entry {}", path.display()))
 }
 
-pub(super) fn file_identity(path: &Path) -> anyhow::Result<(u64, String)> {
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut size = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        size += read as u64;
-        hasher.update(&buffer[..read]);
-    }
-    Ok((size, hex::encode(hasher.finalize())))
-}
-
 pub(super) struct BoundedWriter<W> {
     inner: W,
     pub(super) written: u64,
     max_bytes: u64,
+    hasher: Sha256,
 }
 
 impl<W> BoundedWriter<W> {
@@ -140,7 +125,12 @@ impl<W> BoundedWriter<W> {
             inner,
             written: 0,
             max_bytes,
+            hasher: Sha256::new(),
         }
+    }
+
+    pub(super) fn identity(self) -> (u64, String) {
+        (self.written, hex::encode(self.hasher.finalize()))
     }
 }
 
@@ -154,6 +144,7 @@ impl<W: Write> Write for BoundedWriter<W> {
         }
         let written = self.inner.write(bytes)?;
         self.written += written as u64;
+        self.hasher.update(&bytes[..written]);
         Ok(written)
     }
 

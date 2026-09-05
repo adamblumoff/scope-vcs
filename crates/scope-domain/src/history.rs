@@ -20,7 +20,7 @@ pub enum FileChangeKind {
     Deleted,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryView {
     pub repo_id: String,
     pub view_key: String,
@@ -28,7 +28,7 @@ pub struct HistoryView {
     pub entries: Vec<HistoryEntry>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub id: String,
     pub source_id: String,
@@ -40,14 +40,14 @@ pub struct HistoryEntry {
     pub visibility_changes: Vec<HistoryEntryVisibilityChange>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HistoryEntryKind {
     Push,
     MergedRequest,
     VisibilityChange,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntryFile {
     pub path: ScopePath,
     pub kind: FileChangeKind,
@@ -56,7 +56,7 @@ pub struct HistoryEntryFile {
     pub visibility: Visibility,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntryVisibilityChange {
     pub path: ScopePath,
     pub old_visibility: Visibility,

@@ -408,12 +408,10 @@ impl S3ObjectStore {
         let client = self.client.as_ref().ok_or_else(|| {
             ObjectStoreError::internal_message("object store client is shut down")
         })?;
+        let headers = self.signed_headers(method, &canonical_uri, &host, &payload)?;
         let mut request = match method {
             "GET" => client.get(&url).timeout(self.request_timeout),
-            "PUT" => client
-                .put(&url)
-                .timeout(self.request_timeout)
-                .body(payload.clone()),
+            "PUT" => client.put(&url).timeout(self.request_timeout).body(payload),
             "DELETE" => client.delete(&url).timeout(self.request_timeout),
             _ => {
                 return Err(ObjectStoreError::internal_message(
@@ -421,7 +419,7 @@ impl S3ObjectStore {
                 ));
             }
         };
-        for (name, value) in self.signed_headers(method, &canonical_uri, &host, &payload)? {
+        for (name, value) in headers {
             request = request.header(name, value);
         }
         send_blocking_request(method, key, request, max_bytes)
@@ -453,15 +451,16 @@ fn send_blocking_request(
 }
 
 fn read_response_body(
-    response: reqwest::blocking::Response,
+    mut response: reqwest::blocking::Response,
     key: &str,
     max_bytes: Option<usize>,
 ) -> Result<Vec<u8>, ObjectStoreError> {
     let Some(max_bytes) = max_bytes else {
-        return response
-            .bytes()
-            .map(|bytes| bytes.to_vec())
-            .map_err(ObjectStoreError::internal);
+        let mut body = Vec::new();
+        response
+            .read_to_end(&mut body)
+            .map_err(ObjectStoreError::internal)?;
+        return Ok(body);
     };
 
     if let Some(content_length) = response.content_length()
@@ -495,8 +494,8 @@ impl Drop for S3ObjectStore {
 }
 
 impl ObjectStore for S3ObjectStore {
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ObjectStoreError> {
-        self.send("PUT", key, bytes.to_vec(), None).map(|_| ())
+    fn put(&self, key: &str, bytes: Vec<u8>) -> Result<(), ObjectStoreError> {
+        self.send("PUT", key, bytes, None).map(|_| ())
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>, ObjectStoreError> {
@@ -561,7 +560,7 @@ mod tests {
         let store = test_s3_store(&server.endpoint);
         let key = "objects/blob-1";
 
-        store.put(key, b"stored payload").unwrap();
+        store.put(key, b"stored payload".to_vec()).unwrap();
         assert_eq!(store.get(key).unwrap(), b"stored payload");
         store.delete(key).unwrap();
 

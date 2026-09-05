@@ -1,4 +1,5 @@
 use super::ecs::{EcsClient, StartError};
+use super::provisioning::Provisioning;
 use crate::settings::CloudExecutionSettings;
 use anyhow::Context as _;
 use scope_domain::runs::{attempt::MAX_RUN_ATTEMPT_AGE_SECONDS, step::AttemptConclusion};
@@ -31,94 +32,121 @@ impl CloudExecutionCoordinator {
     }
 
     pub(crate) async fn dispatch_available(&self, now_unix: u64) -> anyhow::Result<usize> {
-        let mut dispatched = 0;
-        // Bound each coordinator tick, including forward repairs.
-        for _ in 0..self.settings.max_concurrency.max(1) {
-            let attempt_id = random_id("attempt")?;
-            let bootstrap_token = random_token("scope_bootstrap_")?;
-            let bootstrap_hash = hex::encode(Sha256::digest(bootstrap_token.as_bytes()));
-            let claim = match self
-                .metadata
-                .runs()
-                .admit_next_job(
-                    self.settings.max_concurrency as u64,
-                    &attempt_id,
-                    &bootstrap_hash,
-                    &self.settings.runtime_version,
-                    now_unix,
-                    now_unix + DISPATCH_LEASE.as_secs(),
-                )
-                .await
-                .map_err(db_error)?
-            {
-                scope_postgres::db::DispatchAdmission::Admitted(claim) => claim,
-                scope_postgres::db::DispatchAdmission::Exhausted(claim) => {
-                    self.publish_status_change(&claim).await;
-                    continue;
-                }
-                scope_postgres::db::DispatchAdmission::Contended => continue,
-                scope_postgres::db::DispatchAdmission::AtCapacity
-                | scope_postgres::db::DispatchAdmission::Empty => break,
-            };
-            self.publish_status_change(&claim).await;
-            let definition = claim
-                .workflow_revision
-                .definition()
-                .job(&claim.job.key)
-                .ok_or_else(|| anyhow::anyhow!("dispatched workflow job definition is missing"))?;
-            match self
-                .ecs
-                .start(
-                    definition.container().image(),
-                    &attempt_id,
-                    &bootstrap_token,
-                    now_unix + MAX_RUN_ATTEMPT_AGE_SECONDS,
-                )
-                .await
-            {
-                Ok(external_run_id) => {
-                    self.metadata
-                        .runs()
-                        .record_external_run_id(&attempt_id, &external_run_id)
+        let mut starts = Provisioning::new(self.settings.max_concurrency);
+        let dispatch_result: anyhow::Result<usize> = async {
+            let mut dispatched = 0;
+            // Bound each coordinator tick, including exhausted-job repairs and contention.
+            for _ in 0..self.settings.max_concurrency.max(1) {
+                starts.wait_for_slot().await?;
+                let attempt_id = random_id("attempt")?;
+                let bootstrap_token = random_token("scope_bootstrap_")?;
+                let bootstrap_hash = hex::encode(Sha256::digest(bootstrap_token.as_bytes()));
+                let claim = match self
+                    .metadata
+                    .runs()
+                    .admit_next_job(
+                        self.settings.max_concurrency as u64,
+                        &attempt_id,
+                        &bootstrap_hash,
+                        &self.settings.runtime_version,
+                        now_unix,
+                        now_unix + DISPATCH_LEASE.as_secs(),
+                    )
+                    .await
+                    .map_err(db_error)?
+                {
+                    scope_postgres::db::DispatchAdmission::Admitted(claim) => *claim,
+                    scope_postgres::db::DispatchAdmission::Exhausted(claim) => {
+                        self.publish_status_change(&claim).await;
+                        continue;
+                    }
+                    scope_postgres::db::DispatchAdmission::Contended => continue,
+                    scope_postgres::db::DispatchAdmission::AtCapacity
+                    | scope_postgres::db::DispatchAdmission::Empty => break,
+                };
+                self.publish_status_change(&claim).await;
+                let execution = self.clone();
+                starts.spawn(async move {
+                    execution
+                        .provision(claim, bootstrap_token, bootstrap_hash, now_unix)
                         .await
-                        .map_err(db_error)?;
-                    self.publish_status_change(&claim).await;
-                    tracing::info!(attempt_id, external_run_id, run_id = %claim.run.id, job = %claim.job.key.as_str(), "dispatched cloud run");
-                }
-                Err(StartError::Rejected(error)) => {
-                    tracing::error!(attempt_id, error = %error, "ECS rejected cloud run");
-                    let claim = self
-                        .metadata
-                        .runs()
-                        .complete_attempt(
-                            &attempt_id,
-                            &bootstrap_hash,
-                            AttemptConclusion::SetupFailed {
-                                exit_code: 69,
-                                message: format!("provider rejected dispatch: {error}")
-                                    .chars()
-                                    .take(2048)
-                                    .collect(),
-                            },
-                            false,
-                            now_unix,
-                        )
-                        .await
-                        .map_err(db_error)?;
-                    self.metadata
-                        .runs()
-                        .complete_cloud_task_absence(&attempt_id, now_unix)
-                        .await
-                        .map_err(db_error)?;
-                    self.publish_status_change(&claim).await;
-                }
-                Err(StartError::Ambiguous(error)) => {
-                    tracing::warn!(attempt_id, error = %error, "ECS dispatch outcome is ambiguous; lease recovery and task cleanup own resolution");
-                }
+                });
+                dispatched += 1;
             }
-            dispatched += 1;
+            Ok(dispatched)
         }
+        .await;
+        // A failed admission or launch must not cancel other already-reserved starts.
+        let provision_result = starts.finish().await;
+        let dispatched = dispatch_result?;
+        provision_result?;
         Ok(dispatched)
+    }
+
+    async fn provision(
+        &self,
+        claim: scope_postgres::db::DispatchClaim,
+        bootstrap_token: String,
+        bootstrap_hash: String,
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let attempt_id = &claim.attempt.id;
+        let definition = claim
+            .workflow_revision
+            .definition()
+            .job(&claim.job.key)
+            .ok_or_else(|| anyhow::anyhow!("dispatched workflow job definition is missing"))?;
+        match self
+            .ecs
+            .start(
+                definition.container().image(),
+                attempt_id,
+                &bootstrap_token,
+                now_unix + MAX_RUN_ATTEMPT_AGE_SECONDS,
+            )
+            .await
+        {
+            Ok(external_run_id) => {
+                self.metadata
+                    .runs()
+                    .record_external_run_id(attempt_id, &external_run_id)
+                    .await
+                    .map_err(db_error)?;
+                self.publish_status_change(&claim).await;
+                tracing::info!(attempt_id = %attempt_id, external_run_id, run_id = %claim.run.id, job = %claim.job.key.as_str(), "dispatched cloud run");
+            }
+            Err(StartError::Rejected(error)) => {
+                tracing::error!(attempt_id = %attempt_id, error = %error, "ECS rejected cloud run");
+                let claim = self
+                    .metadata
+                    .runs()
+                    .complete_attempt(
+                        attempt_id,
+                        &bootstrap_hash,
+                        AttemptConclusion::SetupFailed {
+                            exit_code: 69,
+                            message: format!("provider rejected dispatch: {error}")
+                                .chars()
+                                .take(2048)
+                                .collect(),
+                        },
+                        false,
+                        now_unix,
+                    )
+                    .await
+                    .map_err(db_error)?;
+                self.metadata
+                    .runs()
+                    .complete_cloud_task_absence(attempt_id, now_unix)
+                    .await
+                    .map_err(db_error)?;
+                self.publish_status_change(&claim).await;
+            }
+            Err(StartError::Ambiguous(error)) => {
+                tracing::warn!(attempt_id = %attempt_id, error = %error, "ECS dispatch outcome is ambiguous; lease recovery and task cleanup own resolution");
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn abort_canceled(&self, now_unix: u64) -> anyhow::Result<usize> {
@@ -265,13 +293,4 @@ fn db_error(error: scope_postgres::error::PostgresError) -> anyhow::Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bootstrap_tokens_use_the_runtime_auth_prefix() {
-        let token = random_token("scope_bootstrap_").unwrap();
-        assert!(token.starts_with("scope_bootstrap_"));
-        assert_eq!(token.len(), "scope_bootstrap_".len() + 64);
-    }
-}
+mod tests;

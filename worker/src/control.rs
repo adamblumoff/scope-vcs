@@ -5,6 +5,9 @@ use crate::{
 };
 use scope_postgres::db::MetadataStore;
 
+mod reconciliation;
+use reconciliation::CloudReconciliation;
+
 pub(crate) async fn run(
     metadata: MetadataStore,
     settings: WorkerSettings,
@@ -17,7 +20,7 @@ pub(crate) async fn run(
         ),
         None => None,
     };
-    let mut cloud_reconciliation = None;
+    let mut cloud_reconciliation = CloudReconciliation::default();
     loop {
         if !super::schema_ready_or_wait(&metadata, &health).await {
             return Ok(());
@@ -60,21 +63,8 @@ pub(crate) async fn run(
             )
             .await;
         }
-        if cloud_reconciliation
-            .as_ref()
-            .is_some_and(tokio::task::JoinHandle::is_finished)
-        {
-            let completed = cloud_reconciliation
-                .take()
-                .expect("a finished reconciliation handle is present");
-            if let Err(error) = completed.await {
-                tracing::error!(error = %error, "cloud reconciliation task panicked");
-            }
-        }
-        if cloud_reconciliation.is_none()
-            && let Some(execution) = execution.clone()
-        {
-            cloud_reconciliation = Some(tokio::spawn(reconcile_cloud_execution(execution)));
+        if let Some(execution) = &execution {
+            cloud_reconciliation.poll(execution);
         }
         health.mark_poll_succeeded(WorkerRole::Control, super::unix_now()?);
         if summary.claimed >= settings.batch_size {
@@ -83,36 +73,5 @@ pub(crate) async fn run(
         if super::wait_or_shutdown(settings.poll_interval).await {
             return Ok(());
         }
-    }
-}
-
-async fn reconcile_cloud_execution(execution: CloudExecutionCoordinator) {
-    match super::unix_now() {
-        Ok(now_unix) => {
-            if let Err(error) = execution.cleanup_terminal(now_unix).await {
-                tracing::error!(error = %error, "terminal cloud task cleanup failed");
-            }
-        }
-        Err(error) => tracing::error!(error = %error, "cloud cleanup clock failed"),
-    }
-    match super::unix_now() {
-        Ok(now_unix) => {
-            if let Err(error) = execution.abort_canceled(now_unix).await {
-                tracing::error!(error = %error, "cloud run cancellation reconciliation failed");
-            }
-        }
-        Err(error) => tracing::error!(error = %error, "cloud cancellation clock failed"),
-    }
-    match super::unix_now() {
-        Ok(now_unix) => match execution.dispatch_available(now_unix).await {
-            Ok(dispatched) if dispatched > 0 => {
-                tracing::info!(dispatched, "processed cloud run dispatches");
-            }
-            Ok(_) => {}
-            Err(error) => {
-                tracing::error!(error = %error, "cloud run dispatch failed; continuing control loop");
-            }
-        },
-        Err(error) => tracing::error!(error = %error, "cloud dispatch clock failed"),
     }
 }

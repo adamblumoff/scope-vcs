@@ -5,7 +5,7 @@ import {
   loadRepoFileForRequest,
   parseRepoParams,
 } from '@/api/repos'
-import type { RepoContent, RepoFileContent, RepoParams } from '@/api/types'
+import type { RepoContent, RepoFileContent, RepoLiveState, RepoSummary } from '@/api/types'
 import { RepoContentError } from '@/components/repo-content-error'
 import {
   peekRepoContentCache,
@@ -24,6 +24,8 @@ import { RepositoryCodePending } from '@/features/repo-detail/repository-code-pe
 import {
   DEFAULT_REPO_FILE_PATH,
   loadRepoFileWhenReady,
+  settleRepoCodeResource,
+  repoCodeResourceLoader,
   type RepoFileLoadResult,
 } from '@/features/repo-detail/repo-code-route-data'
 import { useRepoLayout } from '@/features/repo-detail/repo-layout-context'
@@ -38,19 +40,20 @@ import {
   useNavigate,
 } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
-import { useCallback } from 'react'
+import { getRequest } from '@tanstack/react-start/server'
+import { useCallback, useMemo } from 'react'
 
 const PROJECTION_REBUILDING_MESSAGE = 'repository projection is rebuilding; retry shortly'
 
 const loadRepoContent = createServerFn({ method: 'GET' })
   .validator(parseRepoParams)
-  .handler(({ data }) => loadRepoContentForRequest(data))
+  .handler(({ data }) => loadRepoContentForRequest(data, getRequest().signal))
 
 const loadRepoFile = createServerFn({ method: 'GET' })
   .validator(parseRepoFileInput)
   .handler(async ({ data }): Promise<RepoFileLoadResult> => {
     try {
-      return { file: await loadRepoFileForRequest(data), status: 'ready' }
+      return { file: await loadRepoFileForRequest(data, getRequest().signal), status: 'ready' }
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) {
         return { status: 'missing' }
@@ -68,6 +71,24 @@ const loadRepoFile = createServerFn({ method: 'GET' })
 
 export const Route = createFileRoute('/$owner/$repo/_code/')({
   validateSearch: parseRepoCodeSearch,
+  loaderDeps: ({ search }) => ({ file: search.file ?? DEFAULT_REPO_FILE_PATH }),
+  loader: async ({ abortController, deps, params, parentMatchPromise }) => {
+    const live = (await parentMatchPromise).loaderData as RepoLiveState
+    const { contentIdentity, fileIdentity } = repoCodeCacheKeys(live.repo, deps.file)
+    const cachedContent = typeof window === 'undefined' ? null : readRepoContentCache(contentIdentity)
+    const cachedFile = typeof window === 'undefined' ? null : readRepoFileCache(fileIdentity)
+    const signal = abortController.signal
+    return {
+      content: settleRepoCodeResource(cachedContent
+        ? Promise.resolve(cachedContent)
+        : loadRepoContent({ data: params, signal })),
+      file: settleRepoCodeResource(cachedFile
+        ? Promise.resolve(cachedFile)
+        : loadAddressedFile({ ...params, path: deps.file }, signal)),
+      contentIdentity,
+      fileIdentity,
+    }
+  },
   errorComponent: RepoContentError,
   pendingComponent: RepositoryCodePending,
   component: RepoIndexRoute,
@@ -76,23 +97,19 @@ export const Route = createFileRoute('/$owner/$repo/_code/')({
 function RepoIndexRoute() {
   const params = Route.useParams()
   const { repo } = useRepoLayout()
+  const page = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const selectedPath = search.file ?? DEFAULT_REPO_FILE_PATH
   const owner = params.owner
   const repoName = params.repo
-  const contentIdentity = repoContentCacheKey({
-    audience: repo.access.can_read_private_files ? 'private' : 'public',
-    changeVersion: repo.change_version,
-    repoId: repo.id,
-  })
-  const loadContent = useCallback(
+  const { contentIdentity, fileIdentity: selectedFileIdentity } = repoCodeCacheKeys(repo, selectedPath)
+  const loadContent = useMemo(() => repoCodeResourceLoader(
+    page.contentIdentity === contentIdentity ? page.content : null,
     (signal: AbortSignal): Promise<RepoContent> => loadRepoContent({
-      data: { owner, repo: repoName },
-      signal,
+      data: { owner, repo: repoName }, signal,
     }),
-    [owner, repoName],
-  )
+  ), [contentIdentity, owner, page.content, page.contentIdentity, repoName])
   const contentResource = useCachedResource({
     fallbackError: 'Repository files are unavailable.',
     identity: contentIdentity,
@@ -102,44 +119,15 @@ function RepoIndexRoute() {
     write: writeRepoContentCache,
   })
   const content = contentResource.value
-  const selectedFilePath = selectedRouteFilePath(
-    content?.files ?? [],
-    selectedPath,
-  )
-  const selectedMeta = content?.files.find(
-    (file) => file.path === selectedFilePath,
-  )
-  const selectedFileIdentity = selectedMeta && selectedFilePath
-    ? repoFileCacheKey({
-        audience: repo.access.can_read_private_files ? 'private' : 'public',
-        changeVersion: repo.change_version,
-        oid: selectedMeta.oid,
-        path: selectedFilePath,
-        repoId: repo.id,
-      })
-    : null
-  const loadFile = useCallback(
-    async (path: string, signal: AbortSignal): Promise<RepoFileContent> => {
-      const file = await loadRepoFileWhenReady({
-        load: () => loadRepoFile({
-          data: { owner, path, repo: repoName },
-          signal,
-        }),
-        signal,
-      })
-      if (!file) {
-        throw new Error(
-          'This file is no longer available in the current scoped view.',
-        )
-      }
-      return file
-    },
-    [owner, repoName],
-  )
-  const loadSelectedFile = useCallback(
-    (signal: AbortSignal) => loadFile(selectedFilePath ?? '', signal),
-    [loadFile, selectedFilePath],
-  )
+  const selectedFilePath = content
+    ? selectedRouteFilePath(content.files, selectedPath)
+    : selectedPath
+  const loadSelectedFile = useMemo(() => repoCodeResourceLoader(
+    page.fileIdentity === selectedFileIdentity ? page.file : null,
+    (signal: AbortSignal) => loadAddressedFile({
+      owner, path: selectedPath, repo: repoName,
+    }, signal),
+  ), [owner, page.file, page.fileIdentity, repoName, selectedFileIdentity, selectedPath])
   const selectedFileResource = useCachedResource({
     fallbackError: 'File content is unavailable.',
     identity: selectedFileIdentity,
@@ -173,9 +161,7 @@ function RepoIndexRoute() {
       selectedFileIdentity={selectedFileIdentity}
       selectedFileLoading={selectedFileResource.status === 'loading'}
       selectedFileRetry={selectedFileResource.retry}
-      selectedPath={content
-        ? selectedFilePath ? displayRouteFilePath(selectedFilePath) : null
-        : selectedPath}
+      selectedPath={selectedFilePath ? displayRouteFilePath(selectedFilePath) : null}
     />
   )
 }
@@ -184,4 +170,28 @@ type RepoCodeSearch = { file?: string }
 
 function parseRepoCodeSearch(search: Record<string, unknown>): RepoCodeSearch {
   return { file: parseRouteFileSearch(search.file) }
+}
+
+async function loadAddressedFile(
+  data: ReturnType<typeof parseRepoFileInput>,
+  signal: AbortSignal,
+): Promise<RepoFileContent> {
+  const file = await loadRepoFileWhenReady({
+    load: () => loadRepoFile({ data, signal }),
+    signal,
+  })
+  if (!file) throw new Error('This file is no longer available in the current scoped view.')
+  return file
+}
+
+function repoCodeCacheKeys(repo: RepoSummary, path: string) {
+  const scope = {
+    audience: repo.access.can_read_private_files ? 'private' as const : 'public' as const,
+    changeVersion: repo.change_version,
+    repoId: repo.id,
+  }
+  return {
+    contentIdentity: repoContentCacheKey(scope),
+    fileIdentity: repoFileCacheKey({ ...scope, path }),
+  }
 }

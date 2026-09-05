@@ -55,8 +55,11 @@ export async function loadRepoRunStepLogsForRequest(data: RunStepLogsInput) {
     run_id: data.run_id,
     step_index: data.step_index.toString(),
   })
+  const query = new URLSearchParams()
+  if (data.after !== undefined) query.set('after', data.after.toString())
+  if (data.before !== undefined) query.set('before', data.before.toString())
   return createApiClient().get(
-    `${path}?after=${encodeURIComponent(data.after)}`,
+    `${path}${query.size ? `?${query}` : ''}`,
     apiValidators.RepositoryRunStepLogPageResponse,
     { auth: 'required' },
   )
@@ -107,8 +110,14 @@ export function parseRepoRunHistoryInput(
 export function parseRunStepLogsInput(data: RunStepLogsInput): RunStepLogsInput {
   const input = parseRunActionInput(data)
   const attemptId = requiredSegment('attempt_id', data.attempt_id)
-  if (!Number.isSafeInteger(data.after) || data.after < 0) {
-    throw new Error('after must be a non-negative integer')
+  for (const name of ['after', 'before'] as const) {
+    const cursor = data[name]
+    if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) {
+      throw new Error(`${name} must be a non-negative integer`)
+    }
+  }
+  if (data.after !== undefined && data.before !== undefined) {
+    throw new Error('choose after or before, not both')
   }
   if (!Number.isSafeInteger(data.step_index) || data.step_index < 0) {
     throw new Error('step_index must be a non-negative integer')
@@ -116,6 +125,7 @@ export function parseRunStepLogsInput(data: RunStepLogsInput): RunStepLogsInput 
   return {
     ...input,
     after: data.after,
+    before: data.before,
     attempt_id: attemptId,
     step_index: data.step_index,
   }

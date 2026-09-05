@@ -332,3 +332,57 @@ async fn closed_fixture(
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn closed_queue_cursor_keeps_closed_and_merged_timestamp_ties() {
+    let state = test_state_with_readme().await;
+    for (id, time, merged) in [
+        ("req_z_new", 40, false),
+        ("req_a_closed", 30, false),
+        ("req_b_merged", 30, true),
+        ("req_c_closed", 30, false),
+        ("req_a_old", 20, true),
+    ] {
+        create_public_request(&state, id, test_owner_id(), REQUEST_HEAD).await;
+        if merged {
+            state
+                .metadata
+                .requests()
+                .mutate_request_for_tests(id, |request| {
+                    request.submitted_at_unix = Some(10);
+                    request.merged_at_unix = Some(time);
+                    request.merged_by_user_id = Some(test_owner_id());
+                    request.merged_head_oid = Some(REQUEST_HEAD.to_string());
+                    request.merged_main_oid = Some(REQUEST_HEAD.to_string());
+                    request.updated_at_unix = time;
+                })
+                .await
+                .unwrap();
+        } else {
+            closed_fixture(&state, id, 10, time, id, "").await;
+        }
+    }
+    let app = router(state);
+    let mut uri = "/v1/repos/owner/repo/requests/queue?section=closed&limit=2".to_string();
+    let mut ids = Vec::new();
+    loop {
+        let response = api_request(app.clone(), "GET", &uri, None, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let page = response_json(response).await;
+        ids.extend(request_ids(&page).into_iter().map(str::to_owned));
+        let Some(cursor) = page["next_cursor"].as_str() else {
+            break;
+        };
+        uri = format!("/v1/repos/owner/repo/requests/queue?section=closed&limit=2&cursor={cursor}");
+    }
+    assert_eq!(
+        ids,
+        [
+            "req_z_new",
+            "req_a_closed",
+            "req_b_merged",
+            "req_c_closed",
+            "req_a_old"
+        ]
+    );
+}

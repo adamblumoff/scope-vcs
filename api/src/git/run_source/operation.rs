@@ -1,10 +1,10 @@
-use super::TemporaryRunSourceRepository;
+use super::TemporarySourceDirectory;
 use crate::{error::ApiError, runtime_budgets::RuntimePermit, state::AppState};
 use std::{future::Future, sync::Arc};
 
 pub(crate) struct RunSourceOperation {
     // Drop the repository before returning capacity to the next operation.
-    repository: TemporaryRunSourceRepository,
+    repository: TemporarySourceDirectory,
     _permit: RuntimePermit,
     #[cfg(test)]
     hook: Option<TestHook>,
@@ -14,7 +14,7 @@ impl RunSourceOperation {
     pub(super) fn new(state: &AppState) -> Result<Arc<Self>, ApiError> {
         let permit = state.runtime_budgets.try_git_materialization()?;
         Ok(Arc::new(Self {
-            repository: TemporaryRunSourceRepository::new(state)?,
+            repository: TemporarySourceDirectory::new(&state.data_dir.join("run-source"))?,
             _permit: permit,
             #[cfg(test)]
             hook: None,

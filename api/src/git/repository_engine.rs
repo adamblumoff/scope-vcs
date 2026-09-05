@@ -70,6 +70,13 @@ impl RepositoryEngine {
         self.cache.remove(incarnation)
     }
 
+    pub(crate) fn lease_derived(
+        self: &Arc<Self>,
+        path: PathBuf,
+    ) -> Result<GitRepoHandle, ApiError> {
+        self.cache.lease_derived(path)
+    }
+
     /// Coalesces immutable derived views by their content-derived key. These
     /// views do not participate in the repository replica's mutation stream.
     pub(crate) async fn materialize_derived<IsReady, Build, BuildFuture>(
@@ -86,18 +93,31 @@ impl RepositoryEngine {
         Build: FnOnce() -> BuildFuture + Send + 'static,
         BuildFuture: std::future::Future<Output = Result<(), ApiError>> + Send + 'static,
     {
+        let repo = self.cache.lease_derived(path.to_path_buf())?;
+        let build_lease = self.cache.lease_derived(path.to_path_buf())?;
         let started_at = Instant::now();
         let cache_hit = is_ready();
         let built = Arc::new(AtomicBool::new(false));
         let built_for_build = built.clone();
+        let cache_for_build = self.cache.clone();
         let result = self
             .materializations
             .materialize_async(namespace, key, is_ready, move || async move {
+                let _build_lease = build_lease;
                 built_for_build.store(true, Ordering::Relaxed);
-                build().await
+                let result = build().await;
+                if result.is_ok() {
+                    let pruned = tokio::task::spawn_blocking(move || cache_for_build.prune()).await;
+                    match pruned {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::warn!(error = %error.operator_diagnostic(), "failed to prune derived Git caches"),
+                        Err(error) => tracing::warn!(%error, "derived Git cache pruning task failed"),
+                    }
+                }
+                result
             })
             .await
-            .and_then(|()| self.cache.lease_derived(path.to_path_buf()));
+            .map(|()| repo);
         tracing::info!(
             repository_id = incarnation.repository_id(),
             repository_incarnation_id = incarnation.incarnation_id(),
@@ -870,6 +890,55 @@ mod tests {
             Some(1)
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_derived_build_and_active_readers_remain_leased_during_eviction() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = RepositoryEngine::new(root.path().to_path_buf(), 1).unwrap();
+        let incarnation = RepositoryIncarnation::new("owner/repo", "repoi_derived").unwrap();
+        let path = root.path().join("derived.git");
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let waiter = {
+            let engine = engine.clone();
+            let path = path.clone();
+            let build_path = path.clone();
+            let started = started.clone();
+            let release = release.clone();
+            let incarnation = incarnation.clone();
+            tokio::spawn(async move {
+                engine
+                    .materialize_derived(
+                        &incarnation,
+                        GitDerivedCacheNamespace::RequestRevision,
+                        "derived".into(),
+                        &path,
+                        || false,
+                        move || async move {
+                            fs::create_dir(&build_path).unwrap();
+                            fs::write(build_path.join("objects"), [0_u8; 32]).unwrap();
+                            started.notify_one();
+                            release.notified().await;
+                            Ok(())
+                        },
+                    )
+                    .await
+            })
+        };
+        started.notified().await;
+        waiter.abort();
+        let _ = waiter.await;
+        engine.cache.prune().unwrap();
+        assert!(path.exists(), "detached build retains its own lease");
+        let reader = engine.lease_derived(path.clone()).unwrap();
+        release.notify_one();
+        engine.cache.prune().unwrap();
+        assert!(
+            path.exists(),
+            "reader retains the published materialization"
+        );
+        drop(reader);
     }
 
     fn git_head(repo: &Path) -> String {

@@ -47,21 +47,21 @@ fn right_arrow_expands_folder_and_moves_to_first_child_when_already_expanded() {
     let mut state = state();
     state.handle_input(ReviewInput::Down);
     assert_eq!(
-        tree_path(&state.visible_rows()[state.cursor()]),
+        tree_path(&state.visible_rows(0, usize::MAX)[state.cursor()]),
         Some("/src")
     );
 
     state.handle_input(ReviewInput::Right);
     assert!(
         state
-            .visible_rows()
+            .visible_rows(0, usize::MAX)
             .iter()
             .any(|row| tree_path(row) == Some("/src/lib.rs"))
     );
 
     state.handle_input(ReviewInput::Right);
     assert_eq!(
-        tree_path(&state.visible_rows()[state.cursor()]),
+        tree_path(&state.visible_rows(0, usize::MAX)[state.cursor()]),
         Some("/src/lib.rs")
     );
 }
@@ -136,7 +136,7 @@ fn initial_message_surfaces_read_only_history_rewrites() {
 #[test]
 fn added_and_deleted_sections_start_collapsed() {
     let state = state_with_changes();
-    let rows = state.visible_rows();
+    let rows = state.visible_rows(0, usize::MAX);
 
     assert!(matches!(
         rows[0],
@@ -173,7 +173,7 @@ fn change_sections_expand_and_paths_remain_informational() {
     state.handle_input(ReviewInput::Up);
     state.handle_input(ReviewInput::Right);
     assert!(matches!(
-        state.visible_rows()[1],
+        state.visible_rows(0, usize::MAX)[1],
         ReviewRow::ChangePath {
             kind: ChangeListKind::Added,
             ref path,
@@ -191,7 +191,7 @@ fn change_sections_expand_and_paths_remain_informational() {
     state.handle_input(ReviewInput::Left);
     assert!(
         !state
-            .visible_rows()
+            .visible_rows(0, usize::MAX)
             .iter()
             .any(|row| matches!(row, ReviewRow::ChangePath { .. }))
     );
@@ -205,7 +205,7 @@ fn filtering_surfaces_matching_change_paths_without_persisting_expansion() {
     for value in "old".chars() {
         state.handle_input(ReviewInput::Char(value));
     }
-    let rows = state.visible_rows();
+    let rows = state.visible_rows(0, usize::MAX);
     assert!(matches!(
         rows[0],
         ReviewRow::ChangeSection {
@@ -224,7 +224,7 @@ fn filtering_surfaces_matching_change_paths_without_persisting_expansion() {
 
     state.handle_input(ReviewInput::Escape);
     state.handle_input(ReviewInput::Escape);
-    let rows = state.visible_rows();
+    let rows = state.visible_rows(0, usize::MAX);
     assert!(matches!(
         rows[1],
         ReviewRow::ChangeSection {
@@ -233,4 +233,121 @@ fn filtering_surfaces_matching_change_paths_without_persisting_expansion() {
             ..
         }
     ));
+}
+
+fn assert_cached_visibility_matches_domain(state: &ReviewState) {
+    use scope_domain::repo_visibility::{VisibilityNodeKind, VisibilityTarget, target_visibility};
+    for node in state.tree.nodes() {
+        let expected = target_visibility(
+            state.config(),
+            &VisibilityTarget {
+                name: &node.name,
+                path: &node.path,
+                kind: match node.kind {
+                    ReviewNodeKind::Root => VisibilityNodeKind::Root,
+                    ReviewNodeKind::Directory => VisibilityNodeKind::Directory,
+                    ReviewNodeKind::File => VisibilityNodeKind::File,
+                },
+                reserved: node.reserved,
+                file_paths_under: state.tree.file_paths_under(node.id),
+            },
+        );
+        assert_eq!(state.visibilities[node.id], expected, "{}", node.path);
+    }
+}
+
+#[test]
+fn cached_summaries_follow_root_directory_file_and_reserved_toggles() {
+    let paths = [
+        "src/public.rs",
+        "src/private.rs",
+        "src/**",
+        ".scope/RULES.md",
+        ".scope/runs/check.yml",
+    ]
+    .map(str::to_string);
+    let mut state = ReviewState::new(
+        ReviewTree::from_paths(&paths, &[]),
+        default_scope_repo_config(),
+        ReviewMode::Standalone,
+    );
+    state.handle_input(ReviewInput::Filter);
+    state.handle_input(ReviewInput::Char('/'));
+    state.handle_input(ReviewInput::Escape);
+    assert_cached_visibility_matches_domain(&state);
+    for path in [
+        "/",
+        "/src",
+        "/src/public.rs",
+        "/.scope/RULES.md",
+        "/src/**",
+        "/",
+    ] {
+        let id = state
+            .tree
+            .nodes()
+            .iter()
+            .find(|node| node.path == path)
+            .unwrap()
+            .id;
+        state.move_cursor_to_item(ReviewItem::TreeNode(id));
+        state.handle_input(ReviewInput::Toggle);
+        assert_cached_visibility_matches_domain(&state);
+    }
+    let saved = state.config().clone();
+    state.mark_saved();
+    assert!(!state.is_dirty());
+    assert_eq!(state.config(), &saved);
+    assert_cached_visibility_matches_domain(&state);
+}
+
+#[test]
+fn viewport_rows_match_filtered_and_expanded_navigation() {
+    let paths = (0..150)
+        .map(|index| format!("src/file_{index:03}.rs"))
+        .collect::<Vec<_>>();
+    let mut state = ReviewState::new(
+        ReviewTree::from_paths(&paths, &[]),
+        default_scope_repo_config(),
+        ReviewMode::Standalone,
+    );
+    for filtered in [false, true] {
+        if filtered {
+            state.handle_input(ReviewInput::Filter);
+            state.handle_input(ReviewInput::Char('s'));
+            state.handle_input(ReviewInput::Escape);
+        } else {
+            state.handle_input(ReviewInput::Down);
+            state.handle_input(ReviewInput::Right);
+        }
+        let summaries = state.visibilities.as_ptr();
+        for _ in 0..120 {
+            state.handle_input(ReviewInput::Down);
+            state.adjust_scroll(12);
+            let all = state.visible_rows(0, usize::MAX);
+            assert_eq!(all.len(), state.visible_row_count());
+            let expected = all
+                .iter()
+                .skip(state.scroll())
+                .take(12)
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(state.visible_rows(state.scroll(), 12), expected);
+            assert_eq!(state.visibilities.as_ptr(), summaries);
+        }
+        assert!(state.visible_rows(state.visible_row_count(), 12).is_empty());
+        assert!(state.visible_rows(0, 0).is_empty());
+    }
+}
+
+#[test]
+fn empty_tree_summary_uses_config_default() {
+    let mut state = ReviewState::new(
+        ReviewTree::from_paths(&[], &[]),
+        default_scope_repo_config(),
+        ReviewMode::Standalone,
+    );
+    assert_cached_visibility_matches_domain(&state);
+    state.handle_input(ReviewInput::Toggle);
+    assert_cached_visibility_matches_domain(&state);
 }

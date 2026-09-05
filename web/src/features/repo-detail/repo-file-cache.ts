@@ -25,17 +25,15 @@ export function writeRepoFileCache(key: string, file: RepoFileContent) {
 export function repoFileCacheKey({
   audience,
   changeVersion,
-  oid,
   path,
   repoId,
 }: {
   audience: 'private' | 'public'
   changeVersion: number
-  oid: string
   path: string
   repoId: string
 }) {
-  return [repoId, changeVersion, audience, path, oid].join('\0')
+  return [repoId, changeVersion, audience, path.replace(/^\/+/, '')].join('\0')
 }
 
 export function resetRepoFileCache() {

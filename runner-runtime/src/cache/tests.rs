@@ -1,5 +1,5 @@
 use super::{
-    archive::{BoundedWriter, create_archive, file_identity},
+    archive::{BoundedWriter, create_archive},
     finalize::save_cache,
     identity::{MAX_CACHE_KEY_FILE_BYTES, digest_inputs_at, open_key_file},
     restore::CachePreparationPhases,
@@ -26,15 +26,20 @@ fn archives_are_identical_across_creation_order_and_metadata() {
     let first_archive = tempfile::NamedTempFile::new().unwrap();
     let second_archive = tempfile::NamedTempFile::new().unwrap();
 
-    create_archive(first.path(), first_archive.path()).unwrap();
-    create_archive(second.path(), second_archive.path()).unwrap();
+    let first_identity = create_archive(first.path(), first_archive.path()).unwrap();
+    let second_identity = create_archive(second.path(), second_archive.path()).unwrap();
 
     let first_bytes = fs::read(first_archive.path()).unwrap();
     let second_bytes = fs::read(second_archive.path()).unwrap();
     assert_eq!(first_bytes, second_bytes);
+    assert_eq!(first_identity, second_identity);
+    use sha2::{Digest as _, Sha256};
     assert_eq!(
-        file_identity(first_archive.path()).unwrap(),
-        file_identity(second_archive.path()).unwrap()
+        first_identity,
+        (
+            first_bytes.len() as u64,
+            hex::encode(Sha256::digest(&first_bytes))
+        )
     );
 }
 
@@ -96,6 +101,26 @@ fn bounded_writer_accepts_the_limit_and_rejects_the_next_byte() {
     assert_eq!(error.to_string(), "cache archive exceeds 4 bytes");
     assert_eq!(writer.written, 4);
     assert_eq!(MAX_CACHE_OBJECT_BYTES, 1024 * 1024 * 1024);
+}
+
+#[test]
+fn archive_hash_counts_only_bytes_accepted_by_partial_writes() {
+    struct PartialWriter;
+    impl std::io::Write for PartialWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            Ok(bytes.len().min(2))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = BoundedWriter::new(PartialWriter, 8);
+    writer.write_all(b"complete").unwrap();
+    use sha2::{Digest as _, Sha256};
+    assert_eq!(
+        writer.identity(),
+        (8, hex::encode(Sha256::digest(b"complete")))
+    );
 }
 
 #[test]

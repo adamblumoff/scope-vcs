@@ -10,7 +10,8 @@ use crate::{
     use_cases::{
         run_control::{
             ManualRunCommand, cancel_run as cancel_run_control,
-            create_manual_run as create_manual_run_control, retry_run as retry_run_control,
+            create_manual_run as create_manual_run_control,
+            resolve_manual_run as resolve_manual_run_control, retry_run as retry_run_control,
         },
         run_inspection::{
             inspect_run, inspect_run_detail, inspect_run_step_logs, require_repo_member,
@@ -25,8 +26,9 @@ use axum::{
 };
 use scope_api_contract::{
     CreateManualRunQuery, PushTriggerCheckResponse, PushTriggerEvaluationResponse,
-    RepositoryRunDetailResponse, RunResponse,
+    RepositoryRunDetailResponse, ResolveManualRunResponse, RunResponse,
 };
+use scope_domain::runs::manual::ManualRunRequest;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -42,29 +44,53 @@ pub(crate) async fn create_manual_run(
 ) -> Result<Json<RunResponse>, ApiError> {
     let user = require_scope_user(&state, &headers).await?;
     let repo = require_repo_member(&state, &user.id, &owner, &repo_name).await?;
-    validate_request_id(&query.request_id)?;
-    let git_oid = git_oid_request("git_oid", &query.git_oid)?;
+    let request = manual_run_request(repo.record.id, user.id, query)?;
     let bundle = to_bytes(body, MAX_MANUAL_BUNDLE_BYTES)
         .await
         .map_err(|error| ApiError::payload_too_large(format!("run bundle is too large: {error}")))?
         .to_vec();
-    let inspected = create_manual_run_control(
-        &state,
-        ManualRunCommand {
-            repository_id: repo.record.id,
-            user_id: user.id,
-            request_id: query.request_id,
-            git_oid,
-            workflow_name: query.workflow,
-            bundle,
-        },
-    )
-    .await?;
+    let inspected = create_manual_run_control(&state, ManualRunCommand { request, bundle }).await?;
     Ok(Json(run_response(
         &inspected.run,
         &inspected.jobs,
         inspected.logs_truncated,
     )?))
+}
+
+pub(crate) async fn resolve_manual_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((owner, repo_name)): Path<(String, String)>,
+    Query(query): Query<CreateManualRunQuery>,
+) -> Result<Json<ResolveManualRunResponse>, ApiError> {
+    let user = require_scope_user(&state, &headers).await?;
+    let request = manual_run_request(
+        scope_domain::repository::repo_id(&owner, &repo_name),
+        user.id,
+        query,
+    )?;
+    let response = match resolve_manual_run_control(&state, &request).await? {
+        Some(inspected) => ResolveManualRunResponse::Queued {
+            run: run_response(&inspected.run, &inspected.jobs, inspected.logs_truncated)?,
+        },
+        None => ResolveManualRunResponse::UploadRequired,
+    };
+    Ok(Json(response))
+}
+
+fn manual_run_request(
+    repository_id: String,
+    user_id: String,
+    query: CreateManualRunQuery,
+) -> Result<ManualRunRequest, ApiError> {
+    ManualRunRequest::new(
+        repository_id,
+        user_id,
+        query.request_id,
+        query.git_oid,
+        query.workflow,
+    )
+    .map_err(ApiError::from)
 }
 
 pub(crate) async fn get_run(
@@ -94,8 +120,8 @@ pub(crate) async fn get_repository_run_detail(
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RepositoryStepLogsQuery {
-    #[serde(default)]
-    after: u64,
+    after: Option<u64>,
+    before: Option<u64>,
 }
 
 pub(crate) async fn get_repository_run_step_logs(
@@ -119,7 +145,14 @@ pub(crate) async fn get_repository_run_step_logs(
         &run_id,
         &attempt_id,
         step_index,
-        query.after,
+        match (query.after, query.before) {
+            (Some(after), None) => scope_postgres::db::StepLogCursor::After(after),
+            (None, Some(before)) => scope_postgres::db::StepLogCursor::Before(before),
+            (None, None) => scope_postgres::db::StepLogCursor::Tail,
+            (Some(_), Some(_)) => {
+                return Err(ApiError::bad_request("choose after or before, not both"));
+            }
+        },
         REPOSITORY_STEP_LOG_LIMIT,
     )
     .await?;
@@ -129,6 +162,7 @@ pub(crate) async fn get_repository_run_step_logs(
             .logs
             .into_iter()
             .map(|stored| RepositoryRunLogResponse {
+                byte_length: stored.chunk.text.len(),
                 position: stored.position,
                 sequence: stored.chunk.sequence,
                 text: stored.chunk.text,
@@ -137,6 +171,8 @@ pub(crate) async fn get_repository_run_step_logs(
             .collect(),
         next_after: page.next_after,
         logs_truncated: page.logs_truncated,
+        has_earlier: page.has_earlier,
+        has_more: page.has_more,
     }))
 }
 
@@ -244,15 +280,6 @@ pub(crate) async fn retry_run(
         &inspected.jobs,
         inspected.logs_truncated,
     )?))
-}
-
-fn validate_request_id(request_id: &str) -> Result<(), ApiError> {
-    if request_id.len() != 32 || !request_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(ApiError::bad_request(
-            "request_id must be a 32-character hexadecimal value",
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ import {
   parseHistoryPageInput,
 } from '@/api/history'
 import { createServerFn } from '@tanstack/react-start'
+import { getRequest } from '@tanstack/react-start/server'
 
 export const loadHistoryPage = createServerFn({ method: 'GET' })
   .validator(parseHistoryPageInput)
@@ -18,4 +19,4 @@ export const loadHistoryEntry = createServerFn({ method: 'GET' })
 
 export const loadHistoryEntryFileDiff = createServerFn({ method: 'GET' })
   .validator(parseHistoryEntryFileDiffInput)
-  .handler(({ data }) => loadHistoryEntryFileDiffForRequest(data))
+  .handler(({ data }) => loadHistoryEntryFileDiffForRequest(data, getRequest().signal))

@@ -54,15 +54,15 @@ pub fn put_source_blob(
     store: &dyn ObjectStore,
     bytes: &[u8],
 ) -> Result<SourceBlob, ObjectStoreError> {
-    put_content_object(store, ContentObjectKind::Blob, bytes)
+    put_content_object(store, ContentObjectKind::Blob, bytes.to_vec())
 }
 
 pub fn put_content_object(
     store: &dyn ObjectStore,
     kind: ContentObjectKind,
-    bytes: &[u8],
+    bytes: Vec<u8>,
 ) -> Result<SourceBlob, ObjectStoreError> {
-    let blob = content_object_for_bytes(kind, bytes);
+    let blob = content_object_for_bytes(kind, &bytes);
     store.put(&object_key(&blob), bytes)?;
     Ok(blob)
 }
@@ -141,7 +141,7 @@ mod tests {
         let store = MemoryObjectStore::new();
         let blob = content_object_for_bytes(ContentObjectKind::Blob, b"expected");
         let key = object_key(&blob);
-        store.put(&key, b"different").unwrap();
+        store.put(&key, b"different".to_vec()).unwrap();
 
         let error = source_blob_bytes(&store, &blob).unwrap_err();
 
