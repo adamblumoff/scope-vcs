@@ -1,7 +1,7 @@
 use super::*;
 use crate::db::{
-    apply_maintenance_migrations, connect_postgres_worker_store, connect_writer_database,
-    terminate_metadata_writer_sessions, verify_writer_fence_available,
+    apply_maintenance_migrations, connect_postgres_store, connect_postgres_worker_store,
+    connect_writer_database, terminate_metadata_writer_sessions, verify_writer_fence_available,
 };
 
 #[tokio::test]
@@ -116,7 +116,10 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
         MigrationImpact::MaintenanceRequired
     );
     assert_eq!(plan.pending[18].name, "m0036_request_queue_indexes");
-    assert_eq!(plan.pending[18].impact, MigrationImpact::Online);
+    assert_eq!(
+        plan.pending[18].impact,
+        MigrationImpact::MaintenanceRequired
+    );
     assert_eq!(plan.pending[19].name, "m0037_repository_history_views");
     assert_eq!(plan.pending[19].impact, MigrationImpact::Online);
 }
@@ -177,7 +180,10 @@ async fn cache_service_cutover_requires_maintenance() {
         MigrationImpact::MaintenanceRequired
     );
     assert_eq!(plan.pending[15].name, "m0036_request_queue_indexes");
-    assert_eq!(plan.pending[15].impact, MigrationImpact::Online);
+    assert_eq!(
+        plan.pending[15].impact,
+        MigrationImpact::MaintenanceRequired
+    );
     assert_eq!(plan.pending[16].name, "m0037_repository_history_views");
     assert_eq!(plan.pending[16].impact, MigrationImpact::Online);
 }
@@ -226,9 +232,65 @@ async fn compaction_scheduler_is_an_online_additive_migration() {
     assert!(error.to_string().contains("m0025_visibility_change_sets"));
     assert!(relation_exists(db.as_ref(), "scope_git_compaction_jobs").await);
     assert_eq!(plan.pending[12].name, "m0036_request_queue_indexes");
-    assert_eq!(plan.pending[12].impact, MigrationImpact::Online);
+    assert_eq!(
+        plan.pending[12].impact,
+        MigrationImpact::MaintenanceRequired
+    );
     assert_eq!(plan.pending[13].name, "m0037_repository_history_views");
     assert_eq!(plan.pending[13].impact, MigrationImpact::Online);
+}
+
+#[tokio::test]
+async fn request_queue_indexes_require_maintenance_before_startup() {
+    let (target, db, _lease) = isolated_database().await;
+    migrations::Migrator::up(db.as_ref(), Some(35))
+        .await
+        .unwrap();
+    let plan = migrations::plan(db.as_ref()).await.unwrap();
+    assert_eq!(plan.pending[0].name, "m0036_request_queue_indexes");
+    assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
+    assert_eq!(plan.pending[1].name, "m0037_repository_history_views");
+    assert_eq!(plan.pending[1].impact, MigrationImpact::Online);
+
+    let error = match connect_postgres_store(target.schema_database_url()).await {
+        Ok(_) => panic!("API startup must refuse the queue index build"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("m0036_request_queue_indexes"));
+    assert_eq!(migrations::plan(db.as_ref()).await.unwrap(), plan);
+
+    let indexes = [
+        "idx_scope_requests_open_queue",
+        "idx_scope_requests_public_open_queue",
+        "idx_scope_requests_draft_queue",
+        "idx_scope_requests_closed_queue",
+        "idx_scope_requests_public_closed_queue",
+        "idx_scope_requests_public_search",
+    ];
+    for index in indexes {
+        assert!(!relation_exists(db.as_ref(), index).await);
+    }
+
+    let writer = connect_writer_database(&target.schema_database_url())
+        .await
+        .unwrap();
+    let error = apply_maintenance_migrations(target.schema_database_url())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("metadata writer"));
+    assert_eq!(migrations::plan(db.as_ref()).await.unwrap(), plan);
+    writer.close().await.unwrap();
+
+    apply_maintenance_migrations(target.schema_database_url())
+        .await
+        .unwrap();
+    assert!(migrations::plan(db.as_ref()).await.unwrap().exact);
+    for index in indexes {
+        assert!(relation_exists(db.as_ref(), index).await);
+    }
+    let _store = connect_postgres_store(target.schema_database_url())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

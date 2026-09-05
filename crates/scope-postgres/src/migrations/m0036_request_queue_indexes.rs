@@ -12,6 +12,8 @@ impl MigrationName for Migration {
 #[sea_orm_migration::async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // These transactional index builds block writes to existing requests.
+        // The inventory requires maintenance so deployment closes writers first.
         manager
             .get_connection()
             .execute_unprepared(
