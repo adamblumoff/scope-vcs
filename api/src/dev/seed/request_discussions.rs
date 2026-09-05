@@ -3,12 +3,12 @@ use scope_domain::{
     account::UserAccount,
     repository::Repository,
     repository::collaboration::{RepositoryMember, RepositoryMemberPermissions},
-    requests::{
-        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput, RequestDiscussionAnchor,
-        RequestDiscussionStatus,
-    },
+    requests::{RequestDiscussionAnchor, RequestDiscussionStatus},
 };
-use scope_postgres::db::MetadataStore;
+use scope_postgres::db::{
+    CreateRequestDiscussionCommand, CreateRequestDiscussionReplyCommand, DiscussionTransition,
+    MetadataStore, TransitionRequestDiscussionCommand,
+};
 
 pub(super) const CONTRIBUTOR_ID: &str = "scope_usr_dev_contributor";
 pub(super) const MAINTAINER_ID: &str = "scope_usr_dev_maintainer";
@@ -119,11 +119,10 @@ async fn create_revision_conversations(metadata: &MetadataStore) -> Result<(), A
     for (index, discussion) in discussions.into_iter().enumerate() {
         metadata
             .requests()
-            .create_request_discussion(CreateRequestDiscussionInput {
+            .create_request_discussion(CreateRequestDiscussionCommand {
                 request_id: REQUEST_ID.to_string(),
                 id: discussion.discussion_id.to_string(),
                 actor_user_id: discussion.actor_user_id.to_string(),
-                actor_can_participate: false,
                 client_discussion_id: discussion.client_discussion_id.to_string(),
                 body_markdown: discussion.body.to_string(),
                 anchor: Some(RequestDiscussionAnchor {
@@ -141,11 +140,10 @@ async fn create_revision_conversations(metadata: &MetadataStore) -> Result<(), A
 async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), ApiError> {
     metadata
         .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
+        .create_request_discussion(CreateRequestDiscussionCommand {
             request_id: REQUEST_ID.to_string(),
             id: RETRY_CAP_ID.to_string(),
             actor_user_id: CONTRIBUTOR_ID.to_string(),
-            actor_can_participate: false,
             client_discussion_id: "seed_retry_cap".to_string(),
             body_markdown: concat!(
                 "Should the retry cap remain **2 seconds**, or should callers be able to ",
@@ -159,12 +157,11 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
         .await?;
     metadata
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: REQUEST_ID.to_string(),
             discussion_id: RETRY_CAP_ID.to_string(),
             id: RETRY_CAP_MAINTAINER_REPLY_ID.to_string(),
             actor_user_id: MAINTAINER_ID.to_string(),
-            actor_can_participate: false,
             client_reply_id: "seed_retry_cap_maintainer".to_string(),
             body_markdown: concat!(
                 "Two seconds is intentional for interactive commands. Let's extract ",
@@ -177,12 +174,11 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
         .await?;
     metadata
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: REQUEST_ID.to_string(),
             discussion_id: RETRY_CAP_ID.to_string(),
             id: RETRY_CAP_CONTRIBUTOR_REPLY_ID.to_string(),
             actor_user_id: CONTRIBUTOR_ID.to_string(),
-            actor_can_participate: false,
             client_reply_id: "seed_retry_cap_quote".to_string(),
             body_markdown: concat!(
                 "Agreed. Quoting the maintainer response here so the decision remains ",
@@ -195,12 +191,11 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
         .await?;
     metadata
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: REQUEST_ID.to_string(),
             discussion_id: RETRY_CAP_ID.to_string(),
             id: "discussion_reply_demo_retry_cap_nested".to_string(),
             actor_user_id: MAINTAINER_ID.to_string(),
-            actor_can_participate: false,
             client_reply_id: "seed_retry_cap_nested".to_string(),
             body_markdown: concat!(
                 "Exactly. Keeping that decision nested here makes the implementation history ",
@@ -217,11 +212,10 @@ async fn create_retry_cap_conversation(metadata: &MetadataStore) -> Result<(), A
 async fn create_jitter_conversation(metadata: &MetadataStore) -> Result<(), ApiError> {
     metadata
         .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
+        .create_request_discussion(CreateRequestDiscussionCommand {
             request_id: REQUEST_ID.to_string(),
             id: JITTER_ID.to_string(),
             actor_user_id: MAINTAINER_ID.to_string(),
-            actor_can_participate: false,
             client_discussion_id: "seed_jitter".to_string(),
             body_markdown: concat!(
                 "Can we add a small amount of jitter before this lands? Simultaneous clients ",
@@ -234,12 +228,11 @@ async fn create_jitter_conversation(metadata: &MetadataStore) -> Result<(), ApiE
         .await?;
     metadata
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: REQUEST_ID.to_string(),
             discussion_id: JITTER_ID.to_string(),
             id: "discussion_reply_demo_jitter".to_string(),
             actor_user_id: CONTRIBUTOR_ID.to_string(),
-            actor_can_participate: false,
             client_reply_id: "seed_jitter_reply".to_string(),
             body_markdown: concat!(
                 "Yes. I'll use bounded positive jitter and add a deterministic unit test ",
@@ -256,11 +249,10 @@ async fn create_jitter_conversation(metadata: &MetadataStore) -> Result<(), ApiE
 async fn create_resolved_docs_conversation(metadata: &MetadataStore) -> Result<(), ApiError> {
     metadata
         .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
+        .create_request_discussion(CreateRequestDiscussionCommand {
             request_id: REQUEST_ID.to_string(),
             id: RESOLVED_DOCS_ID.to_string(),
             actor_user_id: CONTRIBUTOR_ID.to_string(),
-            actor_can_participate: false,
             client_discussion_id: "seed_resolved_docs".to_string(),
             body_markdown: concat!(
                 "The helper accepts milliseconds, but the name `retryDelay` does not state ",
@@ -273,12 +265,11 @@ async fn create_resolved_docs_conversation(metadata: &MetadataStore) -> Result<(
         .await?;
     metadata
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: REQUEST_ID.to_string(),
             discussion_id: RESOLVED_DOCS_ID.to_string(),
             id: "discussion_reply_demo_resolved_docs".to_string(),
             actor_user_id: MAINTAINER_ID.to_string(),
-            actor_can_participate: false,
             client_reply_id: "seed_resolved_docs_reply".to_string(),
             body_markdown: "The new doc comment now says the returned delay is in milliseconds."
                 .to_string(),
@@ -288,13 +279,14 @@ async fn create_resolved_docs_conversation(metadata: &MetadataStore) -> Result<(
         .await?;
     metadata
         .requests()
-        .resolve_request_discussion(
-            REQUEST_ID.to_string(),
-            RESOLVED_DOCS_ID.to_string(),
-            MAINTAINER_ID.to_string(),
-            "event_demo_discussion_resolved".to_string(),
-            1_800_000_142,
-        )
+        .transition_request_discussion(TransitionRequestDiscussionCommand {
+            request_id: REQUEST_ID.to_string(),
+            discussion_id: RESOLVED_DOCS_ID.to_string(),
+            actor_user_id: MAINTAINER_ID.to_string(),
+            event_id: "event_demo_discussion_resolved".to_string(),
+            now_unix: 1_800_000_142,
+            transition: DiscussionTransition::Resolve,
+        })
         .await?;
     Ok(())
 }

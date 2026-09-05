@@ -251,6 +251,7 @@ async fn assert_repository_file(
         repo.git_head.as_ref().unwrap(),
         &repo.git_pack_spans,
         &repo_root,
+        None,
     )
     .await
     .unwrap();

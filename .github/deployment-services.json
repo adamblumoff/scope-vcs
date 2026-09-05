@@ -73,9 +73,26 @@
         ".github/scripts/railway-service-health.mjs",
         ".github/scripts/railway-service-health.test.mjs",
         ".github/workflows/scope-production-deploy.yml",
-        "dev/check"
+        "dev/check",
+        ".scope/runs/checks.yml",
+        ".github/scripts/check-gates.test.mjs",
+        ".github/scripts/check-rust-toolchain-sync.mjs",
+        ".github/scripts/check-rust-toolchain-sync.test.mjs",
+        ".github/scripts/stop-staging-writers.sh",
+        ".github/scripts/staging-railway-token.sh",
+        ".github/scripts/verify-staging-target.mjs",
+        ".github/scripts/staging-git-smoke.sh",
+        ".github/scripts/verify-staging-target.test.mjs",
+        ".github/scripts/deploy-staging-railway.sh",
+        ".github/scripts/test-staging-git-smoke.sh",
+        ".github/scripts/stop-staging-writers.test.mjs"
       ],
-      "prefixes": []
+      "prefixes": [
+        "dev/checks/",
+        ".github/scripts/fixtures/",
+        "bench/",
+        "deploy/aws/"
+      ]
     },
     "checksImage": {
       "files": [

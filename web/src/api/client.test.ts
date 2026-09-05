@@ -203,3 +203,23 @@ const hasHttpError = (status: number, message: string, errorReference?: string) 
     error.status === status &&
     error.message === message &&
     error.errorReference === errorReference
+
+test('loadJson cancels an oversized response stream before consuming further chunks', async () => {
+  let pulls = 0
+  let cancelled = false
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    pull(controller) {
+      pulls++
+      controller.enqueue(new TextEncoder().encode('x'.repeat(100)))
+    },
+    cancel() { cancelled = true },
+  }), { headers: { 'content-type': 'application/json' } })
+  await assert.rejects(loadJson('/v1/references', okValidator, {}, 150), InvalidApiResponseError)
+  assert.equal(cancelled, true)
+  assert.ok(pulls <= 3)
+})
+
+test('loadJson accepts a valid response within the streaming byte limit', async () => {
+  globalThis.fetch = async () => jsonResponse({ ok: true }, 200)
+  assert.deepEqual(await loadJson('/v1/references', okValidator, {}, 100), { ok: true })
+})

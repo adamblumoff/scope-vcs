@@ -1,4 +1,10 @@
+mod discussion_commands;
+
 use super::super::MetadataStore;
+use super::super::{
+    CreateRequestDiscussionCommand, CreateRequestDiscussionReplyCommand, DiscussionTransition,
+    ReopenAndReplyToRequestDiscussionCommand, TransitionRequestDiscussionCommand,
+};
 use super::*;
 use scope_domain::{
     account::UserAccount,
@@ -6,9 +12,8 @@ use scope_domain::{
     policy::Visibility,
     repository::{RepoLifecycleState, Repository},
     requests::{
-        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
-        RecordRequestRevisionInput, ReopenAndReplyToRequestDiscussionInput, RequestActorRole,
-        RequestAudience, RequestDiscussionAnchor, RequestDiscussionStatus, RequestState,
+        RecordRequestRevisionInput, RequestActorRole, RequestAudience, RequestDiscussionAnchor,
+        RequestDiscussionStatus, RequestState,
     },
 };
 
@@ -66,11 +71,10 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
 
     let first = store
         .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
+        .create_request_discussion(CreateRequestDiscussionCommand {
             request_id: "req_1".to_string(),
             id: "discussion_1".to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_can_participate: false,
             client_discussion_id: "client_root".to_string(),
             body_markdown: "Parser ownership".to_string(),
             anchor: None,
@@ -90,12 +94,11 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
     save_request_row(store.db.as_ref(), &request).await.unwrap();
     store
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: "req_1".to_string(),
             discussion_id: first.discussion.id.clone(),
             id: "reply_before_retry".to_string(),
             actor_user_id: "user_owner".to_string(),
-            actor_can_participate: false,
             client_reply_id: "client_before_retry".to_string(),
             body_markdown: "Maintainer reply".to_string(),
             reply_to_reply_id: None,
@@ -105,11 +108,10 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
         .unwrap();
     let retried = store
         .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
+        .create_request_discussion(CreateRequestDiscussionCommand {
             request_id: "req_1".to_string(),
             id: "discussion_retry_id".to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_can_participate: false,
             client_discussion_id: "client_root".to_string(),
             body_markdown: "Parser ownership".to_string(),
             anchor: None,
@@ -133,24 +135,24 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
 
     let resolved = store
         .requests()
-        .resolve_request_discussion(
-            "req_1".to_string(),
-            first.discussion.id.clone(),
-            "user_public".to_string(),
-            "event_discussion_resolved".to_string(),
-            13,
-        )
+        .transition_request_discussion(TransitionRequestDiscussionCommand {
+            request_id: "req_1".to_string(),
+            discussion_id: first.discussion.id.clone(),
+            actor_user_id: "user_public".to_string(),
+            event_id: "event_discussion_resolved".to_string(),
+            now_unix: 13,
+            transition: DiscussionTransition::Resolve,
+        })
         .await
         .unwrap();
     assert_eq!(resolved.status, RequestDiscussionStatus::Resolved);
     let reply_error = store
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: "req_1".to_string(),
             discussion_id: first.discussion.id.clone(),
             id: "reply_rejected".to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_can_participate: false,
             client_reply_id: "client_rejected".to_string(),
             body_markdown: "One more point".to_string(),
             reply_to_reply_id: None,
@@ -162,14 +164,11 @@ async fn discussion_transactions_are_idempotent_atomic_and_self_read() {
 
     let reopened = store
         .requests()
-        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
+        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionCommand {
             request_id: "req_1".to_string(),
             discussion_id: first.discussion.id,
             reply_id: "reply_1".to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_is_maintainer: false,
-            actor_can_transition: false,
-            actor_can_participate: false,
             event_id: "event_discussion_reopened".to_string(),
             client_reply_id: "client_reply".to_string(),
             body_markdown: "One more point".to_string(),
@@ -214,11 +213,10 @@ async fn completed_private_discussion_transitions_persist_nothing() {
     ] {
         store
             .requests()
-            .create_request_discussion(CreateRequestDiscussionInput {
+            .create_request_discussion(CreateRequestDiscussionCommand {
                 request_id: "req_1".to_string(),
                 id: id.to_string(),
                 actor_user_id: "user_owner".to_string(),
-                actor_can_participate: false,
                 client_discussion_id: format!("client_{id}"),
                 body_markdown: "Review this invariant".to_string(),
                 anchor: None,
@@ -229,34 +227,33 @@ async fn completed_private_discussion_transitions_persist_nothing() {
     }
     store
         .requests()
-        .resolve_request_discussion(
-            "req_1".to_string(),
-            "discussion_resolved".to_string(),
-            "user_owner".to_string(),
-            "event_initial_resolve".to_string(),
-            5,
-        )
+        .transition_request_discussion(TransitionRequestDiscussionCommand {
+            request_id: "req_1".to_string(),
+            discussion_id: "discussion_resolved".to_string(),
+            actor_user_id: "user_owner".to_string(),
+            event_id: "event_initial_resolve".to_string(),
+            now_unix: 5,
+            transition: DiscussionTransition::Resolve,
+        })
         .await
         .unwrap();
     store
         .requests()
-        .resolve_request_discussion(
-            "req_1".to_string(),
-            "discussion_retried".to_string(),
-            "user_owner".to_string(),
-            "event_retry_initial_resolve".to_string(),
-            5,
-        )
+        .transition_request_discussion(TransitionRequestDiscussionCommand {
+            request_id: "req_1".to_string(),
+            discussion_id: "discussion_retried".to_string(),
+            actor_user_id: "user_owner".to_string(),
+            event_id: "event_retry_initial_resolve".to_string(),
+            now_unix: 5,
+            transition: DiscussionTransition::Resolve,
+        })
         .await
         .unwrap();
-    let retry_input = ReopenAndReplyToRequestDiscussionInput {
+    let retry_input = ReopenAndReplyToRequestDiscussionCommand {
         request_id: "req_1".to_string(),
         discussion_id: "discussion_retried".to_string(),
         reply_id: "reply_before_completion".to_string(),
         actor_user_id: "user_owner".to_string(),
-        actor_is_maintainer: false,
-        actor_can_transition: false,
-        actor_can_participate: false,
         event_id: "event_retry_reopened".to_string(),
         client_reply_id: "client_retry_reopened".to_string(),
         body_markdown: "Reopen before completion".to_string(),
@@ -306,13 +303,14 @@ async fn completed_private_discussion_transitions_persist_nothing() {
 
     let resolve_error = store
         .requests()
-        .resolve_request_discussion(
-            "req_1".to_string(),
-            "discussion_open".to_string(),
-            "user_owner".to_string(),
-            "event_rejected_resolve".to_string(),
-            8,
-        )
+        .transition_request_discussion(TransitionRequestDiscussionCommand {
+            request_id: "req_1".to_string(),
+            discussion_id: "discussion_open".to_string(),
+            actor_user_id: "user_owner".to_string(),
+            event_id: "event_rejected_resolve".to_string(),
+            now_unix: 8,
+            transition: DiscussionTransition::Resolve,
+        })
         .await
         .unwrap_err();
     assert_eq!(
@@ -321,13 +319,14 @@ async fn completed_private_discussion_transitions_persist_nothing() {
     );
     let reopen_error = store
         .requests()
-        .reopen_request_discussion(
-            "req_1".to_string(),
-            "discussion_resolved".to_string(),
-            "user_owner".to_string(),
-            "event_rejected_reopen".to_string(),
-            9,
-        )
+        .transition_request_discussion(TransitionRequestDiscussionCommand {
+            request_id: "req_1".to_string(),
+            discussion_id: "discussion_resolved".to_string(),
+            actor_user_id: "user_owner".to_string(),
+            event_id: "event_rejected_reopen".to_string(),
+            now_unix: 9,
+            transition: DiscussionTransition::Reopen,
+        })
         .await
         .unwrap_err();
     assert_eq!(
@@ -336,7 +335,7 @@ async fn completed_private_discussion_transitions_persist_nothing() {
     );
     let retry_error = store
         .requests()
-        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
+        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionCommand {
             now_unix: 10,
             ..retry_input
         })
@@ -390,11 +389,10 @@ async fn discussion_replies_are_read_as_flat_chronological_pages() {
     start_public_request(&store).await;
     let discussion = store
         .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
+        .create_request_discussion(CreateRequestDiscussionCommand {
             request_id: "req_1".to_string(),
             id: "discussion_tree".to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_can_participate: false,
             client_discussion_id: "client_tree".to_string(),
             body_markdown: "Tree shape".to_string(),
             anchor: None,
@@ -537,11 +535,10 @@ async fn close_draft_request_deletes_request_and_events() {
         .unwrap();
     store
         .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
+        .create_request_discussion(CreateRequestDiscussionCommand {
             request_id: "req_1".to_string(),
             id: "discussion_revision".to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_can_participate: false,
             client_discussion_id: "client_revision".to_string(),
             body_markdown: "Review this revision".to_string(),
             anchor: Some(RequestDiscussionAnchor {
@@ -750,12 +747,11 @@ async fn create_test_reply(
 ) {
     store
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: "req_1".to_string(),
             discussion_id: discussion_id.to_string(),
             id: id.to_string(),
             actor_user_id: "user_public".to_string(),
-            actor_can_participate: false,
             client_reply_id: format!("client_{id}"),
             body_markdown: format!("Reply {id}"),
             reply_to_reply_id: parent_id.map(str::to_string),

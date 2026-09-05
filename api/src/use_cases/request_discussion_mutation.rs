@@ -10,12 +10,16 @@ use scope_domain::{
     account::UserAccount,
     repository::{Repository, access::RepositoryAccess},
     requests::{
-        CreateRequestDiscussionInput, CreateRequestDiscussionReplyInput,
-        MarkRequestDiscussionReadInput, ReopenAndReplyToRequestDiscussionInput, Request,
-        RequestDiscussionReply, RequestViewer, request_actor_role, request_policy,
+        MarkRequestDiscussionReadInput, Request, RequestDiscussionReply, RequestViewer,
+        request_actor_role, request_policy,
     },
 };
-use scope_postgres::db::{RequestDiscussionReadModel, RequestDiscussionReplyReadModel};
+pub(crate) use scope_postgres::db::DiscussionTransition;
+use scope_postgres::db::{
+    CreateRequestDiscussionCommand, CreateRequestDiscussionReplyCommand,
+    ReopenAndReplyToRequestDiscussionCommand, RequestDiscussionReadModel,
+    RequestDiscussionReplyReadModel, TransitionRequestDiscussionCommand,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod anchor;
@@ -45,12 +49,6 @@ pub(crate) struct CreateReplyCommand {
     pub(crate) client_reply_id: String,
     pub(crate) body_markdown: String,
     pub(crate) reply_to_reply_id: Option<String>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum DiscussionTransition {
-    Resolve,
-    Reopen,
 }
 
 pub(crate) struct TransitionDiscussionCommand {
@@ -125,11 +123,10 @@ pub(crate) async fn create_discussion(
     let mutation = state
         .metadata
         .requests()
-        .create_request_discussion(CreateRequestDiscussionInput {
+        .create_request_discussion(CreateRequestDiscussionCommand {
             request_id: context.request.id.clone(),
             id: random_id("discussion")?,
             actor_user_id: command.actor_user_id.clone(),
-            actor_can_participate: false,
             client_discussion_id: command.client_discussion_id,
             body_markdown: command.body_markdown,
             anchor,
@@ -176,12 +173,11 @@ pub(crate) async fn create_reply(
     let mutation = state
         .metadata
         .requests()
-        .create_request_discussion_reply(CreateRequestDiscussionReplyInput {
+        .create_request_discussion_reply(CreateRequestDiscussionReplyCommand {
             request_id: context.request.id.clone(),
             discussion_id: command.discussion_id,
             id: random_id("discussion_reply")?,
             actor_user_id: command.actor_user_id.clone(),
-            actor_can_participate: false,
             client_reply_id: command.client_reply_id,
             body_markdown: command.body_markdown,
             reply_to_reply_id: command.reply_to_reply_id,
@@ -212,34 +208,22 @@ pub(crate) async fn transition_discussion(
         &command.actor_user_id,
     )
     .await?;
-    let discussion = match command.transition {
-        DiscussionTransition::Resolve => {
-            state
-                .metadata
-                .requests()
-                .resolve_request_discussion(
-                    context.request.id.clone(),
-                    command.discussion_id.clone(),
-                    command.actor_user_id.clone(),
-                    random_id("event_request_discussion_resolved")?,
-                    unix_now()?,
-                )
-                .await?
-        }
-        DiscussionTransition::Reopen => {
-            state
-                .metadata
-                .requests()
-                .reopen_request_discussion(
-                    context.request.id.clone(),
-                    command.discussion_id.clone(),
-                    command.actor_user_id.clone(),
-                    random_id("event_request_discussion_reopened")?,
-                    unix_now()?,
-                )
-                .await?
-        }
+    let event_prefix = match command.transition {
+        DiscussionTransition::Resolve => "event_request_discussion_resolved",
+        DiscussionTransition::Reopen => "event_request_discussion_reopened",
     };
+    let discussion = state
+        .metadata
+        .requests()
+        .transition_request_discussion(TransitionRequestDiscussionCommand {
+            request_id: context.request.id.clone(),
+            discussion_id: command.discussion_id.clone(),
+            actor_user_id: command.actor_user_id.clone(),
+            event_id: random_id(event_prefix)?,
+            now_unix: unix_now()?,
+            transition: command.transition,
+        })
+        .await?;
     if matches!(command.transition, DiscussionTransition::Resolve) {
         state
             .product_analytics
@@ -278,14 +262,11 @@ pub(crate) async fn reopen_and_reply(
     let mutation = state
         .metadata
         .requests()
-        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionInput {
+        .reopen_and_reply_to_request_discussion(ReopenAndReplyToRequestDiscussionCommand {
             request_id: context.request.id.clone(),
             discussion_id: command.discussion_id,
             reply_id: random_id("discussion_reply")?,
             actor_user_id: command.actor_user_id.clone(),
-            actor_is_maintainer: false,
-            actor_can_transition: false,
-            actor_can_participate: false,
             event_id: random_id("event_request_discussion_reopened")?,
             client_reply_id: command.client_reply_id,
             body_markdown: command.body_markdown,

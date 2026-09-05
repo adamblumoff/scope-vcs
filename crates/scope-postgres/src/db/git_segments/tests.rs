@@ -142,19 +142,19 @@ async fn repository_git_write_lease_is_session_scoped() {
         .await
         .unwrap();
     let waiting_store = repositories.clone();
-    let mut waiting = tokio::spawn(async move {
+    let waiting = tokio::spawn(async move {
         waiting_store
             .acquire_git_write_lease("segment-user/repo")
             .await
             .unwrap()
     });
+    crate::db::locks::wait_for_advisory_waiter(&store, "git-write", "segment-user/repo").await;
     assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut waiting)
-            .await
-            .is_err()
+        !waiting.is_finished(),
+        "waiter must not acquire a held lease"
     );
     first.release().await;
-    let second = tokio::time::timeout(Duration::from_secs(2), waiting)
+    let second = tokio::time::timeout(Duration::from_secs(60), waiting)
         .await
         .unwrap()
         .unwrap();

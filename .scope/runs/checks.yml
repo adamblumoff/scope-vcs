@@ -68,10 +68,7 @@ jobs:
           service postgresql start
           su postgres -c "psql --set=ON_ERROR_STOP=1 --command=\"CREATE ROLE scope LOGIN PASSWORD 'scope'\""
           su postgres -c "createdb --owner=scope scope_test"
-          cargo fmt --all --check
-          cargo test --workspace --features api/test-support --locked
-          cargo test -p api --features local-dev --locked dev::
-          cargo clippy --workspace --features api/test-support --all-targets --locked -- -D warnings
+          ./dev/checks/backend with-api
   cli-checks:
     caches:
       - name: cargo
@@ -100,19 +97,8 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_TARGET_DIR: /scope/cache/cargo-target
     steps:
-      - name: Check formatting
-        run: |
-          cargo fmt --manifest-path cli/Cargo.toml -- --check
-      - name: Test
-        run: |
-          cargo test --manifest-path cli/Cargo.toml --locked
-      - name: Lint
-        run: |
-          cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
-      - name: Build release binaries
-        run: |
-          cargo build --manifest-path cli/Cargo.toml --release --locked \
-              --bin scope --bin scope-cli-service
+      - name: Check CLI
+        run: ./dev/checks/cli
 
   cli-e2e:
     caches:
@@ -138,7 +124,7 @@ jobs:
           ./dev/run-ci-local-stack cli env \
             SCOPE_API_URL=http://localhost:8080 \
             SCOPE_CLI_E2E=1 \
-            cargo test --manifest-path cli/Cargo.toml --test contribution_flow --locked -- --nocapture
+            ./dev/checks/integration cli
 
   web-checks:
     timeout: 45m
@@ -160,19 +146,12 @@ jobs:
     steps:
       - name: Install dependencies
         run: (cd web && pnpm install --frozen-lockfile)
-      - name: Test
-        run: (cd web && pnpm test)
-      - name: Check
+      - name: Check web
         run: |
-          (
-            git config --global --add safe.directory "$PWD"
-            git init --quiet .
-            git add --all -- .gitignore web/src
-            cd web
-            pnpm check
-          )
-      - name: Build
-        run: (cd web && pnpm build)
+          git config --global --add safe.directory "$PWD"
+          git init --quiet .
+          git add --all -- .gitignore web/src
+          ./dev/checks/web
 
   web-smoke:
     timeout: 45m
@@ -205,4 +184,18 @@ jobs:
           ./dev/run-ci-local-stack web env \
             SCOPE_SMOKE_REPO=dev/public-demo \
             SCOPE_WEB_BASE_URL=http://localhost:3000 \
-            sh -c 'cd web && pnpm test:smoke'
+            ./dev/checks/integration web
+
+  repository-policy:
+    steps:
+      - name: Check repository policy
+        run: |
+          git config --global --add safe.directory "$PWD"
+          git init --quiet .
+          git add --all
+          ./dev/checks/policy
+
+  operations:
+    steps:
+      - name: Check operations
+        run: ./dev/checks/ops

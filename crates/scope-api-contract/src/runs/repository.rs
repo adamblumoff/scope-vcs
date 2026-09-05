@@ -127,6 +127,7 @@ pub enum RepositoryRunTerminalReason {
     TimedOut { step_index: Option<u32> },
     Canceled { step_index: Option<u32> },
     ExecutionLost { step_index: Option<u32> },
+    DispatchAttemptsExhausted,
     RuntimeSetupFailed { exit_code: i32, message: String },
 }
 

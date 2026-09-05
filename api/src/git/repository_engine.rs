@@ -209,6 +209,7 @@ impl RepositoryEngine {
                         &head_for_build,
                         &pack_spans_for_build,
                         &temp_path,
+                        None,
                     )
                     .await
                     {
@@ -463,8 +464,8 @@ impl RepositoryEngine {
                 repo_root,
                 repository_id,
                 span,
-                index + 1,
-                missing_count,
+                (index + 1, missing_count),
+                None,
             )
             .await?;
         }
@@ -478,6 +479,7 @@ impl RepositoryEngine {
                 head.head_oid.clone(),
             ],
             "advancing repository Git cache head",
+            None,
         )
         .await?;
         run_timed_git_restore_phase_async(
@@ -490,6 +492,7 @@ impl RepositoryEngine {
                 head.head_oid.clone(),
             ],
             "verifying caught-up repository Git cache",
+            None,
         )
         .await
     }

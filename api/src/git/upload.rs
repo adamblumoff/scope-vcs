@@ -7,7 +7,7 @@ use crate::{
         cache::{GitDerivedCacheNamespace, GitRepoHandle},
         git_read_scope_user,
         import::run_git,
-        projection_repo::{hash_field, projection_bare_repo_for_state},
+        projection_repo::projection_bare_repo_for_state,
         request_refs::attach_visible_request_refs,
     },
     repo_access::{ensure_repo_read, find_repo},
@@ -35,7 +35,6 @@ use scope_git_process::{
     ProcessLimits, STDERR_DIAGNOSTIC_BYTES, StreamingProcessError, run as run_process,
     run_with_stdout, truncated_stderr,
 };
-use sha1::{Digest, Sha1};
 use std::{
     fs,
     io::Read,
@@ -44,7 +43,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
-const GIT_READ_VIEW_CACHE_SEMANTICS_VERSION: &str = "named-request-read-view-v2";
+mod read_view_identity;
+#[cfg(test)]
+mod read_view_tests;
+use read_view_identity::GitReadViewIdentity;
 static GIT_READ_VIEW_CACHE_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
@@ -195,7 +197,6 @@ pub(crate) async fn git_upload_pack_repo_for_request(
         &repo.incarnation(),
         base_repo,
         public_base_repo,
-        viewer_user_id.as_deref(),
         &requests,
         &hidden_request_refs,
     )
@@ -207,7 +208,6 @@ async fn git_read_view_repo(
     incarnation: &RepositoryIncarnation,
     base_repo: GitRepoHandle,
     public_base_repo: Option<GitRepoHandle>,
-    viewer_user_id: Option<&str>,
     requests: &[Request],
     hidden_request_refs: &[String],
 ) -> Result<GitRepoHandle, ApiError> {
@@ -215,65 +215,35 @@ async fn git_read_view_repo(
         return Ok(base_repo);
     }
     let base_repo_path = base_repo.as_ref().to_path_buf();
-    let main_oid = tokio::task::spawn_blocking(move || {
-        git_command_output(
-            Command::new("git")
-                .arg("--git-dir")
-                .arg(base_repo_path)
-                .arg("rev-parse")
-                .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
-            None,
-        )
+    let public_base_repo_path = public_base_repo.as_deref().map(FsPath::to_path_buf);
+    let (main_oid, public_main_oid) = tokio::task::spawn_blocking(move || {
+        let head = |path: &FsPath| {
+            git_command_output(
+                Command::new("git")
+                    .arg("--git-dir")
+                    .arg(path)
+                    .arg("rev-parse")
+                    .arg(format!("refs/heads/{DEFAULT_GIT_BRANCH}")),
+                None,
+            )
+        };
+        Ok::<_, ApiError>((
+            head(&base_repo_path)?,
+            public_base_repo_path.as_deref().map(head).transpose()?,
+        ))
     })
     .await
     .map_err(|error| {
         ApiError::internal_message(format!("Git read-view identity task failed: {error}"))
     })??;
-    let mut hasher = Sha1::new();
-    hash_field(
-        &mut hasher,
-        b"repository",
-        incarnation.repository_id().as_bytes(),
-    );
-    hash_field(
-        &mut hasher,
-        b"incarnation",
-        incarnation.incarnation_id().as_bytes(),
-    );
-    hash_field(
-        &mut hasher,
-        b"semantics",
-        GIT_READ_VIEW_CACHE_SEMANTICS_VERSION.as_bytes(),
-    );
-    hash_field(&mut hasher, b"main", &main_oid);
-    match viewer_user_id {
-        Some(user_id) => {
-            hash_field(&mut hasher, b"authorization", b"user");
-            hash_field(&mut hasher, b"viewer", user_id.as_bytes());
-        }
-        None => hash_field(&mut hasher, b"authorization", b"public"),
-    }
-    for request in requests {
-        hash_field(&mut hasher, b"name", request.name.as_bytes());
-        hash_field(&mut hasher, b"head", request.head_oid.as_bytes());
-        hash_field(
-            &mut hasher,
-            b"audience",
-            format!("{:?}", request.audience).as_bytes(),
-        );
-        hash_field(
-            &mut hasher,
-            b"state",
-            format!("{:?}", request.state()).as_bytes(),
-        );
-        if let Some(snapshot) = request.git_snapshot.as_ref() {
-            hash_field(&mut hasher, b"snapshot", snapshot.sha256.as_bytes());
-        }
-    }
-    for request_name in hidden_request_refs {
-        hash_field(&mut hasher, b"hidden", request_name.as_bytes());
-    }
-    let cache_key = hex::encode(hasher.finalize());
+    let cache_key = GitReadViewIdentity::from_authorized_output(
+        incarnation,
+        &main_oid,
+        public_main_oid.as_deref(),
+        requests,
+        hidden_request_refs,
+    )
+    .cache_key();
     let cache_root = state.repository_engine.cache_root().to_path_buf();
     let repo_path = cache_root.join(format!("read-view-{cache_key}.git"));
     let repo_path_for_ready = repo_path.clone();

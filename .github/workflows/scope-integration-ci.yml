@@ -178,19 +178,14 @@ jobs:
         env:
           SCOPE_SMOKE_REPO: dev/public-demo
           SCOPE_WEB_BASE_URL: http://localhost:3000
-        run: pnpm test:smoke
+        run: ../dev/checks/integration web
 
       - name: Run two-actor CLI contribution flow
         if: inputs.run_cli && !cancelled() && steps.projections.outcome == 'success'
         env:
           SCOPE_API_URL: http://localhost:8080
           SCOPE_CLI_E2E: "1"
-        run: >-
-          cargo test
-          --manifest-path cli/Cargo.toml
-          --test contribution_flow
-          --locked
-          -- --nocapture
+        run: ./dev/checks/integration cli
 
       - name: Print local stack logs
         if: failure()

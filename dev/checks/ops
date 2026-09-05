@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+
+node --test .github/scripts/production-deployment-progress.test.mjs
+node --test .github/scripts/plan-production-deployment.test.mjs
+node --test .github/scripts/verify-staging-target.test.mjs
+node --test .github/scripts/stop-staging-writers.test.mjs
+bash .github/scripts/test-deploy-backend-railway.sh
+bash .github/scripts/test-staging-git-smoke.sh
+node --test bench/*.test.mjs
+node --test .github/scripts/railway-service-health.test.mjs
+node --test deploy/aws/cloud-runner-contract.test.mjs

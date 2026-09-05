@@ -31,11 +31,8 @@ jobs:
         with:
           node-version: 24
 
-      - name: Test Railway cutover orchestration
-        run: bash .github/scripts/test-deploy-backend-railway.sh
-
-      - name: Test AWS runner infrastructure contract
-        run: node --test deploy/aws/cloud-runner-contract.test.mjs
+      - name: Check deployment operations
+        run: ./dev/checks/ops
 
   release-artifact:
     name: Build backend deployment binaries

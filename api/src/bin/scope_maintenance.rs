@@ -16,6 +16,7 @@ commands:
   cleanup-git-segments-v1     delete retired Git segment objects after the v2 migration
   backfill-landing-files      idempotently rebuild repository landing-file metadata
   backfill-workflow-catalogs  idempotently rebuild repository workflow catalogs
+  scrub-retired-git-storage   delete retired local Git paths with writers stopped
   help                        show this help
 
 Production cutovers are owned by the backend deployment workflow. If apply may
@@ -36,6 +37,13 @@ async fn main() -> anyhow::Result<()> {
     let database_url = maintenance_database_url()?;
 
     match command.as_str() {
+        "scrub-retired-git-storage" => {
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .init();
+            let deleted = api::scrub_retired_git_storage_for_maintenance(database_url).await?;
+            println!(r#"{{"retiredGitPathsDeleted":{deleted},"complete":true}}"#);
+        }
         "plan" => {
             println!(
                 "{}",

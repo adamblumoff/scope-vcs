@@ -250,6 +250,9 @@ fn terminal_reason(reason: AttemptTerminalReason) -> RepositoryRunTerminalReason
         AttemptTerminalReason::ExecutionLost { step_index } => {
             RepositoryRunTerminalReason::ExecutionLost { step_index }
         }
+        AttemptTerminalReason::DispatchAttemptsExhausted => {
+            RepositoryRunTerminalReason::DispatchAttemptsExhausted
+        }
         AttemptTerminalReason::RuntimeSetupFailed { exit_code, message } => {
             RepositoryRunTerminalReason::RuntimeSetupFailed { exit_code, message }
         }

@@ -51,31 +51,8 @@ jobs:
           shared-key: workspace-${{ inputs.include_api && 'with-api' || 'without-api' }}
           save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
-      - name: Check Rust formatting
-        run: cargo fmt --all --check
-
-      - name: Test Rust workspace
-        shell: bash
-        run: |
-          if [[ "${{ inputs.include_api }}" == "true" ]]; then
-            cargo test --workspace --features api/test-support --locked
-          else
-            cargo test --workspace --exclude api --locked
-          fi
-
-      - name: Test API local development helpers
-        if: inputs.include_api
-        run: |
-          cargo test -p api --features local-dev --locked dev::
-
-      - name: Lint Rust workspace
-        shell: bash
-        run: |
-          if [[ "${{ inputs.include_api }}" == "true" ]]; then
-            cargo clippy --workspace --features api/test-support --all-targets --locked -- -D warnings
-          else
-            cargo clippy --workspace --exclude api --all-targets --locked -- -D warnings
-          fi
+      - name: Check Rust workspace
+        run: ./dev/checks/backend ${{ inputs.include_api && 'with-api' || 'without-api' }}
 
       - name: Enable pnpm
         if: inputs.include_api
@@ -98,5 +75,4 @@ jobs:
 
       - name: Check generated API TypeScript contract
         if: inputs.include_api
-        working-directory: web
-        run: pnpm check:api-contract
+        run: ./dev/checks/contract

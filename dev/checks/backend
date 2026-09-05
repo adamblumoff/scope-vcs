@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+
+variant="${1:?usage: backend with-api|without-api}"
+case "$variant" in
+  with-api) selection=(--workspace --features api/test-support) ;;
+  without-api) selection=(--workspace --exclude api) ;;
+  *) echo "unknown backend variant: $variant" >&2; exit 2 ;;
+esac
+cargo fmt --all --check
+cargo test "${selection[@]}" --locked
+if [[ "$variant" == with-api ]]; then
+  cargo test -p api --features local-dev --locked dev::
+fi
+cargo clippy "${selection[@]}" --all-targets --locked -- -D warnings

@@ -35,17 +35,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test scope-web
-        run: pnpm test
+      - name: Install Rust for API contract generation
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.98.0
 
-      - name: Type-check scope-web
-        run: pnpm typecheck
+      - name: Cache API contract build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-bin: false
+          shared-key: web-api-contract
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
-      - name: Check React health
-        run: pnpm check:react-doctor
-
-      - name: Check web structure
-        run: pnpm check:konsistent
-
-      - name: Build scope-web
-        run: pnpm build
+      - name: Check scope-web
+        run: ../dev/checks/web

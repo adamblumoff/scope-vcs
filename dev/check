@@ -37,47 +37,11 @@ read_root_env_value() {
   ' .env.local
 }
 
-guardrails() {
-  node --test .github/scripts/check-source-size.test.mjs
-  node .github/scripts/check-source-size.mjs
-  node --test .github/scripts/check-rust-boundaries.test.mjs
-  node .github/scripts/check-rust-boundaries.mjs
-  node .github/scripts/check-rust-toolchain-sync.mjs
-  node --test .github/scripts/check-rust-toolchain-sync.test.mjs
-}
-
-rust() {
-  cargo fmt --all --check
-  cargo test --workspace --features api/test-support --locked
-  cargo test -p api --features local-dev --locked dev::
-  cargo clippy --workspace --features api/test-support --all-targets --locked -- -D warnings
-}
-
-cli() {
-  cargo fmt --manifest-path cli/Cargo.toml -- --check
-  cargo test --manifest-path cli/Cargo.toml --locked
-  cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
-  cargo build --manifest-path cli/Cargo.toml --release --locked
-}
-
-web() {
-  (
-    cd web
-    pnpm test
-    pnpm check
-    pnpm build
-  )
-}
-
-ops() {
-  node --test .github/scripts/production-deployment-progress.test.mjs
-  node --test .github/scripts/plan-production-deployment.test.mjs
-  node --test .github/scripts/verify-staging-target.test.mjs
-  node --test .github/scripts/stop-staging-writers.test.mjs
-  bash .github/scripts/test-deploy-backend-railway.sh
-  bash .github/scripts/test-staging-git-smoke.sh
-  node --test bench/*.test.mjs
-}
+guardrails() { ./dev/checks/policy; }
+rust() { ./dev/checks/backend with-api; }
+cli() { ./dev/checks/cli; }
+web() { ./dev/checks/web; }
+ops() { ./dev/checks/ops; }
 
 smoke() {
   local smoke_repo="${SCOPE_SMOKE_REPO:-}"
@@ -89,11 +53,10 @@ smoke() {
     fi
   fi
   (
-    cd web
     if [[ -n "$smoke_repo" ]]; then
-      SCOPE_SMOKE_REPO="$smoke_repo" pnpm test:smoke
+      SCOPE_SMOKE_REPO="$smoke_repo" ./dev/checks/integration web
     else
-      pnpm test:smoke
+      ./dev/checks/integration web
     fi
   )
 }

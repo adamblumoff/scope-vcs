@@ -1,3 +1,5 @@
+pub(super) mod operation;
+
 use crate::{
     error::ApiError,
     git::{restore::restore_git_pack_spans, upload::git_process_output_with_limits},
@@ -58,15 +60,30 @@ async fn materialize_accepted_git_head_bundle(
     source: &RunSource,
     max_bytes: usize,
 ) -> Result<Vec<u8>, ApiError> {
+    let owner = operation::RunSourceOperation::new(state)?;
+    let state = state.clone();
+    let source = source.clone();
+    operation::supervise(async move {
+        materialize_owned_git_head_bundle(&state, &source, max_bytes, owner).await
+    })
+    .await
+}
+
+async fn materialize_owned_git_head_bundle(
+    state: &AppState,
+    source: &RunSource,
+    max_bytes: usize,
+    owner: std::sync::Arc<operation::RunSourceOperation>,
+) -> Result<Vec<u8>, ApiError> {
     let (repository_id, head, pack_spans) = source.logical_git_head().ok_or_else(|| {
         ApiError::internal_message("run source does not contain a materializable Git head")
     })?;
-    let repo = TemporaryRunSourceRepository::new(state)?;
-    restore_git_pack_spans(state, repository_id, head, pack_spans, repo.path()).await?;
+    let repo = operation::repository(&owner);
+    restore_git_pack_spans(state, repository_id, head, pack_spans, &repo, Some(&owner)).await?;
     let main_ref = format!("refs/heads/{DEFAULT_GIT_BRANCH}");
-    let repo_path = repo.path().to_path_buf();
+    let repo_path = repo;
     let timeout = state.runtime_budgets.git_command_timeout();
-    let output = tokio::task::spawn_blocking(move || {
+    let output = operation::spawn_blocking(Some(&owner), move || {
         git_process_output_with_limits(
             Command::new("git")
                 .arg("--git-dir")
@@ -330,9 +347,7 @@ mod tests {
         repository::git::GitHead, runs::source::RunSource,
     };
 
-    #[tokio::test]
-    async fn concurrent_git_head_materializations_restore_remote_segments_on_the_api_runtime() {
-        let state = AppState::test_state();
+    async fn git_head_fixture(state: &AppState) -> (RunSource, TemporaryRunSourceRepository) {
         let owner = UserAccount {
             id: "user-owner".to_string(),
             handle: "owner".to_string(),
@@ -349,7 +364,7 @@ mod tests {
             .admin()
             .seed_catalog_for_tests(catalog)
             .unwrap();
-        let repository = TemporaryRunSourceRepository::new(&state).unwrap();
+        let repository = TemporaryRunSourceRepository::new(state).unwrap();
         fs::create_dir_all(repository.path()).unwrap();
         run_git(
             None,
@@ -383,7 +398,7 @@ mod tests {
         )
         .unwrap();
 
-        let pushed = git_push_from_repo(&state, "owner/repo", repository.path(), None)
+        let pushed = git_push_from_repo(state, "owner/repo", repository.path(), None)
             .await
             .unwrap();
         let source = RunSource::accepted_git_head(
@@ -404,6 +419,13 @@ mod tests {
             .cleanup_local("owner/repo", &pushed.stored.pack_span.segment.segment_id)
             .await
             .unwrap();
+        (source, repository)
+    }
+
+    #[tokio::test]
+    async fn concurrent_git_head_materializations_restore_remote_segments_on_the_api_runtime() {
+        let state = AppState::test_state();
+        let (source, repository) = git_head_fixture(&state).await;
         let (first, second) = tokio::join!(
             materialize_run_source_bundle(&state, &source, 4 * 1024 * 1024),
             materialize_run_source_bundle(&state, &source, 4 * 1024 * 1024),
@@ -425,7 +447,114 @@ mod tests {
             .output()
             .unwrap();
         assert!(output.status.success());
-        assert!(String::from_utf8_lossy(&output.stdout).contains(&pushed.stored.head.head_oid));
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains(&source.logical_git_head().unwrap().1.head_oid)
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_index_and_bundle_requests_keep_repository_and_capacity_until_exit() {
+        use std::sync::{Arc, Mutex, atomic::AtomicUsize, mpsc};
+
+        // Restore children are cleanup, init, index, update-ref, fsck, symbolic-ref,
+        // followed by bundle creation. Pause inside the selected blocking child.
+        for phase in [3, 7] {
+            for outcome in ["success", "failure", "panic"] {
+                let state = AppState::test_state();
+                let (source, _fixture) = git_head_fixture(&state).await;
+                let _other_permit = state.runtime_budgets.try_git_materialization().unwrap();
+                let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+                let started_tx = Mutex::new(Some(started_tx));
+                let (release_tx, release_rx) = mpsc::channel();
+                let release_rx = Mutex::new(release_rx);
+                let count = AtomicUsize::new(0);
+                let repo_path = Arc::new(Mutex::new(PathBuf::new()));
+                let path_for_hook = repo_path.clone();
+                let owner = operation::with_hook(
+                    &state,
+                    Box::new(move || {
+                        if count.fetch_add(1, Ordering::SeqCst) + 1 != phase {
+                            return;
+                        }
+                        started_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+                        release_rx.lock().unwrap().recv().unwrap();
+                        let path = path_for_hook.lock().unwrap();
+                        assert!(path.exists(), "repository removed beneath blocking child");
+                        match outcome {
+                            "panic" => panic!("injected blocking child panic"),
+                            "failure" => {
+                                if phase == 3 {
+                                    for entry in fs::read_dir(&*path).unwrap() {
+                                        let entry = entry.unwrap();
+                                        if entry
+                                            .file_name()
+                                            .to_string_lossy()
+                                            .ends_with(".pack.tmp")
+                                        {
+                                            fs::remove_file(entry.path()).unwrap();
+                                        }
+                                    }
+                                } else {
+                                    fs::remove_file(path.join("refs/heads/main")).unwrap();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }),
+                );
+                // Observe the path without keeping the operation resources alive.
+                let path = operation::repository(&owner);
+                *repo_path.lock().unwrap() = path.clone();
+                let operation_state = state.clone();
+                let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+                let request = tokio::spawn(async move {
+                    operation::supervise(async move {
+                        let result = materialize_owned_git_head_bundle(
+                            &operation_state,
+                            &source,
+                            4 * 1024 * 1024,
+                            owner,
+                        )
+                        .await;
+                        completed_tx.send(result.is_ok()).unwrap();
+                        result
+                    })
+                    .await
+                });
+                tokio::time::timeout(Duration::from_secs(10), started_rx)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                request.abort();
+                assert!(request.await.unwrap_err().is_cancelled());
+                assert!(path.exists());
+                assert!(state.runtime_budgets.try_git_materialization().is_err());
+                release_tx.send(()).unwrap();
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(10), completed_rx)
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    outcome == "success",
+                );
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        if let Ok(permit) = state.runtime_budgets.try_git_materialization() {
+                            assert!(
+                                !path.exists(),
+                                "capacity returned before repository cleanup"
+                            );
+                            drop(permit);
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+        }
     }
 
     #[test]
