@@ -651,3 +651,6 @@ fn secret_name(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod fake;

@@ -31,4 +31,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+scope_postgres = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
