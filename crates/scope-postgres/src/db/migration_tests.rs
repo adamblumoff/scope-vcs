@@ -63,6 +63,7 @@ const LATEST_MIGRATIONS: &[&str] = &[
     "m0032_flat_discussion_replies",
     "m0033_git_segment_streaming_v2",
     "m0034_repository_incarnations",
+    "m0035_request_queue_indexes",
 ];
 
 pub(super) async fn isolated_database() -> (

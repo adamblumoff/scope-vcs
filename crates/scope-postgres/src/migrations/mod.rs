@@ -32,6 +32,7 @@ mod m0031_provider_neutral_run_attempts;
 mod m0032_flat_discussion_replies;
 mod m0033_git_segment_streaming_v2;
 mod m0034_repository_incarnations;
+mod m0035_request_queue_indexes;
 
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -158,6 +159,7 @@ fn inventory() -> Vec<MigrationSpec> {
             m0034_repository_incarnations::Migration,
             MaintenanceRequired,
         ),
+        spec(m0035_request_queue_indexes::Migration, Online),
     ]
 }
 
