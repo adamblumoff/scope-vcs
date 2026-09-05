@@ -14,7 +14,7 @@ import {
 } from 'react'
 import {
   defaultShowGraph,
-  mergeStepLogs,
+  mergeStepLogPage,
   reconcileAttemptOverrides,
   selectAttempt as selectAttemptInJob,
   selectJob,
@@ -247,14 +247,14 @@ export function useRepositoryRunDetailController({
       .then((page) => {
         if (!mountedRef.current) return false
         const previous = logStatesRef.current[key] ?? current
-        const merged = mergeStepLogs(after === undefined ? [] : previous.logs, page.logs)
+        const merged = mergeStepLogPage(previous, page, after)
         const nextState = {
           error: null,
           loading: false,
           logs: merged.logs,
           logsTruncated: page.logs_truncated,
           initialized: true,
-          hasEarlier: page.has_earlier || merged.truncated || (after !== undefined && previous.hasEarlier),
+          hasEarlier: merged.hasEarlier,
           hasMore: page.has_more,
           viewingEarlier: before !== undefined,
           failedPage: null,

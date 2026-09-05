@@ -4,6 +4,7 @@ import {
   attemptForJob,
   defaultShowGraph,
   latestAttempt,
+  mergeStepLogPage,
   mergeStepLogs,
   reconcileAttemptOverrides,
   runCanChange,
@@ -246,6 +247,50 @@ describe('repository run detail model', () => {
       logs: [{ position: 2, text, byte_length }],
       truncated: true,
     })
+  })
+})
+
+describe('step log pagination', () => {
+  const logs = [1, 2, 3].map((position) => ({ position, text: 'log\n', byte_length: 4 }))
+
+  it('does not offer earlier output already retained after an empty or appended refresh', () => {
+    const initial = mergeStepLogPage(
+      { logs: [], hasEarlier: false },
+      { logs: logs.slice(0, 2), has_earlier: false },
+      undefined,
+    )
+    const refreshed = mergeStepLogPage(initial, { logs: [], has_earlier: true }, 2)
+    assert.deepEqual(refreshed, initial)
+    assert.deepEqual(
+      mergeStepLogPage(refreshed, { logs: logs.slice(2), has_earlier: true }, 2),
+      { logs, hasEarlier: false },
+    )
+  })
+
+  it('keeps genuinely earlier output available across refreshes and clears it at the first page', () => {
+    const latest = mergeStepLogPage(
+      { logs: [], hasEarlier: false },
+      { logs: logs.slice(1), has_earlier: true },
+      undefined,
+    )
+    assert.equal(mergeStepLogPage(latest, { logs: [], has_earlier: false }, 3).hasEarlier, true)
+    assert.deepEqual(
+      mergeStepLogPage(latest, { logs: logs.slice(0, 1), has_earlier: false }, undefined),
+      { logs: logs.slice(0, 1), hasEarlier: false },
+    )
+  })
+
+  it('offers earlier output when the retained window evicts old chunks', () => {
+    const text = 'x'.repeat(300 * 1_024)
+    const largeLogs = logs.map((log) => ({ ...log, text, byte_length: Buffer.byteLength(text) }))
+    assert.deepEqual(
+      mergeStepLogPage(
+        { logs: largeLogs.slice(0, 1), hasEarlier: false },
+        { logs: largeLogs.slice(1, 2), has_earlier: true },
+        1,
+      ),
+      { logs: largeLogs.slice(1, 2), hasEarlier: true },
+    )
   })
 })
 

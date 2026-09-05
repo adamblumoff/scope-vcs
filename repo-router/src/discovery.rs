@@ -92,7 +92,7 @@ impl BackendDiscovery {
 
     pub(crate) async fn backends(&self) -> anyhow::Result<DiscoveredBackends> {
         loop {
-            // Register before inspecting the state so initial discovery cannot miss completion.
+            // Register before inspecting the state so discovery cannot miss refresh completion.
             let refreshed = self.state.refreshed.notified();
             tokio::pin!(refreshed);
             refreshed.as_mut().enable();
@@ -108,22 +108,24 @@ impl BackendDiscovery {
                 }
                 if let Some(snapshot) = &cached.snapshot {
                     let age = now.saturating_duration_since(snapshot.resolved_at);
-                    if age > self.max_stale_age {
+                    if age <= self.max_stale_age {
+                        return Ok(DiscoveredBackends {
+                            backends: snapshot.backends.clone(),
+                            freshness: if age < self.refresh_after {
+                                DiscoveryFreshness::Fresh
+                            } else {
+                                DiscoveryFreshness::Stale
+                            },
+                            age,
+                        });
+                    }
+                    if cached.refresh.is_none() {
                         let error = cached
                             .last_error
                             .as_deref()
-                            .unwrap_or("discovery refresh is pending");
+                            .unwrap_or("discovery unavailable");
                         return Err(expired_error(&self.authority, age, error));
                     }
-                    return Ok(DiscoveredBackends {
-                        backends: snapshot.backends.clone(),
-                        freshness: if age < self.refresh_after {
-                            DiscoveryFreshness::Fresh
-                        } else {
-                            DiscoveryFreshness::Stale
-                        },
-                        age,
-                    });
                 }
                 if cached.refresh.is_none() {
                     return Err(anyhow::anyhow!(
@@ -330,14 +332,28 @@ mod tests {
 
         wait_for_refresh(&discovery).await;
         age_snapshot(&discovery, Duration::from_secs(31)).await;
-        assert!(
-            discovery
-                .backends()
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("expired")
-        );
+        let error = discovery.backends().await.unwrap_err().to_string();
+        assert!(error.contains("expired"));
+        assert!(error.contains("still down"));
+        let repeated_error = tokio::time::timeout(Duration::from_millis(100), discovery.backends())
+            .await
+            .expect("a completed refresh failure remains rate limited")
+            .unwrap_err();
+        assert!(repeated_error.to_string().contains("still down"));
+    }
+
+    #[tokio::test]
+    async fn expired_snapshot_waits_for_healthy_refresh() {
+        let first = "127.0.0.1:8080".parse().unwrap();
+        let second = "127.0.0.2:8080".parse().unwrap();
+        let discovery = scripted(vec![Ok(vec![first]), Ok(vec![second])]);
+        discovery.backends().await.unwrap();
+        age_snapshot(&discovery, Duration::from_secs(31)).await;
+
+        let refreshed = discovery.backends().await.unwrap();
+
+        assert_eq!(refreshed.freshness, DiscoveryFreshness::Fresh);
+        assert_eq!(refreshed.backends[0].address, second);
     }
 
     #[tokio::test]

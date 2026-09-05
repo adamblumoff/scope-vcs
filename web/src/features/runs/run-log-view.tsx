@@ -37,9 +37,14 @@ export function RunLogView({
 
   useEffect(() => {
     const node = scrollRef.current
-    if (!node || (!logState.viewingEarlier && !following)) return
-    // Position the rendered page after fetched or streamed output updates the DOM.
-    node.scrollTop = logState.viewingEarlier ? 0 : node.scrollHeight
+    if (!node || !logState.viewingEarlier) return
+    node.scrollTop = 0
+  }, [logState.logs, logState.viewingEarlier])
+
+  useEffect(() => {
+    const node = scrollRef.current
+    if (!node || logState.viewingEarlier || !following) return
+    node.scrollTop = node.scrollHeight
   }, [following, logState.logs, logState.viewingEarlier])
 
   useEffect(() => {

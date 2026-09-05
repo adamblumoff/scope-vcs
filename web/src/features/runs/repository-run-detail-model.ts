@@ -149,7 +149,22 @@ export function defaultShowGraph(jobs: readonly JobLike[]) {
     jobs.some(({ job }) => job.needs.length > 0)
 }
 
-export function mergeStepLogs<T extends { position: number; text: string; byte_length: number }>(
+type StepLogLike = { position: number; text: string; byte_length: number }
+
+export function mergeStepLogPage<T extends StepLogLike>(
+  previous: { logs: readonly T[]; hasEarlier: boolean },
+  page: { logs: readonly T[]; has_earlier: boolean },
+  after: number | undefined,
+) {
+  const merged = mergeStepLogs(after === undefined ? [] : previous.logs, page.logs)
+  return {
+    logs: merged.logs,
+    // Forward pages can have earlier rows already present in the retained window.
+    hasEarlier: merged.truncated || (after === undefined ? page.has_earlier : previous.hasEarlier),
+  }
+}
+
+export function mergeStepLogs<T extends StepLogLike>(
   previous: readonly T[],
   incoming: readonly T[],
 ) {
