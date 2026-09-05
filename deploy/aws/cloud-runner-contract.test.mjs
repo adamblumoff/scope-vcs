@@ -75,3 +75,45 @@ test('the same optional ARN reaches CloudFormation without becoming a secret val
   )
   assert.doesNotMatch(infrastructureWorkflow, /secrets\.SCOPE_REGISTRY_CREDENTIALS_SECRET_ARN/)
 })
+
+test('managed instances stay opt-in and retire idle experiment hosts immediately', () => {
+  const parameters = between(template, 'Parameters:', 'Conditions:')
+  assert.match(
+    parameters,
+    /RunnerCapacity:\n\s+Type: String\n\s+Default: FARGATE[\s\S]*?- MANAGED_INSTANCES/,
+  )
+  const provider = between(template, '  ManagedCapacityProvider:', '  RunnerClusterCapacityProviders:')
+  assert.match(provider, /Condition: UseManagedInstances/)
+  assert.match(provider, /ScaleInAfter: 0/)
+  assert.match(provider, /CapacityOptionType: ON_DEMAND/)
+  assert.match(provider, /AllowedInstanceTypes:\n\s+- !Ref ManagedInstanceType/)
+  assert.match(provider, /VCpuCount:\n\s+Min: 4\n\s+Max: 4/)
+  assert.match(provider, /MemoryMiB:\n\s+Min: 16384\n\s+Max: 16384/)
+  assert.match(
+    parameters,
+    /ManagedInstanceType:\n\s+Type: String\n\s+Default: m8a\.xlarge\n\s+AllowedValues:\n\s+- m8a\.xlarge/,
+  )
+})
+
+test('task-family cleanup reflects the AWS authorization boundary', () => {
+  const parameters = between(template, 'Parameters:', 'Conditions:')
+  assert.match(
+    parameters,
+    /TaskFamilyPrefix:\n\s+Type: String\n\s+Default: scope-runner-/,
+  )
+  const dispatcher = between(template, '  RailwayDispatcherPolicy:', '  RunnerBudget:')
+  const deregister = between(
+    dispatcher,
+    '          - Sid: DeregisterAttemptTaskDefinitions',
+    '          - Sid: RunScopeTaskDefinitions',
+  )
+  assert.match(deregister, /Resource: "\*"/)
+  assert.match(
+    deregister,
+    /ECS task-definition lifecycle actions do not support resource-level\n\s+# permissions/,
+  )
+  assert.match(
+    applyScript,
+    /ParameterKey=TaskFamilyPrefix,ParameterValue=\$task_family_prefix/,
+  )
+})

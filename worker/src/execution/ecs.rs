@@ -1,17 +1,18 @@
-use super::super::settings::CloudExecutionSettings;
+use super::super::settings::{CloudCapacity, CloudExecutionSettings};
 use anyhow::{Context as _, bail};
 use aws_config::BehaviorVersion;
 #[cfg(test)]
-use aws_sdk_ecs::types::{Compatibility, TaskDefinition};
+use aws_sdk_ecs::types::TaskDefinition;
 use aws_sdk_ecs::{
     Client as EcsSdkClient,
     config::Region,
     error::ProvideErrorMetadata,
     types::{
-        AssignPublicIp, AwsVpcConfiguration, ContainerDefinition, ContainerOverride,
-        CpuArchitecture, Failure, KeyValuePair, LaunchType, LogConfiguration, LogDriver,
-        NetworkConfiguration, NetworkMode, OsFamily, RepositoryCredentials, RuntimePlatform,
-        Secret, SortOrder, Tag, Task, TaskDefinitionStatus, TaskOverride,
+        AssignPublicIp, AwsVpcConfiguration, CapacityProviderStrategyItem, Compatibility,
+        ContainerDefinition, ContainerOverride, CpuArchitecture, Failure, KeyValuePair,
+        LogConfiguration, LogDriver, NetworkConfiguration, NetworkMode, OsFamily,
+        RepositoryCredentials, RuntimePlatform, Secret, SortOrder, Tag, Task, TaskDefinitionStatus,
+        TaskOverride,
     },
 };
 use aws_sdk_secretsmanager::{Client as SecretsManagerClient, types::Tag as SecretTag};
@@ -25,8 +26,6 @@ const CONTAINER_NAME: &str = "scope-runner";
 const BOOTSTRAP_SECRET_ENV: &str = "SCOPE_BOOTSTRAP_TOKEN";
 const RUNTIME_ENTRYPOINT: &str = "/scope/bin/scope-runner-runtime";
 const TASK_CPU: &str = "4096";
-const TASK_MEMORY: &str = "16384";
-const TASK_FAMILY_PREFIX: &str = "scope-runner-";
 const AMBIGUOUS_START_CONSISTENCY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CONSISTENCY_INITIAL_DELAY: Duration = Duration::from_secs(2);
 const CONSISTENCY_MAX_DELAY: Duration = Duration::from_secs(30);
@@ -80,22 +79,16 @@ impl EcsClient {
             Ok(task_definition) => task_definition,
             Err(error) => return Err(self.reject_after_cleanup(attempt_id, error).await),
         };
-        let network = AwsVpcConfiguration::builder()
-            .assign_public_ip(AssignPublicIp::Enabled)
-            .set_subnets(Some(self.settings.ecs_subnet_ids.clone()))
-            .security_groups(self.settings.ecs_security_group_id.clone())
-            .build()
-            .map_err(|error| {
-                StartError::Rejected(anyhow::Error::new(error).context("build ECS task network"))
-            })?;
+        let network = task_network(&self.settings).map_err(StartError::Rejected)?;
+        let capacity_provider = capacity_provider_strategy(&self.settings.ecs_capacity)
+            .map_err(StartError::Rejected)?;
         let overrides = task_override(&self.settings.api_url, attempt_id, deadline_unix);
-        let result = match self
+        let request = self
             .client
             .run_task()
             .cluster(&self.settings.ecs_cluster_arn)
             .task_definition(task_definition)
-            .launch_type(LaunchType::Fargate)
-            .platform_version("LATEST")
+            .capacity_provider_strategy(capacity_provider)
             .count(1)
             .client_token(attempt_id)
             .started_by(attempt_id)
@@ -108,10 +101,13 @@ impl EcsClient {
             .overrides(overrides)
             .tags(scope_tag("Project", "scope-vcs"))
             .tags(scope_tag("Component", "cloud-runner"))
-            .tags(scope_tag("AttemptId", attempt_id))
-            .send()
-            .await
-        {
+            .tags(scope_tag("AttemptId", attempt_id));
+        let request = if self.settings.ecs_capacity.is_fargate() {
+            request.platform_version("LATEST")
+        } else {
+            request
+        };
+        let result = match request.send().await {
             Ok(result) => result,
             Err(error) => {
                 let rejected = error
@@ -210,7 +206,7 @@ impl EcsClient {
     }
 
     async fn cleanup_attempt_resources(&self, attempt_id: &str) -> anyhow::Result<()> {
-        let family = task_family(attempt_id)?;
+        let family = task_family(&self.settings.ecs_task_family_prefix, attempt_id)?;
         let definitions = self
             .client
             .list_task_definitions()
@@ -340,7 +336,7 @@ impl EcsClient {
         image: &str,
         secret_arn: &str,
     ) -> anyhow::Result<String> {
-        let family = task_family(attempt_id)?;
+        let family = task_family(&self.settings.ecs_task_family_prefix, attempt_id)?;
         let container = runner_container(
             image,
             &self.settings.aws_region,
@@ -353,9 +349,9 @@ impl EcsClient {
             .register_task_definition()
             .family(family)
             .network_mode(NetworkMode::Awsvpc)
-            .requires_compatibilities(aws_sdk_ecs::types::Compatibility::Fargate)
+            .requires_compatibilities(task_compatibility(&self.settings.ecs_capacity))
             .cpu(TASK_CPU)
-            .memory(TASK_MEMORY)
+            .memory(self.settings.ecs_task_memory_mib.to_string())
             .execution_role_arn(&self.settings.ecs_execution_role_arn)
             .runtime_platform(runtime_platform())
             .container_definitions(container)
@@ -372,6 +368,35 @@ impl EcsClient {
             .map(str::to_string)
             .context("ECS registered a task definition without an ARN")
     }
+}
+
+fn task_compatibility(capacity: &CloudCapacity) -> Compatibility {
+    match capacity {
+        CloudCapacity::Fargate => Compatibility::Fargate,
+        CloudCapacity::ManagedInstances { .. } => Compatibility::ManagedInstances,
+    }
+}
+
+fn task_network(settings: &CloudExecutionSettings) -> anyhow::Result<AwsVpcConfiguration> {
+    let network = AwsVpcConfiguration::builder()
+        .set_subnets(Some(settings.ecs_subnet_ids.clone()))
+        .security_groups(settings.ecs_security_group_id.clone());
+    let network = if settings.ecs_capacity.is_fargate() {
+        network.assign_public_ip(AssignPublicIp::Enabled)
+    } else {
+        network
+    };
+    network.build().context("build ECS task network")
+}
+
+fn capacity_provider_strategy(
+    capacity: &CloudCapacity,
+) -> anyhow::Result<CapacityProviderStrategyItem> {
+    CapacityProviderStrategyItem::builder()
+        .capacity_provider(capacity.capacity_provider())
+        .weight(1)
+        .build()
+        .context("build ECS capacity provider strategy")
 }
 
 fn task_has_stopped(tasks: &[Task], failures: &[Failure], task_arn: &str) -> anyhow::Result<bool> {
@@ -481,10 +506,12 @@ fn verify_task_definition_contract(
     bootstrap_secret_arn: &str,
     settings: &CloudExecutionSettings,
 ) -> anyhow::Result<()> {
+    let expected_compatibility = task_compatibility(&settings.ecs_capacity);
+    let expected_memory = settings.ecs_task_memory_mib.to_string();
     if definition.network_mode() != Some(&NetworkMode::Awsvpc)
-        || definition.requires_compatibilities() != [Compatibility::Fargate]
+        || definition.requires_compatibilities() != [expected_compatibility]
         || definition.cpu() != Some(TASK_CPU)
-        || definition.memory() != Some(TASK_MEMORY)
+        || definition.memory() != Some(expected_memory.as_str())
         || definition.execution_role_arn() != Some(settings.ecs_execution_role_arn.as_str())
         || definition.task_role_arn().is_some()
         || definition.runtime_platform() != Some(&runtime_platform())
@@ -498,7 +525,7 @@ fn verify_task_definition_contract(
         || definition.enable_fault_injection() == Some(true)
         || definition.container_definitions().len() != 1
     {
-        bail!("stored definition differs from the expected Fargate task");
+        bail!("stored definition differs from the expected ECS task");
     }
     verify_container_contract(
         &definition.container_definitions()[0],
@@ -610,7 +637,15 @@ fn image_digest(image: &str) -> anyhow::Result<&str> {
     Ok(digest)
 }
 
-fn task_family(attempt_id: &str) -> anyhow::Result<String> {
+fn task_family(prefix: &str, attempt_id: &str) -> anyhow::Result<String> {
+    validate_attempt_id(attempt_id)?;
+    if prefix.len() + attempt_id.len() > 255 {
+        bail!("attempt id and configured prefix exceed the ECS task family limit");
+    }
+    Ok(format!("{prefix}{attempt_id}"))
+}
+
+fn validate_attempt_id(attempt_id: &str) -> anyhow::Result<()> {
     if attempt_id.is_empty()
         || !attempt_id
             .bytes()
@@ -618,7 +653,7 @@ fn task_family(attempt_id: &str) -> anyhow::Result<String> {
     {
         bail!("attempt id cannot form an ECS task family");
     }
-    Ok(format!("{TASK_FAMILY_PREFIX}{attempt_id}"))
+    Ok(())
 }
 
 fn task_definition_family(arn: &str) -> Option<&str> {
@@ -638,7 +673,7 @@ fn secret_name(
         .map(|(_, cluster)| cluster)
         .filter(|cluster| !cluster.is_empty())
         .context("ECS cluster ARN is missing its cluster name")?;
-    task_family(attempt_id)?;
+    validate_attempt_id(attempt_id)?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret_name_key)
         .expect("a fixed-size HMAC key is always valid");
     mac.update(attempt_id.as_bytes());

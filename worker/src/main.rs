@@ -102,6 +102,15 @@ async fn run() -> anyhow::Result<()> {
         git_segment_channel_capacity = settings.git_segment_store.channel_capacity,
         "starting worker"
     );
+    if let Some(execution) = settings.execution.as_ref() {
+        tracing::info!(
+            ecs_capacity_provider = execution.ecs_capacity.capacity_provider(),
+            ecs_task_memory_mib = execution.ecs_task_memory_mib,
+            ecs_task_family_prefix = %execution.ecs_task_family_prefix,
+            cloud_run_max_concurrency = execution.max_concurrency,
+            "configured cloud execution"
+        );
+    }
 
     let health = WorkerHealth::new(settings.poll_interval, settings.role);
     let health_server = health.clone().serve(settings.health_port);
