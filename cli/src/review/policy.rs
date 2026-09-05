@@ -14,8 +14,27 @@ pub fn toggle_node_visibility(
     repo_visibility::toggle_visibility_target(config, target_for_node(tree, node_id))
 }
 
-pub fn node_visibility(config: &RepoConfig, tree: &ReviewTree, node_id: usize) -> ReviewVisibility {
-    repo_visibility::target_visibility(config, &target_for_node(tree, node_id))
+pub fn tree_visibilities(config: &RepoConfig, tree: &ReviewTree) -> Vec<ReviewVisibility> {
+    let mut visibilities = vec![ReviewVisibility::Mixed; tree.nodes().len()];
+    // Nodes are inserted after their parents, so every child summary is ready.
+    for node in tree.nodes().iter().rev() {
+        let children = if node.kind == ReviewNodeKind::File {
+            &[][..]
+        } else {
+            node.children.as_slice()
+        };
+        visibilities[node.id] = children
+            .iter()
+            .map(|child| visibilities[*child])
+            .reduce(ReviewVisibility::combine)
+            .unwrap_or_else(|| {
+                repo_visibility::target_visibility(
+                    config,
+                    &target_for_review_node(node, Vec::new()),
+                )
+            });
+    }
+    visibilities
 }
 
 pub fn rule_label(config: &RepoConfig, node: &ReviewNode) -> String {

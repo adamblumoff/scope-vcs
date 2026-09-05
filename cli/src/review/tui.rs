@@ -48,13 +48,13 @@ pub fn run_review_tui(
             ReviewStateAction::None => {}
             ReviewStateAction::Save => {
                 if state.is_dirty() {
-                    save_config(&state.config)?;
+                    save_config(state.config())?;
                     state.mark_saved();
                 }
             }
             ReviewStateAction::ContinuePush => {
                 if state.is_dirty() {
-                    save_config(&state.config)?;
+                    save_config(state.config())?;
                 }
                 return Ok(TuiOutcome::ContinuePush);
             }
@@ -121,10 +121,13 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
         .into_iter()
         .map(|line| Line::from(terminal_safe(&line)))
         .collect::<Vec<_>>();
-    let rows = state.visible_rows();
-    let (read_only_height, row_height) =
-        review_body_heights(body_height, read_only_lines.len(), rows.len());
+    let (read_only_height, row_height) = review_body_heights(
+        body_height,
+        read_only_lines.len(),
+        state.visible_row_count(),
+    );
     state.adjust_scroll(row_height);
+    let rows = state.visible_rows(state.scroll(), row_height);
     let mut lines = read_only_lines
         .into_iter()
         .take(read_only_height)
@@ -132,9 +135,7 @@ fn render(frame: &mut Frame<'_>, state: &mut ReviewState) {
     lines.extend(
         rows.iter()
             .enumerate()
-            .skip(state.scroll())
-            .take(row_height)
-            .map(|(index, row)| row_line(row, index == state.cursor(), width)),
+            .map(|(index, row)| row_line(row, index + state.scroll() == state.cursor(), width)),
     );
     frame.render_widget(Paragraph::new(lines), chunks[1]);
 
