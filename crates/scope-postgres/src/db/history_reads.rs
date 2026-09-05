@@ -16,14 +16,20 @@ pub struct RepositoryHistoryQuery<'a> {
     pub incarnation: &'a RepositoryIncarnation,
     pub version: u64,
     pub audience: ProjectionViewKey,
-    pub before_source_id: Option<&'a str>,
+    pub before: Option<&'a RepositoryHistoryBoundary>,
     pub entry_source_id: Option<&'a str>,
     pub limit: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryHistoryBoundary {
+    pub generation: String,
+    pub position: u64,
+}
+
 pub struct RepositoryHistoryPage {
     pub view: HistoryView,
-    pub has_more: bool,
+    pub next_boundary: Option<RepositoryHistoryBoundary>,
     pub available: bool,
 }
 
@@ -189,7 +195,7 @@ impl RepositoryStore {
             incarnation,
             version,
             audience,
-            before_source_id,
+            before,
             entry_source_id,
             limit,
         } = query;
@@ -211,26 +217,36 @@ impl RepositoryStore {
                 self.ensure_history_view(incarnation).await?;
                 continue;
             };
-            let boundary = match before_source_id {
-            Some(source_id) => Some(tx.query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
-                "SELECT position FROM scope_repository_history_entries WHERE repo_id=$1 AND audience=$2 AND source_id=$3",
-                [incarnation.repository_id().into(), audience.as_str().into(), source_id.into()],
-            )).await.map_err(PostgresError::internal)?.ok_or_else(|| PostgresError::invalid_input("history cursor boundary is no longer available"))?
-                .try_get::<i64>("", "position").map_err(PostgresError::internal)?),
-            None => None,
-        };
+            let boundary = match before {
+                Some(boundary) => {
+                    if boundary.generation != metadata.generation {
+                        return Err(PostgresError::invalid_input(
+                            "history changed; restart pagination",
+                        ));
+                    }
+                    let position = entities::u64_to_i64(boundary.position, "history position")?;
+                    tx.query_one(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        "SELECT position FROM scope_repository_history_entries WHERE repo_id=$1 AND audience=$2 AND position=$3",
+                        [incarnation.repository_id().into(), audience.as_str().into(), position.into()],
+                    )).await.map_err(PostgresError::internal)?
+                        .ok_or_else(|| PostgresError::invalid_input("history cursor boundary is no longer available"))?;
+                    Some(position)
+                }
+                None => None,
+            };
             let limit = limit.clamp(1, 50) as i64;
             // Separate predicates retain index bounds even after PostgreSQL chooses a generic plan.
             let mut values = vec![incarnation.repository_id().into(), audience.as_str().into()];
             let sql = if let Some(source_id) = entry_source_id {
                 values.push(source_id.into());
-                "SELECT payload FROM scope_repository_history_entries WHERE repo_id=$1 AND audience=$2 AND source_id=$3 LIMIT 1"
+                "SELECT position, payload FROM scope_repository_history_entries WHERE repo_id=$1 AND audience=$2 AND source_id=$3 ORDER BY position DESC LIMIT 1"
             } else if let Some(position) = boundary {
                 values.extend([position.into(), (limit + 1).into()]);
-                "SELECT payload FROM scope_repository_history_entries WHERE repo_id=$1 AND audience=$2 AND position<$3 ORDER BY position DESC LIMIT $4"
+                "SELECT position, payload FROM scope_repository_history_entries WHERE repo_id=$1 AND audience=$2 AND position<$3 ORDER BY position DESC LIMIT $4"
             } else {
                 values.push((limit + 1).into());
-                "SELECT payload FROM scope_repository_history_entries WHERE repo_id=$1 AND audience=$2 ORDER BY position DESC LIMIT $3"
+                "SELECT position, payload FROM scope_repository_history_entries WHERE repo_id=$1 AND audience=$2 ORDER BY position DESC LIMIT $3"
             };
             let rows = tx
                 .query_all(Statement::from_sql_and_values(
@@ -240,6 +256,19 @@ impl RepositoryStore {
                 ))
                 .await
                 .map_err(PostgresError::internal)?;
+            let next_boundary = if rows.len() > limit as usize {
+                Some(RepositoryHistoryBoundary {
+                    generation: metadata.generation.clone(),
+                    position: entities::i64_to_u64(
+                        rows[limit as usize - 1]
+                            .try_get("", "position")
+                            .map_err(PostgresError::internal)?,
+                        "history position",
+                    )?,
+                })
+            } else {
+                None
+            };
             let mut entries = rows
                 .into_iter()
                 .map(|row| {
@@ -250,7 +279,6 @@ impl RepositoryStore {
                     .map_err(PostgresError::internal)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let has_more = entries.len() > limit as usize;
             entries.truncate(limit as usize);
             tx.commit().await.map_err(PostgresError::internal)?;
             return Ok(RepositoryHistoryPage {
@@ -260,7 +288,7 @@ impl RepositoryStore {
                     generation: metadata.generation,
                     entries,
                 },
-                has_more,
+                next_boundary,
                 available: metadata.available,
             });
         }

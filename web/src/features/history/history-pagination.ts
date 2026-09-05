@@ -5,16 +5,12 @@ export type LoadedHistory = Pick<HistoryPage, 'entries' | 'next_cursor'>
 export function appendHistoryPage(
   current: LoadedHistory,
   page: HistoryPage,
+  before: string,
 ): LoadedHistory {
-  const knownIds = new Set(current.entries.map((entry) => entry.source_id))
-  const entries = [...current.entries]
-  for (const entry of page.entries) {
-    if (!knownIds.has(entry.source_id)) {
-      knownIds.add(entry.source_id)
-      entries.push(entry)
-    }
-  }
-  return { entries, next_cursor: page.next_cursor }
+  if (current.next_cursor !== before) return current
+  // Generation-bound cursor pages do not overlap. One source can legitimately
+  // contribute multiple visibility fragments, each of which must remain visible.
+  return { entries: [...current.entries, ...page.entries], next_cursor: page.next_cursor }
 }
 
 export function historySummary(

@@ -515,7 +515,6 @@ async fn history_pages_are_newest_first_and_exhaust_cleanly() {
     assert_eq!(first_entries[49]["source_id"], "rv6");
     let cursor = first["next_cursor"].as_str().unwrap();
 
-    replace_test_repo(&state, paged_history_repo(&state, 56)).await;
     let second = history_get(
         state,
         format!("/v1/repos/owner/repo/history?audience=public&before={cursor}"),
@@ -528,11 +527,88 @@ async fn history_pages_are_newest_first_and_exhaust_cleanly() {
     assert_eq!(second_entries.len(), 5);
     assert_eq!(second_entries[0]["source_id"], "rv5");
     assert_eq!(second_entries[4]["source_id"], "rv1");
+    assert_eq!(second["generation"], first["generation"]);
+    assert_eq!(
+        first_entries
+            .iter()
+            .chain(second_entries)
+            .map(|entry| entry["source_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        (1..=55)
+            .rev()
+            .map(|index| format!("rv{index}"))
+            .collect::<Vec<_>>(),
+    );
     assert!(second["next_cursor"].is_null());
 }
 
 #[tokio::test]
-async fn history_cursor_and_entry_urls_survive_projection_id_renumbering() {
+async fn history_cursor_rejects_appended_history_and_restarts_from_the_new_generation() {
+    let state = test_state_with_repo();
+    replace_test_repo(&state, paged_history_repo(&state, 55)).await;
+    let first = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/history?audience=public",
+        false,
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = response_json(first).await;
+    let cursor = first["next_cursor"].as_str().unwrap();
+
+    replace_test_repo(&state, paged_history_repo(&state, 56)).await;
+    let stale = history_get(
+        state.clone(),
+        format!("/v1/repos/owner/repo/history?audience=public&before={cursor}"),
+        false,
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(stale).await["message"],
+        "history changed; restart pagination"
+    );
+
+    let restarted = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/history?audience=public",
+        false,
+    )
+    .await;
+    assert_eq!(restarted.status(), StatusCode::OK);
+    let restarted = response_json(restarted).await;
+    assert_ne!(restarted["generation"], first["generation"]);
+    let restarted_entries = restarted["entries"].as_array().unwrap();
+    assert_eq!(restarted_entries.len(), 50);
+    assert_eq!(restarted_entries[0]["source_id"], "rv56");
+    let cursor = restarted["next_cursor"].as_str().unwrap();
+    let second = history_get(
+        state,
+        format!("/v1/repos/owner/repo/history?audience=public&before={cursor}"),
+        false,
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second = response_json(second).await;
+    let second_entries = second["entries"].as_array().unwrap();
+    assert_eq!(second_entries.len(), 6);
+    assert_eq!(second["generation"], restarted["generation"]);
+    assert_eq!(
+        restarted_entries
+            .iter()
+            .chain(second_entries)
+            .map(|entry| entry["source_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        (1..=56)
+            .rev()
+            .map(|index| format!("rv{index}"))
+            .collect::<Vec<_>>(),
+    );
+    assert!(second["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn history_cursor_restarts_after_reprojection_while_entry_urls_remain_stable() {
     let state = test_state_with_repo();
     replace_test_repo(&state, paged_history_repo(&state, 51)).await;
 
@@ -564,6 +640,42 @@ async fn history_cursor_and_entry_urls_survive_projection_id_renumbering() {
         });
     replace_test_repo(&state, repo).await;
 
+    let stale = history_get(
+        state.clone(),
+        format!("/v1/repos/owner/repo/history?audience=public&before={cursor}"),
+        false,
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(stale).await["message"],
+        "history changed; restart pagination"
+    );
+
+    let restarted = history_get(
+        state.clone(),
+        "/v1/repos/owner/repo/history?audience=public",
+        false,
+    )
+    .await;
+    assert_eq!(restarted.status(), StatusCode::OK);
+    let restarted = response_json(restarted).await;
+    assert_ne!(restarted["generation"], first["generation"]);
+    assert_eq!(
+        restarted["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| &entry["source_id"])
+            .collect::<Vec<_>>(),
+        first["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| &entry["source_id"])
+            .collect::<Vec<_>>(),
+    );
+    let cursor = restarted["next_cursor"].as_str().unwrap();
     let second = history_get(
         state.clone(),
         format!("/v1/repos/owner/repo/history?audience=public&before={cursor}"),
@@ -572,6 +684,8 @@ async fn history_cursor_and_entry_urls_survive_projection_id_renumbering() {
     .await;
     assert_eq!(second.status(), StatusCode::OK);
     let second = response_json(second).await;
+    assert_eq!(second["generation"], restarted["generation"]);
+    assert_eq!(second["entries"].as_array().unwrap().len(), 2);
     assert_eq!(second["entries"][0]["source_id"], "visibility-after-rv1");
     assert_eq!(second["entries"][1]["source_id"], "rv1");
     assert!(second["next_cursor"].is_null());

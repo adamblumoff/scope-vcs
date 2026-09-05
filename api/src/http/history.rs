@@ -26,14 +26,15 @@ use scope_domain::{
 use serde::{Deserialize, Serialize};
 
 const HISTORY_PAGE_SIZE: usize = 50;
-const HISTORY_CURSOR_VERSION: u8 = 1;
+const HISTORY_CURSOR_VERSION: u8 = 2;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct HistoryCursor {
     version: u8,
     repo_id: String,
     audience: ProjectionPreviewAudience,
-    boundary_source_id: String,
+    generation: String,
+    boundary_position: u64,
 }
 
 pub(crate) async fn get_history_page(
@@ -44,7 +45,7 @@ pub(crate) async fn get_history_page(
 ) -> Result<Json<crate::http::responses::HistoryPageResponse>, ApiError> {
     let (repo, audience) =
         repo_and_audience(&state, &headers, &owner, &repo_name, input.audience).await?;
-    let boundary_source_id = input
+    let boundary = input
         .before
         .as_deref()
         .map(|cursor| parse_history_cursor(cursor, &repo.record.id, audience))
@@ -56,7 +57,7 @@ pub(crate) async fn get_history_page(
             incarnation: &repo.incarnation(),
             version: repo.record.change_version,
             audience: history_view_key(audience),
-            before_source_id: boundary_source_id.as_deref(),
+            before: boundary.as_ref(),
             entry_source_id: None,
             limit: HISTORY_PAGE_SIZE as u64,
         })
@@ -64,15 +65,11 @@ pub(crate) async fn get_history_page(
     ensure_history_available(page.available)?;
     let view = page.view;
     let entries = view.entries.as_slice();
-    let has_more = page.has_more;
-    let next_cursor = if has_more {
-        entries
-            .last()
-            .map(|entry| encode_history_cursor(&repo.record.id, audience, &entry.source_id))
-            .transpose()?
-    } else {
-        None
-    };
+    let next_cursor = page
+        .next_boundary
+        .as_ref()
+        .map(|boundary| encode_history_cursor(&repo.record.id, audience, boundary))
+        .transpose()?;
 
     Ok(Json(history_page_response(
         audience,
@@ -97,7 +94,7 @@ pub(crate) async fn get_history_entry(
             incarnation: &repo.incarnation(),
             version: repo.record.change_version,
             audience: history_view_key(audience),
-            before_source_id: None,
+            before: None,
             entry_source_id: Some(&entry_id),
             limit: 1,
         })
@@ -124,7 +121,7 @@ pub(crate) async fn get_history_entry_file_diff(
             incarnation: &repo.incarnation(),
             version: repo.record.change_version,
             audience: history_view_key(audience),
-            before_source_id: None,
+            before: None,
             entry_source_id: Some(&entry_id),
             limit: 1,
         })
@@ -192,13 +189,14 @@ fn ensure_history_available(available: bool) -> Result<(), ApiError> {
 fn encode_history_cursor(
     repo_id: &str,
     audience: ProjectionPreviewAudience,
-    boundary_source_id: &str,
+    boundary: &scope_postgres::db::RepositoryHistoryBoundary,
 ) -> Result<String, ApiError> {
     let cursor = HistoryCursor {
         version: HISTORY_CURSOR_VERSION,
         repo_id: repo_id.to_string(),
         audience,
-        boundary_source_id: boundary_source_id.to_string(),
+        generation: boundary.generation.clone(),
+        boundary_position: boundary.position,
     };
     let encoded = serde_json::to_vec(&cursor).map_err(ApiError::internal)?;
     Ok(URL_SAFE_NO_PAD.encode(encoded))
@@ -208,11 +206,11 @@ fn parse_history_cursor(
     value: &str,
     repo_id: &str,
     audience: ProjectionPreviewAudience,
-) -> Result<String, ApiError> {
+) -> Result<scope_postgres::db::RepositoryHistoryBoundary, ApiError> {
     let invalid = || ApiError::bad_request("invalid history cursor");
     let decoded = URL_SAFE_NO_PAD.decode(value).map_err(|_| invalid())?;
     let cursor: HistoryCursor = serde_json::from_slice(&decoded).map_err(|_| invalid())?;
-    if cursor.version != HISTORY_CURSOR_VERSION {
+    if cursor.version != HISTORY_CURSOR_VERSION || cursor.boundary_position > i64::MAX as u64 {
         return Err(invalid());
     }
     if cursor.repo_id != repo_id || cursor.audience != audience {
@@ -220,7 +218,10 @@ fn parse_history_cursor(
             "history cursor does not match the repository and audience",
         ));
     }
-    Ok(cursor.boundary_source_id)
+    Ok(scope_postgres::db::RepositoryHistoryBoundary {
+        generation: cursor.generation,
+        position: cursor.boundary_position,
+    })
 }
 
 fn history_entry_for_id<'a>(
@@ -261,14 +262,18 @@ mod tests {
 
     #[test]
     fn cursor_is_bound_to_repository_and_audience() {
+        let boundary = scope_postgres::db::RepositoryHistoryBoundary {
+            generation: "generation-1".into(),
+            position: 50,
+        };
         let encoded =
-            encode_history_cursor("owner/repo", ProjectionPreviewAudience::Public, "entry-50")
+            encode_history_cursor("owner/repo", ProjectionPreviewAudience::Public, &boundary)
                 .unwrap();
 
         assert_eq!(
             parse_history_cursor(&encoded, "owner/repo", ProjectionPreviewAudience::Public)
                 .unwrap(),
-            "entry-50"
+            boundary
         );
         assert!(
             parse_history_cursor(&encoded, "owner/repo", ProjectionPreviewAudience::Private)
@@ -285,6 +290,14 @@ mod tests {
                 ProjectionPreviewAudience::Public
             )
             .is_err()
+        );
+        let mut cursor: HistoryCursor =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap();
+        cursor.boundary_position = u64::MAX;
+        let overflow = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&cursor).unwrap());
+        assert!(
+            parse_history_cursor(&overflow, "owner/repo", ProjectionPreviewAudience::Public)
+                .is_err()
         );
     }
 }
