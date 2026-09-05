@@ -26,7 +26,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 pub struct AppState {
     pub(crate) metadata: MetadataStore,
     pub(crate) data_dir: Arc<PathBuf>,
-    pub(crate) _git_storage_writer: Arc<std::fs::File>,
+    pub(crate) _git_storage_writer: Arc<crate::retired_git_storage::StorageLock>,
     pub(crate) clerk: ClerkVerifier,
     pub(crate) object_store: Arc<dyn ObjectStore>,
     pub(crate) git_segment_store: Arc<GitSegmentStore>,

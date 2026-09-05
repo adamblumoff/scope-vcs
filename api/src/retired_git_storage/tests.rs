@@ -72,7 +72,7 @@ fn writers_and_scrub_exclude_each_other() {
     assert!(scrub(root.path(), |_| Ok(())).is_err());
     drop(writer);
     let lock = open_lock(root.path()).unwrap();
-    lock.try_lock().unwrap();
+    lock.0.try_lock().unwrap();
     assert!(open_writer(root.path()).is_err());
     drop(lock);
     assert_eq!(scrub(root.path(), |_| Ok(())).unwrap(), 0);
@@ -159,10 +159,10 @@ fn resumes_when_deletion_finished_before_completion_was_recorded() {
 fn initialization_releases_exclusive_lock_held_by_inherited_descriptor() {
     let root = root();
     let exclusive = open_lock(root.path()).unwrap();
-    exclusive.try_lock().unwrap();
+    exclusive.0.try_lock().unwrap();
     // try_clone shares the same open file description and flock ownership as a
     // descriptor inherited across fork, without scheduling a child process.
-    let inherited = exclusive.try_clone().unwrap();
+    let inherited = exclusive.0.try_clone().unwrap();
     let writer = initialize_clean_writer(root.path(), exclusive).unwrap();
     assert!(complete(root.path()).unwrap());
     let another_writer = open_writer(root.path()).unwrap();
@@ -172,4 +172,22 @@ fn initialization_releases_exclusive_lock_held_by_inherited_descriptor() {
     drop(another_writer);
     drop(writer);
     assert_eq!(scrub(root.path(), |_| Ok(())).unwrap(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn dropped_guards_release_locks_held_by_inherited_descriptors() {
+    let root = root();
+    let writer = open_writer(root.path()).unwrap();
+    let inherited_writer = writer.0.try_clone().unwrap();
+    assert!(scrub(root.path(), |_| Ok(())).is_err());
+    drop(writer);
+    let maintenance = open_lock(root.path()).unwrap();
+    maintenance.0.try_lock().unwrap();
+    let inherited_maintenance = maintenance.0.try_clone().unwrap();
+    assert!(open_writer(root.path()).is_err());
+    drop(maintenance);
+    assert!(open_writer(root.path()).is_ok());
+    assert_eq!(scrub(root.path(), |_| Ok(())).unwrap(), 0);
+    drop((inherited_writer, inherited_maintenance));
 }

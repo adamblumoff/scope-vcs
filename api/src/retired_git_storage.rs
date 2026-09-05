@@ -10,6 +10,18 @@ const MARKER: &str = ".retired-git-storage-v1.complete";
 const COMPLETE: &[u8] = b"retired-git-storage-v1\n";
 const LOCK: &str = ".git-storage-writers.lock";
 
+pub(crate) struct StorageLock(File);
+
+impl Drop for StorageLock {
+    fn drop(&mut self) {
+        // A forked child may still hold the same open file description. Release
+        // our lock explicitly instead of waiting for every descriptor to close.
+        if let Err(error) = self.0.unlock() {
+            tracing::error!(%error, "failed to release local Git storage lock");
+        }
+    }
+}
+
 pub async fn scrub_retired_git_storage_for_maintenance(
     database_url: String,
 ) -> anyhow::Result<usize> {
@@ -20,21 +32,23 @@ pub async fn scrub_retired_git_storage_for_maintenance(
     Ok(count)
 }
 
-pub(crate) fn open_writer(root: &Path) -> anyhow::Result<File> {
+pub(crate) fn open_writer(root: &Path) -> anyhow::Result<StorageLock> {
     validate_root(root)?;
     let lock = open_lock(root)?;
-    lock.try_lock_shared()
+    lock.0
+        .try_lock_shared()
         .context("local Git storage maintenance is running")?;
     if !complete(root)? {
-        lock.unlock()?;
-        lock.try_lock()
+        lock.0.unlock()?;
+        lock.0
+            .try_lock()
             .context("local Git writers must stop before storage cutover")?;
         return initialize_clean_writer(root, lock);
     }
     Ok(lock)
 }
 
-fn initialize_clean_writer(root: &Path, lock: File) -> anyhow::Result<File> {
+fn initialize_clean_writer(root: &Path, lock: StorageLock) -> anyhow::Result<StorageLock> {
     ensure!(
         targets(root)?.is_empty(),
         "retired Git storage remains; stop writers and run scope-maintenance scrub-retired-git-storage"
@@ -42,8 +56,9 @@ fn initialize_clean_writer(root: &Path, lock: File) -> anyhow::Result<File> {
     write_marker(root)?;
     // Forked children can retain this open file description until exec. Closing
     // our descriptor alone would leave its exclusive lock held in those children.
-    lock.unlock()?;
-    lock.try_lock_shared()
+    lock.0.unlock()?;
+    lock.0
+        .try_lock_shared()
         .context("local Git storage maintenance is running")?;
     Ok(lock)
 }
@@ -75,7 +90,7 @@ fn validate_root(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn open_lock(root: &Path) -> anyhow::Result<File> {
+fn open_lock(root: &Path) -> anyhow::Result<StorageLock> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -88,7 +103,7 @@ fn open_lock(root: &Path) -> anyhow::Result<File> {
         file.metadata()?.is_file(),
         "invalid Git storage writer lock"
     );
-    Ok(file)
+    Ok(StorageLock(file))
 }
 
 fn complete(root: &Path) -> anyhow::Result<bool> {
@@ -138,7 +153,8 @@ fn scrub(
 ) -> anyhow::Result<usize> {
     validate_root(root)?;
     let lock = open_lock(root)?;
-    lock.try_lock()
+    lock.0
+        .try_lock()
         .context("local Git writers must stop before storage cutover")?;
     complete(root)?;
     let targets = targets(root)?;
