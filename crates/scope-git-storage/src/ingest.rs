@@ -21,6 +21,7 @@ use tokio::{
     fs::{self, OpenOptions},
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf},
     sync::mpsc,
+    task::JoinSet,
 };
 
 impl GitSegmentStore {
@@ -542,6 +543,8 @@ struct MultipartAccumulator {
     part_bytes: usize,
     buffer: Vec<u8>,
     parts: Vec<UploadedPart>,
+    pending: JoinSet<Result<UploadedPart, GitStorageError>>,
+    next_part_number: i32,
     encrypted_bytes: u64,
     cancellation: Option<ProcessCancellation>,
 }
@@ -557,8 +560,10 @@ impl MultipartAccumulator {
             backend,
             upload,
             part_bytes,
-            buffer: Vec::with_capacity(part_bytes),
+            buffer: Vec::new(),
             parts: Vec::new(),
+            pending: JoinSet::new(),
+            next_part_number: 1,
             encrypted_bytes: 0,
             cancellation,
         }
@@ -570,6 +575,14 @@ impl MultipartAccumulator {
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| GitStorageError::InvalidEnvelope("encrypted size overflow".into()))?;
         while !bytes.is_empty() {
+            if self.buffer.capacity() == 0 {
+                // The old uploader held one outgoing part and one assembly buffer.
+                // Keep that same two-part allocation bound while overlapping uploads.
+                if self.pending.len() == 2 {
+                    self.finish_part().await?;
+                }
+                self.buffer.reserve_exact(self.part_bytes);
+            }
             let available = self.part_bytes - self.buffer.len();
             let take = available.min(bytes.len());
             self.buffer.extend_from_slice(&bytes[..take]);
@@ -585,6 +598,10 @@ impl MultipartAccumulator {
         if !self.buffer.is_empty() {
             self.flush_part().await?;
         }
+        while !self.pending.is_empty() {
+            self.finish_part().await?;
+        }
+        self.parts.sort_unstable_by_key(|part| part.part_number);
         if self.parts.is_empty() {
             return Err(GitStorageError::InvalidEnvelope(
                 "encrypted segment produced no multipart parts".into(),
@@ -594,20 +611,34 @@ impl MultipartAccumulator {
     }
 
     async fn flush_part(&mut self) -> Result<(), GitStorageError> {
-        let part_number = i32::try_from(self.parts.len() + 1).map_err(|_| {
+        let part_number = self.next_part_number;
+        self.next_part_number = part_number.checked_add(1).ok_or_else(|| {
             GitStorageError::InvalidEnvelope("multipart part count exceeds i32".into())
         })?;
-        let bytes = Bytes::from(std::mem::replace(
-            &mut self.buffer,
-            Vec::with_capacity(self.part_bytes),
-        ));
-        let part = self.backend.upload_part(&self.upload, part_number, bytes);
-        let part = multipart_with_cancellation(self.cancellation.as_ref(), part).await?;
-        if part.part_number != part_number {
-            return Err(GitStorageError::Multipart(MultipartError::new(
-                "multipart backend returned the wrong part number",
-            )));
-        }
+        let bytes = Bytes::from(std::mem::take(&mut self.buffer));
+        let backend = Arc::clone(&self.backend);
+        let upload = self.upload.clone();
+        let cancellation = self.cancellation.clone();
+        self.pending.spawn(async move {
+            let operation = backend.upload_part(&upload, part_number, bytes);
+            let part = multipart_with_cancellation(cancellation.as_ref(), operation).await?;
+            if part.part_number != part_number {
+                return Err(GitStorageError::Multipart(MultipartError::new(
+                    "multipart backend returned the wrong part number",
+                )));
+            }
+            Ok(part)
+        });
+        Ok(())
+    }
+
+    async fn finish_part(&mut self) -> Result<(), GitStorageError> {
+        let part = self
+            .pending
+            .join_next()
+            .await
+            .expect("pending multipart upload")
+            .map_err(|error| GitStorageError::Task(error.to_string()))??;
         self.parts.push(part);
         Ok(())
     }
