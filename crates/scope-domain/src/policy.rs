@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{borrow::Borrow, collections::BTreeMap, fmt};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -55,6 +55,12 @@ impl ScopePath {
                 .0
                 .strip_prefix(self.0.as_str())
                 .is_some_and(|suffix| suffix.starts_with('/'))
+    }
+}
+
+impl Borrow<str> for ScopePath {
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -132,20 +138,47 @@ impl Policy {
     }
 
     pub fn add_rule(&mut self, rule: VisibilityRule) -> Result<(), PolicyError> {
-        if rule.visibility == Visibility::Public
-            && let Some(parent) = self.private_ancestor_for(&rule.path)
-        {
-            return Err(PolicyError::PublicIsland {
-                child: rule.path,
-                parent,
-            });
-        }
+        self.add_rules([rule])
+    }
 
-        self.rules.retain(|existing| existing.path != rule.path);
-        self.rules.push(rule);
-        self.rules
-            .sort_by(|left, right| left.path.as_str().cmp(right.path.as_str()));
-        self.validate_no_public_islands()?;
+    pub fn add_rules(
+        &mut self,
+        rules: impl IntoIterator<Item = VisibilityRule>,
+    ) -> Result<(), PolicyError> {
+        let mut additions = rules.into_iter().peekable();
+        if additions.peek().is_none() {
+            return Ok(());
+        }
+        let rules = self
+            .rules
+            .iter()
+            .cloned()
+            .chain(additions)
+            .map(|rule| (rule.path, rule.visibility))
+            .collect::<BTreeMap<_, _>>();
+        for (path, visibility) in &rules {
+            if *visibility != Visibility::Public {
+                continue;
+            }
+            // Check proper path ancestors, including root, rather than every rule.
+            for (separator, _) in path.as_str().match_indices('/') {
+                let ancestor = if separator == 0 {
+                    "/"
+                } else {
+                    &path.as_str()[..separator]
+                };
+                if ancestor != path.as_str() && rules.get(ancestor) == Some(&Visibility::Private) {
+                    return Err(PolicyError::PublicIsland {
+                        child: path.clone(),
+                        parent: ScopePath(ancestor.to_string()),
+                    });
+                }
+            }
+        }
+        self.rules = rules
+            .into_iter()
+            .map(|(path, visibility)| VisibilityRule { path, visibility })
+            .collect();
         Ok(())
     }
 
@@ -179,32 +212,5 @@ impl Policy {
 
     pub fn rules(&self) -> &[VisibilityRule] {
         &self.rules
-    }
-
-    fn private_ancestor_for(&self, path: &ScopePath) -> Option<ScopePath> {
-        self.rules
-            .iter()
-            .find(|rule| {
-                rule.visibility == Visibility::Private
-                    && rule.path != *path
-                    && rule.path.is_ancestor_of(path)
-            })
-            .map(|rule| rule.path.clone())
-    }
-
-    fn validate_no_public_islands(&self) -> Result<(), PolicyError> {
-        for rule in self
-            .rules
-            .iter()
-            .filter(|rule| rule.visibility == Visibility::Public)
-        {
-            if let Some(parent) = self.private_ancestor_for(&rule.path) {
-                return Err(PolicyError::PublicIsland {
-                    child: rule.path.clone(),
-                    parent,
-                });
-            }
-        }
-        Ok(())
     }
 }
