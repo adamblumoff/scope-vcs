@@ -8,6 +8,35 @@ export type RepoFileLoadResult =
   | { file: RepoFileContent; status: 'ready' }
   | { status: 'missing' | 'rebuilding' }
 
+type RepoCodeResource<T> = { value: T; error: null } | { value: null; error: string }
+
+// Deferred route data settles independently, so a slow tree cannot hold up the
+// addressed file. Errors stay with their existing pane instead of the route.
+export async function settleRepoCodeResource<T>(load: Promise<T>): Promise<RepoCodeResource<T>> {
+  try {
+    return { value: await load, error: null }
+  } catch (error) {
+    return { value: null, error: error instanceof Error ? error.message : 'Repository content is unavailable.' }
+  }
+}
+
+export function repoCodeResourceLoader<T>(
+  initial: Promise<RepoCodeResource<T>> | null,
+  reload: (signal: AbortSignal) => Promise<T>,
+) {
+  let pending: Promise<RepoCodeResource<T>> | null = initial
+  return async (signal: AbortSignal): Promise<T> => {
+    signal.throwIfAborted()
+    const first = pending
+    pending = null
+    if (!first) return reload(signal)
+    const result = await first
+    signal.throwIfAborted()
+    if (result.error !== null) throw new Error(result.error)
+    return result.value
+  }
+}
+
 export async function loadRepoFileWhenReady({
   load,
   retryDelays = REBUILD_RETRY_DELAYS,
