@@ -244,7 +244,7 @@ function useHistoryPageModel({ initialPage, params, search }: HistoryPageProps) 
       const page = await loadHistoryPage({
         data: { audience, before, owner: params.owner, repo: params.repo },
       })
-      setLoaded((current) => appendHistoryPage(current, page))
+      setLoaded((current) => appendHistoryPage(current, page, before))
     } catch (error) {
       setLoadOlderError(error instanceof Error ? error.message : 'Older history is unavailable.')
     } finally {

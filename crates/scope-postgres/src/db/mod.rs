@@ -58,7 +58,7 @@ pub use generated_ids::{GeneratedIdKind, GeneratedIdSource};
 mod git_push_reads;
 mod history_reads;
 mod history_rows;
-pub use history_reads::{RepositoryHistoryPage, RepositoryHistoryQuery};
+pub use history_reads::{RepositoryHistoryBoundary, RepositoryHistoryPage, RepositoryHistoryQuery};
 mod landing_files;
 pub use landing_files::RepositoryLandingFileBackfillCandidate;
 mod locks;

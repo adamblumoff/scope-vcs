@@ -54,7 +54,7 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 20);
+    assert_eq!(plan.pending.len(), 21);
     assert_eq!(plan.pending[0].name, "m0018_truthful_run_log_truncation");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0019_run_attempt_cache_observations");
@@ -122,6 +122,11 @@ async fn truthful_log_truncation_cutover_requires_maintenance() {
     );
     assert_eq!(plan.pending[19].name, "m0037_repository_history_views");
     assert_eq!(plan.pending[19].impact, MigrationImpact::Online);
+    assert_eq!(plan.pending[20].name, "m0038_history_entry_positions");
+    assert_eq!(
+        plan.pending[20].impact,
+        MigrationImpact::MaintenanceRequired
+    );
 }
 
 #[tokio::test]
@@ -133,7 +138,7 @@ async fn cache_service_cutover_requires_maintenance() {
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
 
-    assert_eq!(plan.pending.len(), 17);
+    assert_eq!(plan.pending.len(), 18);
     assert_eq!(plan.pending[0].name, "m0021_cache_service_cutover");
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0022_git_pack_spans");
@@ -186,6 +191,11 @@ async fn cache_service_cutover_requires_maintenance() {
     );
     assert_eq!(plan.pending[16].name, "m0037_repository_history_views");
     assert_eq!(plan.pending[16].impact, MigrationImpact::Online);
+    assert_eq!(plan.pending[17].name, "m0038_history_entry_positions");
+    assert_eq!(
+        plan.pending[17].impact,
+        MigrationImpact::MaintenanceRequired
+    );
 }
 
 #[tokio::test]
@@ -196,7 +206,7 @@ async fn compaction_scheduler_is_an_online_additive_migration() {
         .unwrap();
 
     let plan = migrations::plan(db.as_ref()).await.unwrap();
-    assert_eq!(plan.pending.len(), 14);
+    assert_eq!(plan.pending.len(), 15);
     assert_eq!(plan.pending[0].name, "m0024_git_compaction_scheduler");
     assert_eq!(plan.pending[0].impact, MigrationImpact::Online);
     assert_eq!(plan.pending[1].name, "m0025_visibility_change_sets");
@@ -238,6 +248,11 @@ async fn compaction_scheduler_is_an_online_additive_migration() {
     );
     assert_eq!(plan.pending[13].name, "m0037_repository_history_views");
     assert_eq!(plan.pending[13].impact, MigrationImpact::Online);
+    assert_eq!(plan.pending[14].name, "m0038_history_entry_positions");
+    assert_eq!(
+        plan.pending[14].impact,
+        MigrationImpact::MaintenanceRequired
+    );
 }
 
 #[tokio::test]
@@ -251,6 +266,8 @@ async fn request_queue_indexes_require_maintenance_before_startup() {
     assert_eq!(plan.pending[0].impact, MigrationImpact::MaintenanceRequired);
     assert_eq!(plan.pending[1].name, "m0037_repository_history_views");
     assert_eq!(plan.pending[1].impact, MigrationImpact::Online);
+    assert_eq!(plan.pending[2].name, "m0038_history_entry_positions");
+    assert_eq!(plan.pending[2].impact, MigrationImpact::MaintenanceRequired);
 
     let error = match connect_postgres_store(target.schema_database_url()).await {
         Ok(_) => panic!("API startup must refuse the queue index build"),

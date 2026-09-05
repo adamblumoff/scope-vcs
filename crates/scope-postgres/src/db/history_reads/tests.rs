@@ -87,14 +87,14 @@ async fn history_pages_match_domain_projection_and_do_not_read_history_when_warm
             incarnation: &repo.incarnation(),
             version: repo.record.change_version,
             audience: ProjectionViewKey::Private,
-            before_source_id: None,
+            before: None,
             entry_source_id: None,
             limit: 50,
         })
         .await
         .unwrap();
     let cold_elapsed = cold.elapsed();
-    assert!(first.has_more);
+    assert!(first.next_boundary.is_some());
     assert_eq!(first.view.entries, expected_private.entries[..50]);
     assert_eq!(first.view.generation, expected_private.generation);
 
@@ -109,7 +109,7 @@ async fn history_pages_match_domain_projection_and_do_not_read_history_when_warm
                 incarnation: &repo.incarnation(),
                 version: repo.record.change_version,
                 audience: ProjectionViewKey::Private,
-                before_source_id: Some(&first.view.entries[49].source_id),
+                before: first.next_boundary.as_ref(),
                 entry_source_id: None,
                 limit: 50,
             }),
@@ -141,7 +141,7 @@ async fn history_pages_match_domain_projection_and_do_not_read_history_when_warm
             incarnation: &repo.incarnation(),
             version: repo.record.change_version,
             audience: ProjectionViewKey::Public,
-            before_source_id: None,
+            before: None,
             entry_source_id: None,
             limit: 50,
         })
@@ -155,7 +155,7 @@ async fn history_pages_match_domain_projection_and_do_not_read_history_when_warm
             incarnation: &repo.incarnation(),
             version: repo.record.change_version,
             audience: ProjectionViewKey::Public,
-            before_source_id: None,
+            before: None,
             entry_source_id: Some(&public.view.entries[10].source_id),
             limit: 1,
         })
@@ -165,6 +165,150 @@ async fn history_pages_match_domain_projection_and_do_not_read_history_when_warm
     held.rollback().await.unwrap();
     eprintln!(
         "1000 commits/32 paths: baseline hydrate+private projection={baseline_elapsed:?}, cold build both audiences={cold_elapsed:?}, warm 50-entry page={warm_elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn visibility_fragments_keep_repeated_sources_and_page_by_exact_position() {
+    use scope_domain::visibility_changes::{VisibilityChange, VisibilityChangeSet};
+
+    let (store, mut repo) = fixture(5);
+    // A visibility boundary for the latest push is anchored before another visible
+    // commit, so its deletion and content update are separate semantic entries.
+    repo.visibility_change_sets.push(
+        VisibilityChangeSet::new(
+            "vchg_split".into(),
+            Some("logical_0".into()),
+            Some("logical_4".into()),
+            "history_owner".into(),
+            vec![VisibilityChange {
+                path: repo.graph.commits[0].changes[0].path.clone(),
+                old_visibility: Visibility::Public,
+                new_visibility: Visibility::Private,
+                current_content: repo.graph.commits[0].changes[0].new_content.clone(),
+            }],
+        )
+        .unwrap(),
+    );
+    repo.record.change_version += 1;
+    let expected = history_view(
+        &repo.graph,
+        &repo.visibility_change_sets,
+        ProjectionViewKey::Public,
+    );
+    assert_eq!(
+        expected
+            .entries
+            .iter()
+            .map(|entry| entry.source_id.as_str())
+            .collect::<Vec<_>>(),
+        ["logical_4", "logical_2", "logical_4", "logical_0"],
+    );
+    assert_ne!(expected.entries[0].files, expected.entries[2].files);
+
+    // Repository writes enqueue projection rebuilds: their history persistence must
+    // accept both fragments, as must a subsequent cold history read.
+    store
+        .repositories()
+        .replace_repository_for_tests(repo.clone())
+        .await
+        .unwrap();
+    let rebuilt = store
+        .jobs()
+        .run_ready_outbox_jobs(
+            "history-regression",
+            10,
+            &|| Ok(1_700_000_000),
+            &crate::db::generated_ids::test_generated_id,
+        )
+        .await
+        .unwrap();
+    assert!(rebuilt.completed > 0);
+    assert_eq!(rebuilt.failed, 0);
+    assert!(
+        history_view_metadata(
+            store.db.as_ref(),
+            &repo.record.id,
+            repo.record.change_version,
+            ProjectionViewKey::Public,
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+    store
+        .db
+        .execute_unprepared("DELETE FROM scope_repository_history_views")
+        .await
+        .unwrap();
+    let mut before = None;
+    let mut collected = Vec::new();
+    let mut first_boundary = None;
+    for expected_entry in &expected.entries {
+        let page = store
+            .repositories()
+            .repository_history_page(RepositoryHistoryQuery {
+                incarnation: &repo.incarnation(),
+                version: repo.record.change_version,
+                audience: ProjectionViewKey::Public,
+                before: before.as_ref(),
+                entry_source_id: None,
+                limit: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.view.entries, vec![expected_entry.clone()]);
+        assert_eq!(page.view.generation, expected.generation);
+        if collected.is_empty() {
+            first_boundary = page.next_boundary.clone();
+        }
+        collected.extend(page.view.entries);
+        before = page.next_boundary;
+    }
+    assert!(before.is_none());
+    assert_eq!(collected, expected.entries);
+
+    let detail = store
+        .repositories()
+        .repository_history_page(RepositoryHistoryQuery {
+            incarnation: &repo.incarnation(),
+            version: repo.record.change_version,
+            audience: ProjectionViewKey::Public,
+            before: None,
+            entry_source_id: Some("logical_4"),
+            limit: 1,
+        })
+        .await
+        .unwrap();
+    assert_eq!(detail.view.entries, vec![expected.entries[0].clone()]);
+
+    let mut next_commit = repo.graph.commits.last().unwrap().clone();
+    next_commit.id = "logical_5".into();
+    next_commit.message = "Another update".into();
+    repo.graph.commits.push(next_commit);
+    repo.record.change_version += 1;
+    store
+        .repositories()
+        .replace_repository_for_tests(repo.clone())
+        .await
+        .unwrap();
+    let stale = store
+        .repositories()
+        .repository_history_page(RepositoryHistoryQuery {
+            incarnation: &repo.incarnation(),
+            version: repo.record.change_version,
+            audience: ProjectionViewKey::Public,
+            before: first_boundary.as_ref(),
+            entry_source_id: None,
+            limit: 1,
+        })
+        .await
+        .err()
+        .expect("a position must not be reused in another generation");
+    assert!(
+        stale
+            .message
+            .contains("history changed; restart pagination")
     );
 }
 
@@ -203,7 +347,15 @@ async fn history_reads_reject_changed_frontiers_and_deleted_boundaries() {
             incarnation: &repo.incarnation(),
             version: repo.record.change_version,
             audience: ProjectionViewKey::Private,
-            before_source_id: Some("missing"),
+            before: Some(&RepositoryHistoryBoundary {
+                generation: history_view(
+                    &repo.graph,
+                    &repo.visibility_change_sets,
+                    ProjectionViewKey::Private,
+                )
+                .generation,
+                position: 999,
+            }),
             entry_source_id: None,
             limit: 50,
         })
@@ -217,7 +369,7 @@ async fn history_reads_reject_changed_frontiers_and_deleted_boundaries() {
                 incarnation: &repo.incarnation(),
                 version: repo.record.change_version,
                 audience: ProjectionViewKey::Private,
-                before_source_id: None,
+                before: None,
                 entry_source_id: None,
                 limit: 50
             })

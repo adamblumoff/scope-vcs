@@ -29,7 +29,8 @@ export function HistoryEntryList({
 }) {
   return (
     <div className="border-b border-border py-2 lg:border-b-0 lg:border-r">
-      {entries.map((entry) => {
+      {/* Pages append within a generation; row positions stay fixed even when source IDs repeat. */}
+      {entries.map((entry, position) => {
         const labels = historyEntryLabels(entry)
         const selected = selectedEntryId === entry.source_id
         return (
@@ -42,7 +43,7 @@ export function HistoryEntryList({
                 ? 'bg-accent shadow-[inset_2px_0_0_0_var(--brand)]'
                 : 'hover:bg-accent/50',
             )}
-            key={entry.source_id}
+            key={position}
             onClick={() => onSelectEntry(entry)}
             title={entry.source_id}
             type="button"

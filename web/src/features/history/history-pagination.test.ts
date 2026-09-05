@@ -7,28 +7,33 @@ import {
   type LoadedHistory,
 } from './history-pagination'
 
-test('appends three pages without dropping any of 120 updates', () => {
+test('appends all 120 updates including repeated source fragments across page boundaries', () => {
   const allEntries = Array.from({ length: 120 }, (_, index) => entry(index))
+  allEntries[50] = { ...allEntries[0], message: 'Later fragment of the same source' }
+  allEntries[100] = { ...allEntries[50], message: 'Another fragment of the same source' }
   let loaded: LoadedHistory = page(allEntries.slice(0, 50), 'cursor-50')
-  loaded = appendHistoryPage(loaded, page(allEntries.slice(50, 100), 'cursor-100'))
-  loaded = appendHistoryPage(loaded, page(allEntries.slice(100), null))
+  loaded = appendHistoryPage(loaded, page(allEntries.slice(50, 100), 'cursor-100'), 'cursor-50')
+  loaded = appendHistoryPage(loaded, page(allEntries.slice(100), null), 'cursor-100')
 
   assert.equal(loaded.entries.length, 120)
-  assert.deepEqual(loaded.entries.map((item) => item.id), allEntries.map((item) => item.id))
+  assert.deepEqual(loaded.entries, allEntries)
   assert.equal(loaded.next_cursor, null)
 })
 
-test('does not duplicate an overlapping boundary entry', () => {
+test('ignores a repeated response after its cursor has already advanced', () => {
   const first = page([entry(0), entry(1)], 'cursor-2')
-  const loaded = appendHistoryPage(first, page([entry(1), entry(2)], null))
+  const next = page([entry(2)], null)
+  const loaded = appendHistoryPage(first, next, 'cursor-2')
+  assert.equal(appendHistoryPage(loaded, next, 'cursor-2'), loaded)
   assert.deepEqual(loaded.entries.map((item) => item.id), ['entry-0', 'entry-1', 'entry-2'])
 })
 
-test('deduplicates the same causal update when its projected id changes', () => {
-  const original = entry(1)
-  const renumbered = { ...original, id: 'renumbered-projection-id' }
-  const loaded = appendHistoryPage(page([original], 'cursor-2'), page([renumbered], null))
-  assert.deepEqual(loaded.entries, [original])
+test('ignores an older-generation response after history is reset', () => {
+  const reset = page([entry(10)], 'generation-2-cursor-1')
+  assert.equal(
+    appendHistoryPage(reset, page([entry(2)], null), 'generation-1-cursor-2'),
+    reset,
+  )
 })
 
 test('describes a partial page as the most recent updates', () => {
